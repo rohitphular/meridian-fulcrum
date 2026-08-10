@@ -43,7 +43,8 @@ const INSIGHTS = [
   // FX
   { id: '28-forex-spend',       label: 'Foreign currency spend',          group: 'FX & currency',        tabs: false, description: 'Spend in foreign currencies, converted to base currency.' },
   // Daily
-  { id: '29-daily-spend',       label: 'Daily spend',                     group: 'Spending comparisons', tabs: false, description: 'Daily spend as a bar chart — one bar per day. Click any bar to see that day\'s transactions.', periods: ['last_7', 'last_30', 'last_60', 'last_90', 'this_month', 'last_month', 'custom'] },
+  { id: '29-daily-spend',            label: 'Daily spend (with payments)',    group: 'Spending comparisons', tabs: false, description: 'Daily money-out as a bar chart — includes all categories. Click any bar to see that day\'s transactions.', periods: ['last_7', 'last_30', 'last_60', 'last_90', 'this_month', 'last_month', 'custom'] },
+  { id: '30-daily-spend-no-payments', label: 'Daily spend (without payments)', group: 'Spending comparisons', tabs: false, description: 'Daily money-out excluding subscription-eligible categories (loan repayments, rent, recurring commitments). Click any bar to see that day\'s transactions.', periods: ['last_7', 'last_30', 'last_60', 'last_90', 'this_month', 'last_month', 'custom'] },
 ];
 
 const PERIOD_OPTIONS = [
