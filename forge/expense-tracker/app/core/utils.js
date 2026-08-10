@@ -27,11 +27,14 @@ export const toBase     = (amount, from, rowFxRate) => _toBase(amount, from, row
 export const fmtBase    = (amount, from, rowFxRate) => _fmtBase(amount, from, rowFxRate, state.rateMap, state.quoteCurrency, state.rates);
 export const fmtNative  = (amount, currency)        => _fmtNative(amount, currency, state.rates);
 
-const ET_COLS = ['id', 'tx_date_time', 'tx_type', 'source_account', 'target_account',
+const ET_COLS = ['tx_date_time', 'tx_type', 'source_account', 'target_account',
   'tx_location_area', 'tx_location_city', 'tx_location_country',
   'amount', 'currency', 'fx_rate', 'major_category', 'minor_category',
   'tags', 'counterparty_name', 'description'];
-export const exportData = (format, rows)            => _exportData(format, rows, 'expenses', ET_COLS);
+export const exportData = (format, rows) => {
+  const normalised = rows.map(r => ({ ...r, tx_date_time: utcToLocalInput(r.tx_date_time) }));
+  return _exportData(format, normalised, 'expenses', ET_COLS);
+};
 
 // ── Shared context menu ───────────────────────────────────────────────────────
 let _ctxMenuEl  = null;
