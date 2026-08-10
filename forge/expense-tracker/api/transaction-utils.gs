@@ -95,3 +95,31 @@ function applyFxNote(notes, sourceAccountId, targetAccountId, amount, fxRate) {
 
   return cleaned ? (cleaned + ' ' + marker) : marker;
 }
+
+function getTransactionMetadata() {
+  const sheet = getOrCreateSheet(TRANSACTIONS_SHEET, getTransactionSheetColumns());
+  const rows  = sheetToObjectsWithRow(sheet);
+
+  const distinct = function(values) {
+    return Array.from(new Set(values.filter(function(v) { return v && String(v).trim() !== ''; })))
+      .map(function(v) { return String(v).trim(); })
+      .sort();
+  };
+
+  const countries      = distinct(rows.map(function(tx) { return tx.tx_location_country; }));
+  const cities         = distinct(rows.map(function(tx) { return tx.tx_location_city; }));
+  const areas          = distinct(rows.map(function(tx) { return tx.tx_location_area; }));
+  const counterparties = distinct(rows.map(function(tx) { return tx.counterparty_name; }));
+
+  const allTags = [];
+  rows.forEach(function(tx) {
+    if (!tx.tags) return;
+    String(tx.tags).split(';').forEach(function(t) {
+      const trimmed = t.trim();
+      if (trimmed) allTags.push(trimmed);
+    });
+  });
+  const tags = distinct(allTags);
+
+  return { ok: true, countries: countries, cities: cities, areas: areas, counterparties: counterparties, tags: tags };
+}

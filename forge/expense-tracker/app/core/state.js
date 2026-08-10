@@ -12,13 +12,15 @@ export const state = {
   customTo:   '',
 
   filters: {
-    types:              [],
-    accounts:           [],
-    major:              [],
-    minor:              [],
+    types:               [],
+    accounts:            [],
+    major:               [],
+    minor:               [],
     tx_location_country: '',
-    tag:                '',
-    search:             '',
+    tx_location_city:    '',
+    tx_location_area:    '',
+    tag:                 '',
+    search:              '',
   },
 
   txSort:    { col: 'tx_date_time', dir: 'desc' },
@@ -61,6 +63,9 @@ export const state = {
   suggestions:        [],     // cached suggestion list for the session
   suggestionsLoaded:  false,  // true after first fetch
   suggestionsFetching: false, // true while fetch is in-flight
+
+  metadata:       null,   // { countries, cities, areas, counterparties, tags }
+  metadataLoaded: false,
 
   insightId:            '00-earn-burn-rate',
   insightPeriod:        'last_3',

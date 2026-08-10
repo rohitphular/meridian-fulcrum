@@ -32,5 +32,6 @@ export const ExpenseAPI = {
   updateSubscription:         f  => SheetsClient.post({ action: 'update_subscription',       ...f }),
   deleteSubscription:         f  => SheetsClient.post({ action: 'delete_subscription',       ...f }),
   getSuggestedTransactions:   () => SheetsClient.get({ action: 'get_suggested_transactions' }),
+  getTransactionMetadata:     () => SheetsClient.get({ action: 'get_transaction_metadata' }),
   getComputedInsights:        p  => SheetsClient.get({ action: 'get_computed_insights', ...p }),
 };

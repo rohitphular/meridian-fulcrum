@@ -5,12 +5,16 @@ import { filteredTx } from '../core/daterange.js';
 import { ExpenseAPI } from '../core/api.js';
 
 const SUGGESTIONS_CACHE_KEY = 'et_suggestions_v1';
-const SUGGESTIONS_TTL_MS    = 6 * 60 * 60 * 1000; // 6 hours
+const SUGGESTIONS_TTL_MS    = 6 * 60 * 60 * 1000;
+
+const METADATA_CACHE_KEY = 'et_metadata_v1';
+const METADATA_TTL_MS    = 6 * 60 * 60 * 1000;
 
 let filterOpen      = false;
 let _txImportParsed = null;
 let _txMenuKey      = null;
 let _txEventsAbort  = null;
+let _accTypeSel = new Set(); // "type:subtype" keys e.g. "asset:current"
 
 function _dispatchTxAction(action, row) {
   if (action === 'tx-view')           { state.txViewRow = row; state.txEditRow = null; state.txDeleteRow = null; state.txAddOpen = false; renderTransactions(); }
@@ -200,6 +204,41 @@ export function renderTransactions() {
         state.suggestionsFetching = false;
         renderTransactions();
       });
+    }
+  }
+
+  // Load transaction metadata for datalist suggestions (6 h cache).
+  if (!state.metadataLoaded) {
+    state.metadataLoaded = true;
+    let metaFromCache = false;
+    try {
+      const raw = localStorage.getItem(METADATA_CACHE_KEY);
+      if (raw) {
+        const { metadata, ts } = JSON.parse(raw);
+        if (metadata && Date.now() - ts < METADATA_TTL_MS) {
+          state.metadata = metadata;
+          metaFromCache = true;
+        } else {
+          localStorage.removeItem(METADATA_CACHE_KEY);
+        }
+      }
+    } catch (_) {}
+
+    if (!metaFromCache) {
+      ExpenseAPI.getTransactionMetadata().then(res => {
+        if (res.ok) {
+          state.metadata = {
+            countries:      res.countries      || [],
+            cities:         res.cities         || [],
+            areas:          res.areas          || [],
+            counterparties: res.counterparties || [],
+            tags:           res.tags           || [],
+          };
+          try {
+            localStorage.setItem(METADATA_CACHE_KEY, JSON.stringify({ metadata: state.metadata, ts: Date.now() }));
+          } catch (_) {}
+        }
+      }).catch(() => {});
     }
   }
 
@@ -529,15 +568,15 @@ function _renderAddForm() {
       <!-- Row 3: Area | City | Country -->
       <div class="field form-grid-span-2" id="afAreaField">
         <label for="afArea">Area</label>
-        <input type="text" id="afArea" placeholder="e.g. West End">
+        <input type="text" id="afArea" placeholder="e.g. West End" list="dlAfArea" autocomplete="off">
       </div>
       <div class="field form-grid-span-2" id="afCityField">
         <label for="afCity">City</label>
-        <input type="text" id="afCity" placeholder="e.g. London">
+        <input type="text" id="afCity" placeholder="e.g. London" list="dlAfCity" autocomplete="off">
       </div>
       <div class="field form-grid-span-2" id="afCountryField">
         <label for="afCountry">Country</label>
-        <input type="text" id="afCountry" placeholder="UK">
+        <input type="text" id="afCountry" placeholder="UK" list="dlAfCountry" autocomplete="off">
       </div>
       <!-- FX rate: full width, shown only when source and target are cross-currency -->
       <div class="field form-grid-full" id="afFxRateWrap" style="display:none">
@@ -557,12 +596,12 @@ function _renderAddForm() {
       </div>
       <div class="field form-grid-span-2" id="afCounterpartyField">
         <label for="afCounterparty">Counterparty</label>
-        <input type="text" id="afCounterparty" placeholder="Tesco, employer, …">
+        <input type="text" id="afCounterparty" placeholder="Tesco, employer, …" list="dlAfCounterparty" autocomplete="off">
       </div>
       <!-- Row 4: Tags 50% | Notes 50% -->
       <div class="field form-grid-span-3" id="afTagsField">
         <label for="afTags">Tags</label>
-        <input type="text" id="afTags" placeholder="reimbursable, work">
+        <input type="text" id="afTags" placeholder="reimbursable, work" list="dlAfTags" autocomplete="off">
       </div>
       <div class="field form-grid-span-3" id="afDescriptionField">
         <label for="afDescription">Description</label>
@@ -574,6 +613,11 @@ function _renderAddForm() {
       <button class="btn btn-secondary" id="afReset">Clear</button>
     </div>
     <div class="pin-error" id="afError"></div>
+    ${_datalist('dlAfCounterparty', state.metadata?.counterparties)}
+    ${_datalist('dlAfArea',         state.metadata?.areas)}
+    ${_datalist('dlAfCity',         state.metadata?.cities)}
+    ${_datalist('dlAfCountry',      state.metadata?.countries)}
+    ${_datalist('dlAfTags',         state.metadata?.tags)}
   </div>`;
 }
 
@@ -687,6 +731,8 @@ function _attachAddFormEvents() {
     if (fxWrap) fxWrap.style.display = 'none';
     el('afError').textContent = '';
   });
+
+  _attachTagAutocomplete('afTags', 'dlAfTags');
 
   // If a copy was triggered, populate the form now that events are wired
   if (state.txCopyPrefill) {
@@ -1057,15 +1103,15 @@ function _renderTxForm(tx, mode) {
       <!-- Row 3: Area | City | Country -->
       <div class="field form-grid-span-2">
         <label>Area</label>
-        <input type="text" id="txEditArea" value="${esc(tx.tx_location_area || '')}">
+        <input type="text" id="txEditArea" value="${esc(tx.tx_location_area || '')}" list="dlEditArea" autocomplete="off">
       </div>
       <div class="field form-grid-span-2">
         <label>City</label>
-        <input type="text" id="txEditCity" value="${esc(tx.tx_location_city || '')}">
+        <input type="text" id="txEditCity" value="${esc(tx.tx_location_city || '')}" list="dlEditCity" autocomplete="off">
       </div>
       <div class="field form-grid-span-2">
         <label>Country</label>
-        <input type="text" id="txEditCountry" value="${esc(tx.tx_location_country || '')}">
+        <input type="text" id="txEditCountry" value="${esc(tx.tx_location_country || '')}" list="dlEditCountry" autocomplete="off">
       </div>
       <!-- FX rate: full width, shown only when cross-currency -->
       <div class="field form-grid-full" id="txEditFxRateWrap" style="${fxDisplay}">
@@ -1085,12 +1131,12 @@ function _renderTxForm(tx, mode) {
       </div>
       <div class="field form-grid-span-2">
         <label>Counterparty</label>
-        <input type="text" id="txEditCounterparty" value="${esc(tx.counterparty_name || '')}">
+        <input type="text" id="txEditCounterparty" value="${esc(tx.counterparty_name || '')}" list="dlEditCounterparty" autocomplete="off">
       </div>
       <!-- Row 5: Tags 50% | Description 50% -->
       <div class="field form-grid-span-3">
         <label>Tags</label>
-        <input type="text" id="txEditTags" value="${esc(String(tx.tags || '').replace(/;/g, ', '))}">
+        <input type="text" id="txEditTags" value="${esc(String(tx.tags || '').replace(/;/g, ', '))}" list="dlEditTags" autocomplete="off">
       </div>
       <div class="field form-grid-span-3">
         <label>Description</label>
@@ -1102,6 +1148,11 @@ function _renderTxForm(tx, mode) {
       <button class="btn btn-secondary btn-sm" data-action="tx-cancel-edit">Cancel</button>
     </div>
     <div class="pin-error" id="txEditError"></div>
+    ${_datalist('dlEditCounterparty', state.metadata?.counterparties)}
+    ${_datalist('dlEditArea',         state.metadata?.areas)}
+    ${_datalist('dlEditCity',         state.metadata?.cities)}
+    ${_datalist('dlEditCountry',      state.metadata?.countries)}
+    ${_datalist('dlEditTags',         state.metadata?.tags)}
   </div>`;
 }
 
@@ -1225,6 +1276,8 @@ function _attachTxEditCascadeEvents() {
   el('txEditToAccount')?.addEventListener('change', _refreshFieldVis);
   el('txEditFxRate')?.addEventListener('input', _updateFxPreview);
   el('txEditAmount')?.addEventListener('input', _updateFxPreview);
+
+  _attachTagAutocomplete('txEditTags', 'dlEditTags');
 
   // Initial render: apply source/target disabled state based on category flags
   _refreshAccountOpts();
@@ -1440,21 +1493,125 @@ function _renderSuggestionsPanel() {
 
 // ── Filter bar ────────────────────────────────────────────────────────────────
 
+const _ACC_TYPE_LABEL = { asset: 'Asset', investment: 'Investment', liability: 'Liability' };
+
+function _fmtAccType(t) { return _ACC_TYPE_LABEL[t] || t; }
+
+function _accountsForTypeSel() {
+  if (!_accTypeSel.size) return state.accounts;
+  return state.accounts.filter(a => _accTypeSel.has(a.type));
+}
+
+function _accTypeDropdownLabel() {
+  if (!_accTypeSel.size) return 'All account types';
+  return Array.from(_accTypeSel).map(_fmtAccType).join(', ');
+}
+
+function _refreshFilterAccountDropdown() {
+  const dropdown = el('filterAccountDropdown');
+  if (!dropdown) return;
+  const accts   = _accountsForTypeSel();
+  const validIds = new Set(accts.map(a => a.id));
+  if (!_accTypeSel.size) state.filters.accounts = [];
+  else state.filters.accounts = state.filters.accounts.filter(id => validIds.has(id));
+  dropdown.innerHTML = accts.length
+    ? accts.map(a => `<label style="display:flex;align-items:center;gap:8px;font-size:var(--text-base);color:var(--ink);cursor:pointer">
+        <input type="checkbox" data-filter-account="${esc(a.id)}" ${state.filters.accounts.includes(a.id) ? 'checked' : ''}> ${esc(a.name)}
+      </label>`).join('')
+    : `<span style="font-size:var(--text-sm);color:var(--muted)">No accounts for selected type</span>`;
+  _attachFilterAccountCheckboxes(dropdown);
+  const lbl = el('filterAccountLabel');
+  if (lbl) lbl.textContent = state.filters.accounts.length
+    ? state.filters.accounts.map(id => state.accountMap[id]?.name || id).join(', ')
+    : 'All accounts';
+}
+
+function _attachFilterAccountCheckboxes(dropdown) {
+  dropdown.querySelectorAll('[data-filter-account]').forEach(cb => {
+    cb.addEventListener('change', () => {
+      const id = cb.dataset.filterAccount;
+      if (cb.checked) { if (!state.filters.accounts.includes(id)) state.filters.accounts.push(id); }
+      else { state.filters.accounts = state.filters.accounts.filter(x => x !== id); }
+      const lbl = el('filterAccountLabel');
+      if (lbl) lbl.textContent = state.filters.accounts.length
+        ? state.filters.accounts.map(id => state.accountMap[id]?.name || id).join(', ')
+        : 'All accounts';
+    });
+  });
+}
+
+function _refreshFilterMinorDropdown() {
+  const dropdown = el('filterMinorDropdown');
+  if (!dropdown) return;
+  const minors = state.filters.major.length
+    ? [...new Set(state.categories.filter(c => state.filters.major.includes(c.major_category)).map(c => c.minor_category))].sort()
+    : [...new Set(state.categories.map(c => c.minor_category))].sort();
+  const validSet = new Set(minors);
+  state.filters.minor = state.filters.minor.filter(v => validSet.has(v));
+  dropdown.innerHTML = minors.length
+    ? minors.map(v => `<label style="display:flex;align-items:center;gap:8px;font-size:var(--text-base);color:var(--ink);cursor:pointer">
+        <input type="checkbox" data-filter-minor="${esc(v)}" ${state.filters.minor.includes(v) ? 'checked' : ''}> ${esc(v)}
+      </label>`).join('')
+    : `<span style="font-size:var(--text-sm);color:var(--muted)">No minor categories</span>`;
+  dropdown.querySelectorAll('[data-filter-minor]').forEach(cb => {
+    cb.addEventListener('change', () => {
+      const v = cb.dataset.filterMinor;
+      if (cb.checked) { if (!state.filters.minor.includes(v)) state.filters.minor.push(v); }
+      else { state.filters.minor = state.filters.minor.filter(x => x !== v); }
+      const lbl = el('filterMinorLabel');
+      if (lbl) lbl.textContent = state.filters.minor.length ? state.filters.minor.join(', ') : 'All minor';
+    });
+  });
+  const lbl = el('filterMinorLabel');
+  if (lbl) lbl.textContent = state.filters.minor.length ? state.filters.minor.join(', ') : 'All minor';
+}
+
+function _datalist(id, items) {
+  // Always render the element so it exists in the DOM even before metadata loads.
+  return `<datalist id="${esc(id)}">${(items || []).map(v => `<option value="${esc(String(v))}">`).join('')}</datalist>`;
+}
+
+function _attachTagAutocomplete(inputId, datalistId) {
+  const input = el(inputId);
+  const dl    = el(datalistId);
+  if (!input || !dl) return;
+  input.addEventListener('input', () => {
+    const tags = state.metadata?.tags;
+    if (!tags?.length) return;
+    const val       = input.value;
+    const lastComma = val.lastIndexOf(',');
+    const prefix    = lastComma >= 0 ? val.slice(0, lastComma + 1) + ' ' : '';
+    const partial   = val.slice(lastComma + 1).trimStart().toLowerCase();
+    const existing  = new Set(val.split(',').map(t => t.trim().toLowerCase()).filter(Boolean));
+    const hits      = tags.filter(t =>
+      (!partial || t.toLowerCase().startsWith(partial)) && !existing.has(t.toLowerCase())
+    );
+    dl.innerHTML = hits.map(t => `<option value="${esc(prefix + t)}">`).join('');
+  });
+}
+
 function _renderFilterBar() {
   const f        = state.filters;
   const allTypes = _txTypes();
   const allAccs  = state.accounts;
-  const allMajor = [...new Set(state.categories.map(c => c.major_category))];
-  const allMinor = [...new Set(state.categories.map(c => c.minor_category))];
+  const allMajor = [...new Set(state.categories.map(c => c.major_category))].sort();
+
+  const allMinor = f.major.length
+    ? [...new Set(state.categories.filter(c => f.major.includes(c.major_category)).map(c => c.minor_category))].sort()
+    : [...new Set(state.categories.map(c => c.minor_category))].sort();
+
+  const m = state.metadata;
 
   const activeChips = [
-    ...f.types.map(t    => ({ label: _txTypeMap()[t] || t, key: 'types',    val: t })),
-    ...f.accounts.map(id => ({ label: state.accountMap[id]?.name || id, key: 'accounts', val: id })),
-    ...f.major.map(m    => ({ label: m,                   key: 'major',    val: m })),
-    ...f.minor.map(m    => ({ label: m,                   key: 'minor',    val: m })),
-    ...(f.tx_location_country ? [{ label: 'Country: '+f.tx_location_country, key: 'tx_location_country', val: '' }] : []),
-    ...(f.tag     ? [{ label: 'Tag: '    +f.tag,      key: 'tag',     val: '' }] : []),
-    ...(f.search  ? [{ label: 'Search: ' +f.search,  key: 'search',  val: '' }] : []),
+    ...f.types.map(t     => ({ label: _txTypeMap()[t] || t,              key: 'types',    val: t })),
+    ...f.accounts.map(id => ({ label: state.accountMap[id]?.name || id,  key: 'accounts', val: id })),
+    ...f.major.map(v     => ({ label: v,                                 key: 'major',    val: v })),
+    ...f.minor.map(v     => ({ label: v,                                 key: 'minor',    val: v })),
+    ...(f.tx_location_country ? [{ label: 'Country: ' + f.tx_location_country, key: 'tx_location_country', val: '' }] : []),
+    ...(f.tx_location_city    ? [{ label: 'City: '    + f.tx_location_city,    key: 'tx_location_city',    val: '' }] : []),
+    ...(f.tx_location_area    ? [{ label: 'Area: '    + f.tx_location_area,    key: 'tx_location_area',    val: '' }] : []),
+    ...(f.tag    ? [{ label: 'Tag: '    + f.tag,    key: 'tag',    val: '' }] : []),
+    ...(f.search ? [{ label: 'Search: ' + f.search, key: 'search', val: '' }] : []),
   ];
 
   return `
@@ -1465,48 +1622,100 @@ function _renderFilterBar() {
     <div class="filter-body ${filterOpen ? '' : 'hidden'}" id="filterBody">
       <div class="filter-row">
         <label>Type</label>
-        <div style="display:flex;gap:6px;flex-wrap:wrap">
-          ${allTypes.map(t => `<label style="display:flex;align-items:center;gap:4px;font-size:var(--text-sm)">
-            <input type="checkbox" data-filter-type="${esc(t.value)}" ${f.types.includes(t.value) ? 'checked' : ''}> ${esc(t.label)}
-          </label>`).join('')}
+        <div id="filterTypeWrap" style="flex:1;min-width:120px;position:relative">
+          <button id="filterTypeTrigger" type="button" style="width:100%;display:flex;justify-content:space-between;align-items:center;text-align:left;background:var(--panel);border:1px solid var(--hair-strong);border-radius:8px;padding:6px 10px;font-size:var(--text-base);color:var(--ink);cursor:pointer;outline:none">
+            <span id="filterTypeLabel">${f.types.length ? f.types.map(t => _txTypeMap()[t] || t).join(', ') : 'All types'}</span>
+            <span style="color:var(--muted);font-size:var(--text-2xs);margin-left:8px">▼</span>
+          </button>
+          <div id="filterTypeDropdown" class="hidden" style="position:fixed;z-index:1000;background:var(--panel);border:1px solid var(--hair-strong);border-radius:8px;padding:8px 10px;display:flex;flex-direction:column;gap:8px;box-shadow:0 4px 16px rgba(0,0,0,.15)">
+            ${allTypes.map(t => `<label style="display:flex;align-items:center;gap:8px;font-size:var(--text-base);color:var(--ink);cursor:pointer">
+              <input type="checkbox" data-filter-type="${esc(t.value)}" ${f.types.includes(t.value) ? 'checked' : ''}> ${esc(t.label)}
+            </label>`).join('')}
+          </div>
         </div>
       </div>
       <div class="filter-row">
         <label>Account</label>
-        <select id="filterAccount">
-          <option value="">All accounts</option>
-          ${allAccs.map(a => `<option value="${esc(a.id)}" ${f.accounts.includes(a.id) ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}
-        </select>
+        <div style="flex:1;display:flex;gap:8px;flex-wrap:wrap">
+          <div id="filterAccTypeWrap" style="flex:1;min-width:130px;position:relative">
+            <button id="filterAccTypeTrigger" type="button" style="width:100%;display:flex;justify-content:space-between;align-items:center;text-align:left;background:var(--panel);border:1px solid var(--hair-strong);border-radius:8px;padding:6px 10px;font-size:var(--text-base);color:var(--ink);cursor:pointer;outline:none">
+              <span id="filterAccTypeLabel">${_accTypeDropdownLabel()}</span>
+              <span style="color:var(--muted);font-size:var(--text-2xs);margin-left:8px">▼</span>
+            </button>
+            <div id="filterAccTypeDropdown" class="hidden" style="position:fixed;z-index:1000;background:var(--panel);border:1px solid var(--hair-strong);border-radius:8px;padding:8px 10px;display:flex;flex-direction:column;gap:8px;box-shadow:0 4px 16px rgba(0,0,0,.15)">
+              ${[...new Set(state.accounts.map(a => a.type))].map(type => {
+                const count = state.accounts.filter(a => a.type === type).length;
+                return `<label style="display:flex;align-items:center;gap:8px;font-size:var(--text-base);color:var(--ink);cursor:pointer">
+                  <input type="checkbox" data-acc-type="${esc(type)}" ${_accTypeSel.has(type) ? 'checked' : ''}> ${esc(_fmtAccType(type))} <span style="color:var(--muted);font-size:var(--text-xs)">(${count})</span>
+                </label>`;
+              }).join('')}
+            </div>
+          </div>
+          <div id="filterAccountWrap" style="flex:1;min-width:130px;position:relative">
+            <button id="filterAccountTrigger" type="button" style="width:100%;display:flex;justify-content:space-between;align-items:center;text-align:left;background:var(--panel);border:1px solid var(--hair-strong);border-radius:8px;padding:6px 10px;font-size:var(--text-base);color:var(--ink);cursor:pointer;outline:none">
+              <span id="filterAccountLabel">${f.accounts.length ? f.accounts.map(id => state.accountMap[id]?.name || id).join(', ') : 'All accounts'}</span>
+              <span style="color:var(--muted);font-size:var(--text-2xs);margin-left:8px">▼</span>
+            </button>
+            <div id="filterAccountDropdown" class="hidden" style="position:fixed;z-index:1000;background:var(--panel);border:1px solid var(--hair-strong);border-radius:8px;padding:8px 10px;display:flex;flex-direction:column;gap:8px;box-shadow:0 4px 16px rgba(0,0,0,.15);max-height:200px;overflow-y:auto">
+              ${_accountsForTypeSel().map(a => `<label style="display:flex;align-items:center;gap:8px;font-size:var(--text-base);color:var(--ink);cursor:pointer">
+                <input type="checkbox" data-filter-account="${esc(a.id)}" ${f.accounts.includes(a.id) ? 'checked' : ''}> ${esc(a.name)}
+              </label>`).join('') || `<span style="font-size:var(--text-sm);color:var(--muted)">No accounts</span>`}
+            </div>
+          </div>
+        </div>
       </div>
       <div class="filter-row">
-        <label>Major cat.</label>
-        <select id="filterMajor">
-          <option value="">All</option>
-          ${allMajor.map(m => `<option value="${esc(m)}" ${f.major.includes(m) ? 'selected' : ''}>${esc(m)}</option>`).join('')}
-        </select>
+        <label>Category</label>
+        <div style="flex:1;display:flex;gap:8px;flex-wrap:wrap">
+          <div id="filterMajorWrap" style="flex:1;min-width:130px;position:relative">
+            <button id="filterMajorTrigger" type="button" style="width:100%;display:flex;justify-content:space-between;align-items:center;text-align:left;background:var(--panel);border:1px solid var(--hair-strong);border-radius:8px;padding:6px 10px;font-size:var(--text-base);color:var(--ink);cursor:pointer;outline:none">
+              <span id="filterMajorLabel">${f.major.length ? f.major.join(', ') : 'All major'}</span>
+              <span style="color:var(--muted);font-size:var(--text-2xs);margin-left:8px">▼</span>
+            </button>
+            <div id="filterMajorDropdown" class="hidden" style="position:fixed;z-index:1000;background:var(--panel);border:1px solid var(--hair-strong);border-radius:8px;padding:8px 10px;display:flex;flex-direction:column;gap:8px;box-shadow:0 4px 16px rgba(0,0,0,.15);max-height:240px;overflow-y:auto">
+              ${allMajor.map(v => `<label style="display:flex;align-items:center;gap:8px;font-size:var(--text-base);color:var(--ink);cursor:pointer">
+                <input type="checkbox" data-filter-major="${esc(v)}" ${f.major.includes(v) ? 'checked' : ''}> ${esc(v)}
+              </label>`).join('')}
+            </div>
+          </div>
+          <div id="filterMinorWrap" style="flex:1;min-width:130px;position:relative">
+            <button id="filterMinorTrigger" type="button" style="width:100%;display:flex;justify-content:space-between;align-items:center;text-align:left;background:var(--panel);border:1px solid var(--hair-strong);border-radius:8px;padding:6px 10px;font-size:var(--text-base);color:var(--ink);cursor:pointer;outline:none">
+              <span id="filterMinorLabel">${f.minor.length ? f.minor.join(', ') : 'All minor'}</span>
+              <span style="color:var(--muted);font-size:var(--text-2xs);margin-left:8px">▼</span>
+            </button>
+            <div id="filterMinorDropdown" class="hidden" style="position:fixed;z-index:1000;background:var(--panel);border:1px solid var(--hair-strong);border-radius:8px;padding:8px 10px;display:flex;flex-direction:column;gap:8px;box-shadow:0 4px 16px rgba(0,0,0,.15);max-height:240px;overflow-y:auto">
+              ${allMinor.length
+                ? allMinor.map(v => `<label style="display:flex;align-items:center;gap:8px;font-size:var(--text-base);color:var(--ink);cursor:pointer">
+                    <input type="checkbox" data-filter-minor="${esc(v)}" ${f.minor.includes(v) ? 'checked' : ''}> ${esc(v)}
+                  </label>`).join('')
+                : `<span style="font-size:var(--text-sm);color:var(--muted)">No minor categories</span>`}
+            </div>
+          </div>
+        </div>
       </div>
       <div class="filter-row">
-        <label>Minor cat.</label>
-        <select id="filterMinor">
-          <option value="">All</option>
-          ${allMinor.map(m => `<option value="${esc(m)}" ${f.minor.includes(m) ? 'selected' : ''}>${esc(m)}</option>`).join('')}
-        </select>
-      </div>
-      <div class="filter-row">
-        <label>Country</label>
-        <input type="text" id="filterCountry" value="${esc(f.tx_location_country)}" placeholder="e.g. UK">
+        <label>Location</label>
+        <div style="flex:1;display:flex;gap:8px;flex-wrap:wrap">
+          <input type="text" id="filterCountry" value="${esc(f.tx_location_country)}" list="dlFCountry" placeholder="Country" autocomplete="off" style="flex:1;min-width:100px">
+          ${_datalist('dlFCountry', m?.countries)}
+          <input type="text" id="filterCity" value="${esc(f.tx_location_city)}" list="dlFCity" placeholder="City" autocomplete="off" style="flex:1;min-width:100px">
+          ${_datalist('dlFCity', m?.cities)}
+          <input type="text" id="filterArea" value="${esc(f.tx_location_area)}" list="dlFArea" placeholder="Area" autocomplete="off" style="flex:1;min-width:100px">
+          ${_datalist('dlFArea', m?.areas)}
+        </div>
       </div>
       <div class="filter-row">
         <label>Tag</label>
-        <input type="text" id="filterTag" value="${esc(f.tag)}" placeholder="any tag">
+        <input type="text" id="filterTag" value="${esc(f.tag)}" placeholder="any tag" list="dlFTag" autocomplete="off">
+        ${_datalist('dlFTag', m?.tags)}
       </div>
       <div class="filter-row">
         <label>Search</label>
         <input type="text" id="filterSearch" value="${esc(f.search)}" placeholder="counterparty or notes">
       </div>
-      <div style="margin-top:4px;display:flex;gap:8px">
-        <button class="btn btn-primary btn-sm" id="applyFilters">Search</button>
+      <div style="margin-top:4px;display:flex;gap:8px;justify-content:flex-end">
         <button class="btn btn-secondary btn-sm" id="clearFilters">Clear</button>
+        <button class="btn btn-primary btn-sm" id="applyFilters">Search</button>
       </div>
     </div>
   </div>`;
@@ -1701,37 +1910,153 @@ function _attachSuggestionEvents() {
   });
 }
 
+function _positionDropdown(triggerId, dropdownId) {
+  const trigger  = el(triggerId);
+  const dropdown = el(dropdownId);
+  if (!trigger || !dropdown) return;
+  const rect = trigger.getBoundingClientRect();
+  dropdown.style.top   = (rect.bottom + 4) + 'px';
+  dropdown.style.left  = rect.left + 'px';
+  dropdown.style.width = rect.width + 'px';
+}
+
+const _FILTER_DROPDOWN_IDS = ['filterTypeDropdown','filterAccTypeDropdown','filterAccountDropdown','filterMajorDropdown','filterMinorDropdown'];
+const _FILTER_WRAP_IDS     = ['filterTypeWrap','filterAccTypeWrap','filterAccountWrap','filterMajorWrap','filterMinorWrap'];
+
+function _closeAllFilterDropdowns(exceptId) {
+  _FILTER_DROPDOWN_IDS.forEach(id => { if (id !== exceptId) el(id)?.classList.add('hidden'); });
+}
+
 function _attachFilterEvents() {
   el('filterToggle')?.addEventListener('click', () => { filterOpen = !filterOpen; renderTransactions(); });
 
-  el('transactionsContent')?.querySelectorAll('[data-filter-type]').forEach(cb => {
-    cb.addEventListener('change', () => {
-      const t = cb.dataset.filterType;
-      if (cb.checked) { if (!state.filters.types.includes(t)) state.filters.types.push(t); }
-      else { state.filters.types = state.filters.types.filter(x => x !== t); }
+  const typeTrigger  = el('filterTypeTrigger');
+  const typeDropdown = el('filterTypeDropdown');
+  const typeWrap     = el('filterTypeWrap');
+  if (typeTrigger && typeDropdown) {
+    typeTrigger.addEventListener('click', e => {
+      e.stopPropagation();
+      const opening = typeDropdown.classList.contains('hidden');
+      if (opening) _closeAllFilterDropdowns('filterTypeDropdown');
+      typeDropdown.classList.toggle('hidden');
+      if (opening) _positionDropdown('filterTypeTrigger', 'filterTypeDropdown');
     });
+    typeDropdown.querySelectorAll('[data-filter-type]').forEach(cb => {
+      cb.addEventListener('change', () => {
+        const t = cb.dataset.filterType;
+        if (cb.checked) { if (!state.filters.types.includes(t)) state.filters.types.push(t); }
+        else { state.filters.types = state.filters.types.filter(x => x !== t); }
+        const lbl = el('filterTypeLabel');
+        if (lbl) lbl.textContent = state.filters.types.length ? state.filters.types.map(v => _txTypeMap()[v] || v).join(', ') : 'All types';
+      });
+    });
+  }
+
+  // ── Account type dropdown ──
+  const accTypeTrigger  = el('filterAccTypeTrigger');
+  const accTypeDropdown = el('filterAccTypeDropdown');
+  if (accTypeTrigger && accTypeDropdown) {
+    accTypeTrigger.addEventListener('click', e => {
+      e.stopPropagation();
+      const opening = accTypeDropdown.classList.contains('hidden');
+      if (opening) _closeAllFilterDropdowns('filterAccTypeDropdown');
+      accTypeDropdown.classList.toggle('hidden');
+      if (opening) _positionDropdown('filterAccTypeTrigger', 'filterAccTypeDropdown');
+    });
+    accTypeDropdown.querySelectorAll('[data-acc-type]').forEach(cb => {
+      cb.addEventListener('change', () => {
+        if (cb.checked) _accTypeSel.add(cb.dataset.accType);
+        else            _accTypeSel.delete(cb.dataset.accType);
+        const lbl = el('filterAccTypeLabel');
+        if (lbl) lbl.textContent = _accTypeDropdownLabel();
+        _refreshFilterAccountDropdown();
+      });
+    });
+  }
+
+  // ── Account dropdown ──
+  const acctTrigger  = el('filterAccountTrigger');
+  const acctDropdown = el('filterAccountDropdown');
+  if (acctTrigger && acctDropdown) {
+    acctTrigger.addEventListener('click', e => {
+      e.stopPropagation();
+      const opening = acctDropdown.classList.contains('hidden');
+      if (opening) _closeAllFilterDropdowns('filterAccountDropdown');
+      acctDropdown.classList.toggle('hidden');
+      if (opening) _positionDropdown('filterAccountTrigger', 'filterAccountDropdown');
+    });
+    _attachFilterAccountCheckboxes(acctDropdown);
+  }
+
+  // ── Major category dropdown ──
+  const majorTrigger  = el('filterMajorTrigger');
+  const majorDropdown = el('filterMajorDropdown');
+  if (majorTrigger && majorDropdown) {
+    majorTrigger.addEventListener('click', e => {
+      e.stopPropagation();
+      const opening = majorDropdown.classList.contains('hidden');
+      if (opening) _closeAllFilterDropdowns('filterMajorDropdown');
+      majorDropdown.classList.toggle('hidden');
+      if (opening) _positionDropdown('filterMajorTrigger', 'filterMajorDropdown');
+    });
+    majorDropdown.querySelectorAll('[data-filter-major]').forEach(cb => {
+      cb.addEventListener('change', () => {
+        const v = cb.dataset.filterMajor;
+        if (cb.checked) { if (!state.filters.major.includes(v)) state.filters.major.push(v); }
+        else { state.filters.major = state.filters.major.filter(x => x !== v); }
+        const lbl = el('filterMajorLabel');
+        if (lbl) lbl.textContent = state.filters.major.length ? state.filters.major.join(', ') : 'All major';
+        _refreshFilterMinorDropdown();
+      });
+    });
+  }
+
+  // ── Minor category dropdown ──
+  const minorTrigger  = el('filterMinorTrigger');
+  const minorDropdown = el('filterMinorDropdown');
+  if (minorTrigger && minorDropdown) {
+    minorTrigger.addEventListener('click', e => {
+      e.stopPropagation();
+      const opening = minorDropdown.classList.contains('hidden');
+      if (opening) _closeAllFilterDropdowns('filterMinorDropdown');
+      minorDropdown.classList.toggle('hidden');
+      if (opening) _positionDropdown('filterMinorTrigger', 'filterMinorDropdown');
+    });
+    minorDropdown.querySelectorAll('[data-filter-minor]').forEach(cb => {
+      cb.addEventListener('change', () => {
+        const v = cb.dataset.filterMinor;
+        if (cb.checked) { if (!state.filters.minor.includes(v)) state.filters.minor.push(v); }
+        else { state.filters.minor = state.filters.minor.filter(x => x !== v); }
+        const lbl = el('filterMinorLabel');
+        if (lbl) lbl.textContent = state.filters.minor.length ? state.filters.minor.join(', ') : 'All minor';
+      });
+    });
+  }
+
+  // ── Global outside-click: close all dropdowns when clicking outside every wrap ──
+  document.addEventListener('click', e => {
+    const inAnyWrap = _FILTER_WRAP_IDS.some(id => el(id)?.contains(e.target));
+    if (!inAnyWrap) _closeAllFilterDropdowns();
   });
 
-  const bindSelect = (id, key) => el(id)?.addEventListener('change', e => {
-    state.filters[key] = e.target.value ? [e.target.value] : [];
-  });
   const bindText = (id, key) => el(id)?.addEventListener('input', e => {
     state.filters[key] = e.target.value.trim();
   });
 
-  bindSelect('filterAccount', 'accounts');
-  bindSelect('filterMajor',   'major');
-  bindSelect('filterMinor',   'minor');
-  bindText('filterCountry',   'tx_location_country');
-  bindText('filterTag',       'tag');
-  bindText('filterSearch',    'search');
+  bindText('filterCountry', 'tx_location_country');
+  bindText('filterCity',    'tx_location_city');
+  bindText('filterArea',    'tx_location_area');
+  bindText('filterTag',     'tag');
+  bindText('filterSearch',  'search');
+  _attachTagAutocomplete('filterTag', 'dlFTag');
 
   el('applyFilters')?.addEventListener('click', () => {
     state.txPage = 1; renderTransactions();
   });
 
   el('clearFilters')?.addEventListener('click', () => {
-    state.filters = { types:[], accounts:[], major:[], minor:[], tx_location_country:'', tag:'', search:'' };
+    _accTypeSel.clear();
+    state.filters = { types:[], accounts:[], major:[], minor:[], tx_location_country:'', tx_location_city:'', tx_location_area:'', tag:'', search:'' };
     state.txPage = 1; renderTransactions();
   });
 

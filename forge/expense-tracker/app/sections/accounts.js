@@ -1,5 +1,5 @@
 import { state } from '../core/state.js';
-import { el, esc, getSymbol, toBase, fmtBase, exportData, openContextMenu, closeContextMenu } from '../core/utils.js';
+import { el, esc, getSymbol, toBase, fmtBase, exportAccounts, openContextMenu, closeContextMenu } from '../core/utils.js';
 import { showLoading, hideLoading, showMsg } from '../core/ui.js';
 import { ExpenseAPI } from '../core/api.js';
 
@@ -576,7 +576,7 @@ function _attachEvents() {
     openContextMenu(el('accExportBtn'), [
       { key: 'csv',  label: 'CSV'  },
       { key: 'json', label: 'JSON' },
-    ], key => exportData(key, state.accounts));
+    ], key => exportAccounts(key, state.accounts));
   });
 }
 

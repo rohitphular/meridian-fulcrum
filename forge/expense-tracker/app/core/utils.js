@@ -27,14 +27,27 @@ export const toBase     = (amount, from, rowFxRate) => _toBase(amount, from, row
 export const fmtBase    = (amount, from, rowFxRate) => _fmtBase(amount, from, rowFxRate, state.rateMap, state.quoteCurrency, state.rates);
 export const fmtNative  = (amount, currency)        => _fmtNative(amount, currency, state.rates);
 
-const ET_COLS = ['tx_date_time', 'tx_type', 'source_account', 'target_account',
+const ET_COLS  = ['tx_date_time', 'tx_type', 'source_account', 'target_account',
   'tx_location_area', 'tx_location_city', 'tx_location_country',
   'amount', 'currency', 'fx_rate', 'major_category', 'minor_category',
   'tags', 'counterparty_name', 'description'];
-export const exportData = (format, rows) => {
+const ACC_COLS = ['name', 'type', 'sub_type', 'currency', 'opening_value', 'current_value', 'is_active', 'description'];
+const SUB_COLS = ['id', 'name', 'counterparty_name', 'amount', 'currency', 'frequency', 'day_of_month', 'day_of_week',
+  'source_account', 'tx_type', 'major_category', 'minor_category', 'tags', 'is_active', 'description', 'created_at'];
+const CAT_COLS = ['tx_type', 'major_category', 'minor_category', 'description', 'is_active', 'tag_keywords',
+  'counterparty_examples', 'source_account_types', 'target_account_types', 'source_account_mandatory',
+  'target_account_mandatory', 'workflow_type', 'is_subscription_eligible'];
+
+export const exportData          = (format, rows) => {
   const normalised = rows.map(r => ({ ...r, tx_date_time: utcToLocalInput(r.tx_date_time) }));
   return _exportData(format, normalised, 'expenses', ET_COLS);
 };
+export const exportAccounts      = (format, rows) => _exportData(format, rows, 'accounts', ACC_COLS);
+export const exportSubscriptions = (format, rows) => {
+  const normalised = rows.map(r => ({ ...r, created_at: utcToLocalInput(r.created_at) }));
+  return _exportData(format, normalised, 'subscriptions', SUB_COLS);
+};
+export const exportCategories    = (format, rows) => _exportData(format, rows, 'categories', CAT_COLS);
 
 // ── Shared context menu ───────────────────────────────────────────────────────
 let _ctxMenuEl  = null;

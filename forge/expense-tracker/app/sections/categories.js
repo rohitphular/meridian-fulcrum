@@ -1,5 +1,5 @@
 import { state } from '../core/state.js';
-import { el, esc, openContextMenu, closeContextMenu, exportData } from '../core/utils.js';
+import { el, esc, openContextMenu, closeContextMenu, exportCategories } from '../core/utils.js';
 import { showLoading, hideLoading, showMsg } from '../core/ui.js';
 import { ExpenseAPI } from '../core/api.js';
 
@@ -417,7 +417,7 @@ function _attachCatEvents() {
     openContextMenu(el('catExportBtn'), [
       { key: 'csv',  label: '↓ CSV'  },
       { key: 'json', label: '↓ JSON' },
-    ], key => exportData(key, rows));
+    ], key => exportCategories(key, rows));
   });
 
   el('catImportBtn')?.addEventListener('click', () => {

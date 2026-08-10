@@ -47,6 +47,7 @@ function doGet(e) {
   if (action === 'list_subscriptions')           return json({ ok: true, data: listSubscriptions() });
   if (action === 'get_subscription_schema')      return json({ ok: true, data: getSubscriptionSchemaForClient() });
   if (action === 'get_suggested_transactions')   return json({ ok: true, suggestions: getSuggestedTransactions() });
+  if (action === 'get_transaction_metadata')     return json(getTransactionMetadata());
   if (action === 'get_computed_insights')        return json(getComputedInsights(e.parameter));
 
   return json({ ok: false, error: 'unknown_action' });
