@@ -43,7 +43,7 @@ app/
     └── <module-name>.css   All module styles — light + dark themes
 ```
 
-The `_shared/` folder (at `forge/_shared/`) holds code shared across ALL modules. Do not copy-paste from it — import from it.
+The `_shared/` folder (at `expense-tracker/_shared/`) holds code shared across ALL expense-tracker modules. Do not copy-paste from it — import from it.
 
 ---
 
@@ -95,7 +95,7 @@ Rules:
 
 ## The _shared layer
 
-These files live at `forge/_shared/` and are loaded by every module. Never copy their code — always import or load them via `<script src>`.
+These files live at `expense-tracker/_shared/` and are loaded by every module. Never copy their code — always import or load them via `<script src>`.
 
 ### `_shared/sheets-client.js`
 
@@ -120,7 +120,7 @@ Exports `createAuthModule(config)` — call it once in `core/auth.js` to get PIN
 
 ```js
 // core/auth.js
-import { createAuthModule } from '../../../_shared/auth.js';
+import { createAuthModule } from '../../_shared/auth.js';
 import { ExpenseAPI } from './api.js';
 
 export const { writeSession, readSession, clearSession, showPinGate, hidePinGate, submitPin, fetchGeo } =
@@ -667,7 +667,7 @@ Split a section file only if a large private helper function (e.g. a form render
 # HTTP server required — file:// is blocked at the HTML level
 make app-start
 # → http://localhost:8000/expense-tracker/app/
-# Serves from forge/ so ../../_shared/ paths resolve correctly
+# Serves repo root so expense-tracker/_shared/ paths resolve correctly
 ```
 
 Frontend changes do NOT go through `cicd/deploy.sh` — that script is backend-only. To publish frontend changes, commit and push to the main branch. GitHub Pages serves from main automatically.

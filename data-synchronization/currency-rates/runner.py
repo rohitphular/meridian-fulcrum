@@ -5,8 +5,8 @@ from datetime import date
 
 from py_logging import get_logger
 
-import config
-from currency_rates.job import CurrencyRatesJob
+import core.config as config
+from core.fetcher import CurrencyRatesJob
 
 logger = get_logger(__name__)
 

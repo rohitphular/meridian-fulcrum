@@ -16,7 +16,7 @@ Stored in GAS **Project Settings → Script Properties** (not environment variab
 
 | Key | Required | Value |
 |---|---|---|
-| `PIN_SECRET` | Yes | The chosen PIN (numeric or alphanumeric) |
+| `PIN_SECRET` | Yes | The chosen PIN — minimum 8 characters; alphanumeric recommended for prod |
 | `TOTP_SECRET` | When TOTP enabled | Base32 TOTP secret — same value entered into an authenticator app |
 | `TOTP_ENABLED` | No (defaults to `false`) | `"true"` to enforce TOTP; `"false"` or absent to skip |
 | `OPENAI_API_KEY` | If using advisor | OpenAI API key for the LLM advisor endpoint |
@@ -83,7 +83,7 @@ verify only:  checkLocked → checkPin → verifyTotp → recordAccess(success) 
 
 | `TOTP_ENABLED` | Behaviour |
 |---|---|
-| `"true"` | Validates the 6-digit code via RFC 6238 HMAC-SHA1 with a ±1 window for clock skew. Wrong code → `totp_invalid`. |
+| `"true"` | Validates the 6-digit code via RFC 6238 HMAC-SHA1 with a ±1 window for clock skew. Wrong code → `totp_invalid`. If `TOTP_SECRET` is not set → returns `totp_invalid` immediately (fail closed, not fail open). |
 | `"false"` or absent | Returns `true` immediately. Any 6-digit input is accepted (dev convenience). |
 
 The login form always shows both fields regardless of the flag. The user always enters a code. The server silently enforces or skips the check based on the flag.
@@ -142,7 +142,7 @@ Forced logout = clear `sessionStorage`.
 
 The PIN is re-validated on every request via `checkPin`. There is no opaque server-issued session token — this is a deliberate simplification for the single-user threat model. The only realistic exfiltration path for the PIN is XSS:
 
-- **Mitigated by**: `textContent` (not `innerHTML`) for user-supplied strings in `showMsg`; SRI hash on Chart.js CDN; server-side input validation.
+- **Mitigated by**: `textContent` (not `innerHTML`) in `showMsg` — error strings from the server cannot inject HTML; SRI hash on Chart.js CDN; server-side input validation.
 - **Transport**: HTTPS-only via the GAS `/exec` URL.
 
 Future hardening: issue a `Utilities.getUuid()` token at login, stored in `PropertiesService`, and send that instead of the PIN. Out of scope until needed.

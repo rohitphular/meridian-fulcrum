@@ -20,15 +20,15 @@ The deploy pipeline is **backend-only**. It pushes `.gs` source files to a Googl
 **Interactive (recommended):**
 
 ```bash
-bash forge/expense-tracker/cicd/deploy.sh
+bash expense-tracker/cicd/deploy.sh
 # Prompts: pick env → optional description
 ```
 
 **Direct (for scripting or CI):**
 
 ```bash
-bash cicd/deploy.sh dev  "expense-tracker: <change description>"
-bash cicd/deploy.sh prod "expense-tracker: <change description>"
+bash expense-tracker/cicd/deploy.sh dev  "expense-tracker: <change description>"
+bash expense-tracker/cicd/deploy.sh prod "expense-tracker: <change description>"
 ```
 
 The description becomes the GAS deployment label — it appears in the Apps Script editor's "Deployments" list.
@@ -136,7 +136,7 @@ The frontend (`app/`) is static and does not use `cicd/deploy.sh`.
 | Trigger | Result |
 |---|---|
 | `git push` to `main` | GitHub Pages republishes `app/` automatically |
-| `make app-start` | Serves from `forge/` at http://localhost:8000/expense-tracker/app/ |
+| `make app-start` | Serves repo root at http://localhost:8000/expense-tracker/app/ |
 
 `app/config.js` picks the backend URL based on `location.hostname` at runtime — no per-deploy mutation:
 
@@ -233,10 +233,61 @@ Paste the env's `/exec` URL into the matching constant in `app/config.js` (`DEV_
 ### 9. First scripted deploy
 
 ```bash
-bash cicd/deploy.sh dev "bootstrap"
+bash expense-tracker/cicd/deploy.sh dev "bootstrap"
 ```
 
-All subsequent deploys: `bash forge/expense-tracker/cicd/deploy.sh`.
+All subsequent deploys: `bash expense-tracker/cicd/deploy.sh`.
+
+---
+
+## Makefile targets — all environments
+
+From the repo root:
+
+| Target | What it does |
+|---|---|
+| `make infra-up` | Create `fulcrum-net` docker network + start PostgreSQL on port 5433 |
+| `make infra-down` | Stop PostgreSQL + remove docker network |
+| `make app-start` | Start HTTP server at http://localhost:8000/expense-tracker/app/ |
+| `make app-stop` | Stop the HTTP server |
+| `make api-deploy` | Interactive GAS backend deploy (picks env + description) |
+| `make api-logs` | Open GAS executions page in browser |
+| `make job-setup` | Create venv and install expense-tracker job deps |
+| `make job-start` | Run expense-tracker jobs (interactive env selector) |
+
+---
+
+## Data-sync jobs — running
+
+Data-sync jobs (in `data-synchronization/<job>/job/`) do not use `cicd/deploy.sh` — they run directly.
+
+```bash
+# First-time: install deps
+cd data-synchronization/currency-rates/job
+uv sync
+
+# Apply migrations (once per environment)
+uv run python -c "
+from py_db_migrate.runner import run_migrations
+from py_db_migrate.adapters.postgres import get_client
+import config
+client = get_client(config.db_config())
+run_migrations(client, migrations_dir='migrations')
+"
+
+# Daily run
+uv run python runner.py
+
+# Historical backfill from a specific date
+uv run python runner.py --backfill 2024-01-01
+```
+
+Env vars are read from the repo root `.env` — load it before running:
+
+```bash
+set -a && source ../../../../.env && set +a
+uv run python runner.py
+```
 
 ---
 

@@ -5,23 +5,23 @@ description = "Daily currency rate fetch job — fiat (Frankfurter), crypto (Coi
 requires-python = ">=3.12"
 dependencies = [
     "requests>=2.32",
+    "pyyaml>=6.0",
     "py-logging",
     "py-db-migrate",
 ]
 
+[tool.uv]
+package = false
+
 [tool.uv.sources]
-py-logging = { git = "git@github.com:rohitphular/meridian-common-libs.git", subdirectory = "py-logging" }
-py-db-migrate = { git = "git@github.com:rohitphular/meridian-common-libs.git", subdirectory = "py-db-migrate" }
+py-logging = { git = "git+ssh://git@github.com/rohitphular/meridian-common-libs.git", subdirectory = "py-logging" }
+py-db-migrate = { git = "git+ssh://git@github.com/rohitphular/meridian-common-libs.git", subdirectory = "py-db-migrate" }
 
 [dependency-groups]
 dev = [
     "pytest>=8.0",
     "ruff>=0.9",
 ]
-
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
 
 [tool.ruff]
 line-length = 200

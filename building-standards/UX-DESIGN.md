@@ -6,29 +6,31 @@ Living reference for building consistent Fulcrum Forge modules. All modules shar
 
 ## Project Structure
 
-Every Forge module lives at `forge/<module-name>/app/` alongside the shared layer:
+Every Forge module lives at `<module-name>/app/` alongside the shared layer:
 
 ```
-forge/
+expense-tracker/
   _shared/
     style-tokens.css       ← design tokens (colors, fonts) — never edit per-module
     sheets-client.js       ← SheetsClient global loaded before your script
-  <module-name>/
-    app/
-      index.html           ← shell, loads shared CSS → module CSS → <script type="module">
-      main.js              ← ES module entry point
-      config.js            ← SCRIPT_URL (gitignored)
-      style/
-        <module-name>.css  ← module-specific styles only
-      core/
-        state.js           ← exported state object + any shared setters
-        api.js             ← API wrapper (wraps SheetsClient)
-        utils.js           ← el, esc, fmtDate, fmtAmount, etc.
-        ui.js              ← showLoading, hideLoading, showMsg
-        auth.js            ← showPinGate, hidePinGate, submitPin
-        nav.js             ← showSection (multi-tab modules only)
-      sections/
-        <section>.js       ← one file per tab/section, exports render<Section>
+    auth.js                ← auth factory — createAuthModule()
+    ui.js                  ← loading overlay + toast banner
+    utils.js               ← pure utility functions
+  app/
+    index.html             ← shell, loads shared CSS → module CSS → <script type="module">
+    main.js                ← ES module entry point
+    config.js              ← SCRIPT_URL (gitignored)
+    style/
+      expense-tracker.css  ← module-specific styles only
+    core/
+      state.js             ← exported state object + any shared setters
+      api.js               ← API wrapper (wraps SheetsClient)
+      utils.js             ← el, esc, fmtDate, fmtAmount, etc.
+      ui.js                ← showLoading, hideLoading, showMsg
+      auth.js              ← showPinGate, hidePinGate, submitPin
+      nav.js               ← showSection (multi-tab modules only)
+    sections/
+      <section>.js         ← one file per tab/section, exports render<Section>
 ```
 
 Single-page modules (no tabs) omit `nav.js` and `sections/`. Put render logic directly in `main.js` or alongside it.
@@ -166,7 +168,7 @@ On success: store PIN in `sessionStorage` with a module-prefixed key (e.g. `<slu
 ```js
 function showMsg(text, type = 'success') {
   const b = el('msgBanner');
-  el('msgText').innerHTML = text;
+  el('msgText').textContent = text;   // textContent — never innerHTML; safe for any string
   el('msgIco').textContent = type === 'warn' ? '!' : '›';
   b.className = `banner ${type === 'warn' ? 'warn' : 'success'}`;
   clearTimeout(showMsg._t);
@@ -175,6 +177,8 @@ function showMsg(text, type = 'success') {
 ```
 
 Two variants: `.banner.success` (teal left border) and `.banner.warn` (ember left border).
+
+`textContent` is required — `innerHTML` would allow server-sourced error strings to inject HTML into the DOM.
 
 ---
 
@@ -657,7 +661,7 @@ Minimal multi-tab shell:
         <h1>Module Name</h1>
       </div>
       <div class="header-controls">
-        <button class="theme-btn" id="themeToggle" aria-label="Toggle colour theme">☽</button>
+        <button class="theme-btn" id="themeToggle" aria-label="Toggle colour theme" title="Toggle dark/light mode">☽</button>
       </div>
     </div>
     <nav class="tab-nav" id="tabNav">

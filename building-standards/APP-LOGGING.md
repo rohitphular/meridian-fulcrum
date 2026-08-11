@@ -165,15 +165,60 @@ There is no build step to strip logs, so be selective about what you commit. Rul
 - `console.warn` — acceptable for unexpected-but-non-fatal paths.
 - `console.log` — only commit if the message is useful to a future developer (e.g. a schema fallback notice). Remove debug/trace logs before merging.
 
-A future pattern to formalise:
+Guard verbose development logs behind the `DEBUG` flag:
 
 ```js
-// In main.js or config.js
+// In main.js or config.js — set once
 const DEBUG = location.hostname === 'localhost';
 
-// In modules
+// In modules — gate verbose logs
 if (DEBUG) console.log('[state] loadAll complete', state);
 ```
+
+---
+
+---
+
+## Python job logging (`py-logging`)
+
+Python jobs use `py-logging` from `meridian-common-libs`. Never use `print()`, `logging.basicConfig()`, or bare `logging.getLogger()`.
+
+```python
+from py_logging import get_logger
+logger = get_logger(__name__)
+```
+
+### Log format
+
+```
+[YYYY-MM-DD HH:MM:SS UTC] [LEVEL] [module.submodule] message
+```
+
+Messages follow the same `fnname: key=value` pattern as GAS logs:
+
+```python
+logger.info(f"run: input_rows={len(rows)} date={today}")
+logger.warning(f"fetch: source=goldapi status=429 reason=rate_limit")
+logger.error(f"run: error={e}")
+```
+
+### Log levels
+
+| Level | When |
+|---|---|
+| `logger.info` | Start/end of `run()`, row counts, external API success |
+| `logger.warning` | Skipped rows, API rate limits, non-fatal misses |
+| `logger.error` | Caught exceptions, unrecoverable states |
+
+### What to never log in Python jobs
+
+- API keys or DB passwords — any value loaded from `.env`
+- Raw row data (transaction amounts, account balances)
+- Full exception tracebacks that include sensitive values
+
+### Log files
+
+`$MERIDIAN_LOG_ROOT/{top_module}/{top_module}.log` — daily rotation, previous day deleted. The env var `MERIDIAN_LOG_ROOT` must be set before the job runs; `py-logging` raises `EnvironmentError` at import time if it's missing.
 
 ---
 
@@ -187,4 +232,7 @@ if (DEBUG) console.log('[state] loadAll complete', state);
 | Unexpected API error response | `console.warn` | `console.warn` |
 | Schema load failure | — | `console.warn` |
 | Caught exception | `console.error` | `console.error` |
-| Debug/trace during development | — | `console.log` (remove before merge) |
+| Debug/trace during development | — | `console.log` gated by `DEBUG` flag (remove before merge) |
+| Python job run start/end | `logger.info` | — |
+| Python job skipped rows | `logger.warning` | — |
+| Python job caught exception | `logger.error` | — |

@@ -1,253 +1,396 @@
-# Forge Backend — Python Job Processor Guide
+# Forge Backend — Python Job Guide
 
-> **Audience**: LLMs and developers writing or modifying the Forge job processor.
-> **Stack**: Python 3.11+ · `gspread` · Google Sheets API · service account auth
-
----
-
-## What the job processor is
-
-A local Python process that reads raw expense-tracker data from Google Sheets, runs
-compute jobs (KPI aggregation, analysis, etc.), and writes pre-computed results back
-to dedicated output sheets. The GAS `/exec` endpoint serves these output sheets to
-the frontend — no computation happens in GAS or the browser.
-
-The job processor is **not** a server. It runs on demand (`python runner.py`) or via
-cron. It has no HTTP endpoints and no persistent state.
+> **Audience**: LLMs and developers writing or modifying Forge Python jobs.
+> **Stack**: Python 3.12+ · `uv` · `py-logging` · `py-db-migrate` · `psycopg2` · `gspread`
 
 ---
 
-## Folder structure
+## Two kinds of Python jobs
+
+| Kind | Location | Reads from | Writes to | Auth |
+|---|---|---|---|---|
+| **Sheets jobs** | `expense-tracker/job/` | Google Sheets (gspread) | Google Sheets (computed_ tabs) | GCP service account |
+| **Data-sync jobs** | `data-synchronization/<job>/job/` | External APIs / Google Sheets | PostgreSQL (`fulcrum_db`) | DB env vars + API keys |
+
+Both kinds share the same structural rules: `runner.py` entry point, thin `run()` method, private `_compute` methods, `py-logging` for all log output.
+
+---
+
+## Dependency management — always use uv
+
+Every Python job has a `pyproject.toml`. Never use `requirements.txt` for new jobs.
+
+```toml
+[project]
+name = "my-job"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "requests>=2.32",
+    "py-logging",
+    "py-db-migrate",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+py-logging    = { git = "git+ssh://git@github.com/rohitphular/meridian-common-libs.git", subdirectory = "py-logging" }
+py-db-migrate = { git = "git+ssh://git@github.com/rohitphular/meridian-common-libs.git", subdirectory = "py-db-migrate" }
+```
+
+Install / sync:
+```bash
+cd <job>/
+uv sync          # creates .venv and installs all deps
+uv run python runner.py
+```
+
+---
+
+## Shared libraries — meridian-common-libs
+
+Two libraries are mandatory in all new Python jobs. Both are consumed via uv git sources from `git+ssh://git@github.com/rohitphular/meridian-common-libs.git`.
+
+### `py-logging`
+
+Structured logger. Always use it — never use `print()`, `logging.basicConfig()`, or bare `logging.getLogger()`.
+
+```python
+from py_logging import get_logger
+logger = get_logger(__name__)
+```
+
+Requires `MERIDIAN_LOG_ROOT` env var set to the absolute path of the logs directory. Raises `EnvironmentError` at import time if not set — do not suppress this.
+
+Log format: `[YYYY-MM-DD HH:MM:SS UTC] [LEVEL] [module.path] message`
+
+Log files: `$MERIDIAN_LOG_ROOT/{top_module}/{top_module}.log` — daily rotation, previous day deleted.
+
+### `py-db-migrate`
+
+Schema migration runner. Used for all PostgreSQL DDL — never run `CREATE TABLE` ad-hoc.
+
+```python
+from py_db_migrate.core.config import ConnectionConfig
+from py_db_migrate.adapters.postgres import get_client, ensure_schema_migration_table
+
+config = ConnectionConfig(host=..., port=..., user=..., password=..., connect_database=...)
+client = get_client(config)
+```
+
+Migration files live in `job/migrations/`. Naming: `NNNN_description.py` — four-digit zero-padded sequence, `snake_case` description.
+
+```python
+# migrations/0001_create_currency_master.py
+def upgrade(client) -> None:
+    with client.cursor() as cursor:
+        cursor.execute("CREATE TABLE IF NOT EXISTS ...")
+    client.commit()
+```
+
+---
+
+## Sheets jobs — `expense-tracker/job/`
+
+### Folder structure
 
 ```
-forge/expense-tracker/job/
+expense-tracker/job/
   runner.py              ← entry point — discovers and runs jobs
   config.py              ← loads envs.json + resolves service account path
   sheets_client.py       ← thin gspread wrapper (read_sheet / write_sheet)
-  requirements.txt
+  requirements.txt       ← legacy; existing jobs only — new jobs use pyproject.toml
   jobs/
     __init__.py          ← ALL_JOBS registry
     base.py              ← BaseJob abstract class
-    kpi_summary.py       ← one file per job
-    ...
+    kpi_summary.py
+    insights/
+      job.py             ← InsightsJob
+      ...
 ```
 
----
-
-## Running jobs
+### Running
 
 ```bash
-cd forge/expense-tracker/job
-pip install -r requirements.txt
-
-python runner.py --env dev           # run all jobs against dev sheet
-python runner.py --env prod          # run all jobs against prod sheet
-python runner.py --env dev --job kpi_summary   # run one job by name
+cd expense-tracker/job
+python runner.py --env dev              # all jobs against dev sheet
+python runner.py --env prod             # all jobs against prod sheet
+python runner.py --env dev --job kpi_summary   # single job by name
 ```
 
-`--env` defaults to `dev`. Exits with code 1 if any job fails.
+Or via Makefile from the repo root:
+```bash
+make job-start   # interactive env selector
+```
 
----
-
-## Config and credentials
+### Config and credentials
 
 `config.py` reads two files:
 
 | File | Location | Purpose |
 |---|---|---|
-| `envs.json` | `forge/expense-tracker/cicd/envs.json` | Spreadsheet IDs per env (dev/prod) |
+| `envs.json` | `expense-tracker/cicd/envs.json` | Spreadsheet IDs per env (dev/prod) |
 | Service account | `local/configs/gcp_service_account.json` | GCP credentials — **never commit** |
 
-`local/` is gitignored at the repo root. Never move the service account into the repo.
+`local/` is gitignored at the repo root.
 
-The config object passed to every job:
+### Input sheets (read-only)
 
-```python
-{
-  'env':            'dev',
-  'spreadsheet_id': '...',
-  'service_account': '/path/to/gcp_service_account.json',
-  'sheets': {
-    'transactions':  'transactions',
-    'accounts':      'accounts',
-    'categories':    'categories',
-    'rates':         'rates',
-    'subscriptions': 'subscriptions',
-  },
-  'quote_currency': 'GBP',
-}
-```
+Never write to input sheets. They are owned by GAS.
 
----
+| Sheet name | Contents |
+|---|---|
+| `transactions` | All transaction rows |
+| `accounts` | Account definitions and balances |
+| `categories` | Category tree |
+| `rates` | Currency → GBP rate map |
+| `subscriptions` | Subscription definitions |
 
-## Input sheets (read-only)
+### Output sheets (written by jobs)
 
-| Key in `config['sheets']` | Sheet name | Contents |
-|---|---|---|
-| `transactions` | `transactions` | All transaction rows |
-| `accounts` | `accounts` | Account definitions and balances |
-| `categories` | `categories` | Category tree (major / minor) |
-| `rates` | `rates` | Currency → GBP rate map |
-| `subscriptions` | `subscriptions` | Subscription definitions |
+Convention: `computed_<job_name>`.
 
-Never write to input sheets from a job. They are owned by GAS.
-
----
-
-## Output sheets (written by jobs)
-
-Each job writes to its own dedicated sheet. Sheet naming convention:
-
-```
-computed_<job_name>
-```
-
-e.g. `computed_kpi_summary`, `computed_cashflow_monthly`.
-
-Output sheet rules:
 - Row 1: column headers
 - Row 2+: data rows
-- First column: always `computed_at` (ISO 8601 timestamp of the run)
+- First column: always `computed_at` (ISO 8601 UTC timestamp)
 - Jobs clear and rewrite the full sheet on every run — no incremental updates
 
----
+### SheetsClient
 
-## SheetsClient
+`sheets_client.py` wraps gspread. Use only these two methods in job files — do not import gspread directly.
 
-`sheets_client.py` wraps gspread. Use these two methods — do not import gspread directly in job files.
+#### `read_sheet(name: str) -> list[dict]`
 
-### `read_sheet(name: str) -> list[dict]`
+Returns all data rows as dicts keyed by header. Returns `[]` if sheet doesn't exist. All values are strings (`numericise_ignore=['all']`) — cast in the job.
 
-Returns all data rows as a list of dicts keyed by header values. Returns `[]` if the sheet doesn't exist (logs a warning). All values are returned as strings (`numericise_ignore=['all']`) — cast in the job.
+#### `write_sheet(name: str, headers: list[str], rows: list[list]) -> None`
 
-```python
-rows = self.sheets.read_sheet(self.config['sheets']['transactions'])
-# rows = [{'id': '2024-01-15-001', 'amount': '42.50', 'tx_type': 'money-out', ...}, ...]
-```
+Creates the sheet if missing. Clears and rewrites fully on every call.
 
-### `write_sheet(name: str, headers: list[str], rows: list[list]) -> None`
+### Adding a Sheets job
 
-Creates the sheet if it doesn't exist. Clears and rewrites on every call.
-
-```python
-headers = ['computed_at', 'period', 'total_income', 'total_expense']
-rows    = [['2024-01-15T12:00:00Z', 'last_30d', '5000.00', '3200.00']]
-self.sheets.write_sheet('computed_kpi_summary', headers, rows)
-```
-
----
-
-## Adding a new job
-
-1. Create `jobs/<job_name>.py` — one file per job.
-2. Inherit from `BaseJob`, set `name` and `description`, implement `run()`.
-3. Register in `jobs/__init__.py`.
-
-### Job file template
+1. Create `jobs/<job_name>.py` — inherit `BaseJob`, set `name` and `description`, implement `run()`.
+2. Register in `jobs/__init__.py`.
 
 ```python
 from datetime import datetime, timezone
 from jobs.base import BaseJob
+from py_logging import get_logger
+
+logger = get_logger(__name__)
 
 
 class MyNewJob(BaseJob):
     name        = 'my_new_job'
-    description = 'One-line description of what this job computes'
+    description = 'One-line description'
 
-    OUTPUT_SHEET  = 'computed_my_new_job'
+    OUTPUT_SHEET   = 'computed_my_new_job'
     OUTPUT_HEADERS = ['computed_at', 'col_a', 'col_b']
 
     def run(self) -> None:
-        # 1. Read raw data
-        txs = self.sheets.read_sheet(self.config['sheets']['transactions'])
-
-        # 2. Compute
+        txs    = self.sheets.read_sheet(self.config['sheets']['transactions'])
+        logger.info(f"my_new_job: input_rows={len(txs)}")
         result = self._compute(txs)
-
-        # 3. Write output
-        now = datetime.now(timezone.utc).isoformat()
-        rows = [[now, row['col_a'], row['col_b']] for row in result]
+        now    = datetime.now(timezone.utc).isoformat()
+        rows   = [[now, r['col_a'], r['col_b']] for r in result]
         self.sheets.write_sheet(self.OUTPUT_SHEET, self.OUTPUT_HEADERS, rows)
+        logger.info(f"my_new_job: output_rows={len(rows)}")
 
     def _compute(self, txs: list[dict]) -> list[dict]:
-        # Pure computation — no sheet I/O here
+        # Pure computation — no sheet I/O
         ...
 ```
 
-### Register in `jobs/__init__.py`
+---
+
+## Data-sync jobs — `data-synchronization/<job>/job/`
+
+### Folder structure
+
+```
+data-synchronization/<job>/
+  _tasks/              ← design docs for this job
+  pyproject.toml       ← uv deps (always — no requirements.txt)
+  py_db_migrate.toml   ← migration CLI config
+  runner.py            ← entry point; --backfill flag for historical runs
+  config.py            ← DB config + API keys from env vars
+  fetcher.py           ← <JobName>Job class
+  sources/             ← one file per external data source, named after the source
+    <source>.py
+  database/
+    upsert.py          ← PostgreSQL upsert helpers
+  migrations/
+    0001_<name>.py
+    0002_<name>.py
+```
+
+No `__init__.py` files anywhere. Python 3.3+ namespace packages handle directory imports without them. Never add `__init__.py` as a way to make a directory importable — import explicitly by module path instead.
+
+### Config from env vars
+
+All configuration reads from environment variables — no hardcoded values. The `fulcrum/.env` file is the source; load it before running.
 
 ```python
-from jobs.kpi_summary import KpiSummaryJob
-from jobs.my_new_job  import MyNewJob
+# config.py
+import os
+from py_db_migrate.core.config import ConnectionConfig
 
-ALL_JOBS = [
-    KpiSummaryJob,
-    MyNewJob,
-]
+def db_config() -> ConnectionConfig:
+    return ConnectionConfig(
+        host=os.environ["CR_DB_HOST"],
+        port=int(os.environ.get("CR_DB_PORT", "5432")),
+        user=os.environ["CR_DB_USER"],
+        password=os.environ["CR_DB_PASSWORD"],
+        connect_database=os.environ["CR_DB_NAME"],
+    )
 ```
+
+Raise `EnvironmentError` immediately if a required variable is absent — never silently fall back.
+
+### Running migrations
+
+`py_db_migrate.toml` at the job root holds the connection config (reads from env vars). Apply all pending migrations with:
+
+```bash
+cd data-synchronization/<job>
+export $(grep -v '^#' ../../.env | xargs)
+uv run py-db-migrate run --db postgres
+```
+
+### Runner pattern
+
+```python
+# runner.py
+import argparse
+from datetime import date
+from py_logging import get_logger
+import config
+from fetcher import MyJob
+
+logger = get_logger(__name__)
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--backfill', metavar='YYYY-MM-DD')
+    args = parser.parse_args()
+    job = MyJob(config.db_config())
+    if args.backfill:
+        logger.info(f"runner: mode=backfill from_date={args.backfill}")
+        job.backfill(date.fromisoformat(args.backfill))
+    else:
+        logger.info("runner: mode=daily")
+        job.run()
+
+if __name__ == '__main__':
+    main()
+```
+
+### Job class pattern
+
+```python
+# fetcher.py
+import sources.frankfurter as frankfurter   # explicit module import — no __init__.py
+import sources.coingecko as coingecko
+from database.upsert import upsert_rates
+from py_db_migrate.core.config import ConnectionConfig
+from py_db_migrate.adapters.postgres import get_client
+from py_logging import get_logger
+
+logger = get_logger(__name__)
+
+
+class MyJob:
+    def __init__(self, db: ConnectionConfig) -> None:
+        self._db = db
+
+    def run(self) -> None:
+        client = get_client(self._db)
+        try:
+            data = self._fetch()
+            self._upsert(client, data)
+            logger.info(f"job: rows={len(data)}")
+        finally:
+            client.close()
+
+    def backfill(self, from_date) -> None:
+        client = get_client(self._db)
+        try:
+            ...
+        finally:
+            client.close()
+
+    def _fetch(self): ...
+    def _upsert(self, client, data): ...
+```
+
+Always close the client in a `finally` block. Use `upsert` patterns with `ON CONFLICT` — never truncate-and-reload PostgreSQL tables.
 
 ---
 
-## BaseJob interface
+## Coding rules — all Python jobs
+
+### Data handling
+
+- Sheet values are always strings — cast explicitly: `float(row['amount'])`, `int(row['count'])`.
+- Missing or empty values: always `row.get('field') or default`.
+- Dates from sheets: `datetime.fromisoformat(row['date_field'])`.
+- PostgreSQL `NUMERIC` values come back as `Decimal` — convert to `float` only at display time, not in computation.
+
+### Currency / amounts
+
+- All monetary totals must convert to the quote currency (GBP default).
+- Use `tx['fx_rate']` (the rate recorded on the transaction) for historical conversion — never live rates.
+- Transactions without a matching rate: exclude from totals and log the skip with `logger.warn`.
+
+### Logging
+
+Use `py-logging` exclusively. Format: `fnname: key=value key=value`.
 
 ```python
-class BaseJob(ABC):
-    name: str        # unique snake_case identifier — used by --job flag
-    description: str # shown in runner output
-
-    def __init__(self, sheets: SheetsClient, config: dict): ...
-
-    @abstractmethod
-    def run(self) -> None: ...
+logger.info(f"run: input_rows={len(txs)} date={today}")
+logger.warning(f"run: skipped_rows={skipped} reason=missing_rate")
+logger.error(f"run: {e}")
 ```
 
-`run()` must either complete successfully or raise an exception. The runner catches
-all exceptions, logs them, and continues to the next job. It exits with code 1 if
-any job raised.
+Log at the start of `run()` with input counts, at the end with output counts. Never log:
+- Raw transaction data or account names
+- Balances, PINs, API keys, or session objects
+- Any value from `.env` that is a secret
 
----
+### Keep `run()` thin
 
-## Coding rules
+`run()` orchestrates: read → compute → write. All computation lives in private `_methods` — pure functions with no I/O. This makes jobs testable without a real Sheets or DB connection.
 
-**Data handling**
-- All sheet values come back as strings — always cast explicitly: `float(row['amount'])`, `int(row['count'])`.
-- Missing or empty string values are common — always use `row.get('field') or default`.
-- Dates from the sheet are ISO strings — parse with `datetime.fromisoformat(...)`.
+### No side effects on input data
 
-**Currency / amounts**
-- All monetary output must be converted to the quote currency (GBP by default).
-- Build a rate map from the `rates` sheet: `{ 'GBP': 1.0, 'INR': 105.0, ... }`.
-- Conversion: `amount_gbp = float(amount) / float(fx_rate)` where `fx_rate` is the transaction's own rate, not the current live rate.
-- Transactions without a matching rate should be excluded from totals — log the skip.
+Never write to `transactions`, `accounts`, `categories`, `rates`, or `subscriptions` sheets. If a job needs to update a GAS-owned entity, raise it as a design question — it likely belongs in a GAS action instead.
 
-**Logging**
-- Log to console only (`print()`). Format: `[job_name] key=value key=value`.
-- Log at the start of `run()` with input counts, at the end with output counts.
-- Never log raw transaction data, account names, or balances.
+### Error handling
 
-**No side effects on input sheets**
-- Never write to `transactions`, `accounts`, `categories`, `rates`, or `subscriptions`.
-- If a job needs to update a GAS-owned sheet, raise it as a design question first.
+Jobs catch all exceptions, log them, and exit with code 1. The runner should not suppress exceptions mid-job — let them bubble to the runner's top-level handler.
 
-**Keep `run()` thin**
-- `run()` orchestrates: read → compute → write.
-- Computation lives in private `_methods` — pure functions, no sheet I/O.
-- This makes jobs testable without a real Sheets connection.
+```python
+# In runner.py
+try:
+    job.run()
+except Exception as e:
+    logger.error(f"runner: job_failed error={e}")
+    sys.exit(1)
+```
 
 ---
 
 ## GAS integration — `getComputedData` action
 
-The GAS router exposes a `getComputedData` action that reads any `computed_*` sheet
-and returns its rows as JSON. The frontend calls this instead of computing locally.
+The GAS router exposes `getComputedData` — reads any `computed_*` sheet and returns rows as JSON. The frontend calls this for computed results instead of computing locally.
 
 ```
 GET /exec?action=getComputedData&sheet=computed_kpi_summary&pin=...
-→ { ok: true, data: [{ computed_at: '...', period: 'last_30d', ... }] }
+→ { ok: true, data: [{ computed_at: '...', ... }] }
 ```
 
-GAS does no computation — it reads the sheet and returns rows verbatim. The job
-processor is the single source of truth for computed values.
+GAS does no computation here — it reads and returns verbatim.
 
 ---
 
@@ -255,9 +398,13 @@ processor is the single source of truth for computed values.
 
 | Pitfall | What happens | Fix |
 |---|---|---|
-| Not casting sheet values | `'42.50' + 10 = '42.5010'` | Always cast: `float(row['amount'])` |
-| Reading live rates instead of tx fx_rate | Amounts change retroactively | Use `tx['fx_rate']` for historical conversion |
-| Writing to input sheets | GAS data gets corrupted | Only write to `computed_*` sheets |
-| Assuming sheet exists | `read_sheet` returns `[]` silently | Log and handle empty result explicitly |
-| Putting computation in `run()` | Untestable, hard to read | Private `_methods` for all computation |
+| `print()` instead of `logger` | Logs go nowhere useful; no timestamps; no rotation | Always use `from py_logging import get_logger` |
+| `MERIDIAN_LOG_ROOT` not set | `EnvironmentError` at import | Set the env var before running; never catch and suppress |
+| Not casting sheet string values | `'42.50' + 10 = '42.5010'` | Always cast: `float(row['amount'])` |
+| Using live rates for historical amounts | Amounts change retroactively | Use `tx['fx_rate']` from the transaction row |
+| Writing to input sheets | GAS data gets corrupted | Only write to `computed_*` sheets or PostgreSQL |
+| Putting computation in `run()` | Untestable | Private `_methods` for all computation |
 | No `computed_at` column | Can't tell when data was last refreshed | Always include it as the first column |
+| Hardcoding DB credentials | Secrets in git | Always read from env vars; raise `EnvironmentError` if absent |
+| No `finally` on DB connection | Connection leak under exceptions | Always `try/finally: client.close()` |
+| `requirements.txt` in a new job | Bypasses uv | New jobs always use `pyproject.toml` with uv sources |

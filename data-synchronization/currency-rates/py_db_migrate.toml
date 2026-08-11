@@ -1,0 +1,8 @@
+[databases.postgres]
+host             = "${CR_DB_HOST}"
+port             = "${CR_DB_PORT}"
+user             = "${CR_DB_USER}"
+password         = "${CR_DB_PASSWORD}"
+connect_database = "${CR_DB_NAME}"
+migrations_path  = "migrations"
+tracking_table   = "schema_migrations"

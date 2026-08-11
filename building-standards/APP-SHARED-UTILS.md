@@ -1,23 +1,25 @@
 # Forge — Shared Utilities
 
-> **Scope**: The `forge/_shared/` layer — code and assets shared across ALL Forge modules. This document is the canonical catalog of what exists, what is planned, and how to extend it.
+> **Scope**: The `expense-tracker/_shared/` layer — code and assets shared across Forge frontend modules. This document is the canonical catalog of what exists, what is planned, and how to extend it.
 
 ---
 
 ## What `_shared/` is
 
-`forge/_shared/` holds frontend code (JS + CSS) that every module uses. It is loaded by `index.html` before the module's own scripts. Modules never copy from it — they import or `<script src>` it.
+`expense-tracker/_shared/` holds frontend code (JS + CSS) that every module uses. It is loaded by `index.html` before the module's own scripts. Modules never copy from it — they import or `<script src>` it.
 
 There is no equivalent build step. Changes to `_shared/` take effect immediately for every module that loads from that path.
 
 Backend (GAS) has no import system — BE shared code follows a copy-and-own model described at the end of this document.
+
+Python jobs share code via `meridian-common-libs` — see `APP-BE-PYTHON.md § Shared libraries`.
 
 ---
 
 ## Current `_shared/` inventory
 
 ```
-forge/_shared/
+expense-tracker/_shared/
 ├── style-tokens.css    ← design tokens (colours, fonts, type scale)
 ├── sheets-client.js    ← HTTP layer — SheetsClient global
 ├── auth.js             ← auth factory — createAuthModule()
@@ -54,7 +56,7 @@ SheetsClient.post({ action: 'create_account', ...fields }) // HTTP POST
 Factory function. Each module calls it once in `core/auth.js` with its own session key and reload event.
 
 ```js
-import { createAuthModule } from '../../../_shared/auth.js';
+import { createAuthModule } from '../../_shared/auth.js';
 
 export const { writeSession, readSession, clearSession,
                showPinGate, hidePinGate, submitPin, fetchGeo } =

@@ -871,15 +871,35 @@ Split by domain, not by line count. If a core file exceeds ~400 lines, check whe
 
 ---
 
+## GAS quotas and limits
+
+Know these before designing features — they constrain architecture.
+
+| Quota | Limit |
+|---|---|
+| Script execution time | 6 minutes per execution |
+| `UrlFetchApp` calls per script | 20,000 per day |
+| `UrlFetchApp` data fetch | 50 MB per call |
+| Email send (quota) | 100–1,500 per day (irrelevant here) |
+| Spreadsheet read/write | No hard per-day limit; throttled by time budget |
+| Properties storage | 500 KB total across all properties |
+
+Implications for Forge:
+- Long list operations (1,000+ transaction rows) + batch writes can approach the 6-minute limit. If `listTransactions` + Insights processing times out, move computation to a Python job.
+- `UrlFetchApp` is for external API calls only (advisor, webhook). Do not call it in list paths — it is slow and count-limited.
+- Script Properties are not a cache — 500 KB is the hard ceiling for all properties combined.
+
+---
+
 ## Deploy workflow
 
 ```bash
-# Interactive (recommended)
-bash forge/expense-tracker/cicd/deploy.sh   # pick env
+# Interactive (recommended) — from repo root
+bash expense-tracker/cicd/deploy.sh   # pick env
 
-# Direct
-bash cicd/deploy.sh dev  "expense-tracker: add invoices domain"
-bash cicd/deploy.sh prod "expense-tracker: add invoices domain"
+# Direct — from repo root
+bash expense-tracker/cicd/deploy.sh dev  "expense-tracker: add invoices domain"
+bash expense-tracker/cicd/deploy.sh prod "expense-tracker: add invoices domain"
 ```
 
 The script:

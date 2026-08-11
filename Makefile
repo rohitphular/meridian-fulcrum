@@ -64,6 +64,30 @@ api-deploy: ## Deploy GAS backend (interactive: pick env)
 api-logs: ## Open GAS executions page in browser (interactive: pick env)
 	bash expense-tracker/cicd/logs.sh
 
+##@ Data Synchronization
+
+.PHONY: data-sync
+data-sync: ## Run a data-synchronization module (interactive: pick module)
+	@echo ""; \
+	i=1; \
+	for dir in data-synchronization/*/; do \
+		[ -f "$${dir}start-up.sh" ] && printf "  %d) %s\n" "$$i" "$$(basename $$dir)" && i=$$((i+1)); \
+	done; \
+	echo ""; \
+	printf "Select module: "; read -r CHOICE; \
+	i=1; \
+	selected=""; \
+	for dir in data-synchronization/*/; do \
+		if [ -f "$${dir}start-up.sh" ]; then \
+			[ "$$i" = "$$CHOICE" ] && selected="$$dir" && break; \
+			i=$$((i+1)); \
+		fi; \
+	done; \
+	if [ -z "$$selected" ]; then \
+		echo "Invalid choice '$$CHOICE'."; exit 1; \
+	fi; \
+	bash "$${selected}start-up.sh"
+
 ##@ Job
 
 .PHONY: job-setup

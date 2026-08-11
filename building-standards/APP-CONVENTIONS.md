@@ -269,6 +269,156 @@ A 2–3 character lowercase abbreviation, unique across Forge modules. Used as a
 
 ---
 
+---
+
+## Python naming
+
+### Variables, functions, parameters
+
+`snake_case` for everything.
+
+```python
+currency_code = 'GBP'
+rate_vs_usd   = 1.0
+def fetch_latest(api_key: str) -> float: ...
+def _convert_to_base(amount, from_currency): ...
+```
+
+Private helpers: leading underscore `_snake_case`. Do not use double-underscore `__name` (dunder prefix is for Python magic methods only).
+
+### Classes
+
+`PascalCase`. One class per source concept — no utility-dump classes.
+
+```python
+class CurrencyRatesJob: ...
+class ConnectionConfig: ...
+```
+
+### Constants
+
+`UPPER_SNAKE_CASE` at module level:
+
+```python
+AED_PER_USD    = 3.6725
+TROY_OZ_TO_GRAM = 31.1035
+CURRENCIES     = ['EUR', 'GBP', 'JPY']
+```
+
+### File and folder names
+
+`snake_case` for all `.py` files. Folder names describe their role, not the package they contain:
+
+```
+currency-rates/
+  fetcher.py
+  config.py
+  runner.py
+  sources/
+    frankfurter.py
+    coingecko.py
+  database/
+    upsert.py
+  migrations/
+    0001_create_currency_master.py
+```
+
+**No `__init__.py` files.** Python 3.3+ namespace packages make directories importable without them. Import explicitly by module path:
+
+```python
+# Correct — explicit, readable
+import sources.frankfurter as frankfurter
+from database.upsert import upsert_rates
+
+# Wrong — relies on __init__.py re-exports
+from sources import frankfurter
+```
+
+Never create `__init__.py` just to make a directory importable.
+
+### Type annotations
+
+Always annotate function signatures. Omit from local variables where the type is obvious.
+
+```python
+def fetch_latest(api_key: str) -> dict[str, float]: ...
+def run(self) -> None: ...
+```
+
+### Migration files
+
+`NNNN_description.py` — four-digit zero-padded sequence, `snake_case` description, single `upgrade(client)` function.
+
+```
+0001_create_currency_master.py
+0002_create_currency_rates.py
+```
+
+---
+
+## PostgreSQL naming
+
+### Tables
+
+Plural, `snake_case`, lowercase. Prefix with domain when there are many tables:
+
+```sql
+currency_master
+currency_rates
+sync_log
+```
+
+### Columns
+
+`snake_case`. Same suffix conventions as GAS field names:
+
+| Pattern | Examples |
+|---|---|
+| Booleans: `is_` prefix | `is_active`, `is_locked` |
+| Timestamps: `_at` suffix | `created_at`, `updated_at`, `rate_date` |
+| FK references: `_id` suffix | `currency_id` |
+| Count: `_count` suffix | `failure_count` |
+
+Primary key is always just `id` (serial or UUID). Never `table_name_id`.
+
+### Indexes
+
+`idx_{table}_{columns}`:
+
+```sql
+CREATE INDEX idx_currency_rates_code_date ON currency_rates (currency_code, rate_date);
+```
+
+### Constraints
+
+`{type}_{table}_{columns}`:
+
+```sql
+CONSTRAINT pk_currency_rates PRIMARY KEY (id)
+CONSTRAINT uq_currency_rates_code_date UNIQUE (currency_code, rate_date)
+CONSTRAINT fk_currency_rates_master FOREIGN KEY (currency_code) REFERENCES currency_master (code)
+```
+
+### Views
+
+`v_{description}` — lowercase:
+
+```sql
+v_latest_rates
+v_rates_to_gbp
+```
+
+### Functions and triggers
+
+`snake_case`:
+
+```sql
+fn_set_updated_at()
+trg_currency_rates_updated_at
+```
+
+---
+
 ## Cross-cutting rules
 
 ### Never abbreviate field names

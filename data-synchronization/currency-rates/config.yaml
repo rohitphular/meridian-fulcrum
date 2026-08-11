@@ -1,0 +1,9 @@
+sources:
+  goldapi:
+    enabled: false
+  frankfurter:
+    enabled: true
+  coingecko:
+    enabled: true
+  stooq:
+    enabled: true
