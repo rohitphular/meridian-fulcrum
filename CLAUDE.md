@@ -16,15 +16,15 @@ Read `expense-tracker/REWIRE-BRAIN.md` for current project state, URLs, and what
 
 | Task | Read first |
 |---|---|
-| Writing or modifying backend `.gs` files | `documentation/APP-BE-GSCRIPT.md` |
-| Writing or modifying Python job processor | `documentation/APP-BE-PYTHON.md` |
-| Writing or modifying frontend `.js` / `.html` files | `documentation/APP-FE.md` |
-| Authentication, PIN, TOTP, audit log | `documentation/APP-AUTH.md` |
-| Deploying to dev or prod | `documentation/APP-CICD.md` |
-| UI components, layout, CSS, dark mode | `documentation/UX-DESIGN.md` |
-| Naming variables, functions, files, CSS classes | `documentation/APP-CONVENTIONS.md` |
-| Logging — what to log, format, what to never log | `documentation/APP-LOGGING.md` |
-| Shared utilities — existing functions, adding new ones | `documentation/APP-SHARED-UTILS.md` |
+| Writing or modifying backend `.gs` files | `building-standards/APP-BE-GSCRIPT.md` |
+| Writing or modifying Python job processor | `building-standards/APP-BE-PYTHON.md` |
+| Writing or modifying frontend `.js` / `.html` files | `building-standards/APP-FE.md` |
+| Authentication, PIN, TOTP, audit log | `building-standards/APP-AUTH.md` |
+| Deploying to dev or prod | `building-standards/APP-CICD.md` |
+| UI components, layout, CSS, dark mode | `building-standards/UX-DESIGN.md` |
+| Naming variables, functions, files, CSS classes | `building-standards/APP-CONVENTIONS.md` |
+| Logging — what to log, format, what to never log | `building-standards/APP-LOGGING.md` |
+| Shared utilities — existing functions, adding new ones | `building-standards/APP-SHARED-UTILS.md` |
 | What the app does (domain requirements) | `expense-tracker/_docs/README.md` |
 
 ---
@@ -47,8 +47,8 @@ Read `expense-tracker/REWIRE-BRAIN.md` for current project state, URLs, and what
 - Set `innerHTML` first, attach events after — never interleave
 
 **Both**
-- Follow naming conventions in `documentation/APP-CONVENTIONS.md` exactly
-- Follow logging standards in `documentation/APP-LOGGING.md` — never log PINs, tokens, or session objects
+- Follow naming conventions in `building-standards/APP-CONVENTIONS.md` exactly
+- Follow logging standards in `building-standards/APP-LOGGING.md` — never log PINs, tokens, or session objects
 
 ---
 

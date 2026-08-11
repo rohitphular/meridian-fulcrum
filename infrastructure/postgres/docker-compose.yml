@@ -1,0 +1,35 @@
+name: fulcrum-postgres
+
+services:
+
+  postgres:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: fulcrum-postgres
+    ports:
+      - "5433:5432"
+    volumes:
+      - ../../_volume/data-postgres:/var/lib/postgresql/data
+    env_file:
+      - path: ../../.env
+        required: true
+    environment:
+      # POSTGRES_PASSWORD is loaded from env_file — not repeated here to avoid
+      # Docker Compose interpolation warnings when the shell variable is unset.
+      POSTGRES_USER: fulcrum
+      POSTGRES_DB: fulcrum_db
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fulcrum"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    networks:
+      - fulcrum-net
+    restart: unless-stopped
+
+networks:
+  fulcrum-net:
+    external: true
+    name: fulcrum-net

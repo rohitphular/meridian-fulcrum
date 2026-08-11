@@ -1,0 +1,153 @@
+#!/usr/bin/env python3
+"""Create or merge Fulcrum database connections into DBeaver's data-sources.json.
+
+Safe to run multiple times — existing connection IDs are left untouched.
+Passwords are NOT written here; DBeaver stores them in its own encrypted secure
+storage. You will be prompted once on first connect and DBeaver will save the
+credential after that.
+
+Run with DBeaver closed; if it is open the changes will only appear after restart.
+"""
+
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+
+def _find_workspace() -> Path:
+    """Return the .dbeaver config dir inside the latest DBeaver workspace."""
+    dbeaver_data = Path.home() / "Library" / "DBeaverData"
+    workspaces = sorted(
+        dbeaver_data.glob("workspace*"),
+        key=lambda p: int("".join(filter(str.isdigit, p.name)) or 0),
+        reverse=True,
+    )
+    base = workspaces[0] if workspaces else dbeaver_data / "workspace6"
+    return base / "General" / ".dbeaver"
+
+
+_WORKSPACE = _find_workspace()
+_DATASOURCES = _WORKSPACE / "data-sources.json"
+_ENV_FILE = Path(__file__).parent.parent / ".env"
+
+_FOLDER = "fulcrum"
+
+_CONNECTION_TYPE = {
+    "dev": {
+        "name": "Development",
+        "color": "255,255,255",
+        "colorDark": "255,255,255",
+        "description": "Regular development database",
+        "auto-commit": True,
+        "confirm-execute": False,
+        "confirm-data-change": False,
+        "smart-commit": False,
+        "smart-commit-recover": True,
+        "auto-close-transactions": True,
+        "close-transactions-period": 1800,
+        "auto-close-connections": True,
+        "close-connections-period": 14400,
+    }
+}
+
+
+def _load_env(path: Path) -> dict[str, str]:
+    env: dict[str, str] = {}
+    if not path.exists():
+        return env
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        env[key.strip()] = value.strip().strip("'\"")
+    return env
+
+
+def _build_connections(env: dict[str, str]) -> dict:
+    pg_user = env.get("POSTGRES_USER", "fulcrum")
+    pg_host = env.get("POSTGRES_HOST", "localhost")
+    pg_port = env.get("POSTGRES_PORT", "5433")
+    return {
+        "postgresql-fulcrum-db": {
+            "provider": "postgresql",
+            "driver": "postgresql",
+            "name": "fulcrum-db",
+            "save-password": True,
+            "configuration": {
+                "host": pg_host,
+                "port": pg_port,
+                "database": "fulcrum_db",
+                "url": f"jdbc:postgresql://{pg_host}:{pg_port}/fulcrum_db",
+                "configurationType": "MANUAL",
+                "type": "dev",
+                "closeIdleConnection": True,
+                "auth-model": "native",
+                "user": pg_user,
+            },
+        },
+    }
+
+
+def _dbeaver_running() -> bool:
+    try:
+        result = subprocess.run(["pgrep", "-x", "dbeaver"], capture_output=True)
+        return result.returncode == 0
+    except FileNotFoundError:
+        return False
+
+
+def main() -> None:
+    if _dbeaver_running():
+        print("  WARNING: DBeaver is open. Close it and rerun, or restart DBeaver after setup.")
+
+    env = _load_env(_ENV_FILE)
+    connections = _build_connections(env)
+
+    _WORKSPACE.mkdir(parents=True, exist_ok=True)
+
+    if _DATASOURCES.exists():
+        try:
+            data = json.loads(_DATASOURCES.read_text())
+        except json.JSONDecodeError as e:
+            print(f"  ERROR: {_DATASOURCES} contains invalid JSON: {e}")
+            print("  Delete the file and rerun to start fresh.")
+            sys.exit(1)
+    else:
+        data = {}
+
+    data.setdefault("folders", {})
+    data.setdefault("connections", {})
+    data.setdefault("connection-types", {})
+
+    for key, val in _CONNECTION_TYPE.items():
+        data["connection-types"].setdefault(key, val)
+
+    if _FOLDER not in data["folders"]:
+        data["folders"][_FOLDER] = {"name": _FOLDER, "description": ""}
+        print(f"  Created  folder '{_FOLDER}'")
+
+    added = skipped = 0
+    for conn_id, conn in connections.items():
+        if conn_id in data["connections"]:
+            print(f"  Skipped  {conn['name']} (already exists)")
+            skipped += 1
+        else:
+            conn["folder"] = _FOLDER
+            data["connections"][conn_id] = conn
+            print(
+                f"  Added    {conn['name']} → {_FOLDER}/ (postgresql {conn['configuration']['host']}:{conn['configuration']['port']}, user={conn['configuration']['user']})"
+            )
+            added += 1
+
+    _DATASOURCES.write_text(json.dumps(data, indent=4))
+    print(f"  {added} connection(s) added, {skipped} skipped — {_DATASOURCES}")
+    if added:
+        print("  NOTE: Enter the database password from .env on first connect — DBeaver saves it after that.")
+
+
+if __name__ == "__main__":
+    main()

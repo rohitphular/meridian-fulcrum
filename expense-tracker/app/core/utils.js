@@ -6,7 +6,7 @@ import {
   fmtBase   as _fmtBase,
   fmtNative as _fmtNative,
   exportData as _exportData,
-} from '../../../_shared/utils.js';
+} from '../../_shared/utils.js';
 import { state } from './state.js';
 
 export { el, esc, fmtDate, fmtDateTime, parseLocalDate, toDateInputVal, todayISO, nowLocalISO, localToUtcISO, utcToLocalInput };

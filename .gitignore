@@ -16,7 +16,16 @@
 
 # Local configs, secrets, and temp files — never commit
 local/
+.env
 
 # Python virtual environments
 **/.venv/
+
+# PostgreSQL data volume
+_volume/
+
+# Python bytecode
+**/__pycache__/
+**/*.pyc
+**/*.pyo
 
