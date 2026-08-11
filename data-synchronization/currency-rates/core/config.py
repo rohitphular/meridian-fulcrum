@@ -30,10 +30,6 @@ def db_config() -> ConnectionConfig:
     )
 
 
-def goldapi_key() -> str | None:
-    return os.environ.get("CR_GOLDAPI_KEY") or None
-
-
 def stooq_csv_path() -> str:
     path = os.environ.get("CR_STOOQ_CSV_PATH", "")
     if not path:

@@ -1,9 +1,5 @@
 sources:
-  goldapi:
-    enabled: false
-  frankfurter:
-    enabled: true
-  coingecko:
+  exchangerate:
     enabled: true
   stooq:
     enabled: true
