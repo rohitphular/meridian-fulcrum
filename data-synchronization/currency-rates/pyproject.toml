@@ -1,7 +1,7 @@
 [project]
 name = "currency-rates"
 version = "0.1.0"
-description = "Daily currency rate fetch job — fiat (Frankfurter), crypto (CoinGecko), gold (goldapi.io / stooq)"
+description = "Daily currency rate fetch job — fiat (stooq), crypto (exchangerate.fun)"
 requires-python = ">=3.12"
 dependencies = [
     "requests>=2.32",

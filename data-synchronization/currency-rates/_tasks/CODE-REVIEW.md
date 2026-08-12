@@ -123,7 +123,7 @@ Check each item. Mark PASS or FAIL with file and line reference.
 
 - [ ] Every file uses `from py_logging import get_logger` and `logger = get_logger(__name__)` — no `print()`, `logging.basicConfig()`, or bare `logging.getLogger()`
 - [ ] Every log message follows the format `fnname: key=value key=value`
-- [ ] `runner.run()` and `historical.main()` each log at start (with input parameters) and at end (with row/record counts)
+- [ ] `runner.main()` and `historical.main()` each log at start (with input parameters) and at end (with row/record counts)
 - [ ] `logger.info` — used for normal operation (start, end, counts)
 - [ ] `logger.warning` — used for skipped items and non-fatal misses (missing file, empty API response)
 - [ ] `logger.error` — used only inside `except` blocks

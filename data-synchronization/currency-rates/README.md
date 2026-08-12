@@ -32,7 +32,7 @@ The list of tracked currencies and their fetch order lives in `currency_master` 
 |------|------|----------|
 | 1    | USD  | US Dollar |
 | 2    | EUR  | Euro |
-| 3    | GBP  | British Pound |
+| 3    | GBP  | Pound Sterling |
 | 4    | INR  | Indian Rupee |
 | 5    | JPY  | Japanese Yen |
 | 6    | CNY  | Chinese Yuan |

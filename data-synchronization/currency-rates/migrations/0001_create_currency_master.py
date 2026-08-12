@@ -1,4 +1,7 @@
-def upgrade(client) -> None:
+from typing import Any
+
+
+def upgrade(client: Any) -> None:
     with client.cursor() as cursor:
         cursor.execute("""
             CREATE OR REPLACE FUNCTION fn_set_updated_at()
