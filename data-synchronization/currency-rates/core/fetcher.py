@@ -12,11 +12,10 @@ from py_logging import get_logger
 import core.config as config
 import sources.stooq as stooq
 import sources.exchangerate as exchangerate
-from database.upsert import upsert_rates
+from database.upsert import upsert_rates, forward_fill_rates
+from database.currency_master import get_fiat_currencies, update_last_fetched
 
 logger = get_logger(__name__)
-
-FIAT_CURRENCIES = ["USD", "EUR", "GBP", "JPY", "CNY", "INR", "AUD", "CAD", "CHF", "SGD", "AED", "HKD", "BRL", "KRW"]
 
 
 class CurrencyRatesJob:
@@ -37,7 +36,9 @@ def _fetch_and_store(client: Any, from_date: date, to_date: date) -> None:
     all_data: dict[str, dict[date, float]] = {}
 
     if config.source_enabled("stooq"):
-        for i, code in enumerate(FIAT_CURRENCIES):
+        fiat_currencies = get_fiat_currencies(client)
+        logger.info(f"fetch_and_store: source=stooq currencies={fiat_currencies}")
+        for i, code in enumerate(fiat_currencies):
             if i > 0:
                 time.sleep(random.uniform(1, 5))
             try:
@@ -63,13 +64,18 @@ def _fetch_and_store(client: Any, from_date: date, to_date: date) -> None:
         rows.append(("XAU", rate_date, 1.0, "stooq"))
         upsert_rates(client, rows)
 
+    if all_data:
+        update_last_fetched(client, {code: max(data.keys()) for code, data in all_data.items()})
+
     logger.info(f"fetch_and_store: stooq complete dates={len(all_dates)}")
+    forward_fill_rates(client, from_date, to_date)
 
     if config.source_enabled("exchangerate"):
         try:
             crypto = exchangerate.fetch_latest()
             rows = [(code, to_date, rate, "exchangerate") for code, rate in crypto.items()]
             upsert_rates(client, rows)
+            update_last_fetched(client, {code: to_date for code in crypto})
             logger.info(f"fetch_and_store: source=exchangerate currencies={len(rows)}")
         except Exception as e:
             logger.error(f"fetch_and_store: source=exchangerate error={e}")

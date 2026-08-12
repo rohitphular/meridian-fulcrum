@@ -26,11 +26,11 @@ echo ""
 case "$CHOICE" in
     1)
         echo "Running daily job..."
-        uv run python runner.py
+        uv run python -m core.runner
         ;;
     2)
         echo "Running historical load..."
-        uv run python historical.py
+        uv run python -m core.historical
         ;;
     *)
         echo "Invalid choice. Exiting."
