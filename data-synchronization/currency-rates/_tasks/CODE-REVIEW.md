@@ -139,7 +139,7 @@ Check each item. Mark PASS or FAIL with file and line reference.
 - [ ] All variables and function names: `snake_case`
 - [ ] All private helpers: `_snake_case` (single leading underscore)
 - [ ] All class names: `PascalCase`
-- [ ] All module-level constants: `UPPER_SNAKE_CASE`
+- [ ] Public module-level constants: `UPPER_SNAKE_CASE`; private module-level constants (not exported): `_UPPER_SNAKE_CASE`
 - [ ] All `.py` file names: `snake_case`
 
 ### PostgreSQL (check migration files)

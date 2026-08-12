@@ -297,13 +297,23 @@ class ConnectionConfig: ...
 
 ### Constants
 
-`UPPER_SNAKE_CASE` at module level:
+Public module-level constants: `UPPER_SNAKE_CASE`.
 
 ```python
-AED_PER_USD    = 3.6725
+AED_PER_USD     = 3.6725
 TROY_OZ_TO_GRAM = 31.1035
-CURRENCIES     = ['EUR', 'GBP', 'JPY']
+CURRENCIES      = ['EUR', 'GBP', 'JPY']
 ```
+
+Private module-level constants (not intended for import outside the module): `_UPPER_SNAKE_CASE` — leading underscore applied to the UPPER_SNAKE_CASE form.
+
+```python
+_HEADERS       = {"User-Agent": "Mozilla/5.0 ..."}
+_UPSERT_SQL    = "INSERT INTO currency_rates ..."
+_GET_FIAT_SQL  = "SELECT currency_code FROM ..."
+```
+
+The leading underscore signals the constant is an implementation detail of the module. It is never re-exported from a package and never imported by name from outside.
 
 ### File and folder names
 
