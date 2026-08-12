@@ -11,6 +11,7 @@ def upgrade(client) -> None:
         """)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS currency_master (
+              id                UUID         NOT NULL DEFAULT gen_random_uuid(),
               currency_code     CHAR(3)      NOT NULL,
               currency_name     TEXT         NOT NULL,
               currency_symbol   TEXT         NOT NULL,
@@ -18,15 +19,16 @@ def upgrade(client) -> None:
               currency_type     TEXT         NOT NULL,
               is_tracked        BOOLEAN      NOT NULL DEFAULT TRUE,
               currency_rank     INTEGER      NULL,
-              data_last_fetched DATE         NULL,
+              last_fetched_date DATE         NULL,
               created_at        TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
               updated_at        TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
 
-              CONSTRAINT currency_master_pkey     PRIMARY KEY (currency_code),
-              CONSTRAINT chk_cm_code_length       CHECK (char_length(currency_code) = 3),
-              CONSTRAINT chk_cm_currency_type     CHECK (currency_type IN ('fiat', 'commodity', 'crypto')),
-              CONSTRAINT chk_cm_decimal_places    CHECK (decimal_places BETWEEN 0 AND 8),
-              CONSTRAINT chk_cm_rank_positive     CHECK (currency_rank > 0)
+              CONSTRAINT pk_currency_master        PRIMARY KEY (id),
+              CONSTRAINT uq_cm_currency_code       UNIQUE (currency_code),
+              CONSTRAINT chk_cm_code_length        CHECK (char_length(currency_code) = 3),
+              CONSTRAINT chk_cm_currency_type      CHECK (currency_type IN ('fiat', 'commodity', 'crypto')),
+              CONSTRAINT chk_cm_decimal_places     CHECK (decimal_places BETWEEN 0 AND 8),
+              CONSTRAINT chk_cm_rank_positive      CHECK (currency_rank > 0)
             );
         """)
         cursor.execute("""

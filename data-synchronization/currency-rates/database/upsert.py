@@ -55,18 +55,13 @@ ON CONFLICT (quote_currency_code, rate_date) DO NOTHING;
 
 
 def upsert_rates(client: Any, rows: list[tuple[str, date, float, str]]) -> None:
-    """Upsert (quote_currency_code, rate_date, rate_value, rate_source) rows into currency_rates."""
     with client.cursor() as cursor:
         cursor.executemany(_UPSERT_SQL, rows)
     client.commit()
 
 
 def forward_fill_rates(client: Any, from_date: date, to_date: date) -> None:
-    """Insert forward-filled rows for any date gaps in [from_date, to_date].
-
-    Only fills from real closes (rate_source != stooq_forward_fill).
-    Skips dates that already have any row (real or filled).
-    """
+    """Fill date gaps using last real close; skips dates that already have any row."""
     with client.cursor() as cursor:
         cursor.execute(_FORWARD_FILL_SQL, (from_date, to_date))
         filled = cursor.rowcount

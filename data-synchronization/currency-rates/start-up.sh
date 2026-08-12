@@ -17,7 +17,7 @@ uv run py-db-migrate run --db postgres
 
 echo ""
 echo "  1) Daily   — rolling last 365 days"
-echo "  2) Historical — full load from start_date in config.yaml"
+echo "  2) Historical — full load from local CSV files"
 echo ""
 printf "Select (1/2): "
 read -r CHOICE

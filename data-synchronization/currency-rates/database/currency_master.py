@@ -12,30 +12,25 @@ SELECT currency_code
 FROM currency_master
 WHERE currency_type = 'fiat'
   AND is_tracked = TRUE
-ORDER BY data_last_fetched ASC NULLS FIRST, currency_rank ASC NULLS LAST;
+ORDER BY last_fetched_date ASC NULLS FIRST, currency_rank ASC NULLS LAST;
 """
 
 _UPDATE_LAST_FETCHED_SQL = """
 UPDATE currency_master
-SET data_last_fetched = %s
+SET last_fetched_date = %s
 WHERE currency_code = %s;
 """
 
 
 def get_fiat_currencies(client: Any) -> list[str]:
-    """Return tracked fiat currency codes ordered by fetch priority.
-
-    Never-fetched (NULL data_last_fetched) come first so they hit the API
-    before any rate limit. Within the same staleness tier, currency_rank
-    determines order.
-    """
+    """Return tracked fiat codes ordered by fetch priority (null last_fetched_date first, then rank)."""
     with client.cursor() as cursor:
         cursor.execute(_GET_FIAT_SQL)
         return [row[0].strip() for row in cursor.fetchall()]
 
 
 def update_last_fetched(client: Any, updates: dict[str, date]) -> None:
-    """Set data_last_fetched to the max date fetched for each currency."""
+    """Set last_fetched_date to the max date fetched for each currency."""
     with client.cursor() as cursor:
         for code, last_date in updates.items():
             cursor.execute(_UPDATE_LAST_FETCHED_SQL, (last_date, code))

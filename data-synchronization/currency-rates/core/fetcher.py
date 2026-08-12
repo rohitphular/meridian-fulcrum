@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import random
 import time
-from datetime import date, timedelta
+from datetime import date
 from typing import Any
 
 from py_db_migrate.core.config import ConnectionConfig
@@ -41,41 +41,36 @@ def _fetch_and_store(client: Any, from_date: date, to_date: date) -> None:
         for i, code in enumerate(fiat_currencies):
             if i > 0:
                 time.sleep(random.uniform(1, 5))
-            try:
-                data = stooq.fetch_range(code, from_date, to_date)
-                if data:
-                    all_data[code] = data
-                    logger.info(f"fetch_and_store: source=stooq currency={code} dates={len(data)}")
-                else:
-                    logger.warning(f"fetch_and_store: source=stooq currency={code} no_data")
-            except Exception as e:
-                logger.error(f"fetch_and_store: source=stooq currency={code} error={e}")
+            rate_data = stooq.fetch_range(code, from_date, to_date)
+            if rate_data:
+                all_data[code] = rate_data
+                logger.info(f"fetch_and_store: source=stooq currency={code} dates={len(rate_data)}")
+            else:
+                logger.warning(f"fetch_and_store: source=stooq currency={code} no_data")
 
     all_dates: set[date] = set()
-    for data in all_data.values():
-        all_dates.update(data.keys())
+    for date_rates in all_data.values():
+        all_dates.update(date_rates.keys())
 
     for rate_date in sorted(all_dates):
         rows: list[tuple] = []
-        for code, data in all_data.items():
-            rate = data.get(rate_date)
+        for code, date_rates in all_data.items():
+            rate = date_rates.get(rate_date)
             if rate is not None:
                 rows.append((code, rate_date, rate, "stooq"))
         rows.append(("XAU", rate_date, 1.0, "stooq"))
         upsert_rates(client, rows)
 
     if all_data:
-        update_last_fetched(client, {code: max(data.keys()) for code, data in all_data.items()})
+        update_last_fetched(client, {code: max(date_rates.keys()) for code, date_rates in all_data.items()})
 
     logger.info(f"fetch_and_store: stooq complete dates={len(all_dates)}")
     forward_fill_rates(client, from_date, to_date)
 
     if config.source_enabled("exchangerate"):
-        try:
-            crypto = exchangerate.fetch_latest()
+        crypto = exchangerate.fetch_latest()
+        if crypto:
             rows = [(code, to_date, rate, "exchangerate") for code, rate in crypto.items()]
             upsert_rates(client, rows)
             update_last_fetched(client, {code: to_date for code in crypto})
             logger.info(f"fetch_and_store: source=exchangerate currencies={len(rows)}")
-        except Exception as e:
-            logger.error(f"fetch_and_store: source=exchangerate error={e}")

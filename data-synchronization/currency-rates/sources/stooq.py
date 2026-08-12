@@ -2,17 +2,18 @@ from __future__ import annotations
 
 import csv
 import io
-from datetime import date, timedelta
+from datetime import date
 
 import requests
 
 from py_logging import get_logger
 
+import sources.constants as constants
+
 logger = get_logger(__name__)
 
 BASE_URL = "https://stooq.com/q/d/l/"
 HOMEPAGE = "https://stooq.com/"
-TROY_OZ_TO_GRAM = 31.1035
 
 SYMBOLS = {
     "USD": "xauusd",
@@ -44,7 +45,10 @@ _HEADERS = {
 def _new_session() -> requests.Session:
     session = requests.Session()
     session.headers.update(_HEADERS)
-    session.get(HOMEPAGE, timeout=15)
+    try:
+        session.get(HOMEPAGE, timeout=15)
+    except requests.RequestException as e:
+        logger.warning(f"_new_session: homepage_fetch_failed error={e}")
     return session
 
 
@@ -57,23 +61,18 @@ def fetch_range(currency_code: str, from_date: date, to_date: date) -> dict[date
     f = from_date.strftime("%Y%m%d")
     t = to_date.strftime("%Y%m%d")
     session = _new_session()
-    resp = session.get(
-        BASE_URL,
-        params={"s": symbol, "f": f, "t": t, "i": "d"},
-        headers={"Referer": f"https://stooq.com/q/d/?f={f}&t={t}&s={symbol}&c=0"},
-        timeout=30,
-    )
-    resp.raise_for_status()
+    try:
+        resp = session.get(
+            BASE_URL,
+            params={"s": symbol, "f": f, "t": t, "i": "d"},
+            headers={"Referer": f"https://stooq.com/q/d/?f={f}&t={t}&s={symbol}&c=0"},
+            timeout=30,
+        )
+        resp.raise_for_status()
+    except requests.RequestException as e:
+        logger.warning(f"fetch_range: currency={currency_code} http_error={e}")
+        return {}
     return _parse_csv(resp.text, currency_code)
-
-
-def fetch_latest(currency_code: str) -> float | None:
-    """Fetch most recent XAU/{currency} close. Uses a 4-day window to handle weekends/holidays."""
-    today = date.today()
-    data = fetch_range(currency_code, today - timedelta(days=4), today)
-    if not data:
-        return None
-    return data[max(data.keys())]
 
 
 def load_file(file_path: str, currency_code: str) -> dict[date, float]:
@@ -84,12 +83,15 @@ def load_file(file_path: str, currency_code: str) -> dict[date, float]:
 
 def _parse_csv(text: str, currency_code: str) -> dict[date, float]:
     rows: dict[date, float] = {}
+    skipped = 0
     reader = csv.DictReader(io.StringIO(text.strip()))
     for row in reader:
         try:
-            rows[date.fromisoformat(row["Date"])] = float(row["Close"]) / TROY_OZ_TO_GRAM
+            rows[date.fromisoformat(row["Date"])] = float(row["Close"]) / constants.TROY_OZ_TO_GRAM
         except (KeyError, ValueError):
-            continue
+            skipped += 1
+    if skipped:
+        logger.warning(f"_parse_csv: currency={currency_code} skipped_rows={skipped}")
     if not rows:
         logger.warning(f"_parse_csv: currency={currency_code} empty_or_invalid_response")
     return rows

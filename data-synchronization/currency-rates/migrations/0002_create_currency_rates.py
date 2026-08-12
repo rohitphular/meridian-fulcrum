@@ -2,7 +2,7 @@ def upgrade(client) -> None:
     with client.cursor() as cursor:
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS currency_rates (
-              rate_id            UUID          NOT NULL DEFAULT gen_random_uuid(),
+              id                 UUID          NOT NULL DEFAULT gen_random_uuid(),
               rate_date          DATE          NOT NULL,
               base_currency_code CHAR(3)       NOT NULL DEFAULT 'XAU',
               quote_currency_code CHAR(3)      NOT NULL,
@@ -11,7 +11,7 @@ def upgrade(client) -> None:
               created_at         TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
               updated_at         TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
 
-              CONSTRAINT currency_rates_pkey        PRIMARY KEY (rate_id),
+              CONSTRAINT pk_currency_rates           PRIMARY KEY (id),
               CONSTRAINT uq_cr_quote_currency_date  UNIQUE (quote_currency_code, rate_date),
               CONSTRAINT fk_cr_quote_currency_code  FOREIGN KEY (quote_currency_code) REFERENCES currency_master (currency_code),
               CONSTRAINT fk_cr_base_currency_code   FOREIGN KEY (base_currency_code)  REFERENCES currency_master (currency_code),

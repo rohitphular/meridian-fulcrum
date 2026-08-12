@@ -37,27 +37,27 @@ def main() -> None:
                 continue
 
             try:
-                data = stooq.load_file(file_path, code)
-                if data:
-                    all_data[code] = data
-                    logger.info(f"historical: currency={code} dates={len(data)}")
+                rate_data = stooq.load_file(file_path, code)
+                if rate_data:
+                    all_data[code] = rate_data
+                    logger.info(f"historical: currency={code} dates={len(rate_data)}")
                 else:
                     logger.warning(f"historical: currency={code} file_empty={file_path}")
             except Exception as e:
                 logger.error(f"historical: currency={code} error={e}")
 
         if not all_data:
-            logger.warning("historical: no fiat data loaded, skipping upsert")
+            logger.warning("historical: skipped_reason=no_fiat_data_loaded")
             return
 
         all_dates: set[date] = set()
-        for data in all_data.values():
-            all_dates.update(data.keys())
+        for date_rates in all_data.values():
+            all_dates.update(date_rates.keys())
 
         fiat_rows: list[tuple] = []
         for rate_date in sorted(all_dates):
-            for code, data in all_data.items():
-                rate = data.get(rate_date)
+            for code, date_rates in all_data.items():
+                rate = date_rates.get(rate_date)
                 if rate is not None:
                     fiat_rows.append((code, rate_date, rate, "stooq"))
             fiat_rows.append(("XAU", rate_date, 1.0, "stooq"))
@@ -65,17 +65,17 @@ def main() -> None:
         upsert_rates(client, fiat_rows)
         logger.info(f"historical: fiat complete dates={len(all_dates)} currencies={len(all_data)} rows={len(fiat_rows)}")
 
-        update_last_fetched(client, {code: max(data.keys()) for code, data in all_data.items()})
+        update_last_fetched(client, {code: max(date_rates.keys()) for code, date_rates in all_data.items()})
         forward_fill_rates(client, min(all_dates), to_date)
 
-        try:
-            crypto = exchangerate.fetch_latest()
+        crypto = exchangerate.fetch_latest()
+        if crypto:
             rows = [(code, to_date, rate, "exchangerate") for code, rate in crypto.items()]
             upsert_rates(client, rows)
             update_last_fetched(client, {code: to_date for code in crypto})
             logger.info(f"historical: crypto complete currencies={len(rows)}")
-        except Exception as e:
-            logger.error(f"historical: source=exchangerate error={e}")
+
+        logger.info(f"historical: complete fiat_currencies={len(all_data)} dates={len(all_dates)} to_date={to_date}")
 
     finally:
         client.close()

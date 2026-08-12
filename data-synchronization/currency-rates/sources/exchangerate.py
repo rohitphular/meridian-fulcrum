@@ -2,19 +2,26 @@ from __future__ import annotations
 
 import requests
 
+from py_logging import get_logger
+
+import sources.constants as constants
+
+logger = get_logger(__name__)
+
 BASE_URL = "https://api.exchangerate.fun/latest"
-TROY_OZ_TO_GRAM = 31.1035
 
 TRACKED = {"BTC", "ETH", "SOL"}
 
 
 def fetch_latest() -> dict[str, float]:
-    """Fetch all rates with XAU as base. Returns {currency_code: units_per_gram_xau}.
-
-    exchangerate.fun uses XAU = 1 troy ounce (ISO 4217). We divide by 31.1035
-    to convert to per gram, which is our storage unit.
-    """
-    resp = requests.get(BASE_URL, params={"base": "XAU"}, timeout=30)
-    resp.raise_for_status()
+    """Fetch XAU-based rates for BTC/ETH/SOL. Returns empty dict on HTTP error."""
+    try:
+        resp = requests.get(BASE_URL, params={"base": "XAU"}, timeout=30)
+        resp.raise_for_status()
+    except requests.RequestException as e:
+        logger.warning(f"fetch_latest: http_error={e}")
+        return {}
     rates = resp.json()["rates"]
-    return {code: float(rate) / TROY_OZ_TO_GRAM for code, rate in rates.items() if code in TRACKED}
+    crypto_rates = {code: float(rate) / constants.TROY_OZ_TO_GRAM for code, rate in rates.items() if code in TRACKED}
+    logger.info(f"fetch_latest: currencies={sorted(crypto_rates.keys())}")
+    return crypto_rates
