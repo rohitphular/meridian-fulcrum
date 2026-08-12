@@ -1,0 +1,3 @@
+[submodule "building-standards"]
+	path = building-standards
+	url = git@github.com:rohitphular/meridian-building-standards.git
