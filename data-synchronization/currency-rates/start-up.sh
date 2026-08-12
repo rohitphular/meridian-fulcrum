@@ -16,14 +16,24 @@ echo "Running migrations..."
 uv run py-db-migrate run --db postgres
 
 echo ""
-printf "Backfill from date (YYYY-MM-DD) or press Enter to run today: "
-read -r BACKFILL_DATE
-
+echo "  1) Daily   — rolling last 365 days"
+echo "  2) Historical — full load from start_date in config.yaml"
 echo ""
-if [ -z "$BACKFILL_DATE" ]; then
-    echo "Running daily job..."
-    uv run python runner.py
-else
-    echo "Running backfill from $BACKFILL_DATE..."
-    uv run python runner.py --backfill "$BACKFILL_DATE"
-fi
+printf "Select (1/2): "
+read -r CHOICE
+echo ""
+
+case "$CHOICE" in
+    1)
+        echo "Running daily job..."
+        uv run python runner.py
+        ;;
+    2)
+        echo "Running historical load..."
+        uv run python historical.py
+        ;;
+    *)
+        echo "Invalid choice. Exiting."
+        exit 1
+        ;;
+esac

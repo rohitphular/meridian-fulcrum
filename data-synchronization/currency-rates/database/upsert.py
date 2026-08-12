@@ -23,4 +23,3 @@ def upsert_rates(client: Any, rows: list[tuple[str, date, float, str]]) -> None:
     with client.cursor() as cursor:
         cursor.executemany(_UPSERT_SQL, rows)
     client.commit()
-    logger.info(f"upsert_rates: rows={len(rows)}")

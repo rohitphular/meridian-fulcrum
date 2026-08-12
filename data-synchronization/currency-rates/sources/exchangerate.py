@@ -5,11 +5,7 @@ import requests
 BASE_URL = "https://api.exchangerate.fun/latest"
 TROY_OZ_TO_GRAM = 31.1035
 
-TRACKED = {
-    "USD", "EUR", "GBP", "JPY", "CNY", "INR",
-    "AUD", "CAD", "CHF", "SGD", "AED", "HKD",
-    "BRL", "KRW", "BTC", "ETH", "SOL",
-}
+TRACKED = {"BTC", "ETH", "SOL"}
 
 
 def fetch_latest() -> dict[str, float]:

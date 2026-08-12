@@ -1,3 +1,6 @@
+job:
+  start_date: "2020-01-01"
+
 sources:
   exchangerate:
     enabled: true

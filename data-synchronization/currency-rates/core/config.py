@@ -20,6 +20,19 @@ def source_enabled(source: str) -> bool:
     return bool(cfg.get("sources", {}).get(source, {}).get("enabled", False))
 
 
+def start_date() -> date:
+    from datetime import date as _date
+    cfg = load_config()
+    return _date.fromisoformat(cfg["job"]["start_date"])
+
+
+def historical_csv_dir() -> str:
+    path = os.environ.get("CR_HISTORICAL_CSV_DIR", "")
+    if not path:
+        raise EnvironmentError("CR_HISTORICAL_CSV_DIR is not set")
+    return path
+
+
 def db_config() -> ConnectionConfig:
     return ConnectionConfig(
         host=os.environ["CR_DB_HOST"],
@@ -30,8 +43,3 @@ def db_config() -> ConnectionConfig:
     )
 
 
-def stooq_csv_path() -> str:
-    path = os.environ.get("CR_STOOQ_CSV_PATH", "")
-    if not path:
-        raise EnvironmentError("CR_STOOQ_CSV_PATH is not set — download from https://stooq.com/q/d/l/?s=xauusd&d1=20200101&d2=20251231&i=d and set the path")
-    return path

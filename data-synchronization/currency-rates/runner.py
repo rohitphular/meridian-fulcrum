@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-import argparse
-from datetime import date
+from datetime import date, timedelta
 
 from py_logging import get_logger
 
@@ -12,21 +11,13 @@ logger = get_logger(__name__)
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Currency rates fetch job")
-    parser.add_argument("--backfill", metavar="YYYY-MM-DD", help="Backfill from this date to yesterday")
-    args = parser.parse_args()
+    to_date = date.today()
+    from_date = to_date - timedelta(days=365)
 
-    db = config.db_config()
+    logger.info(f"runner: from_date={from_date} to_date={to_date}")
 
-    job = CurrencyRatesJob(db)
-
-    if args.backfill:
-        from_date = date.fromisoformat(args.backfill)
-        logger.info(f"runner: mode=backfill from_date={from_date}")
-        job.backfill(from_date)
-    else:
-        logger.info("runner: mode=daily")
-        job.run()
+    job = CurrencyRatesJob(config.db_config())
+    job.run(from_date, to_date)
 
 
 if __name__ == "__main__":

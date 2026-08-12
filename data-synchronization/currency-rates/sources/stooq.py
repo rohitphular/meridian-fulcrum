@@ -1,32 +1,95 @@
 from __future__ import annotations
 
 import csv
-from datetime import date
-from pathlib import Path
+import io
+from datetime import date, timedelta
+
+import requests
+
+from py_logging import get_logger
+
+logger = get_logger(__name__)
+
+BASE_URL = "https://stooq.com/q/d/l/"
+HOMEPAGE = "https://stooq.com/"
+TROY_OZ_TO_GRAM = 31.1035
+
+SYMBOLS = {
+    "USD": "xauusd",
+    "EUR": "xaueur",
+    "GBP": "xaugbp",
+    "JPY": "xaujpy",
+    "CNY": "xaucny",
+    "INR": "xauinr",
+    "AUD": "xauaud",
+    "CAD": "xaucad",
+    "CHF": "xauchf",
+    "SGD": "xausgd",
+    "AED": "xauaed",
+    "HKD": "xauhkd",
+    "BRL": "xaubrl",
+    "KRW": "xaukrw",
+}
+
+_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Connection": "keep-alive",
+    "DNT": "1",
+    "Upgrade-Insecure-Requests": "1",
+}
 
 
-def load_csv(filepath: Path) -> dict[date, float]:
-    """Parse a pre-downloaded stooq CSV into {date: close_price_per_troy_oz}.
-
-    Download URL:
-      https://stooq.com/q/d/l/?s=xauusd&d1=20200101&d2=20251231&i=d
-    CSV columns: Date, Open, High, Low, Close, Volume
-    """
-    rows: dict[date, float] = {}
-    with filepath.open() as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            try:
-                rate_date = date.fromisoformat(row["Date"])
-                close = float(row["Close"])
-                rows[rate_date] = close
-            except (KeyError, ValueError):
-                continue
-    return rows
+def _new_session() -> requests.Session:
+    session = requests.Session()
+    session.headers.update(_HEADERS)
+    session.get(HOMEPAGE, timeout=15)
+    return session
 
 
-def fetch_csv_row(rate_date: date, data: dict[date, float] | None = None) -> float | None:
-    """Return the close price (per troy oz) for a given date, or None if not available."""
-    if data is None:
+def fetch_range(currency_code: str, from_date: date, to_date: date) -> dict[date, float]:
+    """Fetch XAU/{currency} rates for a date range. Returns {date: rate_per_gram_xau}."""
+    symbol = SYMBOLS.get(currency_code)
+    if not symbol:
+        logger.warning(f"fetch_range: currency={currency_code} no_stooq_symbol")
+        return {}
+    f = from_date.strftime("%Y%m%d")
+    t = to_date.strftime("%Y%m%d")
+    session = _new_session()
+    resp = session.get(
+        BASE_URL,
+        params={"s": symbol, "f": f, "t": t, "i": "d"},
+        headers={"Referer": f"https://stooq.com/q/d/?f={f}&t={t}&s={symbol}&c=0"},
+        timeout=30,
+    )
+    resp.raise_for_status()
+    return _parse_csv(resp.text, currency_code)
+
+
+def fetch_latest(currency_code: str) -> float | None:
+    """Fetch most recent XAU/{currency} close. Uses a 4-day window to handle weekends/holidays."""
+    today = date.today()
+    data = fetch_range(currency_code, today - timedelta(days=4), today)
+    if not data:
         return None
-    return data.get(rate_date)
+    return data[max(data.keys())]
+
+
+def load_file(file_path: str, currency_code: str) -> dict[date, float]:
+    """Parse a local stooq CSV file. Returns {date: rate_per_gram_xau}."""
+    with open(file_path) as f:
+        return _parse_csv(f.read(), currency_code)
+
+
+def _parse_csv(text: str, currency_code: str) -> dict[date, float]:
+    rows: dict[date, float] = {}
+    reader = csv.DictReader(io.StringIO(text.strip()))
+    for row in reader:
+        try:
+            rows[date.fromisoformat(row["Date"])] = float(row["Close"]) / TROY_OZ_TO_GRAM
+        except (KeyError, ValueError):
+            continue
+    if not rows:
+        logger.warning(f"_parse_csv: currency={currency_code} empty_or_invalid_response")
+    return rows
