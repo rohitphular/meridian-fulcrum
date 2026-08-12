@@ -117,12 +117,12 @@ Frontend deploys automatically via GitHub Pages on every `git push` to `main`. N
 
 | Topic | Doc |
 |---|---|
-| Adding a new backend domain | `../building-standards/APP-BE.md` |
-| Adding a new frontend section | `../building-standards/APP-FE.md` |
-| Auth implementation details | `../building-standards/APP-AUTH.md` |
-| Deploy pipeline internals | `../building-standards/APP-CICD.md` |
-| Design system + UX patterns | `../building-standards/UX-DESIGN.md` |
+| Adding a new backend domain | `../building-standards/APP-BE-GSCRIPT.md` |
+| Adding a new frontend section | `../building-standards/APP-FE-VANILLA.md` |
+| Auth implementation details | `../building-standards/APP-AUTH-PIN-TOTP.md` |
+| Deploy pipeline internals | `../building-standards/APP-CICD-PATTERNS.md` |
+| Design system + UX patterns | `../building-standards/UX-DESIGN-FULCRUM.md` |
 | Naming conventions | `../building-standards/APP-CONVENTIONS.md` |
-| Logging standards | `../building-standards/APP-LOGGING.md` |
-| Shared utilities catalog | `../building-standards/APP-SHARED-UTILS.md` |
+| Logging standards | `../building-standards/APP-LOGGING-PATTERNS.md` |
+| Shared utilities catalog | `../building-standards/APP-SHARED-CODE.md` |
 | Domain requirements (what the app does) | `_docs/README.md` |

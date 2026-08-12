@@ -6,7 +6,7 @@ Reverse-engineered, language-agnostic specification for the Expense Tracker app.
 
 1. **[overview.md](overview.md)** — What the app is, the domain model, the capabilities, what's out of scope
 2. **[data-model.md](data-model.md)** — Entity shapes (Account, Transaction, Category, Rate, AuditEntry) and their cross-entity invariants
-3. **[../../../documentation/APP-AUTH.md](../../../documentation/APP-AUTH.md)** — Single-user authentication with PIN + optional TOTP, IP rate limiting, session model (shared Forge doc)
+3. **[../../../documentation/APP-AUTH-PIN-TOTP.md](../../../documentation/APP-AUTH-PIN-TOTP.md)** — Single-user authentication with PIN + optional TOTP, IP rate limiting, session model (shared Forge doc)
 4. **[accounts.md](accounts.md)** — Account types, balance conventions, derived fields, net-worth and utilisation calculations
 5. **[transactions.md](transactions.md)** — The three transaction types, required fields, filters, sort, export, malformed-row handling
 6. **[balance-lifecycle.md](balance-lifecycle.md)** — How `current_balance` changes on every transaction create / update / delete (two-phase reversal)

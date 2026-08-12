@@ -1,39 +1,8 @@
-# Forge Design System
+# Fulcrum Design System
 
-Living reference for building consistent Fulcrum Forge modules. All modules share the same visual language. Update this document as the system evolves — it is the source of truth.
+The locked Fulcrum design implementation. This is a versioned design system — do not change token values, type scale, color roles, or component patterns without creating a new version. Other products may derive their own design system from `UX-DESIGN-PATTERNS.md`.
 
----
-
-## Project Structure
-
-Every Forge module lives at `<module-name>/app/` alongside the shared layer:
-
-```
-expense-tracker/
-  _shared/
-    style-tokens.css       ← design tokens (colors, fonts) — never edit per-module
-    sheets-client.js       ← SheetsClient global loaded before your script
-    auth.js                ← auth factory — createAuthModule()
-    ui.js                  ← loading overlay + toast banner
-    utils.js               ← pure utility functions
-  app/
-    index.html             ← shell, loads shared CSS → module CSS → <script type="module">
-    main.js                ← ES module entry point
-    config.js              ← SCRIPT_URL (gitignored)
-    style/
-      expense-tracker.css  ← module-specific styles only
-    core/
-      state.js             ← exported state object + any shared setters
-      api.js               ← API wrapper (wraps SheetsClient)
-      utils.js             ← el, esc, fmtDate, fmtAmount, etc.
-      ui.js                ← showLoading, hideLoading, showMsg
-      auth.js              ← showPinGate, hidePinGate, submitPin
-      nav.js               ← showSection (multi-tab modules only)
-    sections/
-      <section>.js         ← one file per tab/section, exports render<Section>
-```
-
-Single-page modules (no tabs) omit `nav.js` and `sections/`. Put render logic directly in `main.js` or alongside it.
+> **Design contract**: `UX-DESIGN-PATTERNS.md` — the framework-agnostic design system guide this implementation follows.
 
 ---
 
@@ -489,7 +458,7 @@ if (window.__configMissing || !window.CONFIG?.SCRIPT_URL) {
 
 ---
 
-## Insight & Chart patterns
+## Insight & Chart Patterns
 
 ### Chart.js integration
 
@@ -514,8 +483,6 @@ const C = {
   muted:  style.getPropertyValue('--muted').trim(),
   ink:    style.getPropertyValue('--ink').trim(),
 };
-
-// Pass C.teal to borderColor, C.ember to error states, etc.
 ```
 
 Re-run this block before recreating the chart when the theme changes.
@@ -615,8 +582,6 @@ Stat cards grid:
 ---
 
 ## HTML Shell Template
-
-Minimal multi-tab shell:
 
 ```html
 <!DOCTYPE html>

@@ -22,8 +22,9 @@ You are a senior backend engineer working on Forge — a family of personal-use 
 
 **For GAS (Forge module) work:**
 1. Read `documentation/APP-BE.md` — file structure, CRUD patterns, schema design, router, coding guidelines
-2. Read `documentation/APP-AUTH.md` — auth flow, TOTP, IP audit log, Script Properties
-3. Read `documentation/APP-CICD.md` — deploy pipeline, first-time setup, envs.json
+2. Read `documentation/APP-AUTH-PIN-TOTP.md` — auth flow, TOTP, IP audit log, Script Properties
+3. Read `documentation/APP-CICD-PATTERNS.md` — deploy pipeline, first-time setup, envs.json
+   Read `documentation/APP-CICD-BE-PYTHON.md` — running and scheduling Python jobs
 4. Read `documentation/APP-CONVENTIONS.md` — naming rules for functions, constants, files, action names, error codes, ID formats
 5. Read `documentation/APP-LOGGING.md` — GAS logging format, what to always/never log, error handling pattern
 

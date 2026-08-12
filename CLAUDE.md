@@ -18,13 +18,14 @@ Read `expense-tracker/REWIRE-BRAIN.md` for current project state, URLs, and what
 |---|---|
 | Writing or modifying backend `.gs` files | `building-standards/APP-BE-GSCRIPT.md` |
 | Writing or modifying Python job processor | `building-standards/APP-BE-PYTHON.md` |
-| Writing or modifying frontend `.js` / `.html` files | `building-standards/APP-FE.md` |
-| Authentication, PIN, TOTP, audit log | `building-standards/APP-AUTH.md` |
-| Deploying to dev or prod | `building-standards/APP-CICD.md` |
-| UI components, layout, CSS, dark mode | `building-standards/UX-DESIGN.md` |
+| Writing or modifying frontend `.js` / `.html` files | `building-standards/APP-FE-VANILLA.md` |
+| Authentication, PIN, TOTP, audit log | `building-standards/APP-AUTH-PIN-TOTP.md` |
+| Deploying to dev or prod | `building-standards/APP-CICD-PATTERNS.md` |
+| Running / scheduling Python jobs | `building-standards/APP-CICD-BE-PYTHON.md` |
+| UI components, layout, CSS, dark mode | `building-standards/UX-DESIGN-FULCRUM.md` |
 | Naming variables, functions, files, CSS classes | `building-standards/APP-CONVENTIONS.md` |
-| Logging — what to log, format, what to never log | `building-standards/APP-LOGGING.md` |
-| Shared utilities — existing functions, adding new ones | `building-standards/APP-SHARED-UTILS.md` |
+| Logging — what to log, format, what to never log | `building-standards/APP-LOGGING-PATTERNS.md` |
+| Shared utilities — existing functions, adding new ones | `building-standards/APP-SHARED-CODE.md` |
 | What the app does (domain requirements) | `expense-tracker/_docs/README.md` |
 
 ---

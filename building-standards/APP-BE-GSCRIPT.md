@@ -2,6 +2,7 @@
 
 > **Audience**: LLMs and developers creating new Forge module backends.
 > **Stack**: Google Apps Script (GAS) V8 runtime · Google Sheets as datastore · `clasp` for local dev
+> **Architecture contract**: `APP-BE-PATTERNS.md` — read that first for the language-agnostic module structure, domain quartet, CRUD rules, and validation ordering this guide implements in GAS.
 
 ---
 
@@ -154,7 +155,7 @@ total_attempts | success_count | failure_count | last_failed_at | is_locked | lo
 
 Manual unlock: edit the `audit_access` sheet directly and set `is_locked` to `FALSE` for the IP. Or delete the row entirely.
 
-Do not modify `app-auth.gs` when adding a new module — copy it verbatim. See `APP-AUTH.md` for the full auth specification.
+Do not modify `app-auth.gs` when adding a new module — copy it verbatim. See `APP-AUTH-PIN-TOTP.md` for the full auth specification.
 
 ---
 
