@@ -3,7 +3,6 @@ from __future__ import annotations
 import math
 
 import yfinance as yf
-
 from py_logging import get_logger
 
 import sources.constants as constants
@@ -25,7 +24,11 @@ def fetch_latest() -> dict[str, float]:
         logger.warning("fetch_latest: gold_data_empty")
         return {}
 
-    xau_usd = float(gold_df["Close"].squeeze().iloc[-1])
+    try:
+        xau_usd = float(gold_df["Close"].squeeze().iloc[-1])
+    except Exception as e:
+        logger.warning(f"fetch_latest: gold_price_extract_failed error={e}")
+        return {}
     if math.isnan(xau_usd):
         logger.warning("fetch_latest: gold_price_nan")
         return {}
@@ -40,7 +43,11 @@ def fetch_latest() -> dict[str, float]:
         if df.empty:
             logger.warning(f"fetch_latest: currency={code} ticker={ticker} no_data")
             continue
-        crypto_usd = float(df["Close"].squeeze().iloc[-1])
+        try:
+            crypto_usd = float(df["Close"].squeeze().iloc[-1])
+        except Exception as e:
+            logger.warning(f"fetch_latest: currency={code} ticker={ticker} price_extract_failed error={e}")
+            continue
         if math.isnan(crypto_usd) or crypto_usd == 0:
             logger.warning(f"fetch_latest: currency={code} invalid_price={crypto_usd}")
             continue

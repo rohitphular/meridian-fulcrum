@@ -5,18 +5,20 @@ from typing import Any
 
 from py_logging import get_logger
 
+from database.models.currency_master import TABLE
+
 logger = get_logger(__name__)
 
-_GET_FIAT_SQL = """
+_GET_FIAT_SQL = f"""
 SELECT currency_code
-FROM currency_master
+FROM {TABLE}
 WHERE currency_type = 'fiat'
   AND is_tracked = TRUE
 ORDER BY last_fetched_date ASC NULLS FIRST, currency_rank ASC NULLS LAST;
 """
 
-_UPDATE_LAST_FETCHED_SQL = """
-UPDATE currency_master
+_UPDATE_LAST_FETCHED_SQL = f"""
+UPDATE {TABLE}
 SET last_fetched_date = %s
 WHERE currency_code = %s;
 """

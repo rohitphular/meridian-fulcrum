@@ -219,10 +219,16 @@ sources:
 
 ```
 currency-rates/
+├── README.md
+├── Makefile                 # generate-models target (requires Docker)
 ├── config.yaml              # source toggles
 ├── pyproject.toml           # dependencies (uv)
 ├── py_db_migrate.toml       # migration CLI connection config
+├── py_db_schema.toml        # model generation config
 ├── start-up.sh              # interactive entry point — runs migrations then prompts for mode
+├── _runbooks/
+│   ├── CODE-REVIEW-INSTRUCTIONS.md
+│   └── USAGE-INSTRUCTIONS.md
 ├── core/
 │   ├── config.py            # reads config.yaml and env vars
 │   ├── fetcher.py           # daily fetch logic (fiat loop + crypto via yfinance)
@@ -230,11 +236,14 @@ currency-rates/
 │   └── historical.py        # historical load entry point (local CSV files)
 ├── sources/
 │   ├── constants.py         # shared conversion constants (TROY_OZ_TO_GRAM)
-│   ├── stooq.py             # Yahoo Finance fiat rate fetcher; CSV parser for historical loads
-│   └── exchangerate.py      # Yahoo Finance crypto rate fetcher
+│   ├── fiat.py              # Yahoo Finance fiat rate fetcher; CSV parser for historical loads
+│   └── crypto.py            # Yahoo Finance crypto rate fetcher
 ├── database/
 │   ├── currency_master.py   # fetch-order query and last_fetched_date updates
-│   └── upsert.py            # rate upsert and forward-fill
+│   ├── upsert.py            # rate upsert and forward-fill
+│   └── models/
+│       ├── currency_master.py   # auto-generated typed model for currency_master
+│       └── currency_rates.py    # auto-generated typed model for currency_rates
 └── migrations/
     ├── 0001_create_currency_master.py
     └── 0002_create_currency_rates.py

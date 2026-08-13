@@ -16,11 +16,13 @@ package = false
 [tool.uv.sources]
 py-logging = { git = "git+ssh://git@github.com/rohitphular/meridian-common-libs.git", subdirectory = "py-logging" }
 py-db-migrate = { git = "git+ssh://git@github.com/rohitphular/meridian-common-libs.git", subdirectory = "py-db-migrate" }
+py-db-schema = { git = "git+ssh://git@github.com/rohitphular/meridian-common-libs.git", subdirectory = "py-db-schema" }
 
 [dependency-groups]
 dev = [
     "pytest>=8.0",
     "ruff>=0.9",
+    "py-db-schema[postgres]",
 ]
 
 [tool.ruff]

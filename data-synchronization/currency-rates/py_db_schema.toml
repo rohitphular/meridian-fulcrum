@@ -1,0 +1,7 @@
+[databases.postgres]
+connect_database  = "currency_rates"
+migrations_path   = "migrations"
+tracking_table    = "public.schema_migrations"
+introspect_schema = "public"
+output            = "database/models"
+exclude           = ["schema_migrations"]

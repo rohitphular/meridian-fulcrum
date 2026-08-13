@@ -6,7 +6,6 @@ import math
 from datetime import date, timedelta
 
 import yfinance as yf
-
 from py_logging import get_logger
 
 import sources.constants as constants
@@ -107,7 +106,7 @@ def fetch_range(currency_code: str, from_date: date, to_date: date) -> dict[date
 
 
 def load_file(file_path: str, currency_code: str) -> dict[date, float]:
-    """Parse a local stooq CSV file. Returns {date: rate_per_gram_xau}."""
+    """Parse a local XAU/{CCY} CSV file. Returns {date: rate_per_gram_xau}."""
     with open(file_path) as f:
         return _parse_csv(f.read(), currency_code)
 
@@ -119,7 +118,8 @@ def _parse_csv(text: str, currency_code: str) -> dict[date, float]:
     for row in reader:
         try:
             rows[date.fromisoformat(row["Date"])] = float(row["Close"]) / constants.TROY_OZ_TO_GRAM
-        except (KeyError, ValueError):
+        except (KeyError, ValueError) as e:
+            logger.warning(f"_parse_csv: currency={currency_code} row_skipped error={e}")
             skipped += 1
     if skipped:
         logger.warning(f"_parse_csv: currency={currency_code} skipped_rows={skipped}")

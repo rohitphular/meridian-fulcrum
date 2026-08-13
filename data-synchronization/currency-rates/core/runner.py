@@ -18,11 +18,11 @@ def main() -> None:
     logger.info(f"runner: from_date={from_date} to_date={to_date}")
     try:
         job = CurrencyRatesJob(config.db_config())
-        job.run(from_date, to_date)
+        fiat_count, date_count = job.run(from_date, to_date)
     except Exception as e:
         logger.error(f"runner: job_failed error={e}")
         sys.exit(1)
-    logger.info(f"runner: complete from_date={from_date} to_date={to_date}")
+    logger.info(f"runner: complete from_date={from_date} to_date={to_date} fiat_currencies={fiat_count} dates={date_count}")
 
 
 if __name__ == "__main__":

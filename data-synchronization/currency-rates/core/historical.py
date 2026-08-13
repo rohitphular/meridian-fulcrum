@@ -8,10 +8,10 @@ from py_db_migrate.adapters.postgres import get_client
 from py_logging import get_logger
 
 import core.config as config
-import sources.stooq as stooq
-import sources.exchangerate as exchangerate
-from database.upsert import upsert_rates, forward_fill_rates
+import sources.crypto as crypto
+import sources.fiat as fiat
 from database.currency_master import get_fiat_currencies, update_last_fetched
+from database.upsert import forward_fill_rates, upsert_rates
 
 logger = get_logger(__name__)
 
@@ -31,7 +31,7 @@ def main() -> None:
         all_data: dict[str, dict[date, float]] = {}
 
         for code in fiat_currencies:
-            symbol = stooq.SYMBOLS.get(code, f"xau{code.lower()}")
+            symbol = fiat.SYMBOLS.get(code, f"xau{code.lower()}")
             file_path = os.path.join(csv_dir, f"{symbol}.csv")
 
             if not os.path.exists(file_path):
@@ -39,7 +39,7 @@ def main() -> None:
                 continue
 
             try:
-                rate_data = stooq.load_file(file_path, code)
+                rate_data = fiat.load_file(file_path, code)
                 if rate_data:
                     all_data[code] = rate_data
                     logger.info(f"historical: currency={code} dates={len(rate_data)}")
@@ -70,11 +70,11 @@ def main() -> None:
         update_last_fetched(client, {code: max(date_rates.keys()) for code, date_rates in all_data.items()})
         forward_fill_rates(client, min(all_dates), to_date)
 
-        crypto = exchangerate.fetch_latest()
-        if crypto:
-            rows = [(code, to_date, rate, "yfinance") for code, rate in crypto.items()]
+        crypto_data = crypto.fetch_latest()
+        if crypto_data:
+            rows = [(code, to_date, rate, "yfinance") for code, rate in crypto_data.items()]
             upsert_rates(client, rows)
-            update_last_fetched(client, {code: to_date for code in crypto})
+            update_last_fetched(client, {code: to_date for code in crypto_data})
             logger.info(f"historical: crypto complete currencies={len(rows)}")
 
         logger.info(f"historical: complete fiat_currencies={len(all_data)} dates={len(all_dates)} to_date={to_date}")

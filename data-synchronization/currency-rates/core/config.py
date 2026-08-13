@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-
 from py_db_migrate.core.config import ConnectionConfig
 
 _CONFIG_PATH = Path(__file__).parent.parent / "config.yaml"
