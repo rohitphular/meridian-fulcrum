@@ -13,7 +13,7 @@ Read these documents in full before examining any code. They are the authoritati
 | Document | What it governs |
 |----------|-----------------|
 | `building-standards/APP-BE-PYTHON.md` | Job structure, uv deps, DB client pattern, migration pattern, runner pattern, error handling |
-| `building-standards/APP-LOGGING.md` | Log format, log levels, what to never log |
+| `building-standards/APP-LOGGING-PATTERNS.md` | Log format, log levels, what to never log |
 | `building-standards/APP-CONVENTIONS.md` | Python naming (snake_case, PascalCase, UPPER_SNAKE_CASE), PostgreSQL naming, no `__init__.py` |
 
 Then read the job's own documentation:
@@ -102,7 +102,7 @@ Check each item against the standard. Mark PASS or FAIL with file and line refer
 - [ ] Local variables are NOT annotated unless the type is non-obvious from assignment
 
 ### Error handling
-- [ ] External HTTP calls (including `requests.Session.get` and `requests.Session.post`) are wrapped in `try / except requests.RequestException`
+- [ ] External HTTP calls made directly via `requests` are wrapped in `try / except requests.RequestException`; calls via yfinance (`yf.download`) use `except Exception` because yfinance surfaces multiple internal exception types beyond `requests.RequestException`
 - [ ] Caught exceptions log with `logger.error(f"fnname: error={e}")` and do not silently swallow
 - [ ] No bare `except:` without logging
 
@@ -169,12 +169,12 @@ The README must be accurate enough that someone (human or LLM) can understand th
 - Confirm the SQL order expression in README matches exactly what is in `database/currency_master.py → get_fiat_currencies`
 
 ### Data sources
-- Confirm stooq URL pattern, troy-ounce-to-gram conversion factor (`31.1035`), and list of supported fiat currencies match `sources/stooq.py`
-- Confirm exchangerate.fun URL and tracked crypto set (`TRACKED`) match `sources/exchangerate.py`
+- Confirm yfinance gold ticker (`GC=F`), forex pair mappings (`_FOREX` dict: ticker and multiply flag per currency), and supported fiat currency list match `sources/stooq.py`
+- Confirm yfinance crypto ticker map (`_TICKERS`) matches `sources/exchangerate.py`
 - Confirm `TROY_OZ_TO_GRAM` constant value matches `sources/constants.py`
 
 ### Weekend and holiday gap filling
-- Confirm the description of forward-fill behaviour (fills gaps, `stooq_forward_fill` source, `ON CONFLICT DO NOTHING`) matches `database/upsert.py → forward_fill_rates`
+- Confirm the description of forward-fill behaviour (fills gaps, `forward_fill` source, `ON CONFLICT DO NOTHING`) matches `database/upsert.py → forward_fill_rates`
 
 ### Database schema — `currency_master`
 - Every column listed in README must exist in `migrations/0001_create_currency_master.py`

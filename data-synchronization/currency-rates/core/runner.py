@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from datetime import date, timedelta
 
 from py_logging import get_logger
@@ -15,8 +16,12 @@ def main() -> None:
     from_date = to_date - timedelta(days=365)
 
     logger.info(f"runner: from_date={from_date} to_date={to_date}")
-    job = CurrencyRatesJob(config.db_config())
-    job.run(from_date, to_date)
+    try:
+        job = CurrencyRatesJob(config.db_config())
+        job.run(from_date, to_date)
+    except Exception as e:
+        logger.error(f"runner: job_failed error={e}")
+        sys.exit(1)
     logger.info(f"runner: complete from_date={from_date} to_date={to_date}")
 
 

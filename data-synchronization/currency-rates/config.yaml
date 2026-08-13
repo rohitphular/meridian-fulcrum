@@ -1,5 +1,3 @@
 sources:
-  exchangerate:
-    enabled: true
-  stooq:
+  yfinance:
     enabled: true

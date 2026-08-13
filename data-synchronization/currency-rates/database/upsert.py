@@ -40,14 +40,14 @@ filled AS (
             FROM currency_rates cr
             WHERE cr.quote_currency_code = g.quote_currency_code
               AND cr.rate_date < g.rate_date
-              AND cr.rate_source != 'stooq_forward_fill'
+              AND cr.rate_source != 'forward_fill'
             ORDER BY cr.rate_date DESC
             LIMIT 1
         ) AS rate_value
     FROM gaps g
 )
 INSERT INTO currency_rates (quote_currency_code, rate_date, rate_value, base_currency_code, rate_source)
-SELECT quote_currency_code, rate_date, rate_value, 'XAU', 'stooq_forward_fill'
+SELECT quote_currency_code, rate_date, rate_value, 'XAU', 'forward_fill'
 FROM filled
 WHERE rate_value IS NOT NULL
 ON CONFLICT (quote_currency_code, rate_date) DO NOTHING;

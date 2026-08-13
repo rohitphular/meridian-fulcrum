@@ -10,7 +10,7 @@ echo "Loading env vars..."
 set -a; source "$ROOT/.env"; set +a
 
 echo "Installing dependencies..."
-uv sync --quiet
+uv sync --upgrade --quiet
 
 echo "Running migrations..."
 uv run py-db-migrate run --db postgres

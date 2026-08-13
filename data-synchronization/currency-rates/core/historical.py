@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from datetime import date
 
 from py_db_migrate.adapters.postgres import get_client
@@ -16,13 +17,14 @@ logger = get_logger(__name__)
 
 
 def main() -> None:
-    csv_dir = config.historical_csv_dir()
-    to_date = date.today()
-
-    logger.info(f"historical: csv_dir={csv_dir} to_date={to_date}")
-
-    client = get_client(config.db_config())
+    client = None
     try:
+        csv_dir = config.historical_csv_dir()
+        to_date = date.today()
+
+        logger.info(f"historical: csv_dir={csv_dir} to_date={to_date}")
+
+        client = get_client(config.db_config())
         fiat_currencies = get_fiat_currencies(client)
         logger.info(f"historical: currencies={fiat_currencies}")
 
@@ -59,8 +61,8 @@ def main() -> None:
             for code, date_rates in all_data.items():
                 rate = date_rates.get(rate_date)
                 if rate is not None:
-                    fiat_rows.append((code, rate_date, rate, "stooq"))
-            fiat_rows.append(("XAU", rate_date, 1.0, "stooq"))
+                    fiat_rows.append((code, rate_date, rate, "yfinance"))
+            fiat_rows.append(("XAU", rate_date, 1.0, "yfinance"))
 
         upsert_rates(client, fiat_rows)
         logger.info(f"historical: fiat complete dates={len(all_dates)} currencies={len(all_data)} rows={len(fiat_rows)}")
@@ -70,15 +72,19 @@ def main() -> None:
 
         crypto = exchangerate.fetch_latest()
         if crypto:
-            rows = [(code, to_date, rate, "exchangerate") for code, rate in crypto.items()]
+            rows = [(code, to_date, rate, "yfinance") for code, rate in crypto.items()]
             upsert_rates(client, rows)
             update_last_fetched(client, {code: to_date for code in crypto})
             logger.info(f"historical: crypto complete currencies={len(rows)}")
 
         logger.info(f"historical: complete fiat_currencies={len(all_data)} dates={len(all_dates)} to_date={to_date}")
 
+    except Exception as e:
+        logger.error(f"historical: job_failed error={e}")
+        sys.exit(1)
     finally:
-        client.close()
+        if client is not None:
+            client.close()
 
 
 if __name__ == "__main__":

@@ -6,7 +6,7 @@ Fetches and stores daily exchange rates for fiat currencies and crypto assets, a
 
 ## What it does
 
-Fetches daily exchange rates for 14 fiat currencies and 3 crypto assets from two external sources and stores them in PostgreSQL. All rates use gold (XAU per gram) as the base, so any two currencies can be compared by dividing their rates without storing every pair. The job runs in two modes: Daily fetches the rolling last 365 days via HTTP from stooq (fiat) and exchangerate.fun (crypto); Historical loads fiat rates from locally downloaded CSV files for a one-time backfill. After every fiat upsert, a forward-fill pass fills weekend and holiday gaps by carrying the last real closing rate forward.
+Fetches daily exchange rates for 14 fiat currencies and 3 crypto assets from Yahoo Finance (yfinance) and stores them in PostgreSQL. All rates use gold (XAU per gram) as the base, so any two currencies can be compared by dividing their rates without storing every pair. The job runs in two modes: Daily fetches the rolling last 365 days via Yahoo Finance for both fiat and crypto; Historical loads fiat rates from locally downloaded CSV files for a one-time backfill. After every fiat upsert, a forward-fill pass fills weekend and holiday gaps by carrying the last real closing rate forward.
 
 ---
 
@@ -26,7 +26,7 @@ This model lets any two currencies be compared without storing every pair — ju
 
 The list of tracked currencies and their fetch order lives in `currency_master` — not hardcoded in Python. To add or remove a currency, update the table directly.
 
-**Fiat (14)** — sourced from stooq. Fetched in priority order (see below):
+**Fiat (14)** — sourced from Yahoo Finance (yfinance). Fetched in priority order (see below):
 
 | Rank | Code | Currency |
 |------|------|----------|
@@ -45,7 +45,7 @@ The list of tracked currencies and their fetch order lives in `currency_master` 
 | 13   | BRL  | Brazilian Real |
 | 14   | KRW  | South Korean Won |
 
-**Crypto (3)** — sourced from exchangerate.fun (fetched in a single call):
+**Crypto (3)** — sourced from Yahoo Finance (yfinance):
 
 | Rank | Code | Asset |
 |------|------|-------|
@@ -63,14 +63,14 @@ The list of tracked currencies and their fetch order lives in `currency_master` 
 
 ## Fetch priority ordering
 
-Stooq imposes a daily download limit per IP. To make the most of each run, currencies are fetched in this order:
+To ensure the most important currencies are processed first in case a run is interrupted, currencies are fetched in this order:
 
-1. **Never-fetched first** (`last_fetched_date IS NULL`) — currencies with no data at all hit the API before the limit kicks in
+1. **Never-fetched first** (`last_fetched_date IS NULL`) — currencies with no data at all are processed before those already partially covered
 2. **Then by `currency_rank` ASC** — within currencies that have been fetched, higher-ranked ones go before lower-ranked ones
 
 SQL: `ORDER BY last_fetched_date ASC NULLS FIRST, currency_rank ASC NULLS LAST`
 
-After each successful fetch, `last_fetched_date` is updated to the latest date returned for that currency. If a run is cut short by a rate limit, the next run automatically starts with the currencies that were missed.
+After each successful fetch, `last_fetched_date` is updated to the latest date returned for that currency. If a run is cut short, the next run automatically resumes with the currencies that were missed.
 
 To change the rank of a currency:
 ```sql
@@ -81,21 +81,26 @@ UPDATE currency_master SET currency_rank = 3 WHERE currency_code = 'INR';
 
 ## Data sources
 
-### stooq — fiat rates
-- **URL pattern:** `https://stooq.com/q/d/l/?s=xauusd&f=20200101&t=20260812&i=d`
-- Provides daily XAU/{currency} OHLCV data as CSV
-- Requires browser-like headers and session cookies to avoid access denied — the code hits the stooq homepage first to establish a session, then adds a matching `Referer` header per request
-- The fetcher sleeps 1–5 seconds between each currency request to avoid rate limiting
-- stooq uses **XAU = 1 troy ounce** (ISO 4217 standard); all values are divided by `31.1035` to convert to per gram before storage
-- Crypto pairs (BTC, ETH, SOL) do not exist on stooq
+### Yahoo Finance (yfinance) — fiat rates
 
-### exchangerate.fun — crypto rates
-- **URL:** `https://api.exchangerate.fun/latest?base=XAU`
-- Returns all 170+ currencies in a single call with XAU as base
-- Free, no API key, no rate limits, hourly updates
-- Only BTC, ETH, and SOL are extracted from the response
-- Same troy ounce → gram conversion applied (`÷ 31.1035`)
-- Fetches today's rate only (no historical support)
+Gold is fetched as `GC=F` (COMEX gold futures, priced in USD per troy ounce). Fiat rates are derived by combining the gold price with a forex pair:
+
+| Pair type | Example tickers | Conversion |
+|-----------|----------------|------------|
+| CCY/USD (1 CCY = X USD) | `EURUSD=X`, `GBPUSD=X`, `AUDUSD=X`, `CADUSD=X`, `CHFUSD=X`, `SGDUSD=X` | XAU/CCY = GC=F / forex_rate |
+| USD/CCY (1 USD = X CCY) | `USDJPY=X`, `USDCNY=X`, `USDINR=X`, `USDAED=X`, `USDHKD=X`, `USDBRL=X`, `USDKRW=X` | XAU/CCY = GC=F × forex_rate |
+
+USD needs no forex pair — GC=F is already XAU/USD.
+
+All values are divided by `31.1035` (troy ounces per gram) before storage.
+
+### Yahoo Finance (yfinance) — crypto rates
+
+Crypto tickers used: `BTC-USD`, `ETH-USD`, `SOL-USD`. Gold price from `GC=F`.
+
+Conversion: `grams_of_gold_per_crypto = (GC=F / crypto_usd) / 31.1035`
+
+This answers: "how many grams of gold does one unit of crypto buy?"
 
 ---
 
@@ -103,13 +108,13 @@ UPDATE currency_master SET currency_rank = 3 WHERE currency_code = 'INR';
 
 ### Daily (rolling last 365 days)
 
-Fetches the past 365 days of fiat rates via HTTP from stooq, plus today's crypto rates from exchangerate.fun. Designed to run on a schedule (e.g. nightly cron).
+Fetches the past 365 days of fiat rates and latest crypto rates from Yahoo Finance. Designed to run on a schedule (e.g. nightly cron).
 
 Entry point: `core/runner.py`
 
 ### Historical (one-time backfill)
 
-Loads fiat rates from locally downloaded CSV files (one file per currency, downloaded manually from stooq). Processes files in the same priority order as the daily job. Logs a warning for any missing files and skips them. Fetches today's crypto rates from exchangerate.fun as a finishing step.
+Loads fiat rates from locally downloaded CSV files (one file per currency, downloaded manually from stooq in the original XAU/{CCY} format). Processes files in the same priority order as the daily job. Logs a warning for any missing files and skips them. Fetches latest crypto rates from Yahoo Finance as a finishing step.
 
 Entry point: `core/historical.py`
 
@@ -131,11 +136,11 @@ https://stooq.com/q/d/l/?s=xauinr&f=20200101&t=20260812&i=d
 
 ## Weekend and holiday gap filling
 
-Gold and forex markets close on weekends and public holidays — stooq returns no row for those days. After every stooq upsert, a forward-fill pass runs automatically:
+Gold and forex markets close on weekends and public holidays — Yahoo Finance returns no row for those days. After every fiat upsert, a forward-fill pass runs automatically:
 
 - Finds all dates in the range with no row for a given currency
 - Carries the last real closing rate forward into those gap dates
-- Marks filled rows with `rate_source = 'stooq_forward_fill'` so they are always distinguishable from real closes
+- Marks filled rows with `rate_source = 'forward_fill'` so they are always distinguishable from real closes
 - Never overwrites a real rate — uses `ON CONFLICT DO NOTHING`
 
 The daily job's rolling 365-day window also self-heals any gap caused by a failed run: the next successful run covers the missed days automatically.
@@ -169,7 +174,7 @@ The daily job's rolling 365-day window also self-heals any gap caused by a faile
 | `base_currency_code` | CHAR(3)        | Always `XAU` (enforced by constraint) |
 | `quote_currency_code`| CHAR(3)        | The currency being measured |
 | `rate_value`         | NUMERIC(19,6)  | Units of quote currency per 1 gram of XAU |
-| `rate_source`        | TEXT           | `stooq`, `exchangerate`, or `stooq_forward_fill` |
+| `rate_source`        | TEXT           | `yfinance` or `forward_fill` |
 | `created_at`         | TIMESTAMPTZ    | Auto-set on insert |
 | `updated_at`         | TIMESTAMPTZ    | Auto-updated on upsert |
 
@@ -204,9 +209,7 @@ Unique constraint on `(quote_currency_code, rate_date)` — upserts overwrite on
 
 ```yaml
 sources:
-  stooq:
-    enabled: true
-  exchangerate:
+  yfinance:
     enabled: true
 ```
 
@@ -222,13 +225,13 @@ currency-rates/
 ├── start-up.sh              # interactive entry point — runs migrations then prompts for mode
 ├── core/
 │   ├── config.py            # reads config.yaml and env vars
-│   ├── fetcher.py           # daily fetch logic (stooq loop + exchangerate)
+│   ├── fetcher.py           # daily fetch logic (fiat loop + crypto via yfinance)
 │   ├── runner.py            # daily job entry point (rolling 365 days)
 │   └── historical.py        # historical load entry point (local CSV files)
 ├── sources/
 │   ├── constants.py         # shared conversion constants (TROY_OZ_TO_GRAM)
-│   ├── stooq.py             # stooq HTTP client and CSV parser
-│   └── exchangerate.py      # exchangerate.fun HTTP client
+│   ├── stooq.py             # Yahoo Finance fiat rate fetcher; CSV parser for historical loads
+│   └── exchangerate.py      # Yahoo Finance crypto rate fetcher
 ├── database/
 │   ├── currency_master.py   # fetch-order query and last_fetched_date updates
 │   └── upsert.py            # rate upsert and forward-fill

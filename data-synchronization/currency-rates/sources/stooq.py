@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import csv
 import io
-from datetime import date
+import math
+from datetime import date, timedelta
 
-import requests
+import yfinance as yf
 
 from py_logging import get_logger
 
@@ -12,9 +13,7 @@ import sources.constants as constants
 
 logger = get_logger(__name__)
 
-BASE_URL = "https://stooq.com/q/d/l/"
-HOMEPAGE = "https://stooq.com/"
-
+# Used by historical.py to derive local CSV filenames.
 SYMBOLS = {
     "USD": "xauusd",
     "EUR": "xaueur",
@@ -32,47 +31,79 @@ SYMBOLS = {
     "KRW": "xaukrw",
 }
 
-_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Connection": "keep-alive",
-    "DNT": "1",
-    "Upgrade-Insecure-Requests": "1",
+# (ticker, multiply): if multiply=True, XAU/CCY = XAU/USD * rate (USD/CCY pair e.g. USDJPY).
+# If multiply=False, XAU/CCY = XAU/USD / rate (CCY/USD pair e.g. EURUSD).
+_FOREX: dict[str, tuple[str, bool]] = {
+    "EUR": ("EURUSD=X", False),
+    "GBP": ("GBPUSD=X", False),
+    "JPY": ("USDJPY=X", True),
+    "CNY": ("USDCNY=X", True),
+    "INR": ("USDINR=X", True),
+    "AUD": ("AUDUSD=X", False),
+    "CAD": ("CADUSD=X", False),
+    "CHF": ("CHFUSD=X", False),
+    "SGD": ("SGDUSD=X", False),
+    "AED": ("USDAED=X", True),
+    "HKD": ("USDHKD=X", True),
+    "BRL": ("USDBRL=X", True),
+    "KRW": ("USDKRW=X", True),
 }
 
 
-def _new_session() -> requests.Session:
-    session = requests.Session()
-    session.headers.update(_HEADERS)
-    try:
-        session.get(HOMEPAGE, timeout=15)
-    except requests.RequestException as e:
-        logger.warning(f"_new_session: homepage_fetch_failed error={e}")
-    return session
-
-
 def fetch_range(currency_code: str, from_date: date, to_date: date) -> dict[date, float]:
-    """Fetch XAU/{currency} rates for a date range. Returns {date: rate_per_gram_xau}."""
-    symbol = SYMBOLS.get(currency_code)
-    if not symbol:
-        logger.warning(f"fetch_range: currency={currency_code} no_stooq_symbol")
-        return {}
-    f = from_date.strftime("%Y%m%d")
-    t = to_date.strftime("%Y%m%d")
-    session = _new_session()
+    """Fetch XAU/{currency} rates for a date range via Yahoo Finance. Returns {date: rate_per_gram_xau}."""
+    start = from_date.isoformat()
+    end = (to_date + timedelta(days=1)).isoformat()  # yfinance end is exclusive
+
     try:
-        resp = session.get(
-            BASE_URL,
-            params={"s": symbol, "f": f, "t": t, "i": "d"},
-            headers={"Referer": f"https://stooq.com/q/d/?f={f}&t={t}&s={symbol}&c=0"},
-            timeout=30,
-        )
-        resp.raise_for_status()
-    except requests.RequestException as e:
-        logger.warning(f"fetch_range: currency={currency_code} http_error={e}")
+        gold_df = yf.download("GC=F", start=start, end=end, progress=False, auto_adjust=True)
+    except Exception as e:
+        logger.warning(f"fetch_range: currency={currency_code} gold_download_failed error={e}")
         return {}
-    return _parse_csv(resp.text, currency_code)
+
+    if gold_df.empty:
+        logger.warning(f"fetch_range: currency={currency_code} gold_data_empty")
+        return {}
+
+    # yfinance ≥0.2 returns MultiIndex columns for single-ticker downloads; squeeze collapses to Series.
+    xau_usd = gold_df["Close"].squeeze()
+    if xau_usd.ndim != 1:
+        logger.warning(f"fetch_range: currency={currency_code} unexpected_gold_shape={gold_df['Close'].shape}")
+        return {}
+
+    if currency_code == "USD":
+        per_gram = xau_usd / constants.TROY_OZ_TO_GRAM
+        return {d.date(): float(v) for d, v in per_gram.items() if not math.isnan(float(v))}
+
+    if currency_code not in _FOREX:
+        logger.warning(f"fetch_range: currency={currency_code} no_forex_ticker")
+        return {}
+
+    ticker, multiply = _FOREX[currency_code]
+
+    try:
+        forex_df = yf.download(ticker, start=start, end=end, progress=False, auto_adjust=True)
+    except Exception as e:
+        logger.warning(f"fetch_range: currency={currency_code} forex_download_failed ticker={ticker} error={e}")
+        return {}
+
+    if forex_df.empty:
+        logger.warning(f"fetch_range: currency={currency_code} forex_empty ticker={ticker}")
+        return {}
+
+    forex_rate = forex_df["Close"].squeeze()
+    if forex_rate.ndim != 1:
+        logger.warning(f"fetch_range: currency={currency_code} unexpected_forex_shape ticker={ticker} shape={forex_df['Close'].shape}")
+        return {}
+
+    common = xau_usd.index.intersection(forex_rate.index)
+    xau_usd = xau_usd.loc[common]
+    forex_rate = forex_rate.loc[common]
+
+    xau_ccy = xau_usd * forex_rate if multiply else xau_usd / forex_rate
+    per_gram = xau_ccy / constants.TROY_OZ_TO_GRAM
+
+    return {d.date(): float(v) for d, v in per_gram.items() if not math.isnan(float(v))}
 
 
 def load_file(file_path: str, currency_code: str) -> dict[date, float]:
@@ -93,5 +124,6 @@ def _parse_csv(text: str, currency_code: str) -> dict[date, float]:
     if skipped:
         logger.warning(f"_parse_csv: currency={currency_code} skipped_rows={skipped}")
     if not rows:
-        logger.warning(f"_parse_csv: currency={currency_code} empty_or_invalid_response")
+        snippet = text.strip()[:200].replace("\n", "\\n")
+        logger.warning(f"_parse_csv: currency={currency_code} empty_or_invalid_response response_snippet={snippet!r}")
     return rows
