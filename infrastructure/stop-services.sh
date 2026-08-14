@@ -39,18 +39,18 @@ fi
 
 # ── Step 2: Read config from envs.json ───────────────────────────────────────
 
-read -r POSTGRES_HOST POSTGRES_PORT POSTGRES_DB CONTAINER_NAME VOLUME_PATH NETWORK_NAME < <(python3 -c "
+read -r POSTGRES_PORT POSTGRES_USER POSTGRES_DB CONTAINER_NAME VOLUME_PATH NETWORK_NAME < <(python3 -c "
 import json
 d = json.load(open('$ENVS_FILE'))['$ENV_ARG']
-print(d['postgres_host'], d['postgres_port'], d['postgres_db'], d['container_name'], d['volume_path'], d['network_name'])
+print(d['postgres_port'], d['postgres_user'], d['postgres_db'], d['container_name'], d['volume_path'], d['network_name'])
 ")
 
 # ── Step 3: Export vars for docker-compose interpolation ─────────────────────
 
 export FULCRUM_ENV="$ENV_ARG"
 export FULCRUM_CONTAINER_NAME="$CONTAINER_NAME"
-export FULCRUM_POSTGRES_HOST="$POSTGRES_HOST"
 export FULCRUM_POSTGRES_PORT="$POSTGRES_PORT"
+export FULCRUM_POSTGRES_USER="$POSTGRES_USER"
 export FULCRUM_POSTGRES_DB="$POSTGRES_DB"
 export FULCRUM_VOLUME_PATH="$VOLUME_PATH"
 export FULCRUM_NETWORK_NAME="$NETWORK_NAME"

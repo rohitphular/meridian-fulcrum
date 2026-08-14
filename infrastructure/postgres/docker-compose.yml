@@ -17,7 +17,7 @@ services:
     environment:
       # POSTGRES_PASSWORD is loaded from env_file — not repeated here to avoid
       # Docker Compose interpolation warnings when the shell variable is unset.
-      POSTGRES_USER: fulcrum
+      POSTGRES_USER: ${FULCRUM_POSTGRES_USER}
       POSTGRES_DB: ${FULCRUM_POSTGRES_DB}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U fulcrum"]

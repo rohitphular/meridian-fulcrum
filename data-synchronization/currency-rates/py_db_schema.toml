@@ -1,7 +1,7 @@
 [databases.postgres]
 connect_database  = "fulcrum_db"
 migrations_path   = "migrations"
-tracking_table    = "public.schema_migrations"
+tracking_table    = "schema_migrations_currency_rates"
 introspect_schema = "public"
 output            = "database/models"
-exclude           = ["schema_migrations"]
+exclude           = ["schema_migrations_currency_rates"]

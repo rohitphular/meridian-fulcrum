@@ -3,6 +3,7 @@
   "dev": {
     "postgres_host": "localhost",
     "postgres_port": 5433,
+    "postgres_user": "fulcrum",
     "postgres_db": "fulcrum_db_dev",
     "container_name": "fulcrum-postgres-dev",
     "volume_path": "_volume/data-postgres-dev",
@@ -11,6 +12,7 @@
   "prod": {
     "postgres_host": "localhost",
     "postgres_port": 5434,
+    "postgres_user": "fulcrum",
     "postgres_db": "fulcrum_db",
     "container_name": "fulcrum-postgres-prod",
     "volume_path": "_volume/data-postgres-prod",

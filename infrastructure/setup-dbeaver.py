@@ -54,7 +54,22 @@ _CONNECTION_TYPE = {
         "close-transactions-period": 1800,
         "auto-close-connections": True,
         "close-connections-period": 14400,
-    }
+    },
+    "prod": {
+        "name": "Production",
+        "color": "255,200,200",
+        "colorDark": "100,0,0",
+        "description": "Production database — confirm before writes",
+        "auto-commit": False,
+        "confirm-execute": True,
+        "confirm-data-change": True,
+        "smart-commit": False,
+        "smart-commit-recover": True,
+        "auto-close-transactions": True,
+        "close-transactions-period": 1800,
+        "auto-close-connections": True,
+        "close-connections-period": 14400,
+    },
 }
 
 _LABEL = {
@@ -77,9 +92,9 @@ def _load_env(path: Path) -> dict[str, str]:
 
 
 def _build_connections(env_name: str, env: dict[str, str]) -> dict:
-    pg_user = env.get("POSTGRES_USER", "fulcrum")
-    pg_host = env.get("POSTGRES_HOST", "localhost")
-    pg_port = env.get("POSTGRES_PORT", "5433")
+    pg_host = env.get("FULCRUM_DB_HOST", "localhost")
+    pg_port = env.get("FULCRUM_DB_PORT", "5432")
+    pg_user = env.get("FULCRUM_DB_USER", "fulcrum")
     pg_db = env.get("FULCRUM_DB_NAME", "fulcrum_db")
     label = _LABEL[env_name]
     conn_id = f"postgresql-{label}"
@@ -169,7 +184,7 @@ def main() -> None:
     _DATASOURCES.write_text(json.dumps(data, indent=4))
     print(f"  {added} connection(s) added, {skipped} skipped — {_DATASOURCES}")
     if added:
-        print("  NOTE: Enter the database password from .env on first connect — DBeaver saves it after that.")
+        print(f"  NOTE: Enter the database password from .env.{env_name} on first connect — DBeaver saves it after that.")
 
 
 if __name__ == "__main__":
