@@ -47,11 +47,25 @@ From the `meridian-fulcrum/` root:
 make data-sync
 ```
 
-Select the module number for `currency-rates` when prompted, then choose the mode:
+Select the module number for `currency-rates` when prompted, then select the environment (`dev` or `prod`), then choose the mode:
 
 ```
   1) Daily      — rolling last 365 days
   2) Historical — full load from local CSV files
+```
+
+Or from within the module directory:
+
+```bash
+./cicd/start-up.sh dev    # run against dev DB
+./cicd/start-up.sh prod   # run against prod DB
+```
+
+Or via the module Makefile:
+
+```bash
+make run ENV=dev
+make run ENV=prod
 ```
 
 ---
@@ -96,7 +110,7 @@ The directory pointed to by `CR_HISTORICAL_CSV_DIR` must contain the CSV files n
 
 ```bash
 make data-sync
-# Select currency-rates → 2) Historical
+# Select currency-rates → env → 2) Historical
 ```
 
 ---

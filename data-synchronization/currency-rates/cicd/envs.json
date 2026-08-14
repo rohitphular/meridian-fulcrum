@@ -1,0 +1,5 @@
+{
+  "_comment": "Non-secret per-env config. Secrets (DB creds, log root, CSV dir) stay in meridian-fulcrum/.env",
+  "dev": {},
+  "prod": {}
+}

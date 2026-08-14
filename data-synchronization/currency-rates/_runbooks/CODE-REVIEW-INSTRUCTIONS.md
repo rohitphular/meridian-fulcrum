@@ -36,7 +36,9 @@ currency-rates/
 ├── pyproject.toml
 ├── py_db_migrate.toml
 ├── py_db_schema.toml
-├── start-up.sh
+├── cicd/
+│   ├── envs.json
+│   └── start-up.sh
 ├── _runbooks/
 │   ├── CODE-REVIEW-INSTRUCTIONS.md
 │   └── USAGE-INSTRUCTIONS.md
@@ -228,8 +230,8 @@ The README must be accurate enough that a reviewer can understand the job withou
 
 ### How to run
 
-- Every command shown in the README How to run section matches what `start-up.sh` actually executes.
-- Every mode option (Daily / Historical) matches the `case` block in `start-up.sh`.
+- Every command shown in the README How to run section matches what `cicd/start-up.sh` actually executes.
+- Every mode option (Daily / Historical) matches the `case` block in `cicd/start-up.sh`.
 
 ---
 
