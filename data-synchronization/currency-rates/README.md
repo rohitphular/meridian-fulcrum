@@ -193,11 +193,11 @@ Unique constraint on `(quote_currency_code, rate_date)` — upserts overwrite on
 
 | Variable | Required | Default | Purpose |
 |----------|----------|---------|---------|
-| `CR_DB_HOST`            | Yes  | —      | Postgres host |
-| `CR_DB_PORT`            | No   | `5432` | Postgres port |
-| `CR_DB_USER`            | Yes  | —      | Postgres user |
-| `CR_DB_PASSWORD`        | Yes  | —      | Postgres password |
-| `CR_DB_NAME`            | Yes  | —      | Postgres database name |
+| `FULCRUM_DB_HOST`            | Yes  | —      | Postgres host |
+| `FULCRUM_DB_PORT`            | No   | `5432` | Postgres port |
+| `FULCRUM_DB_USER`            | Yes  | —      | Postgres user |
+| `FULCRUM_DB_PASSWORD`        | Yes  | —      | Postgres password |
+| `FULCRUM_DB_NAME`            | Yes  | —      | Postgres database name |
 | `CR_HISTORICAL_CSV_DIR` | Yes¹ | —      | Absolute path to the folder containing downloaded stooq CSV files |
 | `MERIDIAN_LOG_ROOT`     | Yes  | —      | Root directory for log output |
 

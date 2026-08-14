@@ -19,20 +19,19 @@ def load_config() -> dict[str, Any]:
         return yaml.safe_load(f)
 
 
-def source_enabled(source: str) -> bool:
-    cfg = load_config()
-    return bool(cfg.get("sources", {}).get(source, {}).get("enabled", False))
-
-
-def historical_csv_dir() -> str:
-    return os.environ["CR_HISTORICAL_CSV_DIR"]
-
-
 def db_config() -> ConnectionConfig:
     return ConnectionConfig(
         host=os.environ["FULCRUM_DB_HOST"],
-        port=int(os.environ.get("FULCRUM_DB_PORT", "5432")),
+        port=int(os.environ["FULCRUM_DB_PORT"]),
         user=os.environ["FULCRUM_DB_USER"],
         password=os.environ["FULCRUM_DB_PASSWORD"],
         connect_database=os.environ["FULCRUM_DB_NAME"],
     )
+
+
+def spreadsheet_id() -> str:
+    return os.environ["LE_SPREADSHEET_ID"]
+
+
+def service_account_file() -> str:
+    return os.environ["LE_SERVICE_ACCOUNT_FILE"]

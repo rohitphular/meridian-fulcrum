@@ -25,11 +25,11 @@ A `.env` file must exist at `meridian-fulcrum/.env`. Required variables:
 
 | Variable | Purpose |
 |---|---|
-| `CR_DB_HOST` | Postgres host |
-| `CR_DB_PORT` | Postgres port (optional, default `5432`) |
-| `CR_DB_USER` | Postgres user |
-| `CR_DB_PASSWORD` | Postgres password |
-| `CR_DB_NAME` | Postgres database name |
+| `FULCRUM_DB_HOST` | Postgres host |
+| `FULCRUM_DB_PORT` | Postgres port (optional, default `5432`) |
+| `FULCRUM_DB_USER` | Postgres user |
+| `FULCRUM_DB_PASSWORD` | Postgres password |
+| `FULCRUM_DB_NAME` | Postgres database name |
 | `CR_HISTORICAL_CSV_DIR` | Absolute path to local CSV files (historical mode only) |
 | `MERIDIAN_LOG_ROOT` | Root directory for log output |
 
@@ -112,7 +112,7 @@ Logs are written to `$MERIDIAN_LOG_ROOT`. Check there if a run fails silently. T
 | Symptom | Cause | Fix |
 |---|---|---|
 | `Permission denied (publickey)` during `uv sync` | System git not using your SSH agent | `git config --global core.sshCommand "$(which ssh)"` |
-| `KeyError: 'CR_DB_HOST'` (or similar) | Missing env var | Add the variable to `meridian-fulcrum/.env` |
+| `KeyError: 'FULCRUM_DB_HOST'` (or similar) | Missing env var | Add the variable to `meridian-fulcrum/.env` |
 | `KeyError: 'CR_HISTORICAL_CSV_DIR'` | Running historical mode without that var set | Add `CR_HISTORICAL_CSV_DIR=/path/to/csvs` to `.env` |
 | `currency=XYZ no_data` warnings | Yahoo Finance returned no data for that ticker/date | Usually transient — re-run the next day |
 | No crypto rates in DB | Yahoo Finance `GC=F` or crypto ticker temporarily unavailable | Check logs; re-run when market data is available |

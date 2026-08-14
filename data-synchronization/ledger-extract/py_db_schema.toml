@@ -1,4 +1,5 @@
 [databases.postgres]
+image             = "postgres:17"
 connect_database  = "fulcrum_db"
 migrations_path   = "migrations"
 tracking_table    = "public.schema_migrations"

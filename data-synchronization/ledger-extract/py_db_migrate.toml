@@ -1,0 +1,8 @@
+[databases.postgres]
+host              = "${FULCRUM_DB_HOST}"
+port              = "${FULCRUM_DB_PORT}"
+user              = "${FULCRUM_DB_USER}"
+password          = "${FULCRUM_DB_PASSWORD}"
+connect_database  = "${FULCRUM_DB_NAME}"
+migrations_path   = "migrations"
+tracking_table    = "public.schema_migrations"

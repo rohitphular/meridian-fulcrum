@@ -236,7 +236,7 @@ The README must be accurate enough that a reviewer can understand the job withou
 ## Step 9 — Security
 
 - [ ] No hardcoded credentials, API keys, tokens, or passwords appear in any source file, config file, or comment.
-- [ ] All secrets (`CR_DB_PASSWORD` and any API credentials) are read from environment variables — not from `config.yaml` or any file checked into source control.
+- [ ] All secrets (`FULCRUM_DB_PASSWORD` and any API credentials) are read from environment variables — not from `config.yaml` or any file checked into source control.
 - [ ] No secret value appears in any log output — check all log lines that include request headers, response bodies, config values, or DB connection strings.
 - [ ] CSV row content read in `core/historical.py` is validated before being passed to `upsert_rates` — malformed or non-numeric rate values are skipped with a warning, not forwarded as-is.
 - [ ] API response fields from `sources/crypto.py` are type-checked before the troy-ounce conversion — a non-numeric rate value must not cause an unhandled exception.

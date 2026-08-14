@@ -1,0 +1,38 @@
+[project]
+name = "ledger-extract"
+version = "0.1.0"
+description = "Extract expense-tracker entities from Google Sheets into PostgreSQL"
+requires-python = ">=3.12"
+dependencies = [
+    "pyyaml>=6.0",
+    "py-logging",
+    "py-db-migrate[postgres]",
+    "psycopg2-binary>=2.9",
+    "py-google-workspace",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+py-logging          = { git = "git+ssh://git@github.com/rohitphular/meridian-common-libs.git", subdirectory = "py-logging" }
+py-db-migrate       = { git = "git+ssh://git@github.com/rohitphular/meridian-common-libs.git", subdirectory = "py-db-migrate" }
+py-google-workspace = { git = "git+ssh://git@github.com/rohitphular/meridian-common-libs.git", subdirectory = "py-google-workspace" }
+py-db-schema        = { git = "git+ssh://git@github.com/rohitphular/meridian-common-libs.git", subdirectory = "py-db-schema" }
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.9",
+    "py-db-schema[postgres]",
+]
+
+[tool.ruff]
+line-length = 200
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.ruff.format]
+quote-style = "double"
