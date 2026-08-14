@@ -12,8 +12,10 @@ ledger-extract/
 ├── pyproject.toml
 ├── py_db_migrate.toml
 ├── py_db_schema.toml        # model generation config (dev only)
-├── Makefile                 # generate-models target
-├── start-up.sh              # sources ../../.env (meridian-fulcrum root), uv sync, runs migrations, runs extract
+├── Makefile                 # run + generate-models targets
+├── cicd/
+│   ├── envs.json            # non-secret per-env config (spreadsheet_id); committed to repo
+│   └── start-up.sh          # takes dev|prod arg; reads spreadsheet_id from envs.json, sources ../../.env, uv sync, runs migrations, runs extract
 ├── _tasks/                  # design and decision documents
 ├── _runbooks/
 │   ├── CODE-REVIEW-INSTRUCTIONS.md

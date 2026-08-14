@@ -6,10 +6,32 @@
 - PostgreSQL running (see `FULCRUM_DB_*` env vars)
 - A Google service account JSON key with read access to the target spreadsheet
 - `meridian-fulcrum/.env` populated — see Environment Variables below
+- `cicd/envs.json` populated — see Environment Config below
+
+---
+
+## Environment config (non-secrets)
+
+`cicd/envs.json` — per-env config that is safe to commit. Edit by hand to record the spreadsheet ID for each environment.
+
+```json
+{
+  "dev": {
+    "spreadsheet_id": "<dev spreadsheet ID>"
+  },
+  "prod": {
+    "spreadsheet_id": "<prod spreadsheet ID>"
+  }
+}
+```
+
+`LE_SPREADSHEET_ID` is **not** set in `.env` — it is read from `cicd/envs.json` by `start-up.sh` and exported before the job runs.
 
 ---
 
 ## Environment variables
+
+These are secrets — set them in `meridian-fulcrum/.env`. Not committed to source control.
 
 | Variable | Example | Purpose |
 |---|---|---|
@@ -18,7 +40,6 @@
 | `FULCRUM_DB_USER` | `fulcrum` | Postgres user |
 | `FULCRUM_DB_PASSWORD` | `...` | Postgres password |
 | `FULCRUM_DB_NAME` | `fulcrum_db` | Postgres database |
-| `LE_SPREADSHEET_ID` | `1BxiMV...` | Google Sheets spreadsheet ID |
 | `LE_SERVICE_ACCOUNT_FILE` | `/path/to/sa.json` | Service account key path |
 | `MERIDIAN_LOG_ROOT` | `/var/log/meridian` | Root directory for log output |
 
@@ -30,14 +51,24 @@ All variables are **required**. The job raises `KeyError` at startup if any is m
 
 ```bash
 cd ledger-extract
-./start-up.sh
+./cicd/start-up.sh dev    # run against dev spreadsheet
+./cicd/start-up.sh prod   # run against prod spreadsheet
 ```
 
-`start-up.sh` does, in order:
-1. Sources `../../.env` (meridian-fulcrum root)
-2. `uv sync --quiet` — creates or updates `uv.lock` from `pyproject.toml` (first run), then installs from it
-3. `uv run py-db-migrate run --db postgres` — applies pending migrations
-4. `uv run python -m core.runner` — runs the extract job
+Or from the repo root:
+
+```bash
+make run ENV=dev
+make run ENV=prod
+```
+
+`cicd/start-up.sh` does, in order:
+1. Validates the env arg (`dev` or `prod`) — exits immediately if missing or unrecognised
+2. Reads `spreadsheet_id` from `cicd/envs.json` and exports it as `LE_SPREADSHEET_ID` — exits if `TODO`
+3. Sources `../../.env` (meridian-fulcrum root) for secrets
+4. `uv sync --quiet` — creates or updates `uv.lock` from `pyproject.toml` (first run), then installs from it
+5. `uv run py-db-migrate run --db postgres` — applies pending migrations
+6. `uv run python -m core.runner` — runs the extract job
 
 ---
 
@@ -65,9 +96,9 @@ When an entity is disabled, both its extraction and soft-delete pass are skipped
 
 The job is designed to run as a single instance (cron or equivalent). Concurrent runs are **not safe** — see CODE-REVIEW-INSTRUCTIONS.md for details.
 
-Example crontab entry (runs every 30 minutes):
+Example crontab entry (runs every 30 minutes against prod):
 ```
-*/30 * * * * /path/to/ledger-extract/start-up.sh >> /var/log/meridian/ledger-extract-cron.log 2>&1
+*/30 * * * * /path/to/ledger-extract/cicd/start-up.sh prod >> /var/log/meridian/ledger-extract-cron.log 2>&1
 ```
 
 ---

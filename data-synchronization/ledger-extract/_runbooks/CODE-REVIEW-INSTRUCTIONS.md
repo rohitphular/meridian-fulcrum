@@ -38,7 +38,9 @@ ledger-extract/
 ├── py_db_migrate.toml
 ├── py_db_schema.toml
 ├── Makefile
-├── start-up.sh
+├── cicd/
+│   ├── envs.json
+│   └── start-up.sh
 ├── _tasks/
 │   ├── SETUP.md
 │   ├── TASK-categories.md
@@ -81,7 +83,8 @@ For each file in scope, check:
 4. **Unreachable code** — any code after an unconditional return, raise, exit, or equivalent. Flag it.
 5. **Unused constants** — module-level constants defined but never referenced anywhere in the module. Flag them.
 6. **Orphaned config keys** — every key under `entities:` in `config.yaml` must map to an `entity_enabled("<key>", config)` call in `core/extractor.py`. Flag any key the code never reads.
-7. **Orphaned env vars** — cross-check every `os.environ[...]` in `core/config.py` against the env var table in `_runbooks/USAGE-INSTRUCTIONS.md`. Flag any read in code but absent from docs, and any listed in docs but absent from code.
+7. **Orphaned env vars** — cross-check every `os.environ[...]` in `core/config.py` against the env var table in `_runbooks/USAGE-INSTRUCTIONS.md`. Flag any read in code but absent from docs, and any listed in docs but absent from code. `LE_SPREADSHEET_ID` must NOT appear in `core/config.py` as `os.environ[...]` — it is set by `start-up.sh` from `cicd/envs.json` and then read as a normal env var inside `spreadsheet_id()`.
+8. **Orphaned envs.json keys** — every key declared under each environment in `cicd/envs.json` must be read by `start-up.sh`. Flag any key present in `envs.json` that `start-up.sh` never reads.
 
 ---
 
@@ -231,6 +234,13 @@ The `_runbooks/USAGE-INSTRUCTIONS.md` must be accurate enough that a reviewer ca
 - Every file listed in the `_tasks/SETUP.md` project layout exists on disk.
 - No source file on disk (excluding `.venv/`, `uv.lock`, `__pycache__/`, `database/models/`) is absent from the `_tasks/SETUP.md` layout.
 
+### Environment config (cicd/envs.json)
+
+- `cicd/envs.json` exists and contains a `dev` and `prod` entry, each with a `spreadsheet_id` key.
+- Neither `dev` nor `prod` `spreadsheet_id` value is `"TODO"` — flag if placeholder not replaced.
+- The `_runbooks/USAGE-INSTRUCTIONS.md` contains an "Environment config" section describing `cicd/envs.json`.
+- `LE_SPREADSHEET_ID` does NOT appear in the env var table in `_runbooks/USAGE-INSTRUCTIONS.md` — it is not a secret and is not set in `.env`.
+
 ### Configuration
 
 - Every env var read in `core/config.py` appears in the `_runbooks/USAGE-INSTRUCTIONS.md` env var table.
@@ -251,14 +261,15 @@ The `_runbooks/USAGE-INSTRUCTIONS.md` must be accurate enough that a reviewer ca
 
 ### How to run
 
-- Every command shown in the `_runbooks/USAGE-INSTRUCTIONS.md` Running the job section matches what `start-up.sh` actually executes, in the same order.
+- Every command shown in the `_runbooks/USAGE-INSTRUCTIONS.md` Running the job section matches what `cicd/start-up.sh` actually executes, in the same order.
 
 ---
 
 ## Step 9 — Security
 
 - [ ] No hardcoded credentials, API keys, tokens, or passwords appear in any source file, config file, or comment.
-- [ ] All secrets (`FULCRUM_DB_PASSWORD`, `LE_SERVICE_ACCOUNT_FILE` path) are read from environment variables — not from `config.yaml` or any file checked into source control.
+- [ ] All secrets (`FULCRUM_DB_PASSWORD`, `LE_SERVICE_ACCOUNT_FILE` path) are read from environment variables — not from `config.yaml`, `cicd/envs.json`, or any file checked into source control.
+- [ ] `cicd/envs.json` contains only non-secrets — spreadsheet IDs are public URL components and safe to commit; no passwords, tokens, or key file contents appear in it.
 - [ ] No secret value appears in any log output — check all log lines that include DB connection details, spreadsheet identifiers, or config values.
 - [ ] Sheet row content passed to `transform()` is validated before any DB write — invalid rows raise and abort rather than writing partial data.
 

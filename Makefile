@@ -67,18 +67,18 @@ api-logs: ## Open GAS executions page in browser (interactive: pick env)
 ##@ Data Synchronization
 
 .PHONY: data-sync
-data-sync: ## Run a data-synchronization module (interactive: pick module)
+data-sync: ## Run a data-synchronization module (interactive: pick module + env)
 	@echo ""; \
 	i=1; \
 	for dir in data-synchronization/*/; do \
-		[ -f "$${dir}start-up.sh" ] && printf "  %d) %s\n" "$$i" "$$(basename $$dir)" && i=$$((i+1)); \
+		[ -f "$${dir}cicd/start-up.sh" ] && printf "  %d) %s\n" "$$i" "$$(basename $$dir)" && i=$$((i+1)); \
 	done; \
 	echo ""; \
 	printf "Select module: "; read -r CHOICE; \
 	i=1; \
 	selected=""; \
 	for dir in data-synchronization/*/; do \
-		if [ -f "$${dir}start-up.sh" ]; then \
+		if [ -f "$${dir}cicd/start-up.sh" ]; then \
 			[ "$$i" = "$$CHOICE" ] && selected="$$dir" && break; \
 			i=$$((i+1)); \
 		fi; \
@@ -86,7 +86,16 @@ data-sync: ## Run a data-synchronization module (interactive: pick module)
 	if [ -z "$$selected" ]; then \
 		echo "Invalid choice '$$CHOICE'."; exit 1; \
 	fi; \
-	bash "$${selected}start-up.sh"
+	echo ""; \
+	echo "  1) dev"; \
+	echo "  2) prod"; \
+	echo ""; \
+	printf "Select environment: "; read -r ENV_CHOICE; \
+	if [ "$$ENV_CHOICE" = "1" ]; then ENV="dev"; \
+	elif [ "$$ENV_CHOICE" = "2" ]; then ENV="prod"; \
+	else echo "Invalid choice '$$ENV_CHOICE'. Enter 1 or 2."; exit 1; \
+	fi; \
+	bash "$${selected}cicd/start-up.sh" "$$ENV"
 
 ##@ Job
 
