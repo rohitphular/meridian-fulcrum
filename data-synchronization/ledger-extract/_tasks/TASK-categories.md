@@ -178,10 +178,9 @@ Soft-delete pass (after all sheet rows processed):
 ## What to build
 
 - [x] `migrations/0001_create_account_types.py` — table + seed data
-- [x] `migrations/0002_create_category_master.py`
-- [x] `migrations/0003_create_category_account_type_joins.py`
-- [x] `migrations/0007_create_extract_hashes.py` — shared infrastructure, built as part of this first entity
-- [x] `migrations/0008_create_job_state.py` — shared infrastructure, built as part of this first entity
+- [x] `migrations/0001_create_shared_infrastructure.py` — ledger_data_checksums + job_execution_details
+- [x] `migrations/0002_create_account_types.py` — account_types reference table
+- [x] `migrations/0003_create_categories.py` — category_master + join tables
 - [x] `transforms/categories.py` — row dict → typed dict + SHA-256 hash
 - [x] `database/categories.py` — category_master upsert + explicit join table deletes/inserts
 - [x] `database/ledger_data_checksums.py` — read/write ledger_data_checksums for categories

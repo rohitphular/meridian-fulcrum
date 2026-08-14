@@ -35,17 +35,12 @@ ledger-extract/
 │   ├── job_execution_details.py     # Phase 1 bootstrap/read and Phase 3 UPSERT for job_execution_details
 │   └── categories.py                # category_master upsert + join table writes
 └── migrations/
-    ├── 0001_create_account_types.py                          # reference table, seeded
-    ├── 0002_create_category_master.py
-    ├── 0003_create_category_account_type_joins.py
-    ├── 0004_create_accounts.py                               # (not yet built)
-    ├── 0005_create_transactions.py                           # (not yet built)
-    ├── 0006_create_subscriptions.py                          # (not yet built)
-    ├── 0007_create_extract_hashes.py
-    ├── 0008_create_job_state.py
-    ├── 0009_expand_tx_workflow_combos.py
-    ├── 0010_rename_job_state_to_job_execution_details.py
-    └── 0011_rename_extract_hashes_to_ledger_data_checksums.py
+    ├── 0001_create_shared_infrastructure.py  # ledger_data_checksums + job_execution_details
+    ├── 0002_create_account_types.py          # reference table, seeded
+    ├── 0003_create_categories.py             # category_master + join tables
+    ├── 0004_create_accounts.py               # (not yet built)
+    ├── 0005_create_transactions.py           # (not yet built)
+    └── 0006_create_subscriptions.py          # (not yet built)
 ```
 
 ---
@@ -173,7 +168,7 @@ generate-models: ## Regenerate typed model files (spins up a fresh Docker Postgr
 
 ---
 
-## `ledger_data_checksums` table schema (migration 0007)
+## `ledger_data_checksums` table schema (migration 0001)
 
 Tracks the last known state of every extracted row. Drives hash comparison and soft-delete detection.
 
@@ -190,7 +185,7 @@ Rows are deleted from this table when the corresponding entity row is soft-delet
 
 ---
 
-## `job_execution_details` table schema (migrations 0008 + 0010)
+## `job_execution_details` table schema (migration 0001)
 
 Stores the last-seen spreadsheet modified time to enable the early-exit optimisation.
 
@@ -304,7 +299,7 @@ Type transformations:
 
 Build one entity at a time in this order. Each entity is self-contained — migration, transform, database helper, extractor wiring.
 
-1. `categories` — includes `account_types` (0001) + category_master (0002) + join tables (0003) + **shared infrastructure: `ledger_data_checksums` (0007) and `job_execution_details` (0008) are built here as part of the first entity**
+1. `categories` — depends on `account_types` (0002); shared infrastructure `ledger_data_checksums` + `job_execution_details` are in (0001)
 2. `accounts` — no dependencies
 3. `transactions` — references accounts and categories (FK decision pending)
 4. `subscriptions` — references accounts and categories (FK decision pending)

@@ -62,14 +62,12 @@ ledger-extract/
 │   ├── job_execution_details.py
 │   └── categories.py
 └── migrations/
-    ├── 0001_create_account_types.py
-    ├── 0002_create_category_master.py
-    ├── 0003_create_category_account_type_joins.py
-    ├── 0007_create_extract_ledger_data_checksums.py
-    ├── 0008_create_job_state.py
-    ├── 0009_expand_tx_workflow_combos.py
-    ├── 0010_rename_job_state_to_job_execution_details.py
-    └── 0011_rename_extract_hashes_to_ledger_data_checksums.py
+    ├── 0001_create_shared_infrastructure.py
+    ├── 0002_create_account_types.py
+    ├── 0003_create_categories.py
+    ├── 0004_create_accounts.py
+    ├── 0005_create_transactions.py
+    └── 0006_create_subscriptions.py
 ```
 
 Exclude from this check: `.venv/`, `uv.lock`, `__pycache__/`, `database/models/`
@@ -257,8 +255,8 @@ The `_runbooks/USAGE-INSTRUCTIONS.md` must be accurate enough that a reviewer ca
 
 ### Schema
 
-- Every column listed in the `_tasks/SETUP.md` `ledger_data_checksums` table section exists in `migrations/0007_create_extract_ledger_data_checksums.py` + `migrations/0011_rename_extract_hashes_to_ledger_data_checksums.py`.
-- Every column listed in the `_tasks/SETUP.md` `job_execution_details` table section exists in `migrations/0008_create_job_state.py` + `migrations/0010_rename_job_state_to_job_execution_details.py`.
+- Every column listed in the `_tasks/SETUP.md` `ledger_data_checksums` table section exists in `migrations/0001_create_shared_infrastructure.py`.
+- Every column listed in the `_tasks/SETUP.md` `job_execution_details` table section exists in `migrations/0001_create_shared_infrastructure.py`.
 - No column in either migration is absent from `_tasks/SETUP.md`.
 - Every constraint described in `_tasks/SETUP.md` (primary key, unique, check, foreign key) exists in the corresponding migration file.
 
