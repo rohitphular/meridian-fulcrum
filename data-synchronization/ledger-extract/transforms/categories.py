@@ -11,6 +11,7 @@ _VALID_TX_WORKFLOW_COMBOS = {
     ("money-out", "debt-repayment"),
     ("money-transfer", "funds-transfer"),
     ("money-transfer", "forex-transfer"),
+    ("money-transfer", "debt-repayment"),
 }
 
 

@@ -117,7 +117,7 @@ This spins up a temporary `postgres:17` container, applies all migrations into i
 
 ## Recovering from a stuck soft-delete
 
-If a `category_master` row is missing but its key is still in `extract_hashes`, every run will log:
+If a `category_master` row is missing but its key is still in `ledger_data_checksums`, every run will log:
 
 ```
 upsert_categories: soft_delete_returned_no_rows entity=categories natural_key=<key>
@@ -125,7 +125,7 @@ upsert_categories: soft_delete_returned_no_rows entity=categories natural_key=<k
 
 Manual fix:
 ```sql
-DELETE FROM extract_hashes WHERE entity = 'categories' AND natural_key = '<key>';
+DELETE FROM ledger_data_checksums WHERE entity = 'categories' AND natural_key = '<key>';
 ```
 
 Investigate the root cause before deleting.

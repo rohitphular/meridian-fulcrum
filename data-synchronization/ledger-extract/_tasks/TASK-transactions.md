@@ -68,6 +68,6 @@ Constraints:
 
 - [ ] `migrations/0005_create_transactions.py`
 - [ ] `transforms/transactions.py` — row dict → typed dict + SHA-256 hash; parse `tx_date_time`; resolve `category_id`
-- [ ] `database/upsert.py` — transactions upsert (add entity section)
-- [ ] `database/hashes.py` — read/write extract_hashes for transactions
+- [ ] `database/transactions.py` — transactions upsert
+- [ ] `database/ledger_data_checksums.py` — read/write ledger_data_checksums for transactions
 - [ ] Wire into `core/extractor.py` — ensure categories extract runs before transactions

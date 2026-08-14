@@ -58,15 +58,18 @@ ledger-extract/
 │   └── categories.py
 ├── database/
 │   ├── models/
-│   ├── hashes.py
-│   ├── job_state.py
-│   └── upsert.py
+│   ├── ledger_data_checksums.py
+│   ├── job_execution_details.py
+│   └── categories.py
 └── migrations/
     ├── 0001_create_account_types.py
     ├── 0002_create_category_master.py
     ├── 0003_create_category_account_type_joins.py
-    ├── 0007_create_extract_hashes.py
-    └── 0008_create_job_state.py
+    ├── 0007_create_extract_ledger_data_checksums.py
+    ├── 0008_create_job_state.py
+    ├── 0009_expand_tx_workflow_combos.py
+    ├── 0010_rename_job_state_to_job_execution_details.py
+    └── 0011_rename_extract_hashes_to_ledger_data_checksums.py
 ```
 
 Exclude from this check: `.venv/`, `uv.lock`, `__pycache__/`, `database/models/`
@@ -134,7 +137,7 @@ These checks enforce the incremental load invariants specific to this job. They 
 - [ ] **Hash — token normalisation**: `source_account_types` and `target_account_types` are passed through `_normalise_account_types_for_hash` before inclusion in `ordered_values`, not included raw — this ensures `"asset,investment"` and `"investment,asset"` hash-equivalent
 - [ ] **Hash — column order**: `ordered_values` column order in every `transforms/*.py` exactly matches the schema order declared in the entity's task doc — any reordering silently invalidates all existing hashes
 - [ ] **Zero-row guard**: if `sheets_client.read_sheet(tab)` returns 0 rows, the job raises immediately before the soft-delete pass — an empty read must never trigger a full wipe
-- [ ] **Soft-delete atomicity**: the `extract_hashes` DELETE and the entity table soft-delete UPDATE are in the same transaction — `extract_hashes` must never hold a row for a soft-deleted entity row
+- [ ] **Soft-delete atomicity**: the `ledger_data_checksums` DELETE and the entity table soft-delete UPDATE are in the same transaction — `ledger_data_checksums` must never hold a row for a soft-deleted entity row
 - [ ] **Resurrection**: the new-row INSERT uses `ON CONFLICT (...) DO UPDATE SET is_deleted = FALSE, deleted_at = NULL, ...` — a row returning to the sheet after soft-delete must be fully restored, not rejected by the unique constraint
 - [ ] **account_types expansion — fetchall**: `_expand_account_types` uses `cursor.fetchall()` + inner loop, not `cursor.fetchone()` — a single type token (e.g. `"asset"`) matches multiple sub-types; one join row per sub-type must be inserted
 - [ ] **account_types expansion — conflict safety**: join table inserts use `ON CONFLICT DO NOTHING` — duplicate type tokens in a cell (e.g. `"asset,asset"`) must not raise a PK violation
@@ -145,14 +148,14 @@ Note: `major_category` and `minor_category` are stored and hashed as raw sheet s
 ### Transaction boundaries
 
 - [ ] Every per-row write (insert, update, or hash-only `last_seen_at` update) commits before the next row begins — a rollback on row N must not undo row N-1
-- [ ] `hashes_db.update_last_seen` is the only function in `database/hashes.py` that calls `conn.commit()` — `insert_hash`, `update_hash`, `delete_hash`, and `get_all_keys` must not commit or rollback
+- [ ] `hashes_db.update_last_seen` is the only function in `database/ledger_data_checksums.py` that calls `conn.commit()` — `insert_hash`, `update_hash`, `delete_hash`, and `get_all_keys` must not commit or rollback
 - [ ] `_expand_account_types` does not call `conn.commit()` or `conn.rollback()` — it runs inside the caller's transaction
-- [ ] `hashes_db.get_all_keys` is called after the per-row loop completes, not inside it — it must read the fully committed final state of `extract_hashes`
+- [ ] `hashes_db.get_all_keys` is called after the per-row loop completes, not inside it — it must read the fully committed final state of `ledger_data_checksums`
 
 ### Error handling
 
 - [ ] Transform `ValueError` propagates uncaught from `upsert_categories` — it must abort the job (hard error policy)
-- [ ] When `UPDATE ... RETURNING id` returns 0 rows (DB inconsistency), the path rolls back, logs at error level, and continues to the next row — it must not raise; the `extract_hashes` row is left intact as a diagnostic signal
+- [ ] When `UPDATE ... RETURNING id` returns 0 rows (DB inconsistency), the path rolls back, logs at error level, and continues to the next row — it must not raise; the `ledger_data_checksums` row is left intact as a diagnostic signal
 - [ ] The `except Exception: conn.rollback(); raise` block re-raises every unexpected psycopg2 exception — it must not swallow it
 - [ ] `core/runner.py` catches all exceptions at the top level, logs at error level, and calls `sys.exit(1)` — the process must not exit with code 0 on failure
 
@@ -201,7 +204,7 @@ Check each item. Mark PASS or FAIL with file and line reference.
 
 ### PostgreSQL (check migration files)
 
-- [ ] Table names: plural, `snake_case` (e.g. `category_master`, `account_types`, `extract_hashes`, `job_state`)
+- [ ] Table names: plural, `snake_case` (e.g. `category_master`, `account_types`, `ledger_data_checksums`, `job_execution_details`)
 - [ ] Column names: `snake_case`; booleans prefixed `is_`; timestamps suffixed `_at`; FK references suffixed `_id`
 - [ ] Primary key column: `id UUID NOT NULL DEFAULT gen_random_uuid()` — plain `id`, not entity-prefixed
 - [ ] Constraint names follow `{type_prefix}_{table}_{column(s)}` — e.g. `pk_category_master`, `uq_category_master_nat_key`, `fk_csat_category`, `chk_cm_account_mandatory`
@@ -254,8 +257,8 @@ The `_runbooks/USAGE-INSTRUCTIONS.md` must be accurate enough that a reviewer ca
 
 ### Schema
 
-- Every column listed in the `_tasks/SETUP.md` `extract_hashes` table section exists in `migrations/0007_create_extract_hashes.py`.
-- Every column listed in the `_tasks/SETUP.md` `job_state` table section exists in `migrations/0008_create_job_state.py`.
+- Every column listed in the `_tasks/SETUP.md` `ledger_data_checksums` table section exists in `migrations/0007_create_extract_ledger_data_checksums.py` + `migrations/0011_rename_extract_hashes_to_ledger_data_checksums.py`.
+- Every column listed in the `_tasks/SETUP.md` `job_execution_details` table section exists in `migrations/0008_create_job_state.py` + `migrations/0010_rename_job_state_to_job_execution_details.py`.
 - No column in either migration is absent from `_tasks/SETUP.md`.
 - Every constraint described in `_tasks/SETUP.md` (primary key, unique, check, foreign key) exists in the corresponding migration file.
 

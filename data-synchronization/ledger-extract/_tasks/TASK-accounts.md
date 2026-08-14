@@ -45,6 +45,6 @@ Note: the sheet's `id` column becomes `account_id TEXT UNIQUE NOT NULL` in the D
 
 - [ ] `migrations/0004_create_accounts.py`
 - [ ] `transforms/accounts.py` — row dict → typed dict + SHA-256 hash
-- [ ] `database/upsert.py` — accounts upsert (add entity section)
-- [ ] `database/hashes.py` — read/write extract_hashes for accounts
+- [ ] `database/accounts.py` — accounts upsert
+- [ ] `database/ledger_data_checksums.py` — read/write ledger_data_checksums for accounts
 - [ ] Wire into `core/extractor.py`

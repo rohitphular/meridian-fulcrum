@@ -55,6 +55,6 @@ Note: the sheet's `id` becomes `subscription_id TEXT UNIQUE NOT NULL`.
 
 - [ ] `migrations/0006_create_subscriptions.py`
 - [ ] `transforms/subscriptions.py` — row dict → typed dict + SHA-256 hash
-- [ ] `database/upsert.py` — subscriptions upsert (add entity section)
-- [ ] `database/hashes.py` — read/write extract_hashes for subscriptions
+- [ ] `database/subscriptions.py` — subscriptions upsert
+- [ ] `database/ledger_data_checksums.py` — read/write ledger_data_checksums for subscriptions
 - [ ] Wire into `core/extractor.py`

@@ -4,7 +4,7 @@ from typing import Any
 
 from py_logging import get_logger
 
-import database.hashes as hashes_db
+import database.ledger_data_checksums as hashes_db
 from transforms import categories as categories_transform
 
 logger = get_logger(__name__)
