@@ -15,7 +15,7 @@ ledger-extract/
 ├── Makefile                 # run + generate-models targets
 ├── cicd/
 │   ├── envs.json            # non-secret per-env config (spreadsheet_id); committed to repo
-│   └── start-up.sh          # takes dev|prod arg; reads spreadsheet_id from envs.json, sources ../../.env, uv sync, runs migrations, runs extract
+│   └── start-up.sh          # takes dev|prod arg; reads spreadsheet_id from envs.json, sources ../../.env.{env}, uv sync, runs migrations, runs extract
 ├── _tasks/                  # design and decision documents
 ├── _runbooks/
 │   ├── CODE-REVIEW-INSTRUCTIONS.md

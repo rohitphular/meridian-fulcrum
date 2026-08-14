@@ -43,8 +43,14 @@ fi
 
 # ── Step 2: Load secrets ──────────────────────────────────────────────────────
 
+ENV_FILE="$ROOT/infrastructure/.env.$ENV_ARG"
+if [[ ! -f "$ENV_FILE" ]]; then
+  echo "ERROR: env file not found: $ENV_FILE"
+  exit 1
+fi
+
 echo "[$ENV_ARG] Loading env vars..."
-set -a; source "$ROOT/.env"; set +a
+set -a; source "$ENV_FILE"; set +a
 
 # ── Step 3: Install dependencies and run migrations ───────────────────────────
 

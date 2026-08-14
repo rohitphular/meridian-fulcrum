@@ -21,7 +21,7 @@ ssh -T git@github.com
 
 ### 2. Environment file
 
-A `.env` file must exist at `meridian-fulcrum/.env`. Required variables:
+A `.env.{env}` file must exist at the `meridian-fulcrum/` root — `.env.dev` for dev, `.env.prod` for prod. Neither file is committed to source control. Required variables:
 
 | Variable | Purpose |
 |---|---|

@@ -1,0 +1,19 @@
+{
+  "_comment": "Per-env infrastructure config. Non-secrets — safe to commit. Used by start-services.sh and stop-services.sh.",
+  "dev": {
+    "postgres_host": "localhost",
+    "postgres_port": 5433,
+    "postgres_db": "fulcrum_db_dev",
+    "container_name": "fulcrum-postgres-dev",
+    "volume_path": "_volume/data-postgres-dev",
+    "network_name": "fulcrum-net-dev"
+  },
+  "prod": {
+    "postgres_host": "localhost",
+    "postgres_port": 5434,
+    "postgres_db": "fulcrum_db",
+    "container_name": "fulcrum-postgres-prod",
+    "volume_path": "_volume/data-postgres-prod",
+    "network_name": "fulcrum-net-prod"
+  }
+}

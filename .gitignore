@@ -16,7 +16,7 @@
 
 # Local configs, secrets, and temp files — never commit
 local/
-.env
+infrastructure/.env.*
 
 # Python virtual environments
 **/.venv/

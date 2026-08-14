@@ -7,6 +7,10 @@ storage. You will be prompted once on first connect and DBeaver will save the
 credential after that.
 
 Run with DBeaver closed; if it is open the changes will only appear after restart.
+
+Usage:
+    python3 setup-dbeaver.py dev
+    python3 setup-dbeaver.py prod
 """
 
 from __future__ import annotations
@@ -31,7 +35,7 @@ def _find_workspace() -> Path:
 
 _WORKSPACE = _find_workspace()
 _DATASOURCES = _WORKSPACE / "data-sources.json"
-_ENV_FILE = Path(__file__).parent.parent / ".env"
+_ROOT = Path(__file__).parent
 
 _FOLDER = "fulcrum"
 
@@ -53,6 +57,11 @@ _CONNECTION_TYPE = {
     }
 }
 
+_LABEL = {
+    "dev": "fulcrum-db-dev",
+    "prod": "fulcrum-db-prod",
+}
+
 
 def _load_env(path: Path) -> dict[str, str]:
     env: dict[str, str] = {}
@@ -67,21 +76,24 @@ def _load_env(path: Path) -> dict[str, str]:
     return env
 
 
-def _build_connections(env: dict[str, str]) -> dict:
+def _build_connections(env_name: str, env: dict[str, str]) -> dict:
     pg_user = env.get("POSTGRES_USER", "fulcrum")
     pg_host = env.get("POSTGRES_HOST", "localhost")
     pg_port = env.get("POSTGRES_PORT", "5433")
+    pg_db = env.get("FULCRUM_DB_NAME", "fulcrum_db")
+    label = _LABEL[env_name]
+    conn_id = f"postgresql-{label}"
     return {
-        "postgresql-fulcrum-db": {
+        conn_id: {
             "provider": "postgresql",
             "driver": "postgresql",
-            "name": "fulcrum-db",
+            "name": label,
             "save-password": True,
             "configuration": {
                 "host": pg_host,
                 "port": pg_port,
-                "database": "fulcrum_db",
-                "url": f"jdbc:postgresql://{pg_host}:{pg_port}/fulcrum_db",
+                "database": pg_db,
+                "url": f"jdbc:postgresql://{pg_host}:{pg_port}/{pg_db}",
                 "configurationType": "MANUAL",
                 "type": "dev",
                 "closeIdleConnection": True,
@@ -101,11 +113,22 @@ def _dbeaver_running() -> bool:
 
 
 def main() -> None:
+    if len(sys.argv) < 2:
+        print("ERROR: environment argument is required.")
+        print("  Usage: python3 setup-dbeaver.py dev|prod")
+        sys.exit(1)
+
+    env_name = sys.argv[1]
+    if env_name not in _LABEL:
+        print(f"ERROR: unknown environment '{env_name}'. Valid: {', '.join(_LABEL)}")
+        sys.exit(1)
+
     if _dbeaver_running():
         print("  WARNING: DBeaver is open. Close it and rerun, or restart DBeaver after setup.")
 
-    env = _load_env(_ENV_FILE)
-    connections = _build_connections(env)
+    env_file = _ROOT / f".env.{env_name}"
+    env = _load_env(env_file)
+    connections = _build_connections(env_name, env)
 
     _WORKSPACE.mkdir(parents=True, exist_ok=True)
 
@@ -139,7 +162,7 @@ def main() -> None:
             conn["folder"] = _FOLDER
             data["connections"][conn_id] = conn
             print(
-                f"  Added    {conn['name']} → {_FOLDER}/ (postgresql {conn['configuration']['host']}:{conn['configuration']['port']}, user={conn['configuration']['user']})"
+                f"  Added    {conn['name']} → {_FOLDER}/ (postgresql {conn['configuration']['host']}:{conn['configuration']['port']}, db={conn['configuration']['database']}, user={conn['configuration']['user']})"
             )
             added += 1
 

@@ -31,7 +31,7 @@
 
 ## Environment variables
 
-These are secrets — set them in `meridian-fulcrum/.env`. Not committed to source control.
+These are secrets — set them in `meridian-fulcrum/.env.dev` or `meridian-fulcrum/.env.prod` as appropriate. Neither file is committed to source control.
 
 | Variable | Example | Purpose |
 |---|---|---|
@@ -65,7 +65,7 @@ make run ENV=prod
 `cicd/start-up.sh` does, in order:
 1. Validates the env arg (`dev` or `prod`) — exits immediately if missing or unrecognised
 2. Reads `spreadsheet_id` from `cicd/envs.json` and exports it as `LE_SPREADSHEET_ID` — exits if `TODO`
-3. Sources `../../.env` (meridian-fulcrum root) for secrets
+3. Sources `../../.env.{env}` (meridian-fulcrum root) for secrets — fails fast if the file does not exist
 4. `uv sync --quiet` — creates or updates `uv.lock` from `pyproject.toml` (first run), then installs from it
 5. `uv run py-db-migrate run --db postgres` — applies pending migrations
 6. `uv run python -m core.runner` — runs the extract job

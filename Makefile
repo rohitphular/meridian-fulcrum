@@ -12,14 +12,30 @@ help:
 ##@ Infrastructure
 
 .PHONY: infra-up
-infra-up: ## Create network and start PostgreSQL
-	docker network create fulcrum-net 2>/dev/null || true
-	bash infrastructure/start-services.sh
+infra-up: ## Start PostgreSQL for an environment (interactive: pick env)
+	@echo ""; \
+	echo "  1) dev"; \
+	echo "  2) prod"; \
+	echo ""; \
+	printf "Select environment: "; read -r CHOICE; \
+	if [ "$$CHOICE" = "1" ]; then ENV="dev"; \
+	elif [ "$$CHOICE" = "2" ]; then ENV="prod"; \
+	else echo "Invalid choice '$$CHOICE'. Enter 1 or 2."; exit 1; \
+	fi; \
+	bash infrastructure/start-services.sh "$$ENV"
 
 .PHONY: infra-down
-infra-down: ## Stop PostgreSQL and remove network
-	bash infrastructure/stop-services.sh
-	docker network rm fulcrum-net 2>/dev/null || true
+infra-down: ## Stop PostgreSQL for an environment (interactive: pick env)
+	@echo ""; \
+	echo "  1) dev"; \
+	echo "  2) prod"; \
+	echo ""; \
+	printf "Select environment: "; read -r CHOICE; \
+	if [ "$$CHOICE" = "1" ]; then ENV="dev"; \
+	elif [ "$$CHOICE" = "2" ]; then ENV="prod"; \
+	else echo "Invalid choice '$$CHOICE'. Enter 1 or 2."; exit 1; \
+	fi; \
+	bash infrastructure/stop-services.sh "$$ENV"
 
 ##@ App
 
