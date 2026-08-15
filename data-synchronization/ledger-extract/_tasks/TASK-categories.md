@@ -30,19 +30,19 @@ Seeded from the GAS account schema. Contains all valid type + sub-type combinati
 | Column | Type | Notes |
 |--------|------|-------|
 | `id` | `UUID NOT NULL DEFAULT gen_random_uuid()` | PK |
-| `type` | `TEXT NOT NULL` | `asset`, `investment`, `liability` |
+| `account_type` | `TEXT NOT NULL` | `asset`, `investment`, `liability` |
 | `sub_type` | `TEXT NOT NULL` | e.g. `current`, `crypto`, `mortgage` |
 | `is_deleted` | `BOOLEAN NOT NULL DEFAULT FALSE` | Consistent with all other tables |
 | `created_at` | `TIMESTAMPTZ NOT NULL` | When the seed row was inserted — provide `now()` explicitly in each seed INSERT (no `DEFAULT` on this column) |
 | `deleted_at` | `TIMESTAMPTZ` | Set if sub-type is retired |
 
-`UNIQUE (type, sub_type)`
+`UNIQUE (account_type, sub_type)`
 
 `is_deleted` and `deleted_at` are for manual retirement only — the extract job never writes to this table after the initial seed. To retire a sub-type, update the row directly via a new migration or manual SQL. Retiring a sub-type does not immediately remove existing join rows pointing to it — those are cleaned up only when the referencing category is next modified in the sheet (triggering the changed-row path which deletes and re-inserts all join rows). No `updated_at` column — since the extract job never updates this table after the initial seed, there is nothing to track; any direct SQL retirement is a one-time manual act.
 
 Seed data from GAS `account-schema.gs`:
 
-| type | sub_type |
+| account_type | sub_type |
 |---|---|
 | `asset` | `current`, `savings`, `cash` |
 | `investment` | `stocks_shares`, `isa`, `pension_sipp`, `crypto`, `fixed_deposit`, `bonds`, `property`, `commodities`, `p2p_lending`, `other` |

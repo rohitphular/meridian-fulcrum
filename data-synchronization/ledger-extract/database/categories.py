@@ -21,7 +21,7 @@ def _expand_account_types(conn: Any, category_id: str, raw_field: str | None, ta
     with conn.cursor() as cursor:
         for token in tokens:
             cursor.execute(
-                "SELECT id FROM account_types WHERE type = %s AND is_deleted = FALSE",
+                "SELECT id FROM account_types WHERE account_type = %s AND is_deleted = FALSE",
                 (token,),
             )
             matched = cursor.fetchall()

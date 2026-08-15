@@ -43,7 +43,7 @@ def update_ran_at(conn: Any) -> None:
             (_JOB_NAME,),
         )
     conn.commit()
-    logger.info("job_execution_details: update_ran_at committed")
+    logger.info("update_ran_at: committed")
 
 
 def upsert_job_execution_details(conn: Any, last_sheet_modified_at: datetime) -> None:
@@ -60,4 +60,4 @@ def upsert_job_execution_details(conn: Any, last_sheet_modified_at: datetime) ->
             (_JOB_NAME, last_sheet_modified_at),
         )
     conn.commit()
-    logger.info(f"job_execution_details: upsert committed last_sheet_modified_at={last_sheet_modified_at.isoformat()}")
+    logger.info(f"upsert_job_execution_details: committed last_sheet_modified_at={last_sheet_modified_at.isoformat()}")

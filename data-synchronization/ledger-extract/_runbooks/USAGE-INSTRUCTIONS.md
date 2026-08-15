@@ -5,7 +5,7 @@
 - Python 3.12+, `uv` installed
 - PostgreSQL running (see `FULCRUM_DB_*` env vars)
 - A Google service account JSON key with read access to the target spreadsheet
-- `meridian-fulcrum/.env` populated — see Environment Variables below
+- `meridian-fulcrum/infrastructure/.env.dev` or `meridian-fulcrum/infrastructure/.env.prod` populated — see Environment Variables below
 - `cicd/envs.json` populated — see Environment Config below
 
 ---
@@ -31,7 +31,7 @@
 
 ## Environment variables
 
-These are secrets — set them in `meridian-fulcrum/.env.dev` or `meridian-fulcrum/.env.prod` as appropriate. Neither file is committed to source control.
+These are secrets — set them in `meridian-fulcrum/infrastructure/.env.dev` or `meridian-fulcrum/infrastructure/.env.prod` as appropriate. Neither file is committed to source control.
 
 | Variable | Example | Purpose |
 |---|---|---|
@@ -65,7 +65,7 @@ make run ENV=prod
 `cicd/start-up.sh` does, in order:
 1. Validates the env arg (`dev` or `prod`) — exits immediately if missing or unrecognised
 2. Reads `spreadsheet_id` from `cicd/envs.json` and exports it as `LE_SPREADSHEET_ID` — exits if `TODO`
-3. Sources `../../.env.{env}` (meridian-fulcrum root) for secrets — fails fast if the file does not exist
+3. Sources `infrastructure/.env.{env}` (meridian-fulcrum/infrastructure/) for secrets — fails fast if the file does not exist
 4. `uv sync --quiet` — creates or updates `uv.lock` from `pyproject.toml` (first run), then installs from it
 5. `uv run py-db-migrate run --db postgres` — applies pending migrations
 6. `uv run python -m core.runner` — runs the extract job
@@ -81,10 +81,6 @@ entities:
   categories:
     enabled: true   # set false to skip
   accounts:
-    enabled: false  # not yet implemented
-  transactions:
-    enabled: false  # not yet implemented
-  subscriptions:
     enabled: false  # not yet implemented
 ```
 

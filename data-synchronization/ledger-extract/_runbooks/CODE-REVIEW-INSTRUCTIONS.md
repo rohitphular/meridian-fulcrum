@@ -33,6 +33,7 @@ Confirm every file in the layout below exists on disk, and that no extra source 
 
 ```
 ledger-extract/
+├── .gitignore
 ├── config.yaml
 ├── pyproject.toml
 ├── py_db_migrate.toml
@@ -55,22 +56,22 @@ ledger-extract/
 │   ├── extractor.py
 │   └── runner.py
 ├── transforms/
-│   └── categories.py
+│   ├── categories.py
+│   └── accounts.py
 ├── database/
 │   ├── models/
 │   ├── ledger_data_checksums.py
 │   ├── job_execution_details.py
-│   └── categories.py
+│   ├── categories.py
+│   └── accounts.py
 └── migrations/
     ├── 0001_create_shared_infrastructure.py
     ├── 0002_create_account_types.py
     ├── 0003_create_categories.py
-    ├── 0004_create_accounts.py
-    ├── 0005_create_transactions.py
-    └── 0006_create_subscriptions.py
+    └── 0004_create_accounts.py
 ```
 
-Exclude from this check: `.venv/`, `uv.lock`, `__pycache__/`, `database/models/`
+Exclude from this check: `.venv/`, `uv.lock`, `__pycache__/`, `.ruff_cache/`, `database/models/`
 
 ---
 
@@ -232,8 +233,8 @@ The `_runbooks/USAGE-INSTRUCTIONS.md` must be accurate enough that a reviewer ca
 
 ### File inventory
 
-- Every file listed in the `_tasks/SETUP.md` project layout exists on disk.
-- No source file on disk (excluding `.venv/`, `uv.lock`, `__pycache__/`, `database/models/`) is absent from the `_tasks/SETUP.md` layout.
+- Every file listed in the `_tasks/SETUP.md` project layout exists on disk. Files annotated with `(not yet built)` are exempt from this check.
+- No source file on disk (excluding `.venv/`, `uv.lock`, `__pycache__/`, `.ruff_cache/`, `database/models/`) is absent from the `_tasks/SETUP.md` layout.
 
 ### Environment config (cicd/envs.json)
 
