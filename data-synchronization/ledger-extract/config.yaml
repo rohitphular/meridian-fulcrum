@@ -3,3 +3,5 @@ entities:
     enabled: true
   accounts:
     enabled: false
+  transactions:
+    enabled: false

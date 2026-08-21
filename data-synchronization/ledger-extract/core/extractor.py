@@ -9,6 +9,7 @@ from py_logging import get_logger
 
 import database.accounts as accounts_db
 import database.categories as categories_db
+import database.transactions as transactions_db
 from database.job_execution_details import bootstrap_job_execution_details, read_last_sheet_modified_at, update_ran_at, upsert_job_execution_details
 
 logger = get_logger(__name__)
@@ -58,7 +59,9 @@ class LedgerExtractJob:
             if entity_enabled("accounts", config):
                 self._extract_accounts(sheets_client)
 
-            # TODO: transactions
+            if entity_enabled("transactions", config):
+                self._extract_transactions(sheets_client)
+
             # TODO: subscriptions
 
             # --- Phase 3: Finalise ---
@@ -78,3 +81,10 @@ class LedgerExtractJob:
             raise RuntimeError("accounts: zero rows returned from sheet — aborting to prevent full wipe")
         structure_type_map = accounts_db.load_structure_type_map(self._conn)
         accounts_db.upsert_accounts(self._conn, rows, structure_type_map)
+
+    def _extract_transactions(self, sheets_client: SheetsClient) -> None:
+        rows = sheets_client.read_sheet("transactions")
+        if len(rows) == 0:
+            raise RuntimeError("transactions: zero rows returned from sheet — aborting to prevent full wipe")
+        account_name_map = transactions_db.load_account_name_map(self._conn)
+        transactions_db.upsert_transactions(self._conn, rows, account_name_map)

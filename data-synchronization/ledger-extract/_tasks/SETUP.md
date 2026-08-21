@@ -8,6 +8,7 @@
 
 ```
 ledger-extract/
+├── .gitignore
 ├── config.yaml              # entity toggles (enabled: true/false per entity)
 ├── pyproject.toml
 ├── py_db_migrate.toml
@@ -100,7 +101,7 @@ quote-style = "double"
 | `FULCRUM_DB_USER` | Yes | Postgres user |
 | `FULCRUM_DB_PASSWORD` | Yes | Postgres password |
 | `FULCRUM_DB_NAME` | Yes | Postgres database name |
-| `LE_SPREADSHEET_ID` | Yes | Google Sheets spreadsheet ID |
+| `LE_SPREADSHEET_ID` | Yes | Google Sheets spreadsheet ID — set by `start-up.sh` from `cicd/envs.json`; do not add to `.env` |
 | `LE_SERVICE_ACCOUNT_FILE` | Yes | Path to service account JSON key file |
 | `MERIDIAN_LOG_ROOT` | Yes | Root directory for log output |
 
