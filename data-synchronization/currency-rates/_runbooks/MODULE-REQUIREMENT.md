@@ -9,11 +9,6 @@ The `currency-rates` module manages two PostgreSQL tables that underpin all mult
 - **`currency_master`** — reference data for every tracked currency: code, name, symbol, decimal precision, minor unit name, and tracking metadata.
 - **`currency_rates`** — daily exchange rates expressed as "how many major units of currency X equal 1 XAU (1 gram of gold)". One row per currency per day.
 
-It also provides two read views:
-
-- **`v_latest_rates`** — the most recent rate for each currency (current state snapshot).
-- **`v_rates_to_gbp`** — cross-rate from any currency to GBP, computed as `gbp_rate / local_rate`.
-
 ---
 
 ## Why
@@ -74,25 +69,6 @@ Key constraints:
 - `chk_cr_rate_positive`: `rate_value > 0`
 - `chk_cr_base_is_xau`: `base_currency_code = 'XAU'`
 
-#### Views
-
-`v_latest_rates` — most recent rate row per currency:
-```sql
-SELECT DISTINCT ON (quote_currency_code)
-  quote_currency_code, rate_value, rate_date, base_currency_code, rate_source
-FROM currency_rates
-ORDER BY quote_currency_code, rate_date DESC;
-```
-
-`v_rates_to_gbp` — cross-rate from any currency to GBP using latest rates:
-```sql
-SELECT r.quote_currency_code, r.rate_date,
-       r.rate_value AS rate_vs_xau, gbp.rate_value AS gbp_vs_xau,
-       gbp.rate_value / r.rate_value AS rate_to_gbp
-FROM v_latest_rates r
-JOIN v_latest_rates gbp ON gbp.quote_currency_code = 'GBP';
-```
-
 ### Seeded currencies (18)
 
 XAU (commodity), USD/EUR/GBP/INR/JPY/CNY/AUD/CAD/CHF/SGD/AED/HKD/BRL/KRW (fiat), BTC/ETH/SOL (crypto).
@@ -104,10 +80,10 @@ All 18 have `minor_unit_name` seeded. Any future addition must also include `min
 | Migration | What it does |
 |---|---|
 | `0001_create_currency_master.py` | Create `currency_master` table, `fn_set_updated_at()` trigger, seed 18 currencies |
-| `0002_create_currency_rates.py` | Create `currency_rates` table, trigger, indexes, `v_latest_rates`, `v_rates_to_gbp` |
+| `0002_create_currency_rates.py` | Create `currency_rates` table, trigger, indexes |
 | `0003_update_xau_decimal_places.py` | Widen CHECK to BETWEEN 0 AND 9; add pinned constraint for XAU=9; UPDATE XAU decimal_places 2→9 |
 | `0004_add_minor_unit_name.py` | ADD `minor_unit_name TEXT`; seed all 18 rows; SET NOT NULL |
-| `0005_update_rate_value_precision.py` | Widen `currency_rates.rate_value` NUMERIC(19,6) → NUMERIC(19,8) |
+| `0005_update_rate_value_precision.py` | Drop unused views `v_latest_rates` and `v_rates_to_gbp`; widen `currency_rates.rate_value` NUMERIC(19,6) → NUMERIC(19,8) |
 
 Migrations run in numeric order. Each migration follows the pattern:
 ```python

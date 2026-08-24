@@ -1,7 +1,7 @@
 # TASK — currency schema enhancements
 
 **Status:** PENDING
-**Depends on:** nothing — standalone migrations
+**Depends on:** no external modules — within this module: 0003 and 0004 require 0001 (`currency_master` must exist); 0005 requires 0002 (`currency_rates` and views must exist)
 **Required by:** ledger-extract transactions module (amounts stored as BIGINT in minor units)
 
 ---
@@ -38,7 +38,7 @@ XAU is currently seeded with `decimal_places = 2`, meaning 1 XAU (1 gram of gold
 - £1.00 → 13,157,895 nanograms (error < 1 nanogram = £0.000000076)
 - £0.01 → 131,579 nanograms (still excellent precision)
 
-BIGINT holds up to ~9.2 × 10^18. Maximum representable XAU amount = 9.2 × 10^9 grams = 9.2 million tonnes — far more than all gold ever mined (~200,000 tonnes). No overflow risk.
+BIGINT holds up to ~9.2 × 10^18. At dp=9, maximum representable XAU amount = 9.2 × 10^9 grams = 9,200 tonnes. For a personal finance app, individual transactions are at most a few hundred grams (e.g. a £100,000 transaction at £76/gram ≈ 1,316 grams ≈ 1.3 × 10^12 nanograms). BIGINT max is 9.2 × 10^18 — seven orders of magnitude above any realistic single transaction. No overflow risk.
 
 ### Schema change
 
@@ -110,7 +110,7 @@ Migration 0002 defines two views that reference `rate_value`:
 - `v_latest_rates` — returns the most recent rate per currency (DISTINCT ON, ordered by rate_date DESC)
 - `v_rates_to_gbp` — computes cross-rates to GBP as `gbp.rate_value / r.rate_value`
 
-Both views SELECT or compute `rate_value` without casting it. PostgreSQL resolves view column types at query time — widening the underlying column precision propagates automatically. **No view recreation is needed.**
+Both views reference `rate_value` and have no active consumers — no Python code queries them. They will be dropped in migration 0005 and not recreated. Drop order matters: `v_rates_to_gbp` depends on `v_latest_rates`, so it must be dropped first.
 
 ---
 
@@ -119,10 +119,10 @@ Both views SELECT or compute `rate_value` without casting it. PostgreSQL resolve
 - [ ] `migrations/0003_update_xau_decimal_places.py` — widen CHECK constraint, pin XAU to dp=9, UPDATE XAU row
 
 ```sql
-ALTER TABLE currency_master DROP CONSTRAINT chk_cm_decimal_places;
+ALTER TABLE currency_master DROP CONSTRAINT IF EXISTS chk_cm_decimal_places;
 ALTER TABLE currency_master ADD CONSTRAINT chk_cm_decimal_places CHECK (decimal_places BETWEEN 0 AND 9);
-ALTER TABLE currency_master ADD CONSTRAINT chk_cm_xau_dp_pinned CHECK (currency_code != 'XAU' OR decimal_places = 9);
 UPDATE currency_master SET decimal_places = 9, updated_at = NOW() WHERE currency_code = 'XAU';
+ALTER TABLE currency_master ADD CONSTRAINT chk_cm_xau_dp_pinned CHECK (currency_code != 'XAU' OR decimal_places = 9);
 ```
 
 Verify:
@@ -137,7 +137,7 @@ SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = 'chk_cm_xau_
 - [ ] `migrations/0004_add_minor_unit_name.py` — ADD minor_unit_name column and seed all 18 currencies
 
 ```sql
-ALTER TABLE currency_master ADD COLUMN minor_unit_name TEXT;
+ALTER TABLE currency_master ADD COLUMN IF NOT EXISTS minor_unit_name TEXT;
 
 UPDATE currency_master SET minor_unit_name = 'nanogram' WHERE currency_code = 'XAU';
 UPDATE currency_master SET minor_unit_name = 'cent'     WHERE currency_code = 'USD';
@@ -168,11 +168,19 @@ ALTER TABLE currency_master ALTER COLUMN minor_unit_name SET NOT NULL;
 Verify:
 ```sql
 SELECT currency_code, minor_unit_name FROM currency_master ORDER BY currency_rank NULLS FIRST;
+
+SELECT is_nullable
+FROM information_schema.columns
+WHERE table_name = 'currency_master' AND column_name = 'minor_unit_name';
+-- Expected: NO
 ```
 
-- [ ] `migrations/0005_update_rate_value_precision.py` — widen rate_value to NUMERIC(19,8)
+- [ ] `migrations/0005_update_rate_value_precision.py` — drop unused views, widen rate_value to NUMERIC(19,8)
 
 ```sql
+DROP VIEW IF EXISTS v_rates_to_gbp;
+DROP VIEW IF EXISTS v_latest_rates;
+
 ALTER TABLE currency_rates ALTER COLUMN rate_value TYPE NUMERIC(19, 8);
 ```
 
