@@ -1,4 +1,4 @@
-# TASK — currency_master enhancements
+# TASK — currency schema enhancements
 
 **Status:** PENDING
 **Depends on:** nothing — standalone migrations
@@ -46,7 +46,7 @@ BIGINT holds up to ~9.2 × 10^18. Maximum representable XAU amount = 9.2 × 10^9
 |--------|--------------------|--------------------|
 | `decimal_places` | `2` | `9` |
 
-The existing CHECK constraint `decimal_places BETWEEN 0 AND 8` must be widened to `BETWEEN 0 AND 9` before the UPDATE can run. Migration 0003 handles both.
+The existing CHECK constraint `decimal_places BETWEEN 0 AND 8` must be widened to `BETWEEN 0 AND 9` before the UPDATE can run. A second constraint pins XAU specifically to exactly 9 — preventing any future accidental change. Migration 0003 handles all of this.
 
 ---
 
@@ -91,21 +91,37 @@ Seed values for all 18 currently tracked currencies:
 
 ## Enhancement 3 — currency_rates.rate_value precision
 
+### Problem
+
+`currency_rates.rate_value` is stored as `NUMERIC(19,6)`. With XAU precision now at dp=9 (nanogram), rate-induced rounding error on `tx_amount_base` can exceed 1 nanogram for small transactions. Widening to 8 decimal places reduces this error to sub-nanogram levels for all practical personal finance amounts.
+
+Example: GBP rate ~76.000000 at dp=6. At dp=8 this becomes ~76.00000000 — enough to represent rates precise to ~1 nanogram per major unit.
+
 ### Decision
 
-Increase `currency_rates.rate_value` from `NUMERIC(19,6)` to `NUMERIC(19,8)` — giving two additional significant figures in the stored rate, reducing rate-induced error in `tx_amount_base` computation to sub-nanogram levels for all personal finance amounts.
+Increase `currency_rates.rate_value` from `NUMERIC(19,6)` to `NUMERIC(19,8)` — giving two additional significant figures in the stored rate.
 
-No data is lost — widening NUMERIC precision is always safe.
+No data is lost — widening NUMERIC precision is always safe. Existing rows retain their values unchanged; the wider type allows more decimal places to be stored going forward.
+
+### Views
+
+Migration 0002 defines two views that reference `rate_value`:
+
+- `v_latest_rates` — returns the most recent rate per currency (DISTINCT ON, ordered by rate_date DESC)
+- `v_rates_to_gbp` — computes cross-rates to GBP as `gbp.rate_value / r.rate_value`
+
+Both views SELECT or compute `rate_value` without casting it. PostgreSQL resolves view column types at query time — widening the underlying column precision propagates automatically. **No view recreation is needed.**
 
 ---
 
 ## What to build
 
-- [ ] `migrations/0003_update_xau_decimal_places.py` — widen CHECK constraint, then UPDATE XAU decimal_places to 9
+- [ ] `migrations/0003_update_xau_decimal_places.py` — widen CHECK constraint, pin XAU to dp=9, UPDATE XAU row
 
 ```sql
 ALTER TABLE currency_master DROP CONSTRAINT chk_cm_decimal_places;
 ALTER TABLE currency_master ADD CONSTRAINT chk_cm_decimal_places CHECK (decimal_places BETWEEN 0 AND 9);
+ALTER TABLE currency_master ADD CONSTRAINT chk_cm_xau_dp_pinned CHECK (currency_code != 'XAU' OR decimal_places = 9);
 UPDATE currency_master SET decimal_places = 9, updated_at = NOW() WHERE currency_code = 'XAU';
 ```
 
@@ -113,6 +129,9 @@ Verify:
 ```sql
 SELECT currency_code, currency_name, decimal_places FROM currency_master WHERE currency_code = 'XAU';
 -- Expected: XAU | Gold (per gram) | 9
+
+SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = 'chk_cm_xau_dp_pinned';
+-- Expected: CHECK (((currency_code)::text <> 'XAU'::text) OR (decimal_places = 9))
 ```
 
 - [ ] `migrations/0004_add_minor_unit_name.py` — ADD minor_unit_name column and seed all 18 currencies
@@ -138,6 +157,10 @@ UPDATE currency_master SET minor_unit_name = 'won'      WHERE currency_code = 'K
 UPDATE currency_master SET minor_unit_name = 'satoshi'  WHERE currency_code = 'BTC';
 UPDATE currency_master SET minor_unit_name = 'szabo'    WHERE currency_code = 'ETH';
 UPDATE currency_master SET minor_unit_name = 'microsol' WHERE currency_code = 'SOL';
+
+-- Safety check: all 18 rows must be seeded before setting NOT NULL
+SELECT COUNT(*) FROM currency_master WHERE minor_unit_name IS NULL;
+-- Expected: 0 — if > 0, identify the missed row(s) and fix before proceeding
 
 ALTER TABLE currency_master ALTER COLUMN minor_unit_name SET NOT NULL;
 ```
