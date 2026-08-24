@@ -1,6 +1,6 @@
 # TASK — currency schema enhancements
 
-**Status:** PENDING
+**Status:** DONE
 **Depends on:** no external modules — within this module: 0003 and 0004 require 0001 (`currency_master` must exist); 0005 requires 0002 (`currency_rates` and views must exist)
 **Required by:** ledger-extract transactions module (amounts stored as BIGINT in minor units)
 
@@ -116,7 +116,7 @@ Both views reference `rate_value` and have no active consumers — no Python cod
 
 ## What to build
 
-- [ ] `migrations/0003_update_xau_decimal_places.py` — widen CHECK constraint, pin XAU to dp=9, UPDATE XAU row
+- [x] `migrations/0003_update_xau_decimal_places.py` — widen CHECK constraint, pin XAU to dp=9, UPDATE XAU row
 
 ```sql
 ALTER TABLE currency_master DROP CONSTRAINT IF EXISTS chk_cm_decimal_places;
@@ -134,7 +134,7 @@ SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = 'chk_cm_xau_
 -- Expected: CHECK (((currency_code)::text <> 'XAU'::text) OR (decimal_places = 9))
 ```
 
-- [ ] `migrations/0004_add_minor_unit_name.py` — ADD minor_unit_name column and seed all 18 currencies
+- [x] `migrations/0004_add_minor_unit_name.py` — ADD minor_unit_name column and seed all 18 currencies
 
 ```sql
 ALTER TABLE currency_master ADD COLUMN IF NOT EXISTS minor_unit_name TEXT;
@@ -175,7 +175,7 @@ WHERE table_name = 'currency_master' AND column_name = 'minor_unit_name';
 -- Expected: NO
 ```
 
-- [ ] `migrations/0005_update_rate_value_precision.py` — drop unused views, widen rate_value to NUMERIC(19,8)
+- [x] `migrations/0005_update_rate_value_precision.py` — drop unused views, widen rate_value to NUMERIC(19,8)
 
 ```sql
 DROP VIEW IF EXISTS v_rates_to_gbp;

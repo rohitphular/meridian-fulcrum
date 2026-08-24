@@ -2,8 +2,8 @@ import json
 import os
 from pathlib import Path
 
-_REPO_ROOT  = Path(__file__).resolve().parents[3]   # fulcrum/
-_ENVS_FILE  = _REPO_ROOT / 'forge' / 'expense-tracker' / 'cicd' / 'envs.json'
+_REPO_ROOT  = Path(__file__).resolve().parents[2]   # meridian-fulcrum/
+_ENVS_FILE  = _REPO_ROOT / 'expense-tracker' / 'cicd' / 'envs.json'
 _SA_FILE    = _REPO_ROOT / 'local' / 'configs' / 'gcp_service_account.json'
 
 SHEET_NAMES = {

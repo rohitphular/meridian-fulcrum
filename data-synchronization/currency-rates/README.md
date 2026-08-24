@@ -157,7 +157,8 @@ The daily job's rolling 365-day window also self-heals any gap caused by a faile
 | `currency_code`    | CHAR(3)     | Unique, not null (e.g. `USD`, `XAU`) |
 | `currency_name`    | TEXT        | Display name |
 | `currency_symbol`  | TEXT        | Display symbol |
-| `decimal_places`   | SMALLINT    | Precision for display |
+| `decimal_places`   | SMALLINT    | Minor unit factor = `10^decimal_places`; BETWEEN 0 AND 9 |
+| `minor_unit_name`  | TEXT        | Human-readable name for the lowest denomination (e.g. `pence`, `satoshi`, `nanogram`) |
 | `currency_type`    | TEXT        | `fiat`, `commodity`, or `crypto` |
 | `is_tracked`       | BOOLEAN     | Whether this currency is actively fetched |
 | `currency_rank`    | INTEGER     | Fetch priority (1 = highest). NULL = no preference |
@@ -173,17 +174,12 @@ The daily job's rolling 365-day window also self-heals any gap caused by a faile
 | `rate_date`          | DATE           | The date the rate applies to |
 | `base_currency_code` | CHAR(3)        | Always `XAU` (enforced by constraint) |
 | `quote_currency_code`| CHAR(3)        | The currency being measured |
-| `rate_value`         | NUMERIC(19,6)  | Units of quote currency per 1 gram of XAU |
+| `rate_value`         | NUMERIC(19,8)  | Units of quote currency per 1 gram of XAU |
 | `rate_source`        | TEXT           | `yfinance` or `forward_fill` |
 | `created_at`         | TIMESTAMPTZ    | Auto-set on insert |
 | `updated_at`         | TIMESTAMPTZ    | Auto-updated on upsert |
 
 Unique constraint on `(quote_currency_code, rate_date)` — upserts overwrite on conflict, forward-fills skip on conflict.
-
-**Views:**
-
-- `v_latest_rates` — most recent rate per currency
-- `v_rates_to_gbp` — cross rate from any currency to GBP, derived from latest XAU rates
 
 ---
 
@@ -246,7 +242,10 @@ currency-rates/
 │       └── currency_rates.py    # auto-generated typed model for currency_rates
 └── migrations/
     ├── 0001_create_currency_master.py
-    └── 0002_create_currency_rates.py
+    ├── 0002_create_currency_rates.py
+    ├── 0003_update_xau_decimal_places.py
+    ├── 0004_add_minor_unit_name.py
+    └── 0005_update_rate_value_precision.py
 ```
 
 ---

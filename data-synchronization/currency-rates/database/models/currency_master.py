@@ -23,6 +23,7 @@ COLS = [
     "last_fetched_date",
     "created_at",
     "updated_at",
+    "minor_unit_name",
 ]
 
 
@@ -38,6 +39,7 @@ class Row(TypedDict):
     last_fetched_date: date | None
     created_at: datetime
     updated_at: datetime
+    minor_unit_name: str
 
 
 def to_row(record: Row) -> list:
