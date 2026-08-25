@@ -25,44 +25,46 @@ function createCategory(body) {
   const cols  = getCategorySheetColumns();
   const sheet = getOrCreateSheet(CATEGORIES_SHEET, cols);
 
-  // Duplicate guard — reject if (tx_type, major_category, minor_category) already exists
-  const ciType  = catColIndex('tx_type');
-  const ciMajor = catColIndex('major_category');
-  const ciMinor = catColIndex('minor_category');
+  // Duplicate guard — reject if (tx_type_key, major_category_label, minor_category_label) already exists
+  const ciType  = catColIndex('tx_type_key');
+  const ciMajor = catColIndex('major_category_label');
+  const ciMinor = catColIndex('minor_category_label');
   const existingRows = sheet.getDataRange().getValues();
   for (let i = 1; i < existingRows.length; i++) {
     if (
-      String(existingRows[i][ciType])  === String(body.tx_type || '').trim() &&
-      String(existingRows[i][ciMajor]) === String(body.major_category   || '').trim() &&
-      String(existingRows[i][ciMinor]) === String(body.minor_category   || '').trim()
+      String(existingRows[i][ciType])  === String(body.tx_type_key          || '').trim() &&
+      String(existingRows[i][ciMajor]) === String(body.major_category_label || '').trim() &&
+      String(existingRows[i][ciMinor]) === String(body.minor_category_label || '').trim()
     ) {
       return { ok: false, error: 'duplicate_category' };
     }
   }
 
-  const row   = new Array(cols.length).fill('');
+  const row = new Array(cols.length).fill('');
 
   function setCol(key, value) {
     const field = getCategorySchemaField(key);
     if (field) row[field.sheet_column_position - 1] = (value === undefined || value === null) ? '' : value;
   }
 
-  setCol('tx_type',                 String(body.tx_type).trim());
-  setCol('major_category',          String(body.major_category).trim());
-  setCol('minor_category',          String(body.minor_category).trim());
-  setCol('description',             String(body.description             || '').trim());
-  setCol('is_active',               body.is_active !== false);
-  setCol('tag_keywords',            normaliseKeywords(body.tag_keywords || ''));
-  setCol('counterparty_examples',   normaliseCandidates(body.counterparty_examples   || ''));
-  setCol('source_account_types',      normaliseAccountTypes(body.source_account_types      || ''));
-  setCol('target_account_types', normaliseAccountTypes(body.target_account_types || ''));
-  setCol('source_account_mandatory',  body.source_account_mandatory === true || body.source_account_mandatory === 'true');
-  setCol('target_account_mandatory',  body.target_account_mandatory === true || body.target_account_mandatory === 'true');
-  setCol('workflow_type',             String(body.workflow_type || '').trim());
+  setCol('tx_type_key',              String(body.tx_type_key).trim());
+  setCol('tx_type_label',            body.tx_type_key === 'money-in' ? 'Money In' : 'Money Out');
+  setCol('major_category_label',     String(body.major_category_label).trim());
+  setCol('major_category_key',       slugify(String(body.major_category_label).trim()));
+  setCol('minor_category_label',     String(body.minor_category_label).trim());
+  setCol('minor_category_key',       slugify(String(body.minor_category_label).trim()));
+  setCol('description',              String(body.description             || '').trim());
+  setCol('is_active',                body.is_active !== false);
+  setCol('tag_keywords',             normaliseKeywords(body.tag_keywords || ''));
+  setCol('counterparty_examples',    normaliseCandidates(body.counterparty_examples   || ''));
+  setCol('source_account_types',     normaliseAccountTypes(body.source_account_types  || ''));
+  setCol('target_account_types',     normaliseAccountTypes(body.target_account_types  || ''));
+  setCol('source_account_mandatory', body.source_account_mandatory === true || body.source_account_mandatory === 'true');
+  setCol('target_account_mandatory', body.target_account_mandatory === true || body.target_account_mandatory === 'true');
   setCol('is_subscription_eligible', body.is_subscription_eligible === true || body.is_subscription_eligible === 'true');
 
   sheet.appendRow(row);
-  // Categories have no auto-generated id — the composite (tx_type, major_category, minor_category) is the key.
+  // Categories have no auto-generated id — the composite (tx_type_key, major_category_label, minor_category_label) is the key.
   return { ok: true };
 }
 
@@ -82,18 +84,26 @@ function updateCategory(body) {
     sheet.getRange(rowNum, field.sheet_column_position).setValue(value);
   }
 
-  writeField('tx_type',                 String(body.tx_type).trim());
-  writeField('major_category',          String(body.major_category).trim());
-  writeField('minor_category',          String(body.minor_category).trim());
-  writeField('description',             String(body.description             || '').trim());
-  writeField('is_active',               body.is_active !== false);
-  writeField('tag_keywords',            normaliseKeywords(body.tag_keywords || ''));
-  writeField('counterparty_examples',   normaliseCandidates(body.counterparty_examples   || ''));
-  writeField('source_account_types',      normaliseAccountTypes(body.source_account_types      || ''));
-  writeField('target_account_types', normaliseAccountTypes(body.target_account_types || ''));
-  writeField('source_account_mandatory',  body.source_account_mandatory === true || body.source_account_mandatory === 'true');
-  writeField('target_account_mandatory',  body.target_account_mandatory === true || body.target_account_mandatory === 'true');
-  writeField('workflow_type',             String(body.workflow_type || '').trim());
+  writeField('tx_type_key',              String(body.tx_type_key).trim());
+  // tx_type_label is derived — not editable per schema, writeField will skip it; recompute inline
+  sheet.getRange(rowNum, getCategorySchemaField('tx_type_label').sheet_column_position)
+    .setValue(body.tx_type_key === 'money-in' ? 'Money In' : 'Money Out');
+  writeField('major_category_label',     String(body.major_category_label).trim());
+  // major_category_key is derived — recompute inline
+  sheet.getRange(rowNum, getCategorySchemaField('major_category_key').sheet_column_position)
+    .setValue(slugify(String(body.major_category_label).trim()));
+  writeField('minor_category_label',     String(body.minor_category_label).trim());
+  // minor_category_key is derived — recompute inline
+  sheet.getRange(rowNum, getCategorySchemaField('minor_category_key').sheet_column_position)
+    .setValue(slugify(String(body.minor_category_label).trim()));
+  writeField('description',              String(body.description             || '').trim());
+  writeField('is_active',                body.is_active !== false);
+  writeField('tag_keywords',             normaliseKeywords(body.tag_keywords || ''));
+  writeField('counterparty_examples',    normaliseCandidates(body.counterparty_examples   || ''));
+  writeField('source_account_types',     normaliseAccountTypes(body.source_account_types  || ''));
+  writeField('target_account_types',     normaliseAccountTypes(body.target_account_types  || ''));
+  writeField('source_account_mandatory', body.source_account_mandatory === true || body.source_account_mandatory === 'true');
+  writeField('target_account_mandatory', body.target_account_mandatory === true || body.target_account_mandatory === 'true');
   writeField('is_subscription_eligible', body.is_subscription_eligible === true || body.is_subscription_eligible === 'true');
 
   return { ok: true };
@@ -118,9 +128,9 @@ function createCategoriesBulk(body) {
   const sheet  = getOrCreateSheet(CATEGORIES_SHEET, cols);
   const values = sheet.getDataRange().getValues();
 
-  const ciType  = catColIndex('tx_type');
-  const ciMajor = catColIndex('major_category');
-  const ciMinor = catColIndex('minor_category');
+  const ciType  = catColIndex('tx_type_key');
+  const ciMajor = catColIndex('major_category_label');
+  const ciMinor = catColIndex('minor_category_label');
 
   // Map key → sheet row number (1-indexed) so we can update existing rows
   const existing = {};
@@ -131,7 +141,7 @@ function createCategoriesBulk(body) {
 
   const results = [];
   body.categories.forEach(function(cat) {
-    const key = String(cat.tx_type || '') + '|' + String(cat.major_category || '') + '|' + String(cat.minor_category || '');
+    const key = String(cat.tx_type_key || '') + '|' + String(cat.major_category_label || '') + '|' + String(cat.minor_category_label || '');
 
     const catBody = {};
     Object.keys(cat).forEach(function(k) { catBody[k] = cat[k]; });
@@ -179,12 +189,17 @@ function onEdit(e) {
   if (!catSheet) return;
   const catData = catSheet.getDataRange().getValues().slice(1);
 
+  // Column indices into catData (0-based) — use catColIndex to avoid hardcoding
+  const CI_TYPE = catColIndex('tx_type_key');        // 0
+  const CI_MAJ  = catColIndex('major_category_label'); // 3
+  const CI_MIN  = catColIndex('minor_category_label'); // 5
+
   if (col === TYPE_COL) {
     const txType = sheet.getRange(row, TYPE_COL).getValue();
     const majors = [];
     const seen   = {};
-    catData.filter(function(r) { return r[0] === txType; }).forEach(function(r) {
-      if (!seen[r[1]]) { majors.push(r[1]); seen[r[1]] = true; }
+    catData.filter(function(r) { return r[CI_TYPE] === txType; }).forEach(function(r) {
+      if (!seen[r[CI_MAJ]]) { majors.push(r[CI_MAJ]); seen[r[CI_MAJ]] = true; }
     });
 
     sheet.getRange(row, MAJOR_COL).clearContent();
@@ -202,8 +217,8 @@ function onEdit(e) {
     const txType2 = sheet.getRange(row, TYPE_COL).getValue();
     const major   = sheet.getRange(row, MAJOR_COL).getValue();
     const minors  = catData
-      .filter(function(r) { return r[0] === txType2 && r[1] === major; })
-      .map(function(r) { return r[2]; });
+      .filter(function(r) { return r[CI_TYPE] === txType2 && r[CI_MAJ] === major; })
+      .map(function(r) { return r[CI_MIN]; });
 
     sheet.getRange(row, MINOR_COL).clearContent();
 

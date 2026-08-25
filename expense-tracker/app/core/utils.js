@@ -37,9 +37,15 @@ const ET_COLS  = [
 const ACC_COLS = ['name', 'type', 'sub_type', 'currency', 'opening_value', 'current_value', 'is_active', 'description'];
 const SUB_COLS = ['id', 'name', 'counterparty_name', 'amount', 'currency', 'frequency', 'day_of_month', 'day_of_week',
   'source_account', 'tx_type', 'major_category', 'minor_category', 'tags', 'is_active', 'description', 'created_at'];
-const CAT_COLS = ['tx_type', 'major_category', 'minor_category', 'description', 'is_active', 'tag_keywords',
-  'counterparty_examples', 'source_account_types', 'target_account_types', 'source_account_mandatory',
-  'target_account_mandatory', 'workflow_type', 'is_subscription_eligible'];
+const CAT_COLS = [
+  'tx_type_key', 'tx_type_label',
+  'major_category_key', 'major_category_label',
+  'minor_category_key', 'minor_category_label',
+  'description', 'is_active', 'tag_keywords', 'counterparty_examples',
+  'source_account_types', 'target_account_types',
+  'source_account_mandatory', 'target_account_mandatory',
+  'is_subscription_eligible',
+];
 
 export const exportData          = (format, rows) => {
   const normalised = rows.map(r => ({

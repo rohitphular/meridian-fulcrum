@@ -2,137 +2,184 @@
 // FULCRUM FORGE — Category Schema: field registry
 // Single source of truth for column positions, UI labels, types, and groups.
 // No magic column numbers anywhere else in the codebase.
-// Depends on: VALID_TRANSACTION_TYPES (transaction-schema.gs),
-//             VALID_ACCOUNT_TYPES (account-schema.gs)
+// Depends on: VALID_ACCOUNT_TYPES (account-schema.gs)
 // =============================================================================
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Schema — 13 fields in column-position order
+// Slug helper — used by createCategory / createCategoriesBulk to derive keys
+// ─────────────────────────────────────────────────────────────────────────────
+function slugify(str) {
+  return String(str).toLowerCase()
+    .replace(/[&\/]/g, ' ')
+    .replace(/[^a-z0-9\s-]/g, '')
+    .replace(/[\s-]+/g, '-')
+    .replace(/^-|-$/g, '');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Schema — 15 fields in column-position order
 // ─────────────────────────────────────────────────────────────────────────────
 const CATEGORY_SCHEMA = {
 
-  // ── Core (columns 1–5, all types) ─────────────────────────────────────────
-  tx_type: {
-    sheet_column_name: 'tx_type',
+  // ── Core identifiers (columns 1–6) ────────────────────────────────────────
+  tx_type_key: {
+    sheet_column_name:     'tx_type_key',
     sheet_column_position: 1,
-    ui_label: 'Type',
-    type: 'enum',
-    enum_values: null, // resolved at runtime: VALID_TRANSACTION_TYPES
-    group: 'core',
-    applies_to: null,
-    required_for: null,
-    editable: true,
-    default_value: 'money-out',
+    ui_label:              'Type',
+    type:                  'enum',
+    enum_values:           ['money-in', 'money-out'],
+    group:                 'core',
+    applies_to:            null,
+    required_for:          null,
+    editable:              true,
+    default_value:         'money-out',
   },
-  major_category: {
-    sheet_column_name: 'major_category',
+  tx_type_label: {
+    sheet_column_name:     'tx_type_label',
     sheet_column_position: 2,
-    ui_label: 'Major category',
-    type: 'string',
-    enum_values: null,
-    group: 'core',
-    applies_to: null,
-    required_for: null,
-    editable: true,
-    default_value: '',
+    ui_label:              'Type label',
+    type:                  'string',
+    enum_values:           null,
+    group:                 'core',
+    applies_to:            null,
+    required_for:          null,
+    editable:              false, // derived; never written by user
+    default_value:         '',
   },
-  minor_category: {
-    sheet_column_name: 'minor_category',
+  major_category_key: {
+    sheet_column_name:     'major_category_key',
     sheet_column_position: 3,
-    ui_label: 'Minor category',
-    type: 'string',
-    enum_values: null,
-    group: 'core',
-    applies_to: null,
-    required_for: null,
-    editable: true,
-    default_value: '',
+    ui_label:              'Major category key',
+    type:                  'string',
+    enum_values:           null,
+    group:                 'core',
+    applies_to:            null,
+    required_for:          null,
+    editable:              false, // derived slug
+    default_value:         '',
   },
-  description: {
-    sheet_column_name: 'description',
+  major_category_label: {
+    sheet_column_name:     'major_category_label',
     sheet_column_position: 4,
-    ui_label: 'Description',
-    type: 'string',
-    enum_values: null,
-    group: 'core',
-    applies_to: null,
-    required_for: [],
-    editable: true,
-    default_value: '',
+    ui_label:              'Major category',
+    type:                  'string',
+    enum_values:           null,
+    group:                 'core',
+    applies_to:            null,
+    required_for:          null,
+    editable:              true,
+    default_value:         '',
+  },
+  minor_category_key: {
+    sheet_column_name:     'minor_category_key',
+    sheet_column_position: 5,
+    ui_label:              'Minor category key',
+    type:                  'string',
+    enum_values:           null,
+    group:                 'core',
+    applies_to:            null,
+    required_for:          null,
+    editable:              false, // derived slug
+    default_value:         '',
+  },
+  minor_category_label: {
+    sheet_column_name:     'minor_category_label',
+    sheet_column_position: 6,
+    ui_label:              'Minor category',
+    type:                  'string',
+    enum_values:           null,
+    group:                 'core',
+    applies_to:            null,
+    required_for:          null,
+    editable:              true,
+    default_value:         '',
+  },
+
+  // ── Description & status (columns 7–8) ───────────────────────────────────
+  description: {
+    sheet_column_name:     'description',
+    sheet_column_position: 7,
+    ui_label:              'Description',
+    type:                  'string',
+    enum_values:           null,
+    group:                 'core',
+    applies_to:            null,
+    required_for:          [],
+    editable:              true,
+    default_value:         '',
   },
   is_active: {
-    sheet_column_name: 'is_active',
-    sheet_column_position: 5,
-    ui_label: 'Active',
-    type: 'boolean',
-    enum_values: null,
-    group: 'core',
-    applies_to: null,
-    required_for: null,
-    editable: true,
-    default_value: true,
+    sheet_column_name:     'is_active',
+    sheet_column_position: 8,
+    ui_label:              'Active',
+    type:                  'boolean',
+    enum_values:           null,
+    group:                 'core',
+    applies_to:            null,
+    required_for:          null,
+    editable:              true,
+    default_value:         true,
   },
 
-  // ── Classification (columns 6–7) ──────────────────────────────────────────
+  // ── Classification (columns 9–10) ─────────────────────────────────────────
   tag_keywords: {
-    sheet_column_name: 'tag_keywords',
-    sheet_column_position: 6,
-    ui_label: 'Tag keywords',
-    type: 'string',
-    enum_values: null,
-    group: 'classification',
-    applies_to: null,
-    required_for: [],
-    editable: true,
-    default_value: '',
+    sheet_column_name:     'tag_keywords',
+    sheet_column_position: 9,
+    ui_label:              'Tag keywords',
+    type:                  'string',
+    enum_values:           null,
+    group:                 'classification',
+    applies_to:            null,
+    required_for:          [],
+    editable:              true,
+    default_value:         '',
   },
   counterparty_examples: {
-    sheet_column_name: 'counterparty_examples',
-    sheet_column_position: 7,
-    ui_label: 'Counterparty examples',
-    type: 'string',
-    enum_values: null,
-    group: 'classification',
-    applies_to: null,
-    required_for: [],
-    editable: true,
-    default_value: '',
+    sheet_column_name:     'counterparty_examples',
+    sheet_column_position: 10,
+    ui_label:              'Counterparty examples',
+    type:                  'string',
+    enum_values:           null,
+    group:                 'classification',
+    applies_to:            null,
+    required_for:          [],
+    editable:              true,
+    default_value:         '',
   },
 
-  // ── Account hints (columns 8–11) ─────────────────────────────────────────
+  // ── Account hints (columns 11–14) ─────────────────────────────────────────
   // source_account_types / target_account_types: comma-separated account
   // type values used to filter the respective account dropdowns.
   // source_account_mandatory / target_account_mandatory: when true the field
   // is enabled and required; when false the field is visible but disabled
   // (shows "External").
   source_account_types: {
-    sheet_column_name: 'source_account_types',
-    sheet_column_position: 8,
-    ui_label: 'Source account types',
-    type: 'multi-select',
-    enum_values: null, // resolved at runtime: VALID_ACCOUNT_TYPES
-    group: 'account_hints',
-    applies_to: null,
-    required_for: [],
-    editable: true,
-    default_value: '',
+    sheet_column_name:     'source_account_types',
+    sheet_column_position: 11,
+    ui_label:              'Source account types',
+    type:                  'multi-select',
+    enum_values:           null, // resolved at runtime: VALID_ACCOUNT_TYPES
+    group:                 'account_hints',
+    applies_to:            null,
+    required_for:          [],
+    editable:              true,
+    default_value:         '',
   },
   target_account_types: {
-    sheet_column_name: 'target_account_types',
-    sheet_column_position: 9,
-    ui_label: 'Target account types',
-    type: 'multi-select',
-    enum_values: null, // resolved at runtime: VALID_ACCOUNT_TYPES
-    group: 'account_hints',
-    applies_to: null,
-    required_for: [],
-    editable: true,
-    default_value: '',
+    sheet_column_name:     'target_account_types',
+    sheet_column_position: 12,
+    ui_label:              'Target account types',
+    type:                  'multi-select',
+    enum_values:           null, // resolved at runtime: VALID_ACCOUNT_TYPES
+    group:                 'account_hints',
+    applies_to:            null,
+    required_for:          [],
+    editable:              true,
+    default_value:         '',
   },
-
   source_account_mandatory: {
     sheet_column_name:     'source_account_mandatory',
-    sheet_column_position: 10,
+    sheet_column_position: 13,
     ui_label:              'Source account mandatory',
     type:                  'boolean',
     enum_values:           null,
@@ -144,7 +191,7 @@ const CATEGORY_SCHEMA = {
   },
   target_account_mandatory: {
     sheet_column_name:     'target_account_mandatory',
-    sheet_column_position: 11,
+    sheet_column_position: 14,
     ui_label:              'Target account mandatory',
     type:                  'boolean',
     enum_values:           null,
@@ -155,22 +202,10 @@ const CATEGORY_SCHEMA = {
     default_value:         false,
   },
 
-  // ── Meta (columns 12–13) ─────────────────────────────────────────────────
-  workflow_type: {
-    sheet_column_name: 'workflow_type',
-    sheet_column_position: 12,
-    ui_label: 'Workflow type',
-    type: 'enum',
-    enum_values: ['account-credit', 'account-debit', 'funds-transfer', 'forex-transfer', 'debt-repayment'],
-    group: 'meta',
-    applies_to: null,
-    required_for: [],
-    editable: true,
-    default_value: null,
-  },
+  // ── Meta (column 15) ──────────────────────────────────────────────────────
   is_subscription_eligible: {
     sheet_column_name:     'is_subscription_eligible',
-    sheet_column_position: 13,
+    sheet_column_position: 15,
     ui_label:              'Subscription eligible',
     type:                  'boolean',
     enum_values:           null,
@@ -186,9 +221,10 @@ const CATEGORY_SCHEMA = {
 // Client payload — serialised subset returned by get_category_schema
 // ─────────────────────────────────────────────────────────────────────────────
 function getCategorySchemaForClient() {
+  const CATEGORY_TX_TYPES = ['money-in', 'money-out'];
   return {
-    types: VALID_TRANSACTION_TYPES.map(function(v) {
-      const labels = { 'money-in': 'Money In', 'money-out': 'Money Out', 'money-transfer': 'Transfer' };
+    types: CATEGORY_TX_TYPES.map(function(v) {
+      const labels = { 'money-in': 'Money In', 'money-out': 'Money Out' };
       return { value: v, label: labels[v] || v };
     }),
     account_types: VALID_ACCOUNT_TYPES.map(function(v) {
