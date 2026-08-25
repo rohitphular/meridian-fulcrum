@@ -17,7 +17,6 @@ function validateTransactionCreate(body) {
   const acctTypeErr = _validateCategoryAccountTypeHints(body);
   if (acctTypeErr) return acctTypeErr;
 
-  // Financial hard-block rules (Rules 1–5; Rule 6 is validateFxRate, called by the caller).
   const finErr = _validateFinancialRules(body, null);
   if (!finErr.ok) return finErr;
 
@@ -141,37 +140,12 @@ function _checkAccountTypeHint(accountId, allowedTypesStr, label) {
   return null;
 }
 
-function validateFxRate(sourceAccount, targetAccount, fxRate) {
-  if (!targetAccount) return { ok: true };
-  const accSheet          = getOrCreateSheet(ACCOUNTS_SHEET, getAccountSheetColumns());
-  const accValues         = accSheet.getDataRange().getValues();
-  const accountIdColIdx   = acctColIndex('id');
-  const currencyColIdx    = acctColIndex('currency');
-  const accountCurrencyMap = {};
-  for (let i = 1; i < accValues.length; i++) {
-    accountCurrencyMap[String(accValues[i][accountIdColIdx])] = String(accValues[i][currencyColIdx]);
-  }
-  const fromCcy = accountCurrencyMap[sourceAccount];
-  const toCcy   = accountCurrencyMap[targetAccount];
-  if (fromCcy && toCcy && fromCcy !== toCcy && fxRate <= 0) {
-    return { ok: false, error: 'fx_rate_required' };
-  }
-  return { ok: true };
-}
-
 // ── Financial hard-block rules — server-side safety net ─────────────────────
 // Mirrors the frontend rule logic in app/sections/transactions.js so a direct
 // POST or a request from a stale UI cannot bypass the rules. Specifications:
 // docs/financial-rules.md.
 //
-//   Rules 1 & 3 — source-side asset/investment balance cannot go negative
-//   Rules 2 & 4 — intentionally unenforced: credit_card_limit field not yet added (see financial-rules.md)
-//   Rule 5     — money-out from a loan account is blocked (except Interest & charges)
-//   Rule 6     — FX rate required for cross-currency transfer (validateFxRate above)
-//
-// NOT enforced here (frontend-only, per docs/financial-rules.md): Rule 4 for the
-// TARGET account when a money-transfer credits a credit card. Adding this is a
-// follow-up — the frontend already enforces it on update.
+//   T-03: unknown account refs are rejected before any sheet mutation.
 
 function _validateFinancialRules(body, oldRow) {
   const accountMap = _loadAccountMap();
@@ -188,25 +162,6 @@ function _validateFinancialRules(body, oldRow) {
     return { ok: false, error: 'unknown_target_account:' + body.target_account };
   }
 
-  // money-in has no source account — source-side rules don't apply.
-  if (!body.source_account) return { ok: true };
-
-  const sourceRaw = accountMap[String(body.source_account)];
-
-  // For update: project source balance through the old-row reversal so the rule
-  // checks operate on the balance the NEW row will face after Phase 1.
-  const sourceForCheck = oldRow
-    ? _postReversalBalance(body.source_account, sourceRaw, oldRow)
-    : sourceRaw;
-
-  const amount = Number(body.amount) || 0;
-
-  const balanceErr = _checkBalanceRules(body.tx_type, sourceForCheck, amount);
-  if (balanceErr) return balanceErr;
-
-  const rule5Err = _checkRule5(body.tx_type, sourceForCheck, body.major_category, body.minor_category);
-  if (rule5Err) return rule5Err;
-
   return { ok: true };
 }
 
@@ -220,64 +175,3 @@ function _loadAccountMap() {
   return out;
 }
 
-// When source_account is unchanged across old → new, project the source's
-// current_value to its post-Phase-1 value (undo the old row's effect on the
-// source side). When source_account changes, the old reversal lands on a
-// different account and the new source's current_value is correct as-is.
-function _postReversalBalance(sourceAccountId, sourceAccount, oldRow) {
-  if (!sourceAccount || !oldRow) return sourceAccount;
-
-  const oldSource = String(oldRow[txColIndex('source_account')] || '');
-  if (oldSource !== String(sourceAccountId)) return sourceAccount;
-
-  const oldType   = String(oldRow[txColIndex('tx_type')] || '');
-  const oldAmount = Number(oldRow[txColIndex('amount')]) || 0;
-
-  let projected = Number(sourceAccount.current_value) || 0;
-  if (oldType === 'money-in')       projected -= oldAmount;  // reverse credit
-  if (oldType === 'money-out')      projected += oldAmount;  // reverse debit
-  if (oldType === 'money-transfer') projected += oldAmount;  // reverse debit
-
-  // Shallow copy — never mutate the caller's account object
-  const copy = {};
-  Object.keys(sourceAccount).forEach(function(k) { copy[k] = sourceAccount[k]; });
-  copy.current_value = projected;
-  return copy;
-}
-
-// Rules 1 & 3 (source side): asset/investment balance cannot go negative.
-// Rules 2 & 4 are intentionally unenforced pending a credit_card_limit schema field (see financial-rules.md).
-function _checkBalanceRules(transactionType, sourceAccount, amount) {
-  if (!sourceAccount) return null;
-  if (transactionType !== 'money-out' && transactionType !== 'money-transfer') return null;
-
-  // Rules 1 & 3 — asset/investment accounts cannot go negative
-  if (!isLiabilityType(sourceAccount.type)) {
-    const balance = Number(sourceAccount.current_value) || 0;
-    if (balance < amount) {
-      return {
-        ok: false,
-        error: 'insufficient_balance',
-        detail: sourceAccount.name + ' balance ' + balance.toFixed(2) +
-                ' is less than transaction amount ' + Number(amount).toFixed(2),
-      };
-    }
-    return null;
-  }
-
-  return null;
-}
-
-// Rule 5 — block money-out from a loan account; allow interest/charges exception.
-function _checkRule5(transactionType, sourceAccount, majorCategory, minorCategory) {
-  if (transactionType !== 'money-out') return null;
-  if (!sourceAccount) return null;
-  if (!(sourceAccount.type === 'liability' && isLoanSubType(sourceAccount.sub_type))) return null;
-  if (majorCategory === 'Debt & finance' && minorCategory === 'Interest & charges') return null;
-  return {
-    ok: false,
-    error: 'money_out_from_loan_not_allowed',
-    detail: 'Source ' + sourceAccount.name +
-            ' is a loan account; record loan repayments as money-transfer or money-out with the loan as target',
-  };
-}

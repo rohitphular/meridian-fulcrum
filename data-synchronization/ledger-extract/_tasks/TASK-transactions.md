@@ -2,7 +2,7 @@
 
 **Status:** IN PROGRESS
 **Build order:** 3 of 4 — depends on categories (category_id FK), accounts (source/target account FK), and counterparty_master (counterparty_id FK)
-**External dependency:** `currency-rates` TASK-xau-decimal-places.md must be applied first — migrations 0003 (XAU `decimal_places = 9`), 0004 (`minor_unit_name` column), and 0005 (`rate_value NUMERIC(19,8)`) must all be applied before this job runs
+**External dependency:** `currency-rates` TASK-currency-schema-enhancements.md must be applied first — migrations 0003 (XAU `decimal_places = 9`), 0004 (`minor_unit_name` column), and 0005 (`rate_value NUMERIC(19,8)`) must all be applied before this job runs
 **Pending:** new migrations (counterparty_master, beneficiaries_master, transaction_beneficiaries); 0005_create_transactions.py schema update; transforms and database layers need full rewrite to sync_status model
 
 ---
@@ -104,7 +104,7 @@ Prerequisites: `day_of_week_enum` type created in migration before the table.
 | `tx_currency_base` | `TEXT NOT NULL` | `CHECK (tx_currency_base = 'XAU')` | — | Always `'XAU'` |
 | `tx_currency_local` | `TEXT NOT NULL` | `CHECK (char_length(tx_currency_local) = 3 AND tx_currency_local = upper(tx_currency_local))` | `currency` | Original currency |
 | `local_to_base_currency_rate_ref` | `UUID NOT NULL` | FK → `currency_rates(id)` | — | References the local-currency row in `currency_rates` |
-| `counterparty_id` | `UUID` | FK → `counterparty_master(id)` | `counterparty_name` | Resolved via upsert; NULL only when `counterparty_name` is blank or normalises to empty |
+| `counterparty_id` | `UUID` | FK → `counterparty_master(id)` (added in migration 0006) | `counterparty_name` | Resolved via upsert; NULL only when `counterparty_name` is blank or normalises to empty |
 | `user_location_area` | `TEXT` | | `user_location_area` | Optional — where user physically is |
 | `user_location_city` | `TEXT` | | `user_location_city` | Optional |
 | `user_location_country` | `TEXT` | | `user_location_country` | Optional |
@@ -112,7 +112,7 @@ Prerequisites: `day_of_week_enum` type created in migration before the table.
 | `user_location_longitude` | `NUMERIC(10, 6)` | `CHECK (user_location_longitude BETWEEN -180 AND 180)` | — | Not a sheet column — manually enriched in DB; never written by the extract |
 | `tx_tags` | `TEXT` | | `tx_tags` | Semicolon-separated raw string |
 | `tx_description` | `TEXT` | | `description` | Optional |
-| `category_id` | `UUID` | FK → `category_master(id)` | `major_category` + `minor_category` | Lookup → UUID; NULL if no match |
+| `category_id` | `UUID` | FK → `category_master(id)` | `tx_type` + `major_category` + `minor_category` | Lookup → UUID; NULL if no match |
 | `tx_status` | `TEXT NOT NULL DEFAULT 'active'` | `CHECK (tx_status IN ('active', 'deleted', 'locked'))` | — | `active` = normal; `deleted` = marked for removal by archival process; `locked` = finalised by archival process; extract always sets `active` on write; refuses to modify `locked` or `deleted` records |
 | `created_at` | `TIMESTAMPTZ NOT NULL` | | — | Set on INSERT; preserved across updates |
 | `updated_at` | `TIMESTAMPTZ NOT NULL` | | — | Set to `now()` on every write |
@@ -245,6 +245,12 @@ Iterate rows in sheet order. For each row:
 3. Resolve `counterparty_id` (see counterparty resolution below)
 4. Resolve `source_account_id` / `target_account_id` from preloaded map; NULL if not found. For `money-transfer`: if either resolves to NULL (blank or name not in `account_name_map`) → `sync-failure: money_transfer_missing_account`; do not proceed
 5. Resolve `category_id`: look up `(tx_type, major_category, minor_category)` in `category_master`; NULL if no match; log warning
+
+```sql
+SELECT id FROM category_master
+WHERE tx_type = %s AND major_category = %s AND minor_category = %s
+  AND is_active = TRUE AND is_deleted = FALSE
+```
 6. `INSERT INTO transaction_master (transaction_id, tx_status, ...) RETURNING id` — `transaction_id` = sheet `id` value; `tx_status = 'active'`; do not write `user_location_latitude` or `user_location_longitude`; the returned surrogate `id` is required as `transaction_ref` in step 7
 7. Resolve and insert beneficiaries (see beneficiary resolution below)
 8. Commit
@@ -301,8 +307,20 @@ tx_amount_local = int(
 # e.g. "10.50" GBP → 1050 pence
 ```
 
-Step 2 — look up rate and compute XAU nanograms:
-Look up the local currency row in `currency_rates` on `rate_date = tx_date_time_base.date()`. `rate_value` = how many local major units equal 1 XAU (e.g. 76.0 GBP per XAU at current gold prices).
+If `tx_amount_local == 0` → `sync-failure: amount_rounds_to_zero_in_minor_units`; do not proceed. This catches valid positive decimals that round to zero minor units (e.g. `0.001 GBP` → 0 pence, `0.4 JPY` → 0 yen).
+
+Step 2 — fetch the rate row:
+
+```sql
+SELECT id, rate_value FROM currency_rates
+WHERE quote_currency_code = %s
+  AND rate_date = %s
+  AND base_currency_code = 'XAU'
+```
+
+Bind values: `(tx_currency_local, tx_date_time_base.date())`. `rate_value` = how many local major units equal 1 XAU (e.g. 76.0 GBP per XAU at current gold prices). If no row returned → `sync-failure: currency_rate_not_found: {currency} on {date}`; do not proceed.
+
+Step 3 — compute XAU nanograms:
 ```python
 xau_dp     = currency_decimal_places['XAU']               # always 9
 xau_factor = Decimal(10 ** xau_dp)                        # 1_000_000_000
@@ -314,12 +332,14 @@ tx_amount_base = int(
 # e.g. 1050 pence at 76 GBP/XAU → 138_157_895 nanograms
 ```
 
-`tx_currency_base = 'XAU'`; `local_to_base_currency_rate_ref = cr_local.id`. All currencies including GBP go through this lookup — no shortcut. If no rate found, write `sync-failure` with reason `"currency_rate_not_found: {currency} on {date}"` and skip the row — do not insert or update the transaction.
+`tx_currency_base = 'XAU'`; `local_to_base_currency_rate_ref = cr_local.id`. All currencies including GBP go through this lookup — no shortcut.
 
 **Beneficiary resolution:**
 Parse `raw_beneficiaries` by splitting on `';'` and stripping whitespace. Names are stored as-is (strip only, no case normalisation) — `"Alice"` and `"alice"` are distinct records. Each entry is either `"Name"` or `"Name:percentage"`. All entries must follow the same form — mixing is not allowed:
+- If any entry is empty after stripping (e.g. `"Alice;;Bob"` produces `''`) → `sync-failure: beneficiary_empty_name`
 - If entries are inconsistent (some have a percentage, some do not, e.g. `"Alice:60;Bob"`) → `sync-failure: beneficiary_inconsistent_percentage_format`
 - If any percentage is present but non-numeric → `sync-failure: beneficiary_invalid_percentage`
+- If any explicit percentage is ≤ 0 or > 100 → `sync-failure: beneficiary_invalid_percentage`
 - If no percentages given, compute equal shares: `100 / COUNT` rounded to 4 dp, with remainder assigned to the last entry so they sum exactly to `100.0000` (e.g. 3 people → `33.3333, 33.3333, 33.3334`)
 - If explicit percentages given, validate they sum to `100` (±0.01 tolerance) — if not → `sync-failure: beneficiary_percentages_do_not_sum_to_100`
 
@@ -379,12 +399,75 @@ Commit after this UPDATE.
 ## What to build
 
 **New migrations (not yet created):**
+
 - [ ] `migrations/0006_create_counterparty_master.py`
+
+```sql
+CREATE TABLE IF NOT EXISTS counterparty_master (
+    id                    UUID            NOT NULL DEFAULT gen_random_uuid(),
+    counterparty_key      TEXT            NOT NULL,
+    counterparty_label    TEXT            NOT NULL,
+    location_area         TEXT,
+    location_city         TEXT,
+    location_country      TEXT,
+    location_latitude     NUMERIC(10, 6),
+    location_longitude    NUMERIC(10, 6),
+    is_deleted            BOOLEAN         NOT NULL DEFAULT FALSE,
+    created_at            TIMESTAMPTZ     NOT NULL,
+    updated_at            TIMESTAMPTZ     NOT NULL,
+    deleted_at            TIMESTAMPTZ,
+
+    CONSTRAINT pk_counterparty_master                       PRIMARY KEY (id),
+    CONSTRAINT uq_counterparty_master_key                   UNIQUE (counterparty_key),
+    CONSTRAINT chk_counterparty_master_soft_delete          CHECK ((is_deleted = FALSE AND deleted_at IS NULL) OR (is_deleted = TRUE AND deleted_at IS NOT NULL)),
+    CONSTRAINT chk_counterparty_master_location_lat         CHECK (location_latitude BETWEEN -90 AND 90),
+    CONSTRAINT chk_counterparty_master_location_lon         CHECK (location_longitude BETWEEN -180 AND 180),
+    CONSTRAINT chk_counterparty_master_location_pair        CHECK ((location_latitude IS NULL AND location_longitude IS NULL) OR (location_latitude IS NOT NULL AND location_longitude IS NOT NULL))
+);
+
+-- FK deferred from migration 0005: transaction_master exists now, counterparty_master just created
+ALTER TABLE transaction_master
+    ADD CONSTRAINT fk_transaction_master_counterparty
+    FOREIGN KEY (counterparty_id) REFERENCES counterparty_master(id);
+```
+
 - [ ] `migrations/0007_create_beneficiaries_master.py`
-- [ ] `migrations/0008_create_transaction_beneficiaries.py`
+
+```sql
+CREATE TABLE IF NOT EXISTS beneficiaries_master (
+    id                UUID            NOT NULL DEFAULT gen_random_uuid(),
+    beneficiary_name  TEXT            NOT NULL,
+    is_deleted        BOOLEAN         NOT NULL DEFAULT FALSE,
+    created_at        TIMESTAMPTZ     NOT NULL,
+    updated_at        TIMESTAMPTZ     NOT NULL,
+    deleted_at        TIMESTAMPTZ,
+
+    CONSTRAINT pk_beneficiaries_master              PRIMARY KEY (id),
+    CONSTRAINT uq_beneficiaries_master_name         UNIQUE (beneficiary_name),
+    CONSTRAINT chk_beneficiaries_master_soft_delete CHECK ((is_deleted = FALSE AND deleted_at IS NULL) OR (is_deleted = TRUE AND deleted_at IS NOT NULL))
+);
+```
+
+- [ ] `migrations/0008_create_transaction_beneficiaries.py` — depends on `transaction_master` (0005) and `beneficiaries_master` (0007)
+
+```sql
+CREATE TABLE IF NOT EXISTS transaction_beneficiaries (
+    id                UUID            NOT NULL DEFAULT gen_random_uuid(),
+    transaction_ref   UUID            NOT NULL,
+    beneficiary_id    UUID            NOT NULL,
+    split_percentage  NUMERIC(7, 4)   NOT NULL,
+    created_at        TIMESTAMPTZ     NOT NULL,
+
+    CONSTRAINT pk_transaction_beneficiaries             PRIMARY KEY (id),
+    CONSTRAINT fk_transaction_beneficiaries_transaction FOREIGN KEY (transaction_ref) REFERENCES transaction_master(id),
+    CONSTRAINT fk_transaction_beneficiaries_beneficiary FOREIGN KEY (beneficiary_id) REFERENCES beneficiaries_master(id),
+    CONSTRAINT uq_transaction_beneficiaries_pair        UNIQUE (transaction_ref, beneficiary_id),
+    CONSTRAINT chk_transaction_beneficiaries_split_pct  CHECK (split_percentage > 0 AND split_percentage <= 100)
+);
+```
 
 **Updates to existing files:**
-- [ ] `migrations/0005_create_transactions.py` — rename table to `transaction_master`; drop `row_hash`, `is_deleted`, `deleted_at`; replace flat counterparty columns with `counterparty_id UUID FK → counterparty_master(id)`; add `tx_timezone_base TEXT NOT NULL CHECK (= 'UTC')`; add `tx_timezone_local TEXT NOT NULL`; add `user_location_latitude/longitude NUMERIC(10,6)` nullable with range CHECKs and pair consistency constraint; change `tx_amount_local` and `tx_amount_base` from `NUMERIC(19,6)` to `BIGINT NOT NULL`; update `chk_transactions_tx_amount_base` from `(tx_amount_base IS NULL OR tx_amount_base > 0)` to `(tx_amount_base > 0)`; remove `chk_transactions_base_consistency` (both columns are now NOT NULL); make `tx_currency_base`, `local_to_base_currency_rate_ref` NOT NULL; fix `tx_currency_base CHECK` to `= 'XAU'`; add `tx_status TEXT NOT NULL DEFAULT 'active' CHECK (tx_status IN ('active', 'deleted', 'locked'))`; remove soft-delete consistency CHECK
+- [ ] `migrations/0005_create_transactions.py` — **Approach: rewrite from scratch.** Add `DROP TABLE IF EXISTS transactions` at the top (handles the case where the old migration already ran), then rewrite to `CREATE TABLE IF NOT EXISTS transaction_master` with all correct columns. Preserve the existing `day_of_week_enum` DO block unchanged. Do not layer ALTER statements on top. Changes vs the current table definition: rename table to `transaction_master`; drop `row_hash`, `is_deleted`, `deleted_at`; replace flat counterparty columns with `counterparty_id UUID` — bare nullable column, **no FK constraint here** (FK added in migration 0006 after `counterparty_master` exists); add `tx_timezone_base TEXT NOT NULL CHECK (tx_timezone_base = 'UTC')`; add `tx_timezone_local TEXT NOT NULL`; add `user_location_latitude/longitude NUMERIC(10,6)` nullable with range CHECKs and pair consistency constraint; change `tx_amount_local` and `tx_amount_base` from `NUMERIC(19,6)` to `BIGINT NOT NULL`; update `chk_transactions_tx_amount_base` from `(tx_amount_base IS NULL OR tx_amount_base > 0)` to `(tx_amount_base > 0)`; remove `chk_transactions_base_consistency` (both columns are now NOT NULL); make `tx_currency_base`, `local_to_base_currency_rate_ref` NOT NULL; fix `tx_currency_base CHECK` to `(tx_currency_base = 'XAU')`; add `tx_status TEXT NOT NULL DEFAULT 'active' CHECK (tx_status IN ('active', 'deleted', 'locked'))`; remove soft-delete consistency CHECK
 - [ ] `transforms/transactions.py` — full rewrite: read `id`, `sync_status`, `tx_timezone`, `user_location_area/city/country`, `beneficiaries` from sheet; ignore `fx_rate`; no hash computation; parse `tx_date_time` as UTC directly into `tx_date_time_base`; derive `tx_date_time_local` by converting to `tx_timezone_local` and stripping tzinfo; validate timezone via `ZoneInfo`; pass all fields through for DB layer
 - [ ] `database/transactions.py` — full rewrite: sync_status model (`create-pending` / `update-pending`); add `_resolve_counterparty` (name-only key, always upsert, never write location fields); add `_resolve_beneficiaries` (parse, validate, equal-split rounding, upsert junction); rewrite `_resolve_currency_rate` for XAU using integer minor-unit arithmetic (preloaded `currency_decimal_places`, `ROUND_HALF_UP`, no GBP shortcut; `sync-failure` on rate miss or currency not in `currency_master`); remove `ledger_data_checksums` usage; write `in-sync` / `sync-failure` + `sync_notes` back to sheet; never write `user_location_latitude/longitude`; add counterparty and beneficiary soft-delete passes (filtered on `tx_status = 'active'`); use `transaction_master` table name throughout
 - [ ] `core/extractor.py` — pass `sheets_client` into `upsert_transactions` so the DB layer can write sync results back to the sheet; confirm sheet client supports indexed cell writes

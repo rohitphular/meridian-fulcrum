@@ -36,12 +36,11 @@ function _dispatchTxAction(action, row) {
       target_account:       tx.target_account       || '',
       amount:               tx.amount,
       counterparty_name:    tx.counterparty_name    || '',
-      tx_location_area:     tx.tx_location_area     || '',
-      tx_location_city:     tx.tx_location_city     || '',
-      tx_location_country:  tx.tx_location_country  || '',
-      tags:                 tx.tags                 || '',
+      user_location_area:     tx.user_location_area     || '',
+      user_location_city:     tx.user_location_city     || '',
+      user_location_country:  tx.user_location_country  || '',
+      tx_tags:              tx.tx_tags              || '',
       description:          tx.description          || '',
-      fx_rate:              tx.fx_rate              || '',
     };
     state.txAddOpen   = true;
     state.txEditRow   = null;
@@ -62,7 +61,7 @@ function _dispatchTxAction(action, row) {
       tx_type:           tx.tx_type || '',
       major_category:    tx.major_category || '',
       minor_category:    tx.minor_category || '',
-      tags:              tx.tags || '',
+      tx_tags:           tx.tx_tags || '',
     };
     state.subAddOpen = true;
     document.dispatchEvent(new CustomEvent('et:show-section', { detail: 'subscriptions' }));
@@ -132,11 +131,11 @@ function _normTags(str) {
 function _isAlreadySubscribed(tx) {
   const normCp = (tx.counterparty_name || '').trim().toLowerCase();
   if (!normCp) return false;
-  const txTags = _normTags(tx.tags);
+  const txTags = _normTags(tx.tx_tags);
   return state.subscriptions.some(s => {
     const sCp = (s.counterparty_name || '').trim().toLowerCase();
     if (sCp !== normCp) return false;
-    const sTags = _normTags(s.tags);
+    const sTags = _normTags(s.tx_tags);
     // Match if both have no tags, OR at least one tag overlaps
     return (txTags.size === 0 && sTags.size === 0) || [...txTags].some(t => sTags.has(t));
   });
@@ -232,7 +231,7 @@ export function renderTransactions() {
             cities:         res.cities         || [],
             areas:          res.areas          || [],
             counterparties: res.counterparties || [],
-            tags:           res.tags           || [],
+            tags:           res.tx_tags           || [],
           };
           try {
             localStorage.setItem(METADATA_CACHE_KEY, JSON.stringify({ metadata: state.metadata, ts: Date.now() }));
@@ -343,6 +342,12 @@ export function renderTransactions() {
   }
 }
 
+function _syncBadgeClass(status) {
+  if (status === 'in-sync')      return 'success';
+  if (status === 'sync-failure') return 'danger';
+  return 'muted';
+}
+
 function _renderTxTable(validRows, warnRows) {
   const sorted = _sortTx([...validRows]);
   const total  = sorted.length;
@@ -365,14 +370,13 @@ function _renderTxTable(validRows, warnRows) {
     const badgeCls  = tx.tx_type === 'money-in' ? 'badge-et-in' : tx.tx_type === 'money-out' ? 'badge-et-out' : 'badge-et-transfer';
     const typeLabel = _txTypeMap()[tx.tx_type] || tx.tx_type;
     const missingRate = !state.rateMap[tx.currency];
-    const rowRate     = tx.fx_rate && parseFloat(tx.fx_rate) > 0;
 
     const fromName  = state.accountMap[tx.source_account]?.name || '—';
     const toName    = tx.target_account ? state.accountMap[tx.target_account]?.name : null;
     const acctLabel = toName ? `${fromName} → ${toName}` : fromName;
     const catLabel  = [tx.major_category, tx.minor_category].filter(Boolean).join(' → ') || '—';
     const nativeAmt = fmtNative(tx.amount, tx.currency);
-    const baseAmt   = fmtBase(tx.amount, tx.currency, tx.fx_rate);
+    const baseAmt   = fmtBase(tx.amount, tx.currency);
     const amtCell   = tx.currency !== state.quoteCurrency
       ? `${esc(nativeAmt)} <span class="td-base-amt">/ ${esc(baseAmt)}</span>`
       : esc(nativeAmt);
@@ -382,7 +386,7 @@ function _renderTxTable(validRows, warnRows) {
         <td class="td-mono td-nowrap">${esc(fmtDateTimeCompact(tx.tx_date_time))}</td>
         <td><span class="badge ${badgeCls}">${typeLabel}</span></td>
         <td class="td-truncate" title="${esc(acctLabel)}">${esc(acctLabel)}</td>
-        <td class="td-mono td-nowrap">${amtCell}${missingRate ? ' <span class="badge badge-warn" title="Currency not in rates tab">?</span>' : ''}${rowRate ? ' <span title="Row-level FX rate" style="color:var(--muted);font-size:var(--text-2xs)">†</span>' : ''}</td>
+        <td class="td-mono td-nowrap">${amtCell}${missingRate ? ' <span class="badge badge-warn" title="Currency not in rates tab">?</span>' : ''}</td>
         <td class="td-truncate" title="${esc(catLabel)}">${esc(catLabel)}</td>
         <td style="text-align:right">
           <button class="tx-menu-trigger" data-action="tx-menu" data-row="${tx._row}" title="Actions">⋮</button>
@@ -497,12 +501,12 @@ function _attachEvents() {
         amount:              s.typical_amount,
         currency:            s.currency,
         counterparty_name:   s.counterparty_name,
-        tx_location_area:    s.tx_location_area    || '',
-        tx_location_city:    s.tx_location_city    || '',
-        tx_location_country: s.tx_location_country || '',
-        tags:                s.tags                || '',
+        user_location_area:    s.user_location_area    || '',
+        user_location_city:    s.user_location_city    || '',
+        user_location_country: s.user_location_country || '',
+        tx_tags:             s.tx_tags                || '',
+        beneficiaries:       s.beneficiaries          || '',
         description:         '',
-        fx_rate:             '',
       };
       state.txAddOpen    = true;
       state.txImportOpen = false;
@@ -565,7 +569,39 @@ function _renderAddForm() {
           <option value="">External</option>
         </select>
       </div>
-      <!-- Row 3: Area | City | Country -->
+      <!-- Row 3: Date & time | Timezone | Amount -->
+      <div class="field form-grid-span-2" id="afDateField">
+        <label for="afDate">Date &amp; time *</label>
+        <input type="datetime-local" id="afDate" value="${nowLocalISO()}">
+      </div>
+      <div class="field form-grid-span-2" id="afTimezoneField">
+        <label for="afTimezone">Timezone <span class="optional">optional</span></label>
+        <input type="text" id="afTimezone" placeholder="e.g. Asia/Kolkata" autocomplete="off">
+      </div>
+      <div class="field form-grid-span-2" id="afAmountField">
+        <label for="afAmount">Amount *</label>
+        <input type="number" id="afAmount" min="0.01" step="0.01" placeholder="0.00">
+      </div>
+      <!-- Row 4: Counterparty | Tags -->
+      <div class="field form-grid-span-3" id="afCounterpartyField">
+        <label for="afCounterparty">Counterparty</label>
+        <input type="text" id="afCounterparty" placeholder="Tesco, employer, …" list="dlAfCounterparty" autocomplete="off">
+      </div>
+      <div class="field form-grid-span-3" id="afTagsField">
+        <label for="afTags">Tags</label>
+        <input type="text" id="afTags" placeholder="reimbursable, work" list="dlAfTags" autocomplete="off">
+      </div>
+      <!-- Row 5: Description -->
+      <div class="field form-grid-full" id="afDescriptionField">
+        <label for="afDescription">Description</label>
+        <input type="text" id="afDescription" placeholder="free text">
+      </div>
+      <!-- Row 6: Beneficiaries -->
+      <div class="field form-grid-full" id="afBeneficiariesField">
+        <label for="afBeneficiaries">Beneficiaries <span class="optional">optional</span></label>
+        <input type="text" id="afBeneficiaries" placeholder="e.g. Alice:60;Bob:40 or Alice;Bob" autocomplete="off">
+      </div>
+      <!-- Row 7: Area | City | Country -->
       <div class="field form-grid-span-2" id="afAreaField">
         <label for="afArea">Area</label>
         <input type="text" id="afArea" placeholder="e.g. West End" list="dlAfArea" autocomplete="off">
@@ -578,34 +614,14 @@ function _renderAddForm() {
         <label for="afCountry">Country</label>
         <input type="text" id="afCountry" placeholder="UK" list="dlAfCountry" autocomplete="off">
       </div>
-      <!-- FX rate: full width, shown only when source and target are cross-currency -->
-      <div class="field form-grid-full" id="afFxRateWrap" style="display:none">
-        <label for="afFxRate">FX rate</label>
-        <input type="number" id="afFxRate" min="0.0001" step="any" placeholder="e.g. 105" style="max-width:240px">
-        <div id="afFxDirection" class="field-hint"></div>
-        <div id="afFxPreview"   class="field-hint" style="color:var(--teal)"></div>
-      </div>
-      <!-- Row 3: Date & time | Amount | Counterparty -->
-      <div class="field form-grid-span-2" id="afDateField">
-        <label for="afDate">Date &amp; time *</label>
-        <input type="datetime-local" id="afDate" value="${nowLocalISO()}">
-      </div>
-      <div class="field form-grid-span-2" id="afAmountField">
-        <label for="afAmount">Amount *</label>
-        <input type="number" id="afAmount" min="0.01" step="0.01" placeholder="0.00">
-      </div>
-      <div class="field form-grid-span-2" id="afCounterpartyField">
-        <label for="afCounterparty">Counterparty</label>
-        <input type="text" id="afCounterparty" placeholder="Tesco, employer, …" list="dlAfCounterparty" autocomplete="off">
-      </div>
-      <!-- Row 4: Tags 50% | Notes 50% -->
-      <div class="field form-grid-span-3" id="afTagsField">
-        <label for="afTags">Tags</label>
-        <input type="text" id="afTags" placeholder="reimbursable, work" list="dlAfTags" autocomplete="off">
-      </div>
-      <div class="field form-grid-span-3" id="afDescriptionField">
-        <label for="afDescription">Description</label>
-        <input type="text" id="afDescription" placeholder="free text">
+      <!-- Row 8: Coordinates -->
+      <div class="field form-grid-full" id="afCoordinatesField">
+        <label>Coordinates <span class="optional">optional</span></label>
+        <div style="display:flex;gap:8px;align-items:center">
+          <input type="number" id="afLatitude"  step="any" placeholder="Latitude"  style="flex:1" min="-90"  max="90">
+          <input type="number" id="afLongitude" step="any" placeholder="Longitude" style="flex:1" min="-180" max="180">
+          <button type="button" id="afDetectLocation" class="btn btn-secondary btn-sm">Detect</button>
+        </div>
       </div>
     </div>
     <div class="form-actions">
@@ -652,18 +668,18 @@ function _prefillAddForm(p) {
   const toEl = el('afToAccount');
   if (toEl) toEl.value = p.target_account ?? 'FAILURE';
 
-  // 5. Show/hide FX rate field
-  _afRefreshFxRateVis();
-
-  // 6. Remaining text fields — date stays as nowLocalISO()
+  // 5. Remaining text fields — date stays as nowLocalISO()
   const afAmount  = el('afAmount');      if (afAmount)  afAmount.value  = p.amount              ?? 'FAILURE';
   const afCp      = el('afCounterparty'); if (afCp)     afCp.value      = p.counterparty_name   ?? 'FAILURE';
-  const afArea    = el('afArea');        if (afArea)    afArea.value    = p.tx_location_area    ?? 'FAILURE';
-  const afCity    = el('afCity');        if (afCity)    afCity.value    = p.tx_location_city    ?? 'FAILURE';
-  const afCountry = el('afCountry');     if (afCountry) afCountry.value = p.tx_location_country ?? 'FAILURE';
-  const afTags    = el('afTags');        if (afTags)    afTags.value    = p.tags !== undefined ? String(p.tags).replace(/;/g, ', ') : 'FAILURE';
+  const afArea    = el('afArea');        if (afArea)    afArea.value    = p.user_location_area    ?? 'FAILURE';
+  const afCity    = el('afCity');        if (afCity)    afCity.value    = p.user_location_city    ?? 'FAILURE';
+  const afCountry = el('afCountry');     if (afCountry) afCountry.value = p.user_location_country ?? 'FAILURE';
+  const afTags    = el('afTags');        if (afTags)    afTags.value    = p.tx_tags !== undefined ? String(p.tx_tags).replace(/;/g, ', ') : 'FAILURE';
   const afDesc    = el('afDescription'); if (afDesc)    afDesc.value    = p.description         ?? 'FAILURE';
-  if (p.fx_rate !== undefined) { const f = el('afFxRate'); if (f) { f.value = p.fx_rate; _afUpdateFxPreview(); } }
+  const afTimezone = el('afTimezone'); if (afTimezone) afTimezone.value = p.tx_timezone || '';
+  const afLat = el('afLatitude');  if (afLat) afLat.value = p.user_location_latitude  ?? '';
+  const afLon = el('afLongitude'); if (afLon) afLon.value = p.user_location_longitude ?? '';
+  const afBen = el('afBeneficiaries'); if (afBen) afBen.value = p.beneficiaries || '';
 }
 
 function _attachAddFormEvents() {
@@ -676,7 +692,6 @@ function _attachAddFormEvents() {
     minorEl.innerHTML = '<option value="">— select major first —</option>';
     if (el('afFromAccount')) el('afFromAccount').value = '';
     if (el('afToAccount'))   el('afToAccount').value   = '';
-    if (el('afFxRate'))      el('afFxRate').value       = '';
 
     if (!type) {
       majorEl.disabled = true;
@@ -685,8 +700,6 @@ function _attachAddFormEvents() {
       if (fromEl) { fromEl.disabled = true; fromEl.innerHTML = '<option value="">— select type first —</option>'; }
       const toEl = el('afToAccount');
       if (toEl) { toEl.disabled = true; toEl.innerHTML = '<option value="">External</option>'; }
-      const fxWrap = el('afFxRateWrap');
-      if (fxWrap) fxWrap.style.display = 'none';
       return;
     }
 
@@ -694,7 +707,7 @@ function _attachAddFormEvents() {
     majorEl.disabled  = false;
     minorEl.disabled  = false;
 
-    // _afRefreshFromAccountOpts cascades → _afRefreshToAccountField → _afRefreshFxRateVis
+    // _afRefreshFromAccountOpts cascades → _afRefreshToAccountField
     _afRefreshFromAccountOpts();
   });
 
@@ -709,14 +722,9 @@ function _attachAddFormEvents() {
 
   el('afFromAccount')?.addEventListener('change', _afRefreshToAccountField);
 
-  el('afToAccount')?.addEventListener('change', _afRefreshFxRateVis);
-
-  el('afFxRate')?.addEventListener('input', _afUpdateFxPreview);
-  el('afAmount')?.addEventListener('input', _afUpdateFxPreview);
-
   el('afSubmit')?.addEventListener('click', _saveTransaction);
   el('afReset')?.addEventListener('click', () => {
-    ['afDate','afAmount','afCounterparty','afArea','afCity','afCountry','afTags','afDescription','afFxRate']
+    ['afDate','afAmount','afCounterparty','afArea','afCity','afCountry','afTags','afDescription','afTimezone','afLatitude','afLongitude','afBeneficiaries']
       .forEach(id => { if (el(id)) el(id).value = id === 'afDate' ? nowLocalISO() : ''; });
     el('afType').value = '';
     const fromEl = el('afFromAccount');
@@ -727,12 +735,20 @@ function _attachAddFormEvents() {
     el('afMajor').disabled  = true;
     el('afMinor').innerHTML = '<option value="">— select major first —</option>';
     el('afMinor').disabled  = true;
-    const fxWrap = el('afFxRateWrap');
-    if (fxWrap) fxWrap.style.display = 'none';
     el('afError').textContent = '';
   });
 
   _attachTagAutocomplete('afTags', 'dlAfTags');
+
+  el('afDetectLocation')?.addEventListener('click', () => {
+    if (!navigator.geolocation) return;
+    navigator.geolocation.getCurrentPosition(pos => {
+      const lat = el('afLatitude');
+      const lon = el('afLongitude');
+      if (lat) lat.value = pos.coords.latitude.toFixed(6);
+      if (lon) lon.value = pos.coords.longitude.toFixed(6);
+    });
+  });
 
   // If a copy was triggered, populate the form now that events are wired
   if (state.txCopyPrefill) {
@@ -790,45 +806,9 @@ function _afRefreshToAccountField() {
     toAccEl.innerHTML = `<option value="">External</option>`;
     toAccEl.value     = '';
   }
-  _afRefreshFxRateVis();
 }
 
-function _afRefreshFxRateVis() {
-  const fromAcc = state.accounts.find(a => a.id === el('afFromAccount')?.value);
-  const toAcc   = state.accounts.find(a => a.id === el('afToAccount')?.value);
-  const show    = fromAcc && toAcc && fromAcc.currency !== toAcc.currency;
-  const wrap    = el('afFxRateWrap');
 
-  if (wrap) wrap.style.display = show ? '' : 'none';
-  if (!show && el('afFxRate')) el('afFxRate').value = '';
-
-  const dirEl = el('afFxDirection');
-  const prvEl = el('afFxPreview');
-  if (show) {
-    const fromCcy = fromAcc.currency;
-    const toCcy   = toAcc.currency;
-    if (dirEl) dirEl.textContent = `Rate: units of ${toCcy} per 1 ${fromCcy} (e.g. 105 ${toCcy} per 1 ${fromCcy})`;
-  } else {
-    if (dirEl) dirEl.textContent = '';
-    if (prvEl) prvEl.textContent = '';
-  }
-  _afUpdateFxPreview();
-}
-
-function _afUpdateFxPreview() {
-  const prvEl   = el('afFxPreview');
-  if (!prvEl) return;
-  const fromAcc = state.accountMap[el('afFromAccount')?.value];
-  const toAcc   = state.accountMap[el('afToAccount')?.value];
-  const fxRate  = parseFloat(el('afFxRate')?.value) || 0;
-  const amount  = parseFloat(el('afAmount')?.value) || 0;
-  if (fromAcc && toAcc && fromAcc.currency !== toAcc.currency && fxRate > 0 && amount > 0) {
-    const credited = (amount * fxRate).toFixed(2);
-    prvEl.textContent = `${amount} ${fromAcc.currency} will be sent; ${credited} ${toAcc.currency} will be credited to ${toAcc.name}`;
-  } else {
-    prvEl.textContent = '';
-  }
-}
 
 // ── Financial hard-block rules 1–6 ───────────────────────────────────────────
 // Returns null on pass, or a multi-line error string on block.
@@ -908,21 +888,6 @@ function _checkRule5(transaction_type, sourceAccount, major_category, minor_cate
   );
 }
 
-// Rule 6 — FX rate required for cross-currency money-transfer or linked money-out.
-// Returns null on pass, or the error string on block.
-function _checkRule6(transaction_type, sourceAccount, targetAccount, fx_rate) {
-  if (transaction_type !== 'money-transfer') return null;
-  if (!sourceAccount || !targetAccount) return null;
-  const fromCcy = sourceAccount.currency;
-  const toCcy   = targetAccount.currency;
-  if (fromCcy === toCcy) return null;
-  if (fx_rate && parseFloat(fx_rate) > 0) return null;
-  return (
-    `FX rate required.\n` +
-    `${sourceAccount.name} is in ${fromCcy} and ${targetAccount.name} is in ${toCcy}. Enter the exchange rate to continue.\n` +
-    `(Rate expressed as units of ${toCcy} per 1 ${fromCcy}.)`
-  );
-}
 
 async function _saveTransaction() {
   const btn   = el('afSubmit');
@@ -933,7 +898,6 @@ async function _saveTransaction() {
   const tx_type              = el('afType').value;
   const source_account       = el('afFromAccount').value;
   const target_account       = el('afToAccount')?.value || '';
-  const fx_rate              = el('afFxRate')?.value     || '';
   const amount               = el('afAmount').value;
   const currency             = tx_type === 'money-in'
     ? (state.accountMap[target_account]?.currency || '')
@@ -941,11 +905,15 @@ async function _saveTransaction() {
   const major_category       = el('afMajor').value;
   const minor_category       = el('afMinor').value;
   const counterparty_name    = el('afCounterparty').value.trim();
-  const tx_location_area     = el('afArea')?.value.trim()    || '';
-  const tx_location_city     = el('afCity')?.value.trim()    || '';
-  const tx_location_country  = el('afCountry').value.trim();
-  const tags                 = el('afTags').value.trim();
+  const user_location_area     = el('afArea')?.value.trim()    || '';
+  const user_location_city     = el('afCity')?.value.trim()    || '';
+  const user_location_country  = el('afCountry').value.trim();
+  const tx_tags              = el('afTags').value.trim();
   const description          = el('afDescription').value.trim();
+  const tx_timezone            = el('afTimezone')?.value.trim() || '';
+  const user_location_latitude  = el('afLatitude')?.value  !== '' ? Number(el('afLatitude')?.value)  : '';
+  const user_location_longitude = el('afLongitude')?.value !== '' ? Number(el('afLongitude')?.value) : '';
+  const beneficiaries           = el('afBeneficiaries')?.value.trim() || '';
 
   const isTransfer    = tx_type === 'money-transfer';
   const _saveCat      = _getCat(tx_type, major_category, minor_category);
@@ -967,9 +935,6 @@ async function _saveTransaction() {
   const rule5Error    = _checkRule5(tx_type, sourceAcc, major_category, minor_category);
   if (rule5Error) { errEl.textContent = rule5Error; return; }
 
-  const rule6Error    = _checkRule6(tx_type, sourceAcc, targetAcc, fx_rate);
-  if (rule6Error) { errEl.textContent = rule6Error; return; }
-
   btn.disabled = true; btn.textContent = 'Saving…';
   showLoading();
   try {
@@ -977,10 +942,10 @@ async function _saveTransaction() {
       tx_date_time: localToUtcISO(dateRaw),
       tx_type, source_account, target_account,
       amount: parseFloat(amount), currency,
-      fx_rate: fx_rate ? parseFloat(fx_rate) : '',
       major_category, minor_category,
-      counterparty_name, tx_location_area, tx_location_city, tx_location_country,
-      tags, description,
+      counterparty_name, user_location_area, user_location_city, user_location_country,
+      tx_tags, description,
+      tx_timezone, user_location_latitude, user_location_longitude, beneficiaries,
     });
     if (res.ok) {
       showMsg('Transaction saved.');
@@ -1020,15 +985,16 @@ function _renderTxForm(tx, mode) {
         ${f('Source account',   esc(fromName))}
         ${f('Target account',   esc(toName))}
         ${f('Amount',           esc(fmtNative(tx.amount, tx.currency)))}
-        ${f('≈ ' + state.quoteCurrency, esc(fmtBase(tx.amount, tx.currency, tx.fx_rate)))}
+        ${f('≈ ' + state.quoteCurrency, esc(fmtBase(tx.amount, tx.currency)))}
         ${f('Category',         esc([tx.major_category, tx.minor_category].filter(Boolean).join(' → ') || '—'))}
         ${f('Counterparty',     esc(tx.counterparty_name || '—'))}
-        ${tx.tx_location_area    ? f('Area',    esc(tx.tx_location_area))    : ''}
-        ${tx.tx_location_city    ? f('City',    esc(tx.tx_location_city))    : ''}
-        ${tx.tx_location_country ? f('Country', esc(tx.tx_location_country)) : ''}
-        ${f('Tags',             esc(String(tx.tags || '').replace(/;/g, ', ') || '—'))}
+        ${tx.user_location_area    ? f('Area',    esc(tx.user_location_area))    : ''}
+        ${tx.user_location_city    ? f('City',    esc(tx.user_location_city))    : ''}
+        ${tx.user_location_country ? f('Country', esc(tx.user_location_country)) : ''}
+        ${f('Tags',             esc(String(tx.tx_tags || '').replace(/;/g, ', ') || '—'))}
         ${f('Description',      esc(tx.description || '—'))}
-        ${tx.fx_rate && parseFloat(tx.fx_rate) > 0 ? f('FX rate', esc(String(tx.fx_rate))) : ''}
+        ${tx.sync_status ? `<span class="badge badge-${_syncBadgeClass(tx.sync_status)}">${esc(tx.sync_status)}</span>` : ''}
+        ${tx.sync_status === 'sync-failure' && tx.sync_notes ? `<div class="sync-notes">${esc(tx.sync_notes)}</div>` : ''}
       </div>
       <div class="form-actions" style="margin-top:12px">
         <button class="btn btn-secondary btn-sm" data-action="tx-cancel-view">Close</button>
@@ -1054,13 +1020,8 @@ function _renderTxForm(tx, mode) {
 
   const dateVal = utcToLocalInput(tx.tx_date_time);
 
-  const fromCcy    = state.accountMap[tx.source_account]?.currency;
-  const toCcy      = state.accountMap[tx.target_account]?.currency;
   const isXfer     = tx.tx_type === 'money-transfer';
   const tgtMand    = _editCat ? Boolean(_editCat.target_account_mandatory) : isXfer;
-  const isCrossCcy = tgtMand && fromCcy && toCcy && fromCcy !== toCcy;
-  const fxDisplay  = isCrossCcy ? '' : 'display:none';
-  const fxDirText  = isCrossCcy ? `Rate: units of ${esc(toCcy)} per 1 ${esc(fromCcy)}` : '';
 
   return `
   <div class="card" style="margin-bottom:16px">
@@ -1100,47 +1061,59 @@ function _renderTxForm(tx, mode) {
             : `<option value="">External</option>`}
         </select>
       </div>
-      <!-- Row 3: Area | City | Country -->
-      <div class="field form-grid-span-2">
-        <label>Area</label>
-        <input type="text" id="txEditArea" value="${esc(tx.tx_location_area || '')}" list="dlEditArea" autocomplete="off">
-      </div>
-      <div class="field form-grid-span-2">
-        <label>City</label>
-        <input type="text" id="txEditCity" value="${esc(tx.tx_location_city || '')}" list="dlEditCity" autocomplete="off">
-      </div>
-      <div class="field form-grid-span-2">
-        <label>Country</label>
-        <input type="text" id="txEditCountry" value="${esc(tx.tx_location_country || '')}" list="dlEditCountry" autocomplete="off">
-      </div>
-      <!-- FX rate: full width, shown only when cross-currency -->
-      <div class="field form-grid-full" id="txEditFxRateWrap" style="${fxDisplay}">
-        <label>FX rate</label>
-        <input type="number" id="txEditFxRate" min="0.0001" step="any" value="${esc(String(tx.fx_rate || ''))}" style="max-width:240px">
-        <div id="txEditFxDirection" class="field-hint">${fxDirText}</div>
-        <div id="txEditFxPreview" class="field-hint" style="color:var(--teal)"></div>
-      </div>
-      <!-- Row 4: Date & time | Amount | Counterparty -->
+      <!-- Row 3: Date & time | Timezone | Amount -->
       <div class="field form-grid-span-2">
         <label>Date &amp; time</label>
         <input type="datetime-local" id="txEditDate" value="${esc(dateVal)}">
       </div>
       <div class="field form-grid-span-2">
+        <label>Timezone <span class="optional">optional</span></label>
+        <input type="text" id="txEditTimezone" placeholder="e.g. Asia/Kolkata" autocomplete="off" value="${esc(tx.tx_timezone || '')}">
+      </div>
+      <div class="field form-grid-span-2">
         <label>Amount</label>
         <input type="number" id="txEditAmount" min="0.01" step="0.01" value="${esc(String(tx.amount || ''))}">
       </div>
-      <div class="field form-grid-span-2">
+      <!-- Row 4: Counterparty | Tags -->
+      <div class="field form-grid-span-3">
         <label>Counterparty</label>
         <input type="text" id="txEditCounterparty" value="${esc(tx.counterparty_name || '')}" list="dlEditCounterparty" autocomplete="off">
       </div>
-      <!-- Row 5: Tags 50% | Description 50% -->
       <div class="field form-grid-span-3">
         <label>Tags</label>
-        <input type="text" id="txEditTags" value="${esc(String(tx.tags || '').replace(/;/g, ', '))}" list="dlEditTags" autocomplete="off">
+        <input type="text" id="txEditTags" value="${esc(String(tx.tx_tags || '').replace(/;/g, ', '))}" list="dlEditTags" autocomplete="off">
       </div>
-      <div class="field form-grid-span-3">
+      <!-- Row 5: Description -->
+      <div class="field form-grid-full">
         <label>Description</label>
         <input type="text" id="txEditDescription" value="${esc(tx.description || '')}">
+      </div>
+      <!-- Row 6: Beneficiaries -->
+      <div class="field form-grid-full">
+        <label for="txEditBeneficiaries">Beneficiaries <span class="optional">optional</span></label>
+        <input type="text" id="txEditBeneficiaries" placeholder="e.g. Alice:60;Bob:40 or Alice;Bob" autocomplete="off" value="${esc(tx.beneficiaries || '')}">
+      </div>
+      <!-- Row 7: Area | City | Country -->
+      <div class="field form-grid-span-2">
+        <label>Area</label>
+        <input type="text" id="txEditArea" value="${esc(tx.user_location_area || '')}" list="dlEditArea" autocomplete="off">
+      </div>
+      <div class="field form-grid-span-2">
+        <label>City</label>
+        <input type="text" id="txEditCity" value="${esc(tx.user_location_city || '')}" list="dlEditCity" autocomplete="off">
+      </div>
+      <div class="field form-grid-span-2">
+        <label>Country</label>
+        <input type="text" id="txEditCountry" value="${esc(tx.user_location_country || '')}" list="dlEditCountry" autocomplete="off">
+      </div>
+      <!-- Row 8: Coordinates -->
+      <div class="field form-grid-full">
+        <label>Coordinates <span class="optional">optional</span></label>
+        <div style="display:flex;gap:8px;align-items:center">
+          <input type="number" id="txEditLatitude"  step="any" placeholder="Latitude"  style="flex:1" min="-90"  max="90"  value="${tx.user_location_latitude  ?? ''}">
+          <input type="number" id="txEditLongitude" step="any" placeholder="Longitude" style="flex:1" min="-180" max="180" value="${tx.user_location_longitude ?? ''}">
+          <button type="button" id="txEditDetectLocation" class="btn btn-secondary btn-sm">Detect</button>
+        </div>
       </div>
     </div>
     <div class="form-actions" style="margin-top:8px">
@@ -1162,7 +1135,7 @@ function _renderTxDeleteRow(tx) {
   const accLabel = toName ? `${fromName} → ${toName}` : fromName;
   return `<tr>
     <td colspan="6">
-      <span class="confirm-text">Delete <strong>${esc(fmtDateTime(tx.tx_date_time))}</strong> — ${esc(accLabel)} — ${esc(fmtNative(tx.amount, tx.currency))}? Account balance will be adjusted.</span>
+      <span class="confirm-text">Delete <strong>${esc(fmtDateTime(tx.tx_date_time))}</strong> — ${esc(accLabel)} — ${esc(fmtNative(tx.amount, tx.currency))}?</span>
       <span style="display:inline-flex;gap:8px;margin-left:16px">
         <button class="btn-link danger" data-action="tx-confirm-delete" data-row="${tx._row}">Yes, delete</button>
         <button class="btn-link" data-action="tx-cancel-delete">Cancel</button>
@@ -1172,21 +1145,6 @@ function _renderTxDeleteRow(tx) {
 }
 
 function _attachTxEditCascadeEvents() {
-  const _updateFxPreview = () => {
-    const prvEl   = el('txEditFxPreview');
-    if (!prvEl) return;
-    const fromAcc = state.accountMap[el('txEditFromAccount')?.value];
-    const toAcc   = state.accountMap[el('txEditToAccount')?.value];
-    const fxRate  = parseFloat(el('txEditFxRate')?.value) || 0;
-    const amount  = parseFloat(el('txEditAmount')?.value) || 0;
-    if (fromAcc && toAcc && fromAcc.currency !== toAcc.currency && fxRate > 0 && amount > 0) {
-      const credited    = (amount * fxRate).toFixed(2);
-      prvEl.textContent = `${amount} ${fromAcc.currency} sent; ${credited} ${toAcc.currency} credited to ${toAcc.name}`;
-    } else {
-      prvEl.textContent = '';
-    }
-  };
-
   const _refreshFieldVis = () => {
     const type    = el('txEditType')?.value;
     const major   = el('txEditMajor')?.value || '';
@@ -1196,7 +1154,6 @@ function _attachTxEditCascadeEvents() {
     const toAcc   = state.accountMap[el('txEditToAccount')?.value];
     const isXfer     = type === 'money-transfer';
     const tgtMand    = cat ? Boolean(cat.target_account_mandatory) : isXfer;
-    const isCrossCcy = tgtMand && fromAcc && toAcc && fromAcc.currency !== toAcc.currency;
 
     const toEl = el('txEditToAccount');
     if (toEl) {
@@ -1211,20 +1168,6 @@ function _attachTxEditCascadeEvents() {
         toEl.value     = '';
       }
     }
-
-    const fxWrap = el('txEditFxRateWrap');
-    if (fxWrap) fxWrap.style.display = isCrossCcy ? '' : 'none';
-
-    const dirEl = el('txEditFxDirection');
-    if (dirEl) {
-      dirEl.textContent = isCrossCcy
-        ? `Rate: units of ${toAcc.currency} per 1 ${fromAcc.currency}`
-        : '';
-    }
-
-    if (!isCrossCcy && el('txEditFxRate')) el('txEditFxRate').value = '';
-
-    _updateFxPreview();
   };
 
   const _refreshAccountOpts = () => {
@@ -1274,10 +1217,18 @@ function _attachTxEditCascadeEvents() {
   el('txEditMinor')?.addEventListener('change', _refreshAccountOpts);
   el('txEditFromAccount')?.addEventListener('change', _refreshFieldVis);
   el('txEditToAccount')?.addEventListener('change', _refreshFieldVis);
-  el('txEditFxRate')?.addEventListener('input', _updateFxPreview);
-  el('txEditAmount')?.addEventListener('input', _updateFxPreview);
 
   _attachTagAutocomplete('txEditTags', 'dlEditTags');
+
+  el('txEditDetectLocation')?.addEventListener('click', () => {
+    if (!navigator.geolocation) return;
+    navigator.geolocation.getCurrentPosition(pos => {
+      const lat = el('txEditLatitude');
+      const lon = el('txEditLongitude');
+      if (lat) lat.value = pos.coords.latitude.toFixed(6);
+      if (lon) lon.value = pos.coords.longitude.toFixed(6);
+    });
+  });
 
   // Initial render: apply source/target disabled state based on category flags
   _refreshAccountOpts();
@@ -1292,7 +1243,6 @@ async function _saveEdit() {
   const tx_type             = el('txEditType')?.value;
   const source_account      = el('txEditFromAccount')?.value;
   const target_account      = el('txEditToAccount')?.value  || '';
-  const fx_rate             = el('txEditFxRate')?.value     || '';
   const amount              = el('txEditAmount')?.value;
   const currency            = tx_type === 'money-in'
     ? (state.accountMap[target_account]?.currency || '')
@@ -1300,11 +1250,15 @@ async function _saveEdit() {
   const major_category      = el('txEditMajor')?.value;
   const minor_category      = el('txEditMinor')?.value;
   const counterparty_name   = el('txEditCounterparty')?.value.trim();
-  const tx_location_area    = el('txEditArea')?.value.trim();
-  const tx_location_city    = el('txEditCity')?.value.trim();
-  const tx_location_country = el('txEditCountry')?.value.trim();
-  const tags                = el('txEditTags')?.value.trim();
+  const user_location_area    = el('txEditArea')?.value.trim();
+  const user_location_city    = el('txEditCity')?.value.trim();
+  const user_location_country = el('txEditCountry')?.value.trim();
+  const tx_tags             = el('txEditTags')?.value.trim();
   const description         = el('txEditDescription')?.value.trim();
+  const tx_timezone            = el('txEditTimezone')?.value.trim() || '';
+  const user_location_latitude  = el('txEditLatitude')?.value  !== '' ? Number(el('txEditLatitude')?.value)  : '';
+  const user_location_longitude = el('txEditLongitude')?.value !== '' ? Number(el('txEditLongitude')?.value) : '';
+  const beneficiaries           = el('txEditBeneficiaries')?.value.trim() || '';
 
   const isEditTransfer   = tx_type === 'money-transfer';
   const _editSaveCat     = _getCat(tx_type, major_category, minor_category);
@@ -1343,9 +1297,6 @@ async function _saveEdit() {
   const rule5ErrorEdit = _checkRule5(tx_type, fromAccEdit, major_category, minor_category);
   if (rule5ErrorEdit) { errEl.textContent = rule5ErrorEdit; return; }
 
-  const rule6ErrorEdit = _checkRule6(tx_type, fromAccEdit, toAccEdit, fx_rate);
-  if (rule6ErrorEdit) { errEl.textContent = rule6ErrorEdit; return; }
-
   // target_account credit-card check (transfer edits only)
   if (
     tx_type === 'money-transfer' &&
@@ -1353,14 +1304,12 @@ async function _saveEdit() {
     Number(toAccEdit.credit_card_limit) > 0
   ) {
     // How much will be credited to target_account in Phase 2?
-    const newFxRate   = fx_rate ? parseFloat(fx_rate) : 0;
-    const newCredited = newFxRate > 0 ? parseFloat(amount) * newFxRate : parseFloat(amount);
+    const newCredited = parseFloat(amount);
 
     // Post-reversal balance of target_account: undo old credited amount (if same target_account).
     let toPostRevBal = Number(toAccEdit.current_value);
     if (oldTx && String(oldTx.target_account) === String(target_account)) {
-      const oldFx       = Number(oldTx.fx_rate) || 0;
-      const oldCredited = oldFx > 0 ? Number(oldTx.amount) * oldFx : Number(oldTx.amount);
+      const oldCredited = Number(oldTx.amount);
       toPostRevBal     -= oldCredited; // reversal removes the old credit
     }
 
@@ -1389,10 +1338,10 @@ async function _saveEdit() {
     const res = await ExpenseAPI.updateTransaction({
       row_num: rowNum, tx_date_time: localToUtcISO(dateRaw), tx_type,
       source_account, target_account, amount: parseFloat(amount), currency,
-      fx_rate: fx_rate ? parseFloat(fx_rate) : '',
       major_category, minor_category, counterparty_name,
-      tx_location_area, tx_location_city, tx_location_country,
-      tags, description,
+      user_location_area, user_location_city, user_location_country,
+      tx_tags, description,
+      tx_timezone, user_location_latitude, user_location_longitude, beneficiaries,
     });
     if (res.ok) {
       showMsg('Transaction updated.');
@@ -1607,9 +1556,9 @@ function _renderFilterBar() {
     ...f.accounts.map(id => ({ label: state.accountMap[id]?.name || id,  key: 'accounts', val: id })),
     ...f.major.map(v     => ({ label: v,                                 key: 'major',    val: v })),
     ...f.minor.map(v     => ({ label: v,                                 key: 'minor',    val: v })),
-    ...(f.tx_location_country ? [{ label: 'Country: ' + f.tx_location_country, key: 'tx_location_country', val: '' }] : []),
-    ...(f.tx_location_city    ? [{ label: 'City: '    + f.tx_location_city,    key: 'tx_location_city',    val: '' }] : []),
-    ...(f.tx_location_area    ? [{ label: 'Area: '    + f.tx_location_area,    key: 'tx_location_area',    val: '' }] : []),
+    ...(f.user_location_country ? [{ label: 'Country: ' + f.user_location_country, key: 'user_location_country', val: '' }] : []),
+    ...(f.user_location_city    ? [{ label: 'City: '    + f.user_location_city,    key: 'user_location_city',    val: '' }] : []),
+    ...(f.user_location_area    ? [{ label: 'Area: '    + f.user_location_area,    key: 'user_location_area',    val: '' }] : []),
     ...(f.tag    ? [{ label: 'Tag: '    + f.tag,    key: 'tag',    val: '' }] : []),
     ...(f.search ? [{ label: 'Search: ' + f.search, key: 'search', val: '' }] : []),
   ];
@@ -1696,11 +1645,11 @@ function _renderFilterBar() {
       <div class="filter-row">
         <label>Location</label>
         <div style="flex:1;display:flex;gap:8px;flex-wrap:wrap">
-          <input type="text" id="filterCountry" value="${esc(f.tx_location_country)}" list="dlFCountry" placeholder="Country" autocomplete="off" style="flex:1;min-width:100px">
+          <input type="text" id="filterCountry" value="${esc(f.user_location_country)}" list="dlFCountry" placeholder="Country" autocomplete="off" style="flex:1;min-width:100px">
           ${_datalist('dlFCountry', m?.countries)}
-          <input type="text" id="filterCity" value="${esc(f.tx_location_city)}" list="dlFCity" placeholder="City" autocomplete="off" style="flex:1;min-width:100px">
+          <input type="text" id="filterCity" value="${esc(f.user_location_city)}" list="dlFCity" placeholder="City" autocomplete="off" style="flex:1;min-width:100px">
           ${_datalist('dlFCity', m?.cities)}
-          <input type="text" id="filterArea" value="${esc(f.tx_location_area)}" list="dlFArea" placeholder="Area" autocomplete="off" style="flex:1;min-width:100px">
+          <input type="text" id="filterArea" value="${esc(f.user_location_area)}" list="dlFArea" placeholder="Area" autocomplete="off" style="flex:1;min-width:100px">
           ${_datalist('dlFArea', m?.areas)}
         </div>
       </div>
@@ -1731,7 +1680,7 @@ function _renderTxImportPanel() {
       <div class="field form-grid-span-2">
         <label for="txImportFile">CSV file</label>
         <input type="file" id="txImportFile" accept=".csv">
-        <div class="field-hint">Columns: tx_date_time, tx_type, source_account, target_account, counterparty_name, amount, currency, fx_rate, major_category, minor_category, tags, tx_location_country, description</div>
+        <div class="field-hint">Columns: tx_date_time, tx_timezone, tx_type, source_account, target_account, user_location_area, user_location_city, user_location_country, user_location_latitude, user_location_longitude, amount, currency, major_category, minor_category, description, counterparty_name, tx_tags, beneficiaries</div>
       </div>
     </div>
     <div id="txImportStatus"></div>
@@ -1796,26 +1745,27 @@ function _parseTxCsv(text) {
 
     const tx_date_time = localToUtcISO(row.tx_date_time);
 
-    const fxRate = row.fx_rate ? parseFloat(row.fx_rate) : 0;
-
     transactions.push({
       tx_date_time,
-      tx_type:              row.tx_type,
-      amount:               parseFloat(row.amount),
-      currency:             row.currency.toUpperCase(),
-      source_account:       sourceId,
-      target_account:       targetId,
-      major_category:       row.major_category,
-      minor_category:       row.minor_category,
-      counterparty_name:    row.counterparty_name || '',
-      tx_location_area:     row.tx_location_area  || '',
-      tx_location_city:     row.tx_location_city  || '',
-      tx_location_country:  row.tx_location_country || '',
-      description:          row.description || '',
-      tags:                 row.tags || '',
-      fx_rate:              fxRate || undefined,
-      _src_name:            row.source_account,
-      _tgt_name:            row.target_account,
+      tx_timezone:              row.tx_timezone || '',
+      tx_type:                  row.tx_type,
+      source_account:           sourceId,
+      target_account:           targetId,
+      user_location_area:       row.user_location_area    || '',
+      user_location_city:       row.user_location_city    || '',
+      user_location_country:    row.user_location_country || '',
+      user_location_latitude:   row.user_location_latitude  !== '' ? parseFloat(row.user_location_latitude)  : '',
+      user_location_longitude:  row.user_location_longitude !== '' ? parseFloat(row.user_location_longitude) : '',
+      amount:                   parseFloat(row.amount),
+      currency:                 row.currency.toUpperCase(),
+      major_category:           row.major_category,
+      minor_category:           row.minor_category,
+      description:              row.description || '',
+      counterparty_name:        row.counterparty_name || '',
+      tx_tags:                  row.tx_tags || '',
+      beneficiaries:            row.beneficiaries || '',
+      _src_name:                row.source_account,
+      _tgt_name:                row.target_account,
     });
   }
 
@@ -2043,9 +1993,9 @@ function _attachFilterEvents() {
     state.filters[key] = e.target.value.trim();
   });
 
-  bindText('filterCountry', 'tx_location_country');
-  bindText('filterCity',    'tx_location_city');
-  bindText('filterArea',    'tx_location_area');
+  bindText('filterCountry', 'user_location_country');
+  bindText('filterCity',    'user_location_city');
+  bindText('filterArea',    'user_location_area');
   bindText('filterTag',     'tag');
   bindText('filterSearch',  'search');
   _attachTagAutocomplete('filterTag', 'dlFTag');
@@ -2056,7 +2006,7 @@ function _attachFilterEvents() {
 
   el('clearFilters')?.addEventListener('click', () => {
     _accTypeSel.clear();
-    state.filters = { types:[], accounts:[], major:[], minor:[], tx_location_country:'', tx_location_city:'', tx_location_area:'', tag:'', search:'' };
+    state.filters = { types:[], accounts:[], major:[], minor:[], user_location_country:'', user_location_city:'', user_location_area:'', tag:'', search:'' };
     state.txPage = 1; renderTransactions();
   });
 

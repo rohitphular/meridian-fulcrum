@@ -106,15 +106,15 @@ function getTransactionMetadata() {
       .sort();
   };
 
-  const countries      = distinct(rows.map(function(tx) { return tx.tx_location_country; }));
-  const cities         = distinct(rows.map(function(tx) { return tx.tx_location_city; }));
-  const areas          = distinct(rows.map(function(tx) { return tx.tx_location_area; }));
+  const countries      = distinct(rows.map(function(tx) { return tx.user_location_country; }));
+  const cities         = distinct(rows.map(function(tx) { return tx.user_location_city; }));
+  const areas          = distinct(rows.map(function(tx) { return tx.user_location_area; }));
   const counterparties = distinct(rows.map(function(tx) { return tx.counterparty_name; }));
 
   const allTags = [];
   rows.forEach(function(tx) {
-    if (!tx.tags) return;
-    String(tx.tags).split(';').forEach(function(t) {
+    if (!tx.tx_tags) return;
+    String(tx.tx_tags).split(';').forEach(function(t) {
       const trimmed = t.trim();
       if (trimmed) allTags.push(trimmed);
     });

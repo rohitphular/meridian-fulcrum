@@ -27,10 +27,13 @@ export const toBase     = (amount, from, rowFxRate) => _toBase(amount, from, row
 export const fmtBase    = (amount, from, rowFxRate) => _fmtBase(amount, from, rowFxRate, state.rateMap, state.quoteCurrency, state.rates);
 export const fmtNative  = (amount, currency)        => _fmtNative(amount, currency, state.rates);
 
-const ET_COLS  = ['tx_date_time', 'tx_type', 'source_account', 'target_account',
-  'tx_location_area', 'tx_location_city', 'tx_location_country',
-  'amount', 'currency', 'fx_rate', 'major_category', 'minor_category',
-  'tags', 'counterparty_name', 'description'];
+const ET_COLS  = [
+  'tx_date_time', 'tx_timezone', 'tx_type', 'source_account', 'target_account',
+  'user_location_area', 'user_location_city', 'user_location_country',
+  'user_location_latitude', 'user_location_longitude',
+  'amount', 'currency', 'major_category', 'minor_category',
+  'description', 'counterparty_name', 'tx_tags', 'beneficiaries',
+];
 const ACC_COLS = ['name', 'type', 'sub_type', 'currency', 'opening_value', 'current_value', 'is_active', 'description'];
 const SUB_COLS = ['id', 'name', 'counterparty_name', 'amount', 'currency', 'frequency', 'day_of_month', 'day_of_week',
   'source_account', 'tx_type', 'major_category', 'minor_category', 'tags', 'is_active', 'description', 'created_at'];
@@ -39,7 +42,12 @@ const CAT_COLS = ['tx_type', 'major_category', 'minor_category', 'description', 
   'target_account_mandatory', 'workflow_type', 'is_subscription_eligible'];
 
 export const exportData          = (format, rows) => {
-  const normalised = rows.map(r => ({ ...r, tx_date_time: utcToLocalInput(r.tx_date_time) }));
+  const normalised = rows.map(r => ({
+    ...r,
+    tx_date_time:   utcToLocalInput(r.tx_date_time),
+    source_account: state.accountMap[r.source_account]?.name || r.source_account || '',
+    target_account: state.accountMap[r.target_account]?.name || r.target_account || '',
+  }));
   return _exportData(format, normalised, 'expenses', ET_COLS);
 };
 export const exportAccounts      = (format, rows) => _exportData(format, rows, 'accounts', ACC_COLS);
