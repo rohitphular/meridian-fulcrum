@@ -6,6 +6,7 @@ import { ExpenseAPI } from '../core/api.js';
 let _catImportParsed = null;
 let _catMenuKey      = null;
 let _catDraft        = null;   // pending filter selections; copied to state.catFilters on Search
+let _catDDCleanup    = null;   // cleanup fn for the currently open filter dropdown's outside-click listener
 
 function _acctTypeGroups() {
   const schema = state.accountSchema;
@@ -122,18 +123,32 @@ function _renderCatFilterBar() {
     minors.sort();
   }
 
-  const majorOpts = `<option value="all"${f.major === 'all' ? ' selected' : ''}>All major</option>` +
-    majors.map(m => `<option value="${esc(m)}"${f.major === m ? ' selected' : ''}>${esc(m)}</option>`).join('');
-
-  const minorOpts = f.major === 'all'
-    ? `<option value="all">— select major first —</option>`
-    : `<option value="all"${f.minor === 'all' ? ' selected' : ''}>All minor</option>` +
-      minors.map(n => `<option value="${esc(n)}"${f.minor === n ? ' selected' : ''}>${esc(n)}</option>`).join('');
-
   const rs = new Set(f.recordStatuses);
 
-  const tog = (val, label, attr, cur) =>
-    `<button class="btn btn-sm ${cur === val ? 'btn-primary' : 'btn-secondary'}" data-${attr}="${val}">${label}</button>`;
+  const typeLabel   = f.type === 'money-in' ? 'Money In' : f.type === 'money-out' ? 'Money Out' : 'All types';
+  const majorLabel  = f.major === 'all' ? 'All major' : f.major;
+  const minorLabel  = f.major === 'all' ? '— select major first —' : (f.minor === 'all' ? 'All minor' : f.minor);
+  const srcLabel    = f.sourceMandatory === 'yes' ? 'Required' : f.sourceMandatory === 'no' ? 'Optional' : 'All';
+  const tgtLabel    = f.targetMandatory === 'yes' ? 'Required' : f.targetMandatory === 'no' ? 'Optional' : 'All';
+  const subLabel    = f.subscriptionEligible === 'yes' ? 'Eligible' : f.subscriptionEligible === 'no' ? 'Not eligible' : 'All';
+  const statusLabel = rs.size === 4 ? 'All' : rs.size === 0 ? 'None'
+    : [...rs].map(s => s.charAt(0).toUpperCase() + s.slice(1)).join(', ');
+
+  const trigStyle = 'width:100%;display:flex;justify-content:space-between;align-items:center;text-align:left;background:var(--panel);border:1px solid var(--hair-strong);border-radius:8px;padding:6px 10px;font-size:var(--text-base);color:var(--ink);cursor:pointer;outline:none';
+  const optStyle  = 'display:flex;align-items:center;gap:8px;font-size:var(--text-base);color:var(--ink);cursor:pointer';
+
+  const radioRows = (name, opts, cur) => opts.map(([val, lbl]) =>
+    `<label style="${optStyle}"><input type="radio" name="${name}" value="${val}"${cur === val ? ' checked' : ''}> ${lbl}</label>`
+  ).join('');
+
+  const dd = (triggerId, labelId, menuId, curLabel, items, disabled) => `
+    <div style="flex:1;position:relative">
+      <button type="button" id="${triggerId}"${disabled ? ' disabled' : ''} style="${trigStyle}${disabled ? ';opacity:0.5;cursor:not-allowed' : ''}">
+        <span id="${labelId}">${curLabel}</span>
+        <span style="color:var(--muted);font-size:var(--text-2xs);margin-left:8px">▼</span>
+      </button>
+      <div id="${menuId}" style="display:none">${items}</div>
+    </div>`;
 
   return `
   <div class="filter-bar">
@@ -143,19 +158,19 @@ function _renderCatFilterBar() {
     <div class="filter-body ${state.catFilterOpen ? '' : 'hidden'}" id="catFilterBody">
       <div class="filter-row">
         <label>Type</label>
-        <div style="display:flex;gap:4px;flex-wrap:wrap">
-          ${tog('all',       'All',       'cat-filter-type', f.type)}
-          ${tog('money-in',  'Money In',  'cat-filter-type', f.type)}
-          ${tog('money-out', 'Money Out', 'cat-filter-type', f.type)}
-        </div>
+        ${dd('catFTypeTrigger','catFTypeLabel','catFTypeMenu', typeLabel,
+          radioRows('catFTypeR', [['all','All types'],['money-in','Money In'],['money-out','Money Out']], f.type))}
       </div>
       <div class="filter-row">
         <label>Major</label>
-        <select id="catFMajor" style="flex:1">${majorOpts}</select>
+        ${dd('catFMajorTrigger','catFMajorLabel','catFMajorMenu', majorLabel,
+          radioRows('catFMajorR', [['all','All major'], ...majors.map(m => [m, m])], f.major))}
       </div>
       <div class="filter-row">
         <label>Minor</label>
-        <select id="catFMinor" style="flex:1"${f.major === 'all' ? ' disabled' : ''}>${minorOpts}</select>
+        ${dd('catFMinorTrigger','catFMinorLabel','catFMinorMenu', minorLabel,
+          f.major === 'all' ? '' : radioRows('catFMinorR', [['all','All minor'], ...minors.map(n => [n, n])], f.minor),
+          f.major === 'all')}
       </div>
       <div class="filter-row">
         <label>Search</label>
@@ -163,35 +178,25 @@ function _renderCatFilterBar() {
       </div>
       <div class="filter-row">
         <label>Source acct</label>
-        <div style="display:flex;gap:4px;flex-wrap:wrap">
-          ${tog('all', 'All',      'cat-filter-src', f.sourceMandatory)}
-          ${tog('yes', 'Required', 'cat-filter-src', f.sourceMandatory)}
-          ${tog('no',  'Optional', 'cat-filter-src', f.sourceMandatory)}
-        </div>
+        ${dd('catFSrcTrigger','catFSrcLabel','catFSrcMenu', srcLabel,
+          radioRows('catFSrcR', [['all','All'],['yes','Required'],['no','Optional']], f.sourceMandatory))}
       </div>
       <div class="filter-row">
         <label>Target acct</label>
-        <div style="display:flex;gap:4px;flex-wrap:wrap">
-          ${tog('all', 'All',      'cat-filter-tgt', f.targetMandatory)}
-          ${tog('yes', 'Required', 'cat-filter-tgt', f.targetMandatory)}
-          ${tog('no',  'Optional', 'cat-filter-tgt', f.targetMandatory)}
-        </div>
+        ${dd('catFTgtTrigger','catFTgtLabel','catFTgtMenu', tgtLabel,
+          radioRows('catFTgtR', [['all','All'],['yes','Required'],['no','Optional']], f.targetMandatory))}
       </div>
       <div class="filter-row">
         <label>Subscription</label>
-        <div style="display:flex;gap:4px;flex-wrap:wrap">
-          ${tog('all', 'All',          'cat-filter-sub', f.subscriptionEligible)}
-          ${tog('yes', 'Eligible',     'cat-filter-sub', f.subscriptionEligible)}
-          ${tog('no',  'Not eligible', 'cat-filter-sub', f.subscriptionEligible)}
-        </div>
+        ${dd('catFSubTrigger','catFSubLabel','catFSubMenu', subLabel,
+          radioRows('catFSubR', [['all','All'],['yes','Eligible'],['no','Not eligible']], f.subscriptionEligible))}
       </div>
       <div class="filter-row">
         <label>Status</label>
-        <div style="display:flex;gap:10px;flex-wrap:wrap">
-          ${['active','inactive','deleted','locked'].map(s =>
-            `<label class="checkbox-label"><input type="checkbox" data-cat-filter-rstat="${s}"${rs.has(s) ? ' checked' : ''}> ${s.charAt(0).toUpperCase() + s.slice(1)}</label>`
-          ).join('')}
-        </div>
+        ${dd('catFStatusTrigger','catFStatusLabel','catFStatusMenu', statusLabel,
+          ['active','inactive','deleted','locked'].map(s =>
+            `<label style="${optStyle}"><input type="checkbox" data-cat-filter-rstat="${s}"${rs.has(s) ? ' checked' : ''}> ${s.charAt(0).toUpperCase() + s.slice(1)}</label>`
+          ).join(''))}
       </div>
       <div style="margin-top:4px;display:flex;gap:8px;justify-content:flex-end">
         <button class="btn btn-secondary btn-sm" id="catFClear">Clear</button>
@@ -551,6 +556,7 @@ async function _submitCatImport(categories) {
 // ── Events ────────────────────────────────────────────────────────────────────
 
 function _attachCatEvents() {
+  if (_catDDCleanup) { _catDDCleanup(); _catDDCleanup = null; }
   el('catExportBtn').addEventListener('click', () => {
     const rows = _applyFilters(state.categories);
     if (!rows.length) { showMsg('No categories to export.', 'warn'); return; }
@@ -650,60 +656,125 @@ function _attachCatEvents() {
   });
 
   if (state.catFilterOpen) {
-    const content = el('categoriesContent');
+    const MENU_OPEN_STYLE = 'display:flex;flex-direction:column;gap:8px;position:fixed;z-index:1000;background:var(--panel);border:1px solid var(--hair-strong);border-radius:8px;padding:8px 10px;box-shadow:0 4px 16px rgba(0,0,0,.15)';
+    const OPT_STYLE       = 'display:flex;align-items:center;gap:8px;font-size:var(--text-base);color:var(--ink);cursor:pointer';
 
-    // Toggle button groups — update draft + flip classes in-place (no re-render)
-    const _togGroup = (attr, draftKey) => {
-      content.querySelectorAll(`[data-${attr}]`).forEach(btn => {
-        btn.addEventListener('click', () => {
-          const val = btn.dataset[attr.replace(/-([a-z])/g, (_, c) => c.toUpperCase())];
-          if (_catDraft) _catDraft[draftKey] = val;
-          content.querySelectorAll(`[data-${attr}]`).forEach(b => {
-            b.className = `btn btn-sm ${b.dataset[attr.replace(/-([a-z])/g, (_, c) => c.toUpperCase())] === val ? 'btn-primary' : 'btn-secondary'}`;
-          });
-        });
+    const ALL_DD_MENUS = ['catFTypeMenu','catFMajorMenu','catFMinorMenu','catFSrcMenu','catFTgtMenu','catFSubMenu','catFStatusMenu'];
+
+    const _openDD = (triggerId, menuId) => {
+      ALL_DD_MENUS.filter(id => id !== menuId).forEach(id => {
+        const m = el(id); if (m && m.style.display !== 'none') m.style.cssText = 'display:none';
+      });
+      if (_catDDCleanup) { _catDDCleanup(); _catDDCleanup = null; }
+      const menu = el(menuId);
+      if (!menu) return;
+      if (menu.style.display === 'flex') { menu.style.cssText = 'display:none'; return; }
+      const trig = el(triggerId);
+      if (!trig) return;
+      const r = trig.getBoundingClientRect();
+      menu.style.cssText = `${MENU_OPEN_STYLE};top:${r.bottom + 4}px;left:${r.left}px;width:${r.width}px`;
+      const close = e => {
+        if (trig.contains(e.target) || menu.contains(e.target)) return;
+        menu.style.cssText = 'display:none';
+        document.removeEventListener('click', close, true);
+        _catDDCleanup = null;
+      };
+      document.addEventListener('click', close, true);
+      _catDDCleanup = () => document.removeEventListener('click', close, true);
+    };
+
+    el('catFTypeTrigger').addEventListener('click',   () => _openDD('catFTypeTrigger',   'catFTypeMenu'));
+    el('catFMajorTrigger').addEventListener('click',  () => _openDD('catFMajorTrigger',  'catFMajorMenu'));
+    el('catFMinorTrigger').addEventListener('click',  () => {
+      const trig = el('catFMinorTrigger');
+      if (trig && trig.disabled) return;
+      _openDD('catFMinorTrigger', 'catFMinorMenu');
+    });
+    el('catFSrcTrigger').addEventListener('click',    () => _openDD('catFSrcTrigger',    'catFSrcMenu'));
+    el('catFTgtTrigger').addEventListener('click',    () => _openDD('catFTgtTrigger',    'catFTgtMenu'));
+    el('catFSubTrigger').addEventListener('click',    () => _openDD('catFSubTrigger',    'catFSubMenu'));
+    el('catFStatusTrigger').addEventListener('click', () => _openDD('catFStatusTrigger', 'catFStatusMenu'));
+
+    // Single-select radio menus — event delegation on the container
+    const _delegateRadio = (menuId, draftKey, labelId, labelMap) => {
+      const menu = el(menuId);
+      if (!menu) return;
+      menu.addEventListener('change', e => {
+        const radio = e.target.closest('input[type="radio"]');
+        if (!radio) return;
+        const val = radio.value;
+        if (_catDraft) _catDraft[draftKey] = val;
+        const lbl = el(labelId); if (lbl) lbl.textContent = labelMap[val] || val;
+        menu.style.cssText = 'display:none';
+        if (_catDDCleanup) { _catDDCleanup(); _catDDCleanup = null; }
       });
     };
-    _togGroup('cat-filter-type', 'type');
-    _togGroup('cat-filter-src',  'sourceMandatory');
-    _togGroup('cat-filter-tgt',  'targetMandatory');
-    _togGroup('cat-filter-sub',  'subscriptionEligible');
+    _delegateRadio('catFTypeMenu',  'type',                'catFTypeLabel',  { all: 'All types', 'money-in': 'Money In', 'money-out': 'Money Out' });
+    _delegateRadio('catFSrcMenu',   'sourceMandatory',      'catFSrcLabel',   { all: 'All', yes: 'Required', no: 'Optional' });
+    _delegateRadio('catFTgtMenu',   'targetMandatory',      'catFTgtLabel',   { all: 'All', yes: 'Required', no: 'Optional' });
+    _delegateRadio('catFSubMenu',   'subscriptionEligible', 'catFSubLabel',   { all: 'All', yes: 'Eligible', no: 'Not eligible' });
 
-    // Major — update draft + repopulate minor dropdown in-place
-    el('catFMajor').addEventListener('change', () => {
-      const newMajor = el('catFMajor').value;
-      if (_catDraft) { _catDraft.major = newMajor; _catDraft.minor = 'all'; }
-      const minorEl = el('catFMinor');
-      if (!minorEl) return;
-      if (newMajor === 'all') {
-        minorEl.disabled = true;
-        minorEl.innerHTML = `<option value="all">— select major first —</option>`;
-      } else {
-        const mins = [], seen = {};
-        state.categories.filter(c => c.major_category_label === newMajor).forEach(c => {
-          if (!seen[c.minor_category_label]) { seen[c.minor_category_label] = true; mins.push(c.minor_category_label); }
-        });
-        mins.sort();
-        minorEl.disabled = false;
-        minorEl.innerHTML = `<option value="all" selected>All minor</option>` +
-          mins.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
-      }
-    });
+    // Major — delegation; also repopulates minor menu and updates minor trigger state
+    const majorMenu = el('catFMajorMenu');
+    if (majorMenu) {
+      majorMenu.addEventListener('change', e => {
+        const radio = e.target.closest('input[type="radio"]');
+        if (!radio) return;
+        const val = radio.value;
+        if (_catDraft) { _catDraft.major = val; _catDraft.minor = 'all'; }
+        const lbl = el('catFMajorLabel'); if (lbl) lbl.textContent = val === 'all' ? 'All major' : val;
+        majorMenu.style.cssText = 'display:none';
+        if (_catDDCleanup) { _catDDCleanup(); _catDDCleanup = null; }
 
-    // Minor — update draft only
-    el('catFMinor').addEventListener('change', () => {
-      if (_catDraft) _catDraft.minor = el('catFMinor').value;
-    });
-
-    // Record status checkboxes — update draft only
-    content.querySelectorAll('[data-cat-filter-rstat]').forEach(cb => {
-      cb.addEventListener('change', () => {
-        if (!_catDraft) return;
-        _catDraft.recordStatuses = Array.from(
-          content.querySelectorAll('[data-cat-filter-rstat]:checked')
-        ).map(c => c.dataset.catFilterRstat);
+        const minTrig = el('catFMinorTrigger');
+        const minMenu = el('catFMinorMenu');
+        const minLbl  = el('catFMinorLabel');
+        if (val === 'all') {
+          if (minTrig) { minTrig.disabled = true; minTrig.style.opacity = '0.5'; minTrig.style.cursor = 'not-allowed'; }
+          if (minLbl)  minLbl.textContent = '— select major first —';
+          if (minMenu) minMenu.innerHTML = '';
+        } else {
+          const mins = [], seen = {};
+          state.categories.filter(c => c.major_category_label === val).forEach(c => {
+            if (!seen[c.minor_category_label]) { seen[c.minor_category_label] = true; mins.push(c.minor_category_label); }
+          });
+          mins.sort();
+          if (minTrig) { minTrig.disabled = false; minTrig.style.opacity = ''; minTrig.style.cursor = ''; }
+          if (minLbl)  minLbl.textContent = 'All minor';
+          if (minMenu) minMenu.innerHTML = [['all','All minor'], ...mins.map(n => [n, n])].map(([v, l]) =>
+            `<label style="${OPT_STYLE}"><input type="radio" name="catFMinorR" value="${v}"${v === 'all' ? ' checked' : ''}> ${esc(l)}</label>`
+          ).join('');
+        }
       });
-    });
+    }
+
+    // Minor — delegation (handles dynamically repopulated innerHTML)
+    const minorMenu = el('catFMinorMenu');
+    if (minorMenu) {
+      minorMenu.addEventListener('change', e => {
+        const radio = e.target.closest('input[type="radio"]');
+        if (!radio) return;
+        const val = radio.value;
+        if (_catDraft) _catDraft.minor = val;
+        const lbl = el('catFMinorLabel'); if (lbl) lbl.textContent = val === 'all' ? 'All minor' : val;
+        minorMenu.style.cssText = 'display:none';
+        if (_catDDCleanup) { _catDDCleanup(); _catDDCleanup = null; }
+      });
+    }
+
+    // Status checkboxes — delegation; dropdown stays open while checking
+    const statusMenu = el('catFStatusMenu');
+    if (statusMenu) {
+      statusMenu.addEventListener('change', () => {
+        if (!_catDraft) return;
+        const checked = Array.from(statusMenu.querySelectorAll('[data-cat-filter-rstat]:checked'))
+          .map(c => c.dataset.catFilterRstat);
+        _catDraft.recordStatuses = checked;
+        const lbl = el('catFStatusLabel');
+        if (lbl) lbl.textContent = checked.length === 4 ? 'All' : checked.length === 0 ? 'None'
+          : checked.map(s => s.charAt(0).toUpperCase() + s.slice(1)).join(', ');
+      });
+    }
 
     // Apply draft → state on Search / Enter
     const _applyDraft = () => {

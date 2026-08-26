@@ -129,7 +129,7 @@ function updateCategory(body) {
   // sync_status: preserve create-pending if not yet synced; clear sync_notes either way
   const syncStatusCol = getCategorySchemaField('sync_status').sheet_column_position;
   const syncNotesCol  = getCategorySchemaField('sync_notes').sheet_column_position;
-  const currentSyncStatus = String(allRows[rowNum - 1][syncStatusCol] || '');
+  const currentSyncStatus = String(allRows[rowNum - 1][syncStatusCol - 1] || '');
   sheet.getRange(rowNum, syncStatusCol).setValue(computeSyncStatus(currentSyncStatus));
   sheet.getRange(rowNum, syncNotesCol).setValue('');
 
