@@ -108,17 +108,17 @@ const CATEGORY_SCHEMA = {
     editable:              true,
     default_value:         '',
   },
-  is_active: {
-    sheet_column_name:     'is_active',
+  record_status: {
+    sheet_column_name:     'record_status',
     sheet_column_position: 8,
-    ui_label:              'Active',
-    type:                  'boolean',
-    enum_values:           null,
+    ui_label:              'Record status',
+    type:                  'enum',
+    enum_values:           ['active', 'inactive', 'deleted'],
     group:                 'core',
     applies_to:            null,
     required_for:          null,
     editable:              true,
-    default_value:         true,
+    default_value:         'active',
   },
 
   // ── Classification (columns 9–10) ─────────────────────────────────────────
@@ -251,11 +251,6 @@ function getCategorySchemaForClient() {
       const labels = { 'money-in': 'Money In', 'money-out': 'Money Out' };
       return { value: v, label: labels[v] || v };
     }),
-    account_types: VALID_ACCOUNT_TYPES.map(function(v) {
-      const labels = { asset: 'Asset', investment: 'Investment', liability: 'Liability' };
-      const groups = { asset: 'asset', investment: 'investment', liability: 'liability' };
-      return { value: v, label: labels[v] || v, group: groups[v] || v };
-    }),
   };
 }
 
@@ -263,15 +258,6 @@ function getCategorySchemaForClient() {
 // Helper functions
 // ─────────────────────────────────────────────────────────────────────────────
 
-function getFieldsForCategoryType(type) {
-  return Object.keys(CATEGORY_SCHEMA).map(function(key) {
-    const f = CATEGORY_SCHEMA[key];
-    return { key: key, editable: f.editable, required: f.required_for === null };
-  }).filter(function(f) {
-    const schema = CATEGORY_SCHEMA[f.key];
-    return schema.applies_to === null || schema.applies_to === type;
-  });
-}
 
 function getCategorySheetColumns() {
   return Object.values(CATEGORY_SCHEMA)

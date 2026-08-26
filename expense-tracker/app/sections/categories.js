@@ -1,5 +1,5 @@
 import { state } from '../core/state.js';
-import { el, esc, openContextMenu, closeContextMenu, exportCategories } from '../core/utils.js';
+import { el, esc, openContextMenu, closeContextMenu, exportCategories, recordStatusIcon, syncStatusIcon } from '../core/utils.js';
 import { showLoading, hideLoading, showMsg } from '../core/ui.js';
 import { ExpenseAPI } from '../core/api.js';
 
@@ -41,7 +41,7 @@ export function renderCategories() {
     { key: 'money-out', label: 'Money Out' },
     { key: 'transfer',  label: 'Transfer' },
   ];
-  const filterLabel = CAT_FILTERS.find(o => o.key === (state.catFilter || 'all')).label;
+  const filterLabel = (CAT_FILTERS.find(o => o.key === (state.catFilter || 'all')) || CAT_FILTERS[0]).label;
   const anyFormOpen = state.catAddOpen || state.catViewRow !== null || state.catEditRow !== null;
   const viewCat = state.catViewRow !== null ? state.categories.find(c => c._row === state.catViewRow) : null;
   const editCat = state.catEditRow !== null ? state.categories.find(c => c._row === state.catEditRow) : null;
@@ -79,11 +79,9 @@ function _renderForm(cat, mode) {
   const tgtId  = isView ? '' : `${pfx}Tgt`;
 
   const types = state.categorySchema.types;
-  const typeOpts = types.map(t => {
-    const v = typeof t === 'string' ? t : t.value;
-    const l = typeof t === 'string' ? t : t.label;
-    return `<option value="${esc(v)}" ${cat.tx_type_key === v ? 'selected' : ''}>${esc(l)}</option>`;
-  }).join('');
+  const typeOpts = types.map(t =>
+    `<option value="${esc(t.value)}" ${cat.tx_type_key === t.value ? 'selected' : ''}>${esc(t.label)}</option>`
+  ).join('');
 
   const header = (isView || isEdit) ? `
     <div class="cat-form-header">
@@ -144,13 +142,21 @@ function _renderForm(cat, mode) {
       </div>
       ${_renderAcctTypeCheckboxes(tgtId, cat.target_account_types || '', isView)}
     </div>
-    ${(isEdit || isView) ? `
-    <label class="checkbox-label cat-mandatory-check" style="margin-top:14px">
-      <input type="checkbox" id="${pfx}IsActive" ${(cat.is_active !== false) ? 'checked' : ''}${dis}> Active
-    </label>` : ''}
+    <div class="field" style="margin-top:14px">
+      <label>Record status</label>
+      <select id="${pfx}RecordStatus"${dis}>
+        <option value="active"   ${(cat.record_status === 'active' || !cat.record_status) ? 'selected' : ''}>Active</option>
+        <option value="inactive" ${cat.record_status === 'inactive' ? 'selected' : ''}>Inactive</option>
+        <option value="deleted"  ${cat.record_status === 'deleted'  ? 'selected' : ''}>Deleted</option>
+      </select>
+    </div>
     <label class="checkbox-label cat-mandatory-check" style="margin-top:8px">
       <input type="checkbox" id="${pfx}IsSubEligible" ${cat.is_subscription_eligible === true ? 'checked' : ''}${dis}> Subscription eligible
     </label>
+    ${isView ? `
+    <div style="margin-top:14px;font-size:12px;color:var(--muted)">
+      Sync: ${syncStatusIcon(cat.sync_status || '')} ${esc(cat.sync_status || '—')}${cat.sync_notes ? ' · ' + esc(cat.sync_notes) : ''}
+    </div>` : ''}
     ${isView ? `
     <div class="form-actions" style="margin-top:16px">
       <button class="btn btn-secondary" id="catCancelView">Close</button>
@@ -180,8 +186,8 @@ function _renderCatTable(cats) {
   const hasActiveCatRow = state.catDeleteRow !== null;
 
   const rows = cats.map(cat => {
-    const isArchived = !cat.is_active;
-    const rowStyle   = isArchived ? ' style="opacity:0.5"' : '';
+    const rowStyle = cat.record_status === 'inactive' ? ' style="opacity:0.5"'
+                   : cat.record_status === 'deleted'  ? ' style="opacity:0.35"' : '';
 
     const displayType = _isTransfer(cat) ? 'transfer' : cat.tx_type_key;
 
@@ -200,14 +206,17 @@ function _renderCatTable(cats) {
       <td>${_catTypeBadge(displayType)}</td>
       <td class="td-name">${esc(cat.major_category_label)}</td>
       <td>${esc(cat.minor_category_label)}</td>
-      <td><button class="tx-menu-trigger" data-action="cat-menu" data-row="${cat._row}">⋮</button></td>
+      <td><div style="display:flex;align-items:center;justify-content:flex-end;gap:5px">
+        ${recordStatusIcon(cat.record_status)}${syncStatusIcon(cat.sync_status)}
+        <button class="tx-menu-trigger" data-action="cat-menu" data-row="${cat._row}">⋮</button>
+      </div></td>
     </tr>`;
   }).join('');
 
   const cardRows = cats.map(cat => {
-    const isArchived = !cat.is_active;
     if (state.catDeleteRow === cat._row) return '';
     const displayType = _isTransfer(cat) ? 'transfer' : cat.tx_type_key;
+    const isArchived  = cat.record_status !== 'active';
     return `<div class="cat-card${isArchived ? ' is-archived' : ''}">
       <div class="cat-card-top">
         <div class="cat-card-name">
@@ -216,7 +225,10 @@ function _renderCatTable(cats) {
           <span class="cat-card-sep">›</span>
           <span class="cat-card-minor">${esc(cat.minor_category_label)}</span>
         </div>
-        <button class="tx-menu-trigger" data-action="cat-menu" data-row="${cat._row}">⋮</button>
+        <div style="display:flex;align-items:center;gap:6px">
+          ${recordStatusIcon(cat.record_status)} ${syncStatusIcon(cat.sync_status)}
+          <button class="tx-menu-trigger" data-action="cat-menu" data-row="${cat._row}">⋮</button>
+        </div>
       </div>
     </div>`;
   }).join('');
@@ -228,7 +240,7 @@ function _renderCatTable(cats) {
           <th style="width:80px">Type</th>
           <th>Major</th>
           <th>Minor</th>
-          <th style="width:40px"></th>
+          <th style="width:64px"></th>
         </tr></thead>
         <tbody>${rows}</tbody>
       </table>
@@ -286,6 +298,7 @@ function _catTypeDot(type) {
   return `<span class="tx-type-dot ${cls}">●</span>`;
 }
 
+
 // ── CSV import ────────────────────────────────────────────────────────────────
 
 function _renderCatImportPanel() {
@@ -296,7 +309,7 @@ function _renderCatImportPanel() {
       <div class="field form-grid-span-2">
         <label for="catImportFile">CSV file</label>
         <input type="file" id="catImportFile" accept=".csv">
-        <div class="field-hint">Columns: tx_type_key, tx_type_label, major_category_key, major_category_label, minor_category_key, minor_category_label, description, is_active, tag_keywords, counterparty_examples, source_account_types, target_account_types, source_account_mandatory, target_account_mandatory, is_subscription_eligible</div>
+        <div class="field-hint">Required: tx_type_key, major_category_label, minor_category_label. Optional: description, record_status, tag_keywords, counterparty_examples, source_account_types, target_account_types, source_account_mandatory, target_account_mandatory, is_subscription_eligible</div>
       </div>
     </div>
     <div id="catImportStatus"></div>
@@ -345,7 +358,7 @@ function _parseCatCsv(text) {
       minor_category_key:        row.minor_category_key        || '',
       minor_category_label:      row.minor_category_label,
       description:               row.description               || '',
-      is_active:                 row.is_active !== 'FALSE' && row.is_active !== 'false',
+      record_status:             ['active', 'inactive', 'deleted'].includes(row.record_status) ? row.record_status : 'active',
       tag_keywords:              row.tag_keywords              || '',
       counterparty_examples:     row.counterparty_examples     || '',
       source_account_types:      row.source_account_types      || '',
@@ -363,11 +376,16 @@ function _renderCatImportStatus(parsed) {
   const errHtml = errors.length
     ? `<div class="pin-error" style="margin-bottom:8px">${errors.map(e => esc(e)).join('<br>')}</div>`
     : '';
-  if (!categories.length) return errHtml + '<p class="placeholder">No valid rows found.</p>';
+  if (!categories.length) return errHtml + '<p class="pin-error" style="margin:0">No valid rows found — check the column headers match the expected format.</p>';
   return `${errHtml}<p style="font-size:13px;color:var(--muted);margin:0">${categories.length} categor${categories.length !== 1 ? 'ies' : 'y'} ready to import</p>`;
 }
 
 async function _submitCatImport(categories) {
+  if (!categories || !categories.length) {
+    const errEl = el('catImportError');
+    if (errEl) errEl.textContent = 'No valid rows to import.';
+    return;
+  }
   const btn   = el('catImportConfirm');
   const errEl = el('catImportError');
   if (btn)   { btn.disabled = true; btn.textContent = 'Importing…'; }
@@ -410,6 +428,7 @@ function _attachCatEvents() {
       : state.catFilter === 'transfer'
         ? state.categories.filter(c => c.source_account_mandatory && c.target_account_mandatory)
         : state.categories.filter(c => c.tx_type_key === state.catFilter);
+    if (!rows.length) { showMsg('No categories to export.', 'warn'); return; }
     openContextMenu(el('catExportBtn'), [
       { key: 'csv',  label: '↓ CSV'  },
       { key: 'json', label: '↓ JSON' },
@@ -560,7 +579,7 @@ async function _saveNewCategory() {
   const target_account_types  = _getCheckedAccountTypes('catNewTgt');
   const source_account_mandatory = el('catNewSrcMandatory').checked === true;
   const target_account_mandatory = el('catNewTgtMandatory').checked === true;
-  const is_active                = true;
+  const record_status            = el('catNewRecordStatus').value;
   const is_subscription_eligible = el('catNewIsSubEligible').checked === true;
   const errEl                    = el('catAddError');
 
@@ -574,7 +593,7 @@ async function _saveNewCategory() {
   try {
     const res = await ExpenseAPI.createCategory({
       tx_type_key, major_category_label, minor_category_label, description,
-      is_active, is_subscription_eligible, tag_keywords, counterparty_examples,
+      record_status, is_subscription_eligible, tag_keywords, counterparty_examples,
       source_account_types, target_account_types,
       source_account_mandatory, target_account_mandatory,
     });
@@ -615,7 +634,7 @@ async function _saveCatEdit() {
   const target_account_types  = _getCheckedAccountTypes('catEditTgt');
   const source_account_mandatory = el('catEditSrcMandatory').checked === true;
   const target_account_mandatory = el('catEditTgtMandatory').checked === true;
-  const is_active                = el('catEditIsActive').checked !== false;
+  const record_status            = el('catEditRecordStatus').value;
   const is_subscription_eligible = el('catEditIsSubEligible').checked === true;
   const errEl                    = el('catEditError');
 
@@ -631,7 +650,7 @@ async function _saveCatEdit() {
   try {
     const res = await ExpenseAPI.updateCategory({
       row_num: rowNum, tx_type_key, major_category_label, minor_category_label, description,
-      is_active, is_subscription_eligible, tag_keywords, counterparty_examples,
+      record_status, is_subscription_eligible, tag_keywords, counterparty_examples,
       source_account_types, target_account_types,
       source_account_mandatory, target_account_mandatory,
     });
@@ -663,7 +682,7 @@ async function _deleteCat(rowNum) {
   try {
     const res = await ExpenseAPI.deleteCategory({ row_num: rowNum });
     if (res.ok) {
-      showMsg('Category deleted.');
+      showMsg('Category marked as deleted.');
       state.catDeleteRow = null;
       document.dispatchEvent(new CustomEvent('et:reload'));
     } else {

@@ -9,7 +9,6 @@ function listCategories() {
   // Coerce boolean fields (sheet may store TRUE/FALSE as boolean or string)
   return rows.map(function(r) {
     const toBool = function(v) { return v === true || String(v).toLowerCase() === 'true'; };
-    r.is_active                = toBool(r.is_active);
     r.source_account_mandatory = toBool(r.source_account_mandatory);
     r.target_account_mandatory = toBool(r.target_account_mandatory);
     r.is_subscription_eligible = toBool(r.is_subscription_eligible);
@@ -54,7 +53,7 @@ function createCategory(body) {
   setCol('minor_category_label',     String(body.minor_category_label).trim());
   setCol('minor_category_key',       slugify(String(body.minor_category_label).trim()));
   setCol('description',              String(body.description             || '').trim());
-  setCol('is_active',                body.is_active !== false);
+  setCol('record_status',            VALID_RECORD_STATUSES.includes(body.record_status) ? body.record_status : 'active');
   setCol('tag_keywords',             normaliseKeywords(body.tag_keywords || ''));
   setCol('counterparty_examples',    normaliseCandidates(body.counterparty_examples   || ''));
   setCol('source_account_types',     normaliseAccountTypes(body.source_account_types  || ''));
@@ -115,7 +114,7 @@ function updateCategory(body) {
   sheet.getRange(rowNum, getCategorySchemaField('minor_category_key').sheet_column_position)
     .setValue(slugify(String(body.minor_category_label).trim()));
   writeField('description',              String(body.description             || '').trim());
-  writeField('is_active',                body.is_active !== false);
+  writeField('record_status',            VALID_RECORD_STATUSES.includes(body.record_status) ? body.record_status : 'active');
   writeField('tag_keywords',             normaliseKeywords(body.tag_keywords || ''));
   writeField('counterparty_examples',    normaliseCandidates(body.counterparty_examples   || ''));
   writeField('source_account_types',     normaliseAccountTypes(body.source_account_types  || ''));
@@ -126,7 +125,7 @@ function updateCategory(body) {
   // sync_status: preserve create-pending if not yet synced; clear sync_notes either way
   const syncStatusCol = getCategorySchemaField('sync_status').sheet_column_position;
   const syncNotesCol  = getCategorySchemaField('sync_notes').sheet_column_position;
-  const currentSyncStatus = String(sheet.getRange(rowNum, syncStatusCol).getValue() || '');
+  const currentSyncStatus = String(allRows[rowNum - 1][syncStatusCol] || '');
   sheet.getRange(rowNum, syncStatusCol).setValue(computeSyncStatus(currentSyncStatus));
   sheet.getRange(rowNum, syncNotesCol).setValue('');
 
@@ -140,7 +139,16 @@ function deleteCategory(body) {
   const rowNum  = Number(body.row_num);
   const lastRow = sheet.getLastRow();
   if (rowNum < 2 || rowNum > lastRow) return { ok: false, error: 'invalid_row' };
-  sheet.deleteRow(rowNum);
+
+  const recordStatusCol = getCategorySchemaField('record_status').sheet_column_position;
+  const syncStatusCol   = getCategorySchemaField('sync_status').sheet_column_position;
+  const syncNotesCol    = getCategorySchemaField('sync_notes').sheet_column_position;
+  const currentSyncStatus = String(sheet.getRange(rowNum, syncStatusCol).getValue() || '');
+
+  sheet.getRange(rowNum, recordStatusCol).setValue('deleted');
+  sheet.getRange(rowNum, syncStatusCol).setValue(computeSyncStatus(currentSyncStatus));
+  sheet.getRange(rowNum, syncNotesCol).setValue('');
+
   return { ok: true };
 }
 
@@ -216,15 +224,16 @@ function onEdit(e) {
   const catData = catSheet.getDataRange().getValues().slice(1);
 
   // Column indices into catData (0-based) — use catColIndex to avoid hardcoding
-  const CI_TYPE = catColIndex('tx_type_key');        // 0
-  const CI_MAJ  = catColIndex('major_category_label'); // 3
-  const CI_MIN  = catColIndex('minor_category_label'); // 5
+  const CI_TYPE   = catColIndex('tx_type_key');          // 0
+  const CI_MAJ    = catColIndex('major_category_label'); // 3
+  const CI_MIN    = catColIndex('minor_category_label'); // 5
+  const CI_RSTAT  = catColIndex('record_status');        // 7
 
   if (col === TYPE_COL) {
     const txType = sheet.getRange(row, TYPE_COL).getValue();
     const majors = [];
     const seen   = {};
-    catData.filter(function(r) { return r[CI_TYPE] === txType; }).forEach(function(r) {
+    catData.filter(function(r) { return r[CI_TYPE] === txType && r[CI_RSTAT] === 'active'; }).forEach(function(r) {
       if (!seen[r[CI_MAJ]]) { majors.push(r[CI_MAJ]); seen[r[CI_MAJ]] = true; }
     });
 
@@ -243,7 +252,7 @@ function onEdit(e) {
     const txType2 = sheet.getRange(row, TYPE_COL).getValue();
     const major   = sheet.getRange(row, MAJOR_COL).getValue();
     const minors  = catData
-      .filter(function(r) { return r[CI_TYPE] === txType2 && r[CI_MAJ] === major; })
+      .filter(function(r) { return r[CI_TYPE] === txType2 && r[CI_MAJ] === major && r[CI_RSTAT] === 'active'; })
       .map(function(r) { return r[CI_MIN]; });
 
     sheet.getRange(row, MINOR_COL).clearContent();

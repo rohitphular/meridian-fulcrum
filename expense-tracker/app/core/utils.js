@@ -41,7 +41,7 @@ const CAT_COLS = [
   'tx_type_key', 'tx_type_label',
   'major_category_key', 'major_category_label',
   'minor_category_key', 'minor_category_label',
-  'description', 'is_active', 'tag_keywords', 'counterparty_examples',
+  'description', 'record_status', 'tag_keywords', 'counterparty_examples',
   'source_account_types', 'target_account_types',
   'source_account_mandatory', 'target_account_mandatory',
   'is_subscription_eligible',
@@ -51,8 +51,8 @@ export const exportData          = (format, rows) => {
   const normalised = rows.map(r => ({
     ...r,
     tx_date_time:   utcToLocalInput(r.tx_date_time),
-    source_account: state.accountMap[r.source_account]?.name || r.source_account || '',
-    target_account: state.accountMap[r.target_account]?.name || r.target_account || '',
+    source_account: (state.accountMap[r.source_account] && state.accountMap[r.source_account].name) || r.source_account || '',
+    target_account: (state.accountMap[r.target_account] && state.accountMap[r.target_account].name) || r.target_account || '',
   }));
   return _exportData(format, normalised, 'expenses', ET_COLS);
 };
@@ -62,6 +62,25 @@ export const exportSubscriptions = (format, rows) => {
   return _exportData(format, normalised, 'subscriptions', SUB_COLS);
 };
 export const exportCategories    = (format, rows) => _exportData(format, rows, 'categories', CAT_COLS);
+
+// ── Status icons (shared across all entity tables) ───────────────────────────
+
+export function recordStatusIcon(status) {
+  const base = 'font-size:13px;line-height:1;vertical-align:middle';
+  if (status === 'inactive') return `<span title="Inactive" style="${base};color:#6b7280">●</span>`;
+  if (status === 'deleted')  return `<span title="Deleted"  style="${base};color:#ef4444">✕</span>`;
+  return `<span title="Active" style="${base};color:#22c55e">●</span>`;
+}
+
+export function syncStatusIcon(status) {
+  const base = 'font-size:14px;line-height:1;vertical-align:middle';
+  if (status === 'create-pending') return `<span title="Create pending" style="${base};color:#f59e0b">○</span>`;
+  if (status === 'update-pending') return `<span title="Update pending" style="${base};color:#3b82f6">↻</span>`;
+  if (status === 'in-sync')        return `<span title="In sync"        style="${base};color:#22c55e">✓</span>`;
+  if (status === 'create-failed')  return `<span title="Create failed"  style="${base};color:#ef4444">✕</span>`;
+  if (status === 'update-failed')  return `<span title="Update failed"  style="${base};color:#ef4444">⚠</span>`;
+  return `<span title="Unknown" style="${base};color:#6b7280">?</span>`;
+}
 
 // ── Shared context menu ───────────────────────────────────────────────────────
 let _ctxMenuEl  = null;
@@ -101,7 +120,7 @@ export function openContextMenu(triggerBtn, items, onSelect) {
 
   _ctxHandler = e => {
     if (triggerBtn.contains(e.target)) return;
-    if (!_ctxMenuEl?.contains(e.target)) closeContextMenu();
+    if (!(_ctxMenuEl && _ctxMenuEl.contains(e.target))) closeContextMenu();
   };
   document.addEventListener('click', _ctxHandler, true);
 }
