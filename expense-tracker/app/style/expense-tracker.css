@@ -487,7 +487,8 @@ td.td-truncate { max-width: 180px; overflow: hidden; text-overflow: ellipsis; wh
   position: absolute; bottom: 130%; left: 50%; transform: translateX(-50%);
   background: var(--ink); color: var(--panel);
   font-size: var(--text-sm); font-family: var(--grotesk); font-weight: 400;
-  padding: 5px 9px; border-radius: 6px; white-space: nowrap;
+  padding: 5px 9px; border-radius: 6px;
+  white-space: normal; max-width: 280px; text-align: left;
   z-index: 200; pointer-events: none;
   transition: opacity .15s ease;
 }

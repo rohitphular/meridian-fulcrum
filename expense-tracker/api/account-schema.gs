@@ -114,17 +114,17 @@ const ACCOUNT_SCHEMA = {
     editable: false,
     default_value: 0,
   },
-  is_active: {
-    sheet_column_name: 'is_active',
+  record_status: {
+    sheet_column_name: 'record_status',
     sheet_column_position: 8,
-    ui_label: 'Status',
-    type: 'boolean',
-    enum_values: null,
+    ui_label: 'Record status',
+    type: 'enum',
+    enum_values: ['active', 'inactive', 'deleted', 'locked'],
     group: 'core',
     applies_to: null,
     required_for: null,
     editable: true,
-    default_value: true,
+    default_value: 'active',
   },
   description: {
     sheet_column_name: 'description',
@@ -149,6 +149,32 @@ const ACCOUNT_SCHEMA = {
     required_for: [],
     editable: false,
     default_value: null,
+  },
+
+  // ── Sync (columns 11–12) ──────────────────────────────────────────────────
+  sync_status: {
+    sheet_column_name: 'sync_status',
+    sheet_column_position: 11,
+    ui_label: 'Sync status',
+    type: 'enum',
+    enum_values: ['create-pending', 'update-pending', 'in-sync', 'create-failed', 'update-failed'],
+    group: 'meta',
+    applies_to: null,
+    required_for: null,
+    editable: false,
+    default_value: 'create-pending',
+  },
+  sync_notes: {
+    sheet_column_name: 'sync_notes',
+    sheet_column_position: 12,
+    ui_label: 'Sync notes',
+    type: 'string',
+    enum_values: null,
+    group: 'meta',
+    applies_to: null,
+    required_for: [],
+    editable: false,
+    default_value: '',
   },
 };
 

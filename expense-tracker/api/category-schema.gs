@@ -113,7 +113,7 @@ const CATEGORY_SCHEMA = {
     sheet_column_position: 8,
     ui_label:              'Record status',
     type:                  'enum',
-    enum_values:           ['active', 'inactive', 'deleted'],
+    enum_values:           ['active', 'inactive', 'deleted', 'locked'],
     group:                 'core',
     applies_to:            null,
     required_for:          null,

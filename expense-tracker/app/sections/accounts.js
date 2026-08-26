@@ -1,5 +1,8 @@
 import { state } from '../core/state.js';
-import { el, esc, getSymbol, toBase, fmtBase, exportAccounts, openContextMenu, closeContextMenu } from '../core/utils.js';
+import {
+  el, esc, getSymbol, toBase, fmtBase, exportAccounts,
+  openContextMenu, closeContextMenu, recordStatusIcon, syncStatusIcon,
+} from '../core/utils.js';
 import { showLoading, hideLoading, showMsg } from '../core/ui.js';
 import { ExpenseAPI } from '../core/api.js';
 
@@ -17,12 +20,10 @@ function _liabSubTypes()     { return _sch().liability_sub_types    || []; }
 function _loanSubSet()       { return new Set(_sch().loan_sub_types || []); }
 function _validTypes()       { return new Set(_accountTypes().map(t => t.value)); }
 
-function _isActive(a)        { return a.is_active === true; }
 function _isLiability(a)     { return a.type === 'liability'; }
 function _isLoan(a)          { return a.type === 'liability' && _loanSubSet().has(a.sub_type); }
 
 // Convert snake_case sub_type value to a readable label.
-// Special-cases: stocks_shares → "Stocks & Shares", p2p_lending → "P2P Lending"
 function _subTypeLabel(v) {
   if (!v) return '—';
   if (v === 'stocks_shares') return 'Stocks & Shares';
@@ -30,7 +31,6 @@ function _subTypeLabel(v) {
   if (v === 'pension_sipp')  return 'Pension / SIPP';
   if (v === 'fixed_deposit') return 'Fixed Deposit';
   if (v === 'isa')           return 'ISA';
-  // Default: replace underscores and title-case each word
   return v.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
 }
 
@@ -38,9 +38,7 @@ function _fmtBal(n) {
   return Math.abs(parseFloat(n || 0)).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-// compact = true → just the headline number (table / cards)
-// compact = false → same, but called from view form (kept for future detail rows)
-function _balanceCell(a, compact = false) {
+function _balanceCell(a) {
   const val     = parseFloat(a.current_value || 0);
   const sym     = getSymbol(a.currency);
   const foreign = a.currency !== state.quoteCurrency;
@@ -91,15 +89,15 @@ function _renderNetWorth() {
   const LIQUID_SUB_TYPES = new Set(['current', 'savings', 'cash']);
 
   const totalAssets = state.accounts
-    .filter(a => a.type === 'asset' || a.type === 'investment')
+    .filter(a => a.record_status !== 'deleted' && (a.type === 'asset' || a.type === 'investment'))
     .reduce((s, a) => s + toBase(parseFloat(a.current_value || 0), a.currency, null), 0);
 
   const totalLiab = state.accounts
-    .filter(a => a.type === 'liability')
+    .filter(a => a.record_status !== 'deleted' && a.type === 'liability')
     .reduce((s, a) => s + Math.abs(toBase(parseFloat(a.current_value || 0), a.currency, null)), 0);
 
   const liquidCash = state.accounts
-    .filter(a => a.type === 'asset' && LIQUID_SUB_TYPES.has(a.sub_type))
+    .filter(a => a.record_status !== 'deleted' && a.type === 'asset' && LIQUID_SUB_TYPES.has(a.sub_type))
     .reduce((s, a) => s + toBase(parseFloat(a.current_value || 0), a.currency, null), 0);
 
   const netWorth = totalAssets - totalLiab;
@@ -138,7 +136,7 @@ function _subTypeOptsHtml(type, selected) {
     ).join('');
 }
 
-// ── Type dropdown (3 flat options, no optgroups) ──────────────────────────────
+// ── Type dropdown (3 flat options) ────────────────────────────────────────────
 
 function _typeOptsHtml(selected) {
   return _accountTypes().map(t =>
@@ -156,7 +154,7 @@ function _renderImportPanel() {
       <div class="field form-grid-span-2">
         <label for="accImportFile">CSV file</label>
         <input type="file" id="accImportFile" accept=".csv">
-        <div class="field-hint">Columns: name, type, sub_type, currency, opening_value, current_value, is_active, description</div>
+        <div class="field-hint">Required: name, type, sub_type, currency. Optional: opening_value, current_value, record_status, description</div>
       </div>
     </div>
     <div id="accImportStatus"></div>
@@ -212,7 +210,7 @@ function _parseAccountsCsv(text) {
       current_value: currentVal !== undefined
         ? (row.type === 'liability' ? -(Math.abs(currentVal)) : currentVal)
         : undefined,
-      is_active:     row.is_active !== 'false',
+      record_status: ['active', 'inactive', 'deleted', 'locked'].includes(row.record_status) ? row.record_status : 'active',
       description:   row.description || '',
     });
   }
@@ -239,7 +237,7 @@ function _renderAccountForm(a, mode) {
 
   const type = isAdd ? '' : (a.type || '');
 
-  const v = val => esc(String(val ?? ''));
+  const v = val => esc(String(val || ''));
 
   const currencyOpts = state.rates.map(r =>
     `<option value="${esc(r.currency)}" ${(!isAdd && a.currency === r.currency) ? 'selected' : ''}>${esc(r.currency)}</option>`
@@ -250,8 +248,6 @@ function _renderAccountForm(a, mode) {
       ${isView ? 'Viewing' : 'Editing'} — <strong>${esc(a.name)}</strong>
     </div>` : '';
 
-  // For add: type dropdown + sub_type dropdown (always shown, repopulated on type change)
-  // For view/edit: type and sub_type shown as text / select respectively
   const typeField = isAdd
     ? `<select id="accNewType"><option value="">— select —</option>${_typeOptsHtml('')}</select>`
     : `<input type="text" id="accEditType" value="${esc(type)}" disabled>`;
@@ -261,6 +257,22 @@ function _renderAccountForm(a, mode) {
     : `<input type="text" id="accEditSubType" value="${esc(_subTypeLabel(a.sub_type || ''))}" disabled>`;
 
   const sym = isAdd ? '' : getSymbol(a.currency);
+
+  const recordStatusField = !isAdd ? `
+      <div class="field">
+        <label for="accEditRecordStatus">Record status</label>
+        <select id="accEditRecordStatus"${dis}>
+          <option value="active"   ${a.record_status === 'active'   ? 'selected' : ''}>Active</option>
+          <option value="inactive" ${a.record_status === 'inactive' ? 'selected' : ''}>Inactive</option>
+          <option value="locked"   ${a.record_status === 'locked'   ? 'selected' : ''}>Locked</option>
+          <option value="deleted"  ${a.record_status === 'deleted'  ? 'selected' : ''}>Deleted</option>
+        </select>
+      </div>` : '';
+
+  const syncStatusLine = isView ? `
+    <div class="field-hint" style="margin-top:8px">
+      Sync: ${syncStatusIcon(a.sync_status)} ${esc(a.sync_notes || '')}
+    </div>` : '';
 
   return `
   <div class="card" style="margin-bottom:20px">
@@ -287,14 +299,7 @@ function _renderAccountForm(a, mode) {
         <label for="${pfx}SubType">Sub-type${isAdd ? ' *' : ''}</label>
         ${subTypeField}
       </div>
-      ${!isAdd ? `
-      <div class="field">
-        <label for="accEditIsActive">Status</label>
-        <select id="accEditIsActive"${dis}>
-          <option value="true"  ${a.is_active !== false ? 'selected' : ''}>Active</option>
-          <option value="false" ${a.is_active === false ? 'selected' : ''}>Archived</option>
-        </select>
-      </div>` : ''}
+      ${recordStatusField}
     </div>
 
     <div class="form-grid" style="margin-bottom:16px;align-items:start">
@@ -321,10 +326,13 @@ function _renderAccountForm(a, mode) {
       </div>
     </div>
 
+    ${syncStatusLine}
+
     <div class="form-actions" style="margin-top:${isAdd ? '20' : '16'}px">
       ${isView
         ? `<button class="btn btn-secondary" id="accCancelView">Close</button>
-           <button class="btn btn-primary" id="accViewToEdit" data-row="${a._row}">Edit</button>`
+           ${a.record_status === 'deleted' ? `<button class="btn btn-primary" id="accViewRestore" data-row="${a._row}">Restore</button>` : ''}
+           ${a.record_status !== 'locked' && a.record_status !== 'deleted' ? `<button class="btn btn-primary" id="accViewToEdit" data-row="${a._row}">Edit</button>` : ''}`
         : `<button class="btn btn-primary" id="${isAdd ? 'accSaveNew' : 'accSaveEdit'}">Save</button>
            <button class="btn btn-secondary" id="${isAdd ? 'accCancelNew' : 'accCancelEdit'}">Cancel</button>`}
     </div>
@@ -334,33 +342,31 @@ function _renderAccountForm(a, mode) {
 
 // ── Table ─────────────────────────────────────────────────────────────────────
 
-function _activeBadge(a) {
-  return _isActive(a)
-    ? `<span class="acc-status-dot acc-status-active" title="Active">●</span>`
-    : `<span class="acc-status-dot acc-status-archived" title="Archived">●</span>`;
-}
-
 function _renderAccountRow(a) {
+  const rowStyle = a.record_status === 'deleted'  ? ' style="opacity:0.5"'
+                 : a.record_status === 'inactive' ? ' style="opacity:0.5"'
+                 : a.record_status === 'locked'   ? ' style="opacity:0.7"'
+                 : '';
+
   if (state.accDeleteRow === a._row) {
-    // Blocked state — backend refused because transactions still reference this account.
     if (state.accDeleteBlocked) {
       const n    = state.accDeleteBlocked.referenced_count || 0;
       const noun = n === 1 ? 'transaction refers' : 'transactions refer';
-      return `<tr>
+      return `<tr${rowStyle}>
         <td colspan="5">
           <span class="confirm-text">Cannot delete <strong>${esc(a.name)}</strong> — <strong>${n}</strong> ${noun} to this account.</span>
           <div style="color:var(--muted);font-size:var(--text-sm);margin-top:4px">
-            Delete or reassign those transactions first, or archive the account (it stays on record but is hidden from transaction forms).
+            Delete or reassign those transactions first, or deactivate the account instead.
           </div>
         </td>
         <td><div class="row-actions">
-          <button class="btn-link" data-action="acc-archive" data-row="${a._row}">Archive instead</button>
+          <button class="btn-link" data-action="acc-deactivate" data-row="${a._row}">Deactivate instead</button>
           <button class="btn-link" data-action="acc-cancel-delete">Cancel</button>
         </div></td>
       </tr>`;
     }
-    return `<tr>
-      <td colspan="5"><span class="confirm-text">Delete <strong>${esc(a.name)}</strong>? This permanently removes the account.</span></td>
+    return `<tr${rowStyle}>
+      <td colspan="5"><span class="confirm-text">Delete <strong>${esc(a.name)}</strong>? This marks the account as deleted.</span></td>
       <td><div class="row-actions">
         <button class="btn-link danger" data-action="acc-confirm-delete" data-row="${a._row}">Yes, delete</button>
         <button class="btn-link" data-action="acc-cancel-delete">Cancel</button>
@@ -368,15 +374,16 @@ function _renderAccountRow(a) {
     </tr>`;
   }
 
-  return `<tr>
+  return `<tr${rowStyle}>
     <td class="td-mono" style="color:var(--muted);font-size:11px">${esc(a.id)}</td>
-    <td>${_activeBadge(a)} ${esc(a.name)}${a.description ? `<span class="info-icon-wrap"><span style="cursor:help;color:var(--teal);font-size:13px">ⓘ</span><span class="info-tooltip">${esc(a.description)}</span></span>` : ''}</td>
+    <td>${esc(a.name)}${a.description ? `<span class="info-icon-wrap"><span style="cursor:help;color:var(--teal);font-size:13px">ⓘ</span><span class="info-tooltip">${esc(a.description)}</span></span>` : ''}</td>
     <td style="color:var(--muted);font-size:12px">${esc(_subTypeLabel(a.sub_type || ''))}</td>
     <td>${esc(a.currency)}</td>
-    <td>${_balanceCell(a, true)}</td>
-    <td style="text-align:right">
+    <td>${_balanceCell(a)}</td>
+    <td><div style="display:flex;align-items:center;justify-content:flex-end;gap:5px">
+      ${recordStatusIcon(a.record_status)}${syncStatusIcon(a.sync_status)}
       <button class="tx-menu-trigger" data-action="acc-menu" data-row="${a._row}" title="Actions">⋮</button>
-    </td>
+    </div></td>
   </tr>`;
 }
 
@@ -425,13 +432,20 @@ function _renderTable() {
       `<div class="acc-card-group">${g.label}</div>`,
       ...accs.map(a => {
         if (state.accDeleteRow === a._row) return '';
-        return `<div class="acc-card">
+        const cardStyle = a.record_status === 'deleted'  ? ' style="opacity:0.5"'
+                        : a.record_status === 'inactive' ? ' style="opacity:0.5"'
+                        : a.record_status === 'locked'   ? ' style="opacity:0.7"'
+                        : '';
+        return `<div class="acc-card"${cardStyle}>
           <div class="acc-card-body">
-            <div class="acc-card-name">${_activeBadge(a)} ${esc(a.name)}</div>
+            <div class="acc-card-name">${esc(a.name)}</div>
             <div class="acc-card-meta">${esc(_subTypeLabel(a.sub_type))} · ${esc(a.currency)}</div>
           </div>
-          <div class="acc-card-bal">${_balanceCell(a, true)}</div>
-          <button class="tx-menu-trigger acc-card-menu" data-action="acc-menu" data-row="${a._row}" title="Actions">⋮</button>
+          <div class="acc-card-bal">${_balanceCell(a)}</div>
+          <div style="display:flex;align-items:center;gap:6px">
+            ${recordStatusIcon(a.record_status)} ${syncStatusIcon(a.sync_status)}
+            <button class="tx-menu-trigger acc-card-menu" data-action="acc-menu" data-row="${a._row}" title="Actions">⋮</button>
+          </div>
         </div>`;
       })
     ];
@@ -446,7 +460,7 @@ function _renderTable() {
           <th style="width:160px">Sub-type</th>
           <th style="width:70px">CCY</th>
           <th style="width:160px">Balance</th>
-          <th style="width:40px"></th>
+          <th style="width:64px"></th>
         </tr></thead>
         <tbody>${bodyRows}</tbody>
       </table>
@@ -457,7 +471,8 @@ function _renderTable() {
 // ── Type-change handler: repopulate sub_type dropdown (Add form) ──────────────
 
 function _refreshAddTypeUI() {
-  const type   = el('accNewType')?.value || '';
+  const typeEl = el('accNewType');
+  const type   = typeEl ? typeEl.value : '';
   const subSel = el('accNewSubType');
   if (subSel) subSel.innerHTML = _subTypeOptsHtml(type, '');
 }
@@ -465,7 +480,7 @@ function _refreshAddTypeUI() {
 // ── Events ────────────────────────────────────────────────────────────────────
 
 function _attachEvents() {
-  el('accImportBtn')?.addEventListener('click', () => {
+  el('accImportBtn').addEventListener('click', () => {
     if (state.accImportOpen) {
       state.accImportOpen = false;
       _importParsed = null;
@@ -478,7 +493,7 @@ function _attachEvents() {
     renderAccounts();
   });
 
-  el('accAddBtn')?.addEventListener('click', () => {
+  el('accAddBtn').addEventListener('click', () => {
     if (state.accAddOpen || state.accViewRow !== null || state.accEditRow !== null) {
       state.accAddOpen = false;
       state.accViewRow = null;
@@ -491,48 +506,59 @@ function _attachEvents() {
     renderAccounts();
   });
 
-  el('accImportFile')?.addEventListener('change', e => {
-    const file = e.target.files[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = ev => {
-      const parsed = _parseAccountsCsv(ev.target.result);
-      _importParsed = parsed.accounts.length ? parsed.accounts : null;
-      const status = el('accImportStatus');
-      if (status) status.innerHTML = _renderImportStatus(parsed);
-      const btn = el('accImportConfirm');
-      if (btn) btn.disabled = !_importParsed;
-    };
-    reader.readAsText(file);
-  });
+  if (state.accImportOpen) {
+    el('accImportFile').addEventListener('change', e => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = ev => {
+        const parsed = _parseAccountsCsv(ev.target.result);
+        _importParsed = parsed.accounts.length ? parsed.accounts : null;
+        el('accImportStatus').innerHTML = _renderImportStatus(parsed);
+        el('accImportConfirm').disabled = !_importParsed;
+      };
+      reader.readAsText(file);
+    });
 
-  el('accImportConfirm')?.addEventListener('click', () => {
-    if (_importParsed) _submitImport(_importParsed);
-  });
+    el('accImportConfirm').addEventListener('click', () => {
+      if (_importParsed) _submitImport(_importParsed);
+    });
 
-  el('accImportCancel')?.addEventListener('click', () => {
-    state.accImportOpen = false;
-    _importParsed = null;
-    renderAccounts();
-  });
+    el('accImportCancel').addEventListener('click', () => {
+      state.accImportOpen = false;
+      _importParsed = null;
+      renderAccounts();
+    });
+  }
 
-  el('accSaveNew')?.addEventListener('click', _saveNew);
-  el('accCancelNew')?.addEventListener('click', () => { state.accAddOpen = false; renderAccounts(); });
-  if (el('accNewType')) {
+  if (state.accAddOpen) {
+    el('accSaveNew').addEventListener('click', _saveNew);
+    el('accCancelNew').addEventListener('click', () => { state.accAddOpen = false; renderAccounts(); });
     el('accNewType').addEventListener('change', _refreshAddTypeUI);
     _refreshAddTypeUI();
   }
 
-  el('accSaveEdit')?.addEventListener('click', _saveEdit);
-  el('accCancelEdit')?.addEventListener('click', () => { state.accEditRow = null; renderAccounts(); });
+  if (state.accEditRow !== null) {
+    el('accSaveEdit').addEventListener('click', _saveEdit);
+    el('accCancelEdit').addEventListener('click', () => { state.accEditRow = null; renderAccounts(); });
+  }
 
-  el('accCancelView')?.addEventListener('click', () => { state.accViewRow = null; renderAccounts(); });
-  el('accViewToEdit')?.addEventListener('click', e => {
-    const row = Number(e.currentTarget.dataset.row);
-    state.accViewRow = null;
-    state.accEditRow = row;
-    renderAccounts();
-  });
+  if (state.accViewRow !== null) {
+    el('accCancelView').addEventListener('click', () => { state.accViewRow = null; renderAccounts(); });
+    const viewToEditEl = el('accViewToEdit');
+    if (viewToEditEl) viewToEditEl.addEventListener('click', e => {
+      const row = Number(e.currentTarget.dataset.row);
+      state.accViewRow = null;
+      state.accEditRow = row;
+      renderAccounts();
+    });
+    const viewRestoreEl = el('accViewRestore');
+    if (viewRestoreEl) viewRestoreEl.addEventListener('click', e => {
+      const row = Number(e.currentTarget.dataset.row);
+      state.accViewRow = null;
+      _restoreAccount(row);
+    });
+  }
 
   const handleAccAction = e => {
     const btn    = e.target.closest('[data-action]');
@@ -542,16 +568,22 @@ function _attachEvents() {
     if (action === 'acc-menu') {
       if (_accMenuKey === row) { closeContextMenu(); _accMenuKey = null; return; }
       _accMenuKey = row;
-      openContextMenu(btn, [
-        { key: 'acc-view',   label: 'View',         cls: '' },
-        { key: 'acc-edit',   label: 'Edit',         cls: '' },
-        { key: 'acc-txs',    label: 'Transactions', cls: '' },
-        { key: 'acc-delete', label: 'Delete',       cls: 'danger' },
-      ], key => {
+      const menuAcc   = state.accounts.find(a => a._row === row);
+      const isLocked  = menuAcc && menuAcc.record_status === 'locked';
+      const isDeleted = menuAcc && menuAcc.record_status === 'deleted';
+      const menuItems = [
+        { key: 'acc-view', label: 'View', cls: '' },
+        ...(!isLocked && !isDeleted ? [{ key: 'acc-edit',    label: 'Edit',    cls: ''       }] : []),
+        { key: 'acc-txs', label: 'Transactions', cls: '' },
+        ...(isDeleted               ? [{ key: 'acc-restore', label: 'Restore', cls: ''       }] : []),
+        ...(!isLocked && !isDeleted ? [{ key: 'acc-delete',  label: 'Delete',  cls: 'danger' }] : []),
+      ];
+      openContextMenu(btn, menuItems, key => {
         _accMenuKey = null;
-        if (key === 'acc-view')   { state.accViewRow = row; state.accEditRow = null; state.accDeleteRow = null; state.accDeleteBlocked = null; state.accAddOpen = false; renderAccounts(); }
-        if (key === 'acc-edit')   { state.accEditRow = row; state.accViewRow = null; state.accDeleteRow = null; state.accDeleteBlocked = null; state.accAddOpen = false; renderAccounts(); }
-        if (key === 'acc-delete') { state.accDeleteRow = row; state.accViewRow = null; state.accEditRow = null; state.accDeleteBlocked = null; renderAccounts(); }
+        if (key === 'acc-view')    { state.accViewRow = row; state.accEditRow = null; state.accDeleteRow = null; state.accDeleteBlocked = null; state.accAddOpen = false; renderAccounts(); }
+        if (key === 'acc-edit')    { state.accEditRow = row; state.accViewRow = null; state.accDeleteRow = null; state.accDeleteBlocked = null; state.accAddOpen = false; renderAccounts(); }
+        if (key === 'acc-delete')  { state.accDeleteRow = row; state.accViewRow = null; state.accEditRow = null; state.accDeleteBlocked = null; renderAccounts(); }
+        if (key === 'acc-restore') { _restoreAccount(row); }
         if (key === 'acc-txs') {
           const acc = state.accounts.find(a => a._row === row);
           if (acc) {
@@ -562,17 +594,29 @@ function _attachEvents() {
       });
       return;
     }
-    if (action === 'acc-view')           { state.accViewRow = row; state.accEditRow = null; state.accDeleteRow = null; state.accDeleteBlocked = null; state.accAddOpen = false; renderAccounts(); return; }
-    if (action === 'acc-edit')           { state.accEditRow = row; state.accViewRow = null; state.accDeleteRow = null; state.accDeleteBlocked = null; state.accAddOpen = false; renderAccounts(); return; }
-    if (action === 'acc-delete')         { state.accDeleteRow = row; state.accViewRow = null; state.accEditRow = null; state.accDeleteBlocked = null; renderAccounts(); }
+    if (action === 'acc-view')   { state.accViewRow = row; state.accEditRow = null; state.accDeleteRow = null; state.accDeleteBlocked = null; state.accAddOpen = false; renderAccounts(); return; }
+    if (action === 'acc-edit') {
+      const editAcc = state.accounts.find(a => a._row === row);
+      if (editAcc && (editAcc.record_status === 'locked' || editAcc.record_status === 'deleted')) return;
+      state.accEditRow = row; state.accViewRow = null; state.accDeleteRow = null; state.accDeleteBlocked = null; state.accAddOpen = false; renderAccounts(); return;
+    }
+    if (action === 'acc-delete') {
+      const delAcc = state.accounts.find(a => a._row === row);
+      if (delAcc && (delAcc.record_status === 'locked' || delAcc.record_status === 'deleted')) return;
+      state.accDeleteRow = row; state.accViewRow = null; state.accEditRow = null; state.accDeleteBlocked = null; renderAccounts();
+    }
     if (action === 'acc-cancel-delete')  { state.accDeleteRow = null; state.accDeleteBlocked = null; renderAccounts(); }
     if (action === 'acc-confirm-delete') { _confirmDelete(row); }
-    if (action === 'acc-archive')        { _archiveAccount(row); }
+    if (action === 'acc-deactivate')     { _deactivateAccount(row); }
   };
-  el('accountsContent')?.querySelector('.acc-table-wrap')?.addEventListener('click', handleAccAction);
-  el('accountsContent')?.querySelector('.acc-cards')?.addEventListener('click', handleAccAction);
 
-  el('accExportBtn')?.addEventListener('click', () => {
+  const tableWrap = el('accountsContent').querySelector('.acc-table-wrap');
+  if (tableWrap) tableWrap.addEventListener('click', handleAccAction);
+  const cards = el('accountsContent').querySelector('.acc-cards');
+  if (cards) cards.addEventListener('click', handleAccAction);
+
+  el('accExportBtn').addEventListener('click', () => {
+    if (!state.accounts.length) { showMsg('No accounts to export.', 'warn'); return; }
     openContextMenu(el('accExportBtn'), [
       { key: 'csv',  label: 'CSV'  },
       { key: 'json', label: 'JSON' },
@@ -582,27 +626,26 @@ function _attachEvents() {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function _v(id)  { return el(id)?.value ?? ''; }
+function _v(id)  { return el(id).value; }
 function _n(id)  { const v = _v(id); return v === '' ? undefined : parseFloat(v); }
 
 // ── Save new ──────────────────────────────────────────────────────────────────
 
 async function _saveNew() {
-  const name     = _v('accNewName').trim();
-  const currency = _v('accNewCurrency');
-  const type     = _v('accNewType');
-  const sub_type = _v('accNewSubType');
+  const name        = _v('accNewName').trim();
+  const currency    = _v('accNewCurrency');
+  const type        = _v('accNewType');
+  const sub_type    = _v('accNewSubType');
   const description = _v('accNewDescription').trim();
-  const errEl    = el('accAddError');
+  const errEl       = el('accAddError');
 
-  if (!name)                                              { if (errEl) errEl.textContent = 'Name is required.';       return; }
-  if (!type || !_validTypes().has(type))                  { if (errEl) errEl.textContent = 'Type is required.';       return; }
-  if (!sub_type)                                          { if (errEl) errEl.textContent = 'Sub-type is required.';   return; }
-  if (!currency || !(currency in (state.rateMap || {})))  { if (errEl) errEl.textContent = 'Currency is required.';   return; }
-  if (errEl) errEl.textContent = '';
+  if (!name)                              { errEl.textContent = 'Name is required.';     return; }
+  if (!type || !_validTypes().has(type))  { errEl.textContent = 'Type is required.';     return; }
+  if (!sub_type)                          { errEl.textContent = 'Sub-type is required.'; return; }
+  if (!currency || !(currency in state.rateMap)) { errEl.textContent = 'Currency is required.'; return; }
+  errEl.textContent = '';
 
-  const rawVal = _v('accNewOpeningValue');
-  const openingVal = parseFloat(rawVal) || 0;
+  const openingVal = parseFloat(_v('accNewOpeningValue')) || 0;
 
   const payload = {
     name,
@@ -623,16 +666,16 @@ async function _saveNew() {
       state.accAddOpen = false;
       document.dispatchEvent(new CustomEvent('et:reload'));
     } else {
-      console.warn('[accounts] _saveNew failed:', res?.error);
+      console.warn('[accounts] _saveNew failed:', res.error);
       const msg = res.error === 'duplicate_account'
         ? 'An account with this name already exists.'
         : 'Error: ' + (res.error || 'unknown');
-      if (errEl) errEl.textContent = msg;
+      errEl.textContent = msg;
       if (btn) { btn.disabled = false; btn.textContent = 'Save'; }
     }
   } catch (_) {
     console.error('[accounts] _saveNew failed:', _);
-    if (errEl) errEl.textContent = 'Connection error.';
+    errEl.textContent = 'Connection error.';
     if (btn) { btn.disabled = false; btn.textContent = 'Save'; }
   } finally {
     hideLoading();
@@ -645,19 +688,18 @@ async function _saveEdit() {
   const rowNum = state.accEditRow;
   if (!rowNum) return;
 
-  const name    = el('accEditName')?.value.trim();
-  const errEl   = el('accEditError');
-  if (!name) { if (errEl) errEl.textContent = 'Name is required.'; return; }
+  const name  = el('accEditName').value.trim();
+  const errEl = el('accEditError');
+  if (!name) { errEl.textContent = 'Name is required.'; return; }
 
-  if (errEl) errEl.textContent = '';
+  errEl.textContent = '';
 
   const acc = state.accounts.find(a => a._row === rowNum);
   const payload = {
-    row_num:   rowNum,
+    row_num:       rowNum,
     name,
-    sub_type:  acc?.sub_type || '',
-    is_active: el('accEditIsActive')?.value === 'true',
-    description: el('accEditDescription')?.value.trim() || '',
+    record_status: el('accEditRecordStatus').value,
+    description:   el('accEditDescription').value.trim() || '',
   };
 
   const btn = el('accSaveEdit');
@@ -670,13 +712,17 @@ async function _saveEdit() {
       state.accEditRow = null;
       document.dispatchEvent(new CustomEvent('et:reload'));
     } else {
-      console.warn('[accounts] _saveEdit failed:', res?.error);
-      if (errEl) errEl.textContent = 'Update failed: ' + (res.error || 'unknown');
+      console.warn('[accounts] _saveEdit failed:', res.error);
+      errEl.textContent = res.error === 'record_locked'
+        ? 'This account is locked and cannot be edited.'
+        : res.error === 'duplicate_account'
+          ? 'An account with this name already exists.'
+          : 'Update failed: ' + (res.error || 'unknown');
       if (btn) { btn.disabled = false; btn.textContent = 'Save'; }
     }
   } catch (_) {
     console.error('[accounts] _saveEdit failed:', _);
-    if (errEl) errEl.textContent = 'Connection error.';
+    errEl.textContent = 'Connection error.';
     if (btn) { btn.disabled = false; btn.textContent = 'Save'; }
   } finally {
     hideLoading();
@@ -690,18 +736,23 @@ async function _confirmDelete(rowNum) {
   try {
     const res = await ExpenseAPI.deleteAccount({ row_num: rowNum });
     if (res.ok) {
-      showMsg('Account deleted.');
+      showMsg('Account marked as deleted.');
       state.accDeleteRow = null;
       state.accDeleteBlocked = null;
       document.dispatchEvent(new CustomEvent('et:reload'));
+    } else if (res.error === 'record_locked') {
+      showMsg('This account is locked and cannot be deleted.', 'warn');
+      state.accDeleteRow = null;
+      state.accDeleteBlocked = null;
+      renderAccounts();
     } else if (res.error === 'account_in_use') {
       // Backend refused because transactions reference this account.
       // Keep the row in delete-confirm state, switch to the blocked variant
-      // which offers an "Archive instead" CTA.
+      // which offers a "Deactivate instead" CTA.
       state.accDeleteBlocked = { referenced_count: res.referenced_count || 0 };
       renderAccounts();
     } else {
-      console.warn('[accounts] _confirmDelete failed:', res?.error);
+      console.warn('[accounts] _confirmDelete failed:', res.error);
       showMsg('Delete failed: ' + (res.error || 'unknown'), 'warn');
       state.accDeleteRow = null;
       state.accDeleteBlocked = null;
@@ -718,33 +769,32 @@ async function _confirmDelete(rowNum) {
   }
 }
 
-// One-click archive (is_active = false) — invoked from the blocked-deletion CTA.
-async function _archiveAccount(rowNum) {
+// Deactivate (record_status = inactive) — invoked from the blocked-deletion CTA.
+async function _deactivateAccount(rowNum) {
   const acc = state.accounts.find(a => a._row === rowNum);
   if (!acc) return;
   showLoading();
   try {
     const res = await ExpenseAPI.updateAccount({
-      row_num:   rowNum,
-      name:      acc.name || '',
-      sub_type:  acc.sub_type || '',
-      is_active: false,
-      description: acc.description || '',
+      row_num:       rowNum,
+      name:          acc.name || '',
+      record_status: 'inactive',
+      description:   acc.description || '',
     });
     if (res.ok) {
-      showMsg('Account archived.');
+      showMsg('Account deactivated.');
       state.accDeleteRow = null;
       state.accDeleteBlocked = null;
       document.dispatchEvent(new CustomEvent('et:reload'));
     } else {
-      console.warn('[accounts] _archiveAccount failed:', res?.error);
-      showMsg('Archive failed: ' + (res.error || 'unknown'), 'warn');
+      console.warn('[accounts] _deactivateAccount failed:', res.error);
+      showMsg('Deactivate failed: ' + (res.error || 'unknown'), 'warn');
       state.accDeleteBlocked = null;
       state.accDeleteRow = null;
       renderAccounts();
     }
   } catch (_) {
-    console.error('[accounts] _archiveAccount failed:', _);
+    console.error('[accounts] _deactivateAccount failed:', _);
     showMsg('Connection error.', 'warn');
     state.accDeleteBlocked = null;
     state.accDeleteRow = null;
@@ -754,7 +804,42 @@ async function _archiveAccount(rowNum) {
   }
 }
 
+async function _restoreAccount(rowNum) {
+  const acc = state.accounts.find(a => a._row === rowNum);
+  if (!acc) return;
+  showLoading();
+  try {
+    const res = await ExpenseAPI.updateAccount({
+      row_num:       rowNum,
+      name:          acc.name || '',
+      record_status: 'active',
+      description:   acc.description || '',
+    });
+    if (res.ok) {
+      showMsg('Account restored.');
+      document.dispatchEvent(new CustomEvent('et:reload'));
+    } else {
+      console.warn('[accounts] _restoreAccount failed:', res.error);
+      const msg = res.error === 'duplicate_account'
+        ? 'Cannot restore: an account with this name already exists.'
+        : 'Restore failed: ' + (res.error || 'unknown');
+      showMsg(msg, 'warn');
+      renderAccounts();
+    }
+  } catch (_) {
+    console.error('[accounts] _restoreAccount failed:', _);
+    showMsg('Connection error.', 'warn');
+    renderAccounts();
+  } finally {
+    hideLoading();
+  }
+}
+
 async function _submitImport(accounts) {
+  if (!accounts || !accounts.length) {
+    showMsg('No accounts to import.', 'warn');
+    return;
+  }
   const btn   = el('accImportConfirm');
   const errEl = el('accImportError');
   if (btn)   { btn.disabled = true; btn.textContent = 'Importing…'; }
@@ -764,7 +849,7 @@ async function _submitImport(accounts) {
     const res = await ExpenseAPI.createAccountsBulk({ accounts });
 
     if (!res.ok && !res.results) {
-      console.warn('[accounts] _submitImport failed:', res?.error);
+      console.warn('[accounts] _submitImport failed:', res.error);
       if (errEl) errEl.textContent = 'Error: ' + (res.error || 'unknown');
       if (btn)   { btn.disabled = false; btn.textContent = 'Import'; }
       return;
@@ -784,7 +869,6 @@ async function _submitImport(accounts) {
       showMsg(msg || 'Nothing to import.');
       document.dispatchEvent(new CustomEvent('et:reload'));
     } else {
-      // Keep panel open — show per-row results so user can see what failed and why
       const resultRows = (res.results || []).map(r => `
         <tr>
           <td>${esc(r.name)}</td>
@@ -795,8 +879,7 @@ async function _submitImport(accounts) {
               : `<span class="badge badge-et-out">${esc(r.error || 'unknown')}</span>`}
           </td>
         </tr>`).join('');
-      const status = el('accImportStatus');
-      if (status) status.innerHTML = `
+      el('accImportStatus').innerHTML = `
         <div style="margin-bottom:8px;font-size:13px">${created} created${skipped ? ` · ${skipped} already existed` : ''} · <span style="color:var(--ember)">${failed} failed</span></div>
         <div class="table-wrap" style="margin-bottom:8px">
           <table class="acc-table">
@@ -817,4 +900,3 @@ async function _submitImport(accounts) {
     hideLoading();
   }
 }
-

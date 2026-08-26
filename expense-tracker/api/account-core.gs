@@ -5,10 +5,7 @@
 function listAccounts() {
   const cols  = getAccountSheetColumns();
   const sheet = getOrCreateSheet(ACCOUNTS_SHEET, cols);
-  return sheetToObjectsWithRow(sheet).map(function(a) {
-    a.is_active = a.is_active === true || String(a.is_active).toLowerCase() === 'true';
-    return a;
-  });
+  return sheetToObjectsWithRow(sheet);
 }
 
 function createAccount(body) {
@@ -54,9 +51,11 @@ function createAccount(body) {
   setCol('currency',      normCurrency);
   setCol('opening_value', openingValue);
   setCol('current_value', openingValue);
-  setCol('is_active',     true);
+  setCol('record_status', VALID_RECORD_STATUSES.includes(body.record_status) ? body.record_status : 'active');
   setCol('description',   String(body.description || '').trim());
   setCol('created_at',    now);
+  setCol('sync_status',   SYNC_STATUS_CREATE_PENDING);
+  setCol('sync_notes',    '');
 
   sheet.appendRow(row);
   return { ok: true, id: id };
@@ -93,11 +92,25 @@ function updateAccount(body) {
   const lastRow = sheet.getLastRow();
   if (rowNum < 2 || rowNum > lastRow) return { ok: false, error: 'invalid_row' };
 
-  const typeColPos  = getAccountSchemaField('type').sheet_column_position;
-  const currentType = sheet.getRange(rowNum, typeColPos).getValue();
+  const allRows = sheet.getDataRange().getValues();
+
+  if (String(allRows[rowNum - 1][acctColIndex('record_status')] || '') === 'locked')
+    return { ok: false, error: 'record_locked' };
+
+  const currentType = String(allRows[rowNum - 1][acctColIndex('type')] || '');
 
   const validation = validateAccountUpdate(body, currentType);
   if (!validation.ok) return validation;
+
+  // Duplicate name guard — reject if a different row already has the same name
+  const nameIdx  = acctColIndex('name');
+  const normName = String(body.name).trim().toLowerCase();
+  for (let i = 1; i < allRows.length; i++) {
+    if (i + 1 === rowNum) continue;
+    if (String(allRows[i][nameIdx] || '').trim().toLowerCase() === normName) {
+      return { ok: false, error: 'duplicate_account' };
+    }
+  }
 
   function writeField(key, value) {
     const field = getAccountSchemaField(key);
@@ -105,9 +118,16 @@ function updateAccount(body) {
     sheet.getRange(rowNum, field.sheet_column_position).setValue(value);
   }
 
-  writeField('name',     String(body.name).trim());
-  writeField('is_active', body.is_active === true || body.is_active === 'true');
-  writeField('description', String(body.description || '').trim());
+  writeField('name',          String(body.name).trim());
+  writeField('record_status', VALID_RECORD_STATUSES.includes(body.record_status) ? body.record_status : 'active');
+  writeField('description',   String(body.description || '').trim());
+
+  // sync_status: preserve create-pending if not yet synced; clear sync_notes either way
+  const syncStatusCol     = getAccountSchemaField('sync_status').sheet_column_position;
+  const syncNotesCol      = getAccountSchemaField('sync_notes').sheet_column_position;
+  const currentSyncStatus = String(allRows[rowNum - 1][syncStatusCol - 1] || '');
+  sheet.getRange(rowNum, syncStatusCol).setValue(computeSyncStatus(currentSyncStatus));
+  sheet.getRange(rowNum, syncNotesCol).setValue('');
 
   return { ok: true };
 }
@@ -121,8 +141,12 @@ function deleteAccount(body) {
   if (rowNum < 2 || rowNum > lastRow) return { ok: false, error: 'invalid_row' };
 
   // T-04 FK check: refuse if any transaction references this account.
-  // Archive (is_active = false) is the recommended path for retiring an
-  // account while keeping its transaction history intact.
+  // Deactivate (record_status = inactive) is the recommended path for retiring
+  // an account while keeping its transaction history intact.
+  const rstatColPos2 = getAccountSchemaField('record_status').sheet_column_position;
+  if (String(sheet.getRange(rowNum, rstatColPos2).getValue() || '') === 'locked')
+    return { ok: false, error: 'record_locked' };
+
   const idColPos  = getAccountSchemaField('id').sheet_column_position;
   const accountId = String(sheet.getRange(rowNum, idColPos).getValue() || '');
   if (!accountId) return { ok: false, error: 'missing_account_id' };
@@ -133,11 +157,20 @@ function deleteAccount(body) {
       ok: false,
       error: 'account_in_use',
       referenced_count: refCount,
-      hint: 'archive_instead',
+      hint: 'deactivate_instead',
     };
   }
 
-  sheet.deleteRow(rowNum);
+  // Soft delete: mark as deleted, advance sync_status, clear sync_notes
+  const recordStatusCol   = getAccountSchemaField('record_status').sheet_column_position;
+  const syncStatusCol     = getAccountSchemaField('sync_status').sheet_column_position;
+  const syncNotesCol      = getAccountSchemaField('sync_notes').sheet_column_position;
+  const currentSyncStatus = String(sheet.getRange(rowNum, syncStatusCol).getValue() || '');
+
+  sheet.getRange(rowNum, recordStatusCol).setValue('deleted');
+  sheet.getRange(rowNum, syncStatusCol).setValue(computeSyncStatus(currentSyncStatus));
+  sheet.getRange(rowNum, syncNotesCol).setValue('');
+
   return { ok: true };
 }
 

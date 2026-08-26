@@ -95,6 +95,10 @@ function updateCategory(body) {
     }
   }
 
+  const ciRstat = catColIndex('record_status');
+  if (String(allRows[rowNum - 1][ciRstat] || '') === 'locked')
+    return { ok: false, error: 'record_locked' };
+
   function writeField(key, value) {
     const field = getCategorySchemaField(key);
     if (!field || !field.editable) return;
@@ -141,6 +145,9 @@ function deleteCategory(body) {
   if (rowNum < 2 || rowNum > lastRow) return { ok: false, error: 'invalid_row' };
 
   const recordStatusCol = getCategorySchemaField('record_status').sheet_column_position;
+  if (String(sheet.getRange(rowNum, recordStatusCol).getValue() || '') === 'locked')
+    return { ok: false, error: 'record_locked' };
+
   const syncStatusCol   = getCategorySchemaField('sync_status').sheet_column_position;
   const syncNotesCol    = getCategorySchemaField('sync_notes').sheet_column_position;
   const currentSyncStatus = String(sheet.getRange(rowNum, syncStatusCol).getValue() || '');

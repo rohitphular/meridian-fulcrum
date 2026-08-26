@@ -773,7 +773,7 @@ function _afRefreshFromAccountOpts() {
   } else {
     fromEl.disabled  = false;
     const prevVal    = fromEl.value;
-    const activeAccs = state.accounts.filter(a => a.is_active === true);
+    const activeAccs = state.accounts.filter(a => a.record_status === 'active');
     const srcTypes   = cat?.source_account_types || '';
     fromEl.innerHTML = `<option value="">— select —</option>${_acctOptsWithHints(activeAccs, srcTypes, prevVal)}`;
     if (prevVal) fromEl.value = prevVal;
@@ -796,7 +796,7 @@ function _afRefreshToAccountField() {
     toAccEl.disabled  = false;
     const fromId      = el('afFromAccount')?.value || '';
     const prevVal     = toAccEl.value;
-    const activeAccs  = state.accounts.filter(a => a.is_active === true);
+    const activeAccs  = state.accounts.filter(a => a.record_status === 'active');
     const dstTypes    = cat?.target_account_types || '';
     const eligible    = activeAccs.filter(a => a.id !== fromId);
     toAccEl.innerHTML = `<option value="">— select —</option>${_acctOptsWithHints(eligible, dstTypes, prevVal)}`;
@@ -1004,7 +1004,7 @@ function _renderTxForm(tx, mode) {
   }
 
   // Edit mode
-  const activeAccounts  = state.accounts.filter(a => a.is_active === true);
+  const activeAccounts  = state.accounts.filter(a => a.record_status === 'active');
   const _editCat        = _getCat(tx.tx_type, tx.major_category, tx.minor_category);
   const fromAccountOpts = _acctOptsWithHints(activeAccounts, _editCat?.source_account_types || '', tx.source_account);
   const toAccountOpts   = _acctOptsWithHints(
@@ -1178,7 +1178,7 @@ function _attachTxEditCascadeEvents() {
     const srcTypes = cat?.source_account_types      || '';
     const dstTypes = cat?.target_account_types || '';
     const srcMand  = cat ? Boolean(cat.source_account_mandatory) : type !== 'money-in';
-    const actives  = state.accounts.filter(a => a.is_active === true);
+    const actives  = state.accounts.filter(a => a.record_status === 'active');
     const fromEl   = el('txEditFromAccount');
     const toEl     = el('txEditToAccount');
     if (fromEl) {

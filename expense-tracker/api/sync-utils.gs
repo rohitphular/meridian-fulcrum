@@ -8,7 +8,7 @@ const SYNC_STATUS_IN_SYNC        = 'in-sync';
 const SYNC_STATUS_CREATE_FAILED  = 'create-failed';
 const SYNC_STATUS_UPDATE_FAILED  = 'update-failed';
 
-const VALID_RECORD_STATUSES = ['active', 'inactive', 'deleted'];
+const VALID_RECORD_STATUSES = ['active', 'inactive', 'deleted', 'locked'];
 
 // Computes the sync_status for an entity being updated.
 // create-pending and create-failed both reset to create-pending — the sync job must

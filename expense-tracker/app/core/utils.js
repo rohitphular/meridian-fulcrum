@@ -34,7 +34,7 @@ const ET_COLS  = [
   'amount', 'currency', 'major_category', 'minor_category',
   'description', 'counterparty_name', 'tx_tags', 'beneficiaries',
 ];
-const ACC_COLS = ['name', 'type', 'sub_type', 'currency', 'opening_value', 'current_value', 'is_active', 'description'];
+const ACC_COLS = ['name', 'type', 'sub_type', 'currency', 'opening_value', 'current_value', 'record_status', 'description'];
 const SUB_COLS = ['id', 'name', 'counterparty_name', 'amount', 'currency', 'frequency', 'day_of_month', 'day_of_week',
   'source_account', 'tx_type', 'major_category', 'minor_category', 'tags', 'is_active', 'description', 'created_at'];
 const CAT_COLS = [
@@ -66,20 +66,21 @@ export const exportCategories    = (format, rows) => _exportData(format, rows, '
 // ── Status icons (shared across all entity tables) ───────────────────────────
 
 export function recordStatusIcon(status) {
-  const base = 'font-size:13px;line-height:1;vertical-align:middle';
-  if (status === 'inactive') return `<span title="Inactive" style="${base};color:#6b7280">●</span>`;
-  if (status === 'deleted')  return `<span title="Deleted"  style="${base};color:#ef4444">✕</span>`;
-  return `<span title="Active" style="${base};color:#22c55e">●</span>`;
+  const wrap = 'display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px';
+  if (status === 'inactive') return `<span title="Inactive" style="${wrap};font-size:11px;color:#6b7280">●</span>`;
+  if (status === 'deleted')  return `<span title="Deleted"  style="${wrap};font-size:13px">🗑️</span>`;
+  if (status === 'locked')   return `<span title="Locked"   style="${wrap};font-size:13px">🔒</span>`;
+  return `<span title="Active" style="${wrap};font-size:11px;color:#22c55e">●</span>`;
 }
 
 export function syncStatusIcon(status) {
-  const base = 'font-size:14px;line-height:1;vertical-align:middle';
-  if (status === 'create-pending') return `<span title="Create pending" style="${base};color:#f59e0b">○</span>`;
-  if (status === 'update-pending') return `<span title="Update pending" style="${base};color:#3b82f6">↻</span>`;
-  if (status === 'in-sync')        return `<span title="In sync"        style="${base};color:#22c55e">✓</span>`;
-  if (status === 'create-failed')  return `<span title="Create failed"  style="${base};color:#ef4444">✕</span>`;
-  if (status === 'update-failed')  return `<span title="Update failed"  style="${base};color:#ef4444">⚠</span>`;
-  return `<span title="Unknown" style="${base};color:#6b7280">?</span>`;
+  const wrap = 'display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;font-size:13px';
+  if (status === 'create-pending') return `<span title="Create pending" style="${wrap};color:#f59e0b">○</span>`;
+  if (status === 'update-pending') return `<span title="Update pending" style="${wrap};color:#3b82f6">↻</span>`;
+  if (status === 'in-sync')        return `<span title="In sync"        style="${wrap};color:#22c55e">✓</span>`;
+  if (status === 'create-failed')  return `<span title="Create failed"  style="${wrap};color:#ef4444">✕</span>`;
+  if (status === 'update-failed')  return `<span title="Update failed"  style="${wrap};color:#ef4444">⚠</span>`;
+  return `<span title="Unknown" style="${wrap};color:#6b7280">?</span>`;
 }
 
 // ── Shared context menu ───────────────────────────────────────────────────────

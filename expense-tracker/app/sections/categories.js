@@ -147,6 +147,7 @@ function _renderForm(cat, mode) {
       <select id="${pfx}RecordStatus"${dis}>
         <option value="active"   ${(cat.record_status === 'active' || !cat.record_status) ? 'selected' : ''}>Active</option>
         <option value="inactive" ${cat.record_status === 'inactive' ? 'selected' : ''}>Inactive</option>
+        <option value="locked"   ${cat.record_status === 'locked'   ? 'selected' : ''}>Locked</option>
         <option value="deleted"  ${cat.record_status === 'deleted'  ? 'selected' : ''}>Deleted</option>
       </select>
     </div>
@@ -160,7 +161,8 @@ function _renderForm(cat, mode) {
     ${isView ? `
     <div class="form-actions" style="margin-top:16px">
       <button class="btn btn-secondary" id="catCancelView">Close</button>
-      <button class="btn btn-primary" id="catViewToEdit" data-row="${cat._row}">Edit</button>
+      ${cat.record_status === 'deleted' ? `<button class="btn btn-primary" id="catViewRestore" data-row="${cat._row}">Restore</button>` : ''}
+      ${cat.record_status !== 'locked' && cat.record_status !== 'deleted' ? `<button class="btn btn-primary" id="catViewToEdit" data-row="${cat._row}">Edit</button>` : ''}
     </div>
     ` : `
     <div class="form-actions" style="margin-top:16px">
@@ -186,8 +188,9 @@ function _renderCatTable(cats) {
   const hasActiveCatRow = state.catDeleteRow !== null;
 
   const rows = cats.map(cat => {
-    const rowStyle = cat.record_status === 'inactive' ? ' style="opacity:0.5"'
-                   : cat.record_status === 'deleted'  ? ' style="opacity:0.35"' : '';
+    const rowStyle = cat.record_status === 'deleted'  ? ' style="opacity:0.5"'
+                   : cat.record_status === 'inactive' ? ' style="opacity:0.5"'
+                   : cat.record_status === 'locked'   ? ' style="opacity:0.7"' : '';
 
     const displayType = _isTransfer(cat) ? 'transfer' : cat.tx_type_key;
 
@@ -358,7 +361,7 @@ function _parseCatCsv(text) {
       minor_category_key:        row.minor_category_key        || '',
       minor_category_label:      row.minor_category_label,
       description:               row.description               || '',
-      record_status:             ['active', 'inactive', 'deleted'].includes(row.record_status) ? row.record_status : 'active',
+      record_status:             ['active', 'inactive', 'deleted', 'locked'].includes(row.record_status) ? row.record_status : 'active',
       tag_keywords:              row.tag_keywords              || '',
       counterparty_examples:     row.counterparty_examples     || '',
       source_account_types:      row.source_account_types      || '',
@@ -501,11 +504,18 @@ function _attachCatEvents() {
   // View form
   if (state.catViewRow !== null) {
     el('catCancelView').addEventListener('click', () => { state.catViewRow = null; renderCategories(); });
-    el('catViewToEdit').addEventListener('click', e => {
+    const viewToEditEl = el('catViewToEdit');
+    if (viewToEditEl) viewToEditEl.addEventListener('click', e => {
       const row = Number(e.currentTarget.dataset.row);
       state.catViewRow = null;
       state.catEditRow = row;
       renderCategories();
+    });
+    const viewRestoreEl = el('catViewRestore');
+    if (viewRestoreEl) viewRestoreEl.addEventListener('click', e => {
+      const row = Number(e.currentTarget.dataset.row);
+      state.catViewRow = null;
+      _restoreCat(row);
     });
   }
 
@@ -534,16 +544,22 @@ function _attachCatEvents() {
     if (action === 'cat-menu') {
       if (_catMenuKey === row) { closeContextMenu(); _catMenuKey = null; return; }
       _catMenuKey = row;
-      openContextMenu(btn, [
-        { key: 'cat-view',   label: 'View',         cls: '' },
-        { key: 'cat-edit',   label: 'Edit',         cls: '' },
-        { key: 'cat-txs',    label: 'Transactions', cls: '' },
-        { key: 'cat-delete', label: 'Delete',       cls: 'danger' },
-      ], key => {
+      const menuCat   = state.categories.find(c => c._row === row);
+      const isLocked  = menuCat && menuCat.record_status === 'locked';
+      const isDeleted = menuCat && menuCat.record_status === 'deleted';
+      const menuItems = [
+        { key: 'cat-view', label: 'View', cls: '' },
+        ...(!isLocked && !isDeleted ? [{ key: 'cat-edit',    label: 'Edit',    cls: ''       }] : []),
+        { key: 'cat-txs', label: 'Transactions', cls: '' },
+        ...(isDeleted               ? [{ key: 'cat-restore', label: 'Restore', cls: ''       }] : []),
+        ...(!isLocked && !isDeleted ? [{ key: 'cat-delete',  label: 'Delete',  cls: 'danger' }] : []),
+      ];
+      openContextMenu(btn, menuItems, key => {
         _catMenuKey = null;
-        if (key === 'cat-view')   { state.catViewRow = row; state.catEditRow = null; state.catDeleteRow = null; state.catAddOpen = false; renderCategories(); }
-        if (key === 'cat-edit')   { state.catEditRow = row; state.catViewRow = null; state.catDeleteRow = null; state.catAddOpen = false; renderCategories(); }
-        if (key === 'cat-delete') { state.catDeleteRow = row; state.catViewRow = null; state.catEditRow = null; renderCategories(); }
+        if (key === 'cat-view')    { state.catViewRow = row; state.catEditRow = null; state.catDeleteRow = null; state.catAddOpen = false; renderCategories(); }
+        if (key === 'cat-edit')    { state.catEditRow = row; state.catViewRow = null; state.catDeleteRow = null; state.catAddOpen = false; renderCategories(); }
+        if (key === 'cat-delete')  { state.catDeleteRow = row; state.catViewRow = null; state.catEditRow = null; renderCategories(); }
+        if (key === 'cat-restore') { _restoreCat(row); }
         if (key === 'cat-txs') {
           const cat = state.categories.find(c => c._row === row);
           if (cat) {
@@ -554,9 +570,17 @@ function _attachCatEvents() {
       });
       return;
     }
-    if (action === 'cat-view')           { state.catViewRow = row; state.catEditRow = null; state.catDeleteRow = null; state.catAddOpen = false; renderCategories(); }
-    if (action === 'cat-edit')           { state.catEditRow = row; state.catViewRow = null; state.catDeleteRow = null; state.catAddOpen = false; renderCategories(); }
-    if (action === 'cat-delete')         { state.catDeleteRow = row; state.catViewRow = null; state.catEditRow = null; renderCategories(); }
+    if (action === 'cat-view')   { state.catViewRow = row; state.catEditRow = null; state.catDeleteRow = null; state.catAddOpen = false; renderCategories(); }
+    if (action === 'cat-edit') {
+      const editCat = state.categories.find(c => c._row === row);
+      if (editCat && (editCat.record_status === 'locked' || editCat.record_status === 'deleted')) return;
+      state.catEditRow = row; state.catViewRow = null; state.catDeleteRow = null; state.catAddOpen = false; renderCategories();
+    }
+    if (action === 'cat-delete') {
+      const delCat = state.categories.find(c => c._row === row);
+      if (delCat && (delCat.record_status === 'locked' || delCat.record_status === 'deleted')) return;
+      state.catDeleteRow = row; state.catViewRow = null; state.catEditRow = null; renderCategories();
+    }
     if (action === 'cat-cancel-delete')  { state.catDeleteRow = null; renderCategories(); }
     if (action === 'cat-confirm-delete') { _deleteCat(row); }
   };
@@ -564,6 +588,50 @@ function _attachCatEvents() {
   if (tableWrap) tableWrap.addEventListener('click', handleCatAction);
   const catCards = el('categoriesContent').querySelector('.cat-cards');
   if (catCards) catCards.addEventListener('click', handleCatAction);
+}
+
+// ── Restore ───────────────────────────────────────────────────────────────────
+
+async function _restoreCat(rowNum) {
+  const cat = state.categories.find(c => c._row === rowNum);
+  if (!cat) return;
+  showLoading();
+  try {
+    const res = await ExpenseAPI.updateCategory({
+      row_num:                  rowNum,
+      tx_type_key:              cat.tx_type_key,
+      major_category_label:     cat.major_category_label,
+      minor_category_label:     cat.minor_category_label,
+      description:              cat.description || '',
+      record_status:            'active',
+      is_subscription_eligible: cat.is_subscription_eligible || false,
+      tag_keywords:             cat.tag_keywords || '',
+      counterparty_examples:    cat.counterparty_examples || '',
+      source_account_types:     cat.source_account_types || '',
+      target_account_types:     cat.target_account_types || '',
+      source_account_mandatory: cat.source_account_mandatory || false,
+      target_account_mandatory: cat.target_account_mandatory || false,
+    });
+    if (res.ok) {
+      showMsg('Category restored.');
+      document.dispatchEvent(new CustomEvent('et:reload'));
+    } else {
+      console.warn('[categories] _restoreCat failed:', res.error);
+      const msg = res.error === 'duplicate_category'
+        ? 'Cannot restore: this category already exists.'
+        : res.error === 'record_locked'
+          ? 'This category is locked.'
+          : 'Restore failed: ' + (res.error || 'unknown');
+      showMsg(msg, 'warn');
+      renderCategories();
+    }
+  } catch (err) {
+    console.error('[categories] _restoreCat failed:', err);
+    showMsg('Connection error.', 'warn');
+    renderCategories();
+  } finally {
+    hideLoading();
+  }
 }
 
 // ── Save new ──────────────────────────────────────────────────────────────────
@@ -662,7 +730,9 @@ async function _saveCatEdit() {
       console.warn('[categories] _saveCatEdit failed:', res.error);
       const msg = res.error === 'duplicate_category'
         ? 'This category already exists.'
-        : 'Update failed: ' + (res.error || 'unknown');
+        : res.error === 'record_locked'
+          ? 'This category is locked and cannot be edited.'
+          : 'Update failed: ' + (res.error || 'unknown');
       if (errEl) errEl.textContent = msg;
       if (btn) { btn.disabled = false; btn.textContent = 'Save'; }
     }
@@ -687,7 +757,10 @@ async function _deleteCat(rowNum) {
       document.dispatchEvent(new CustomEvent('et:reload'));
     } else {
       console.warn('[categories] _deleteCat failed:', res.error);
-      showMsg('Delete failed: ' + (res.error || 'unknown'), 'warn');
+      const msg = res.error === 'record_locked'
+        ? 'This category is locked and cannot be deleted.'
+        : 'Delete failed: ' + (res.error || 'unknown');
+      showMsg(msg, 'warn');
       state.catDeleteRow = null;
       renderCategories();
     }
