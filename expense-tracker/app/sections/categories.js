@@ -4,7 +4,8 @@ import { showLoading, hideLoading, showMsg } from '../core/ui.js';
 import { ExpenseAPI } from '../core/api.js';
 
 let _catImportParsed = null;
-let _catMenuKey = null;
+let _catMenuKey      = null;
+let _catDraft        = null;   // pending filter selections; copied to state.catFilters on Search
 
 function _acctTypeGroups() {
   const schema = state.accountSchema;
@@ -29,27 +30,15 @@ export function renderCategories() {
   closeContextMenu(); _catMenuKey = null;
   const content = el('categoriesContent');
 
-  const filtered = state.catFilter === 'all'
-    ? state.categories
-    : state.catFilter === 'transfer'
-      ? state.categories.filter(c => c.source_account_mandatory && c.target_account_mandatory)
-      : state.categories.filter(c => c.tx_type_key === state.catFilter);
-
-  const CAT_FILTERS = [
-    { key: 'all',       label: 'All' },
-    { key: 'money-in',  label: 'Money In' },
-    { key: 'money-out', label: 'Money Out' },
-    { key: 'transfer',  label: 'Transfer' },
-  ];
-  const filterLabel = (CAT_FILTERS.find(o => o.key === (state.catFilter || 'all')) || CAT_FILTERS[0]).label;
+  const filtered    = _applyFilters(state.categories);
+  const activeCount = _activeFilterCount();
   const anyFormOpen = state.catAddOpen || state.catViewRow !== null || state.catEditRow !== null;
-  const viewCat = state.catViewRow !== null ? state.categories.find(c => c._row === state.catViewRow) : null;
-  const editCat = state.catEditRow !== null ? state.categories.find(c => c._row === state.catEditRow) : null;
+  const viewCat     = state.catViewRow !== null ? state.categories.find(c => c._row === state.catViewRow) : null;
+  const editCat     = state.catEditRow !== null ? state.categories.find(c => c._row === state.catEditRow) : null;
 
   content.innerHTML = `
-    <div class="sec-head" style="align-items:center;gap:8px">
-      <button class="btn btn-secondary btn-sm" id="catFilterBtn">≡ ${esc(filterLabel)}</button>
-      <div style="display:flex;gap:8px;align-items:center;margin-left:auto">
+    <div class="sec-head">
+      <div style="display:flex;gap:8px;margin-left:auto">
         <button class="btn btn-secondary btn-sm" id="catExportBtn">↓ Export</button>
         <button class="btn btn-secondary btn-sm" id="catImportBtn">${state.catImportOpen ? '× Close' : '↑ Import'}</button>
         <button class="btn btn-primary btn-sm" id="catAddBtn">${anyFormOpen ? '× Close' : '+ Add'}</button>
@@ -59,6 +48,7 @@ export function renderCategories() {
     ${state.catAddOpen ? _renderForm({}, 'add') : ''}
     ${viewCat          ? _renderForm(viewCat, 'view') : ''}
     ${editCat          ? _renderForm(editCat, 'edit') : ''}
+    ${_renderCatFilterBar()}
     <div class="cat-count-bar">
       <span class="cat-count">${filtered.length} ${filtered.length === 1 ? 'category' : 'categories'}</span>
     </div>
@@ -66,6 +56,149 @@ export function renderCategories() {
   `;
 
   _attachCatEvents();
+}
+
+// ── Filter helpers ────────────────────────────────────────────────────────────
+
+function _applyFilters(cats) {
+  const f = state.catFilters;
+  return cats.filter(c => {
+    if (f.type !== 'all' && c.tx_type_key !== f.type) return false;
+    if (f.major !== 'all' && c.major_category_label !== f.major) return false;
+    if (f.minor !== 'all' && c.minor_category_label !== f.minor) return false;
+    if (f.search) {
+      const q   = f.search.toLowerCase();
+      const hay = [c.major_category_label, c.minor_category_label, c.description, c.tag_keywords, c.counterparty_examples]
+        .join(' ').toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    if (f.sourceMandatory !== 'all' && c.source_account_mandatory !== (f.sourceMandatory === 'yes')) return false;
+    if (f.targetMandatory !== 'all' && c.target_account_mandatory !== (f.targetMandatory === 'yes')) return false;
+    if (f.subscriptionEligible !== 'all' && c.is_subscription_eligible !== (f.subscriptionEligible === 'yes')) return false;
+    if (f.recordStatuses.length < 4 && !f.recordStatuses.includes(c.record_status)) return false;
+    return true;
+  });
+}
+
+function _activeFilterCount() {
+  const f = state.catFilters;
+  let n = 0;
+  if (f.type !== 'all')                 n++;
+  if (f.major !== 'all')                n++;
+  if (f.minor !== 'all')                n++;
+  if (f.search)                         n++;
+  if (f.sourceMandatory !== 'all')      n++;
+  if (f.targetMandatory !== 'all')      n++;
+  if (f.subscriptionEligible !== 'all') n++;
+  if (f.recordStatuses.length < 4)      n++;
+  return n;
+}
+
+function _renderCatFilterBar() {
+  const activeCount = _activeFilterCount();          // badge uses applied filter (state.catFilters)
+  const f           = _catDraft || state.catFilters; // panel UI uses draft when available
+
+  const majors = [];
+  const seenM  = {};
+  state.categories.forEach(c => {
+    if (!seenM[c.major_category_label]) {
+      seenM[c.major_category_label] = true;
+      majors.push(c.major_category_label);
+    }
+  });
+  majors.sort();
+
+  const minors = [];
+  if (f.major !== 'all') {
+    const seenN = {};
+    state.categories
+      .filter(c => c.major_category_label === f.major)
+      .forEach(c => {
+        if (!seenN[c.minor_category_label]) {
+          seenN[c.minor_category_label] = true;
+          minors.push(c.minor_category_label);
+        }
+      });
+    minors.sort();
+  }
+
+  const majorOpts = `<option value="all"${f.major === 'all' ? ' selected' : ''}>All major</option>` +
+    majors.map(m => `<option value="${esc(m)}"${f.major === m ? ' selected' : ''}>${esc(m)}</option>`).join('');
+
+  const minorOpts = f.major === 'all'
+    ? `<option value="all">— select major first —</option>`
+    : `<option value="all"${f.minor === 'all' ? ' selected' : ''}>All minor</option>` +
+      minors.map(n => `<option value="${esc(n)}"${f.minor === n ? ' selected' : ''}>${esc(n)}</option>`).join('');
+
+  const rs = new Set(f.recordStatuses);
+
+  const tog = (val, label, attr, cur) =>
+    `<button class="btn btn-sm ${cur === val ? 'btn-primary' : 'btn-secondary'}" data-${attr}="${val}">${label}</button>`;
+
+  return `
+  <div class="filter-bar">
+    <button class="filter-toggle" id="catFilterToggle">
+      Filters${activeCount ? ` (${activeCount})` : ''} <span class="filter-arrow">${state.catFilterOpen ? '▲' : '▼'}</span>
+    </button>
+    <div class="filter-body ${state.catFilterOpen ? '' : 'hidden'}" id="catFilterBody">
+      <div class="filter-row">
+        <label>Type</label>
+        <div style="display:flex;gap:4px;flex-wrap:wrap">
+          ${tog('all',       'All',       'cat-filter-type', f.type)}
+          ${tog('money-in',  'Money In',  'cat-filter-type', f.type)}
+          ${tog('money-out', 'Money Out', 'cat-filter-type', f.type)}
+        </div>
+      </div>
+      <div class="filter-row">
+        <label>Major</label>
+        <select id="catFMajor" style="flex:1">${majorOpts}</select>
+      </div>
+      <div class="filter-row">
+        <label>Minor</label>
+        <select id="catFMinor" style="flex:1"${f.major === 'all' ? ' disabled' : ''}>${minorOpts}</select>
+      </div>
+      <div class="filter-row">
+        <label>Search</label>
+        <input type="text" id="catFSearch" placeholder="name, keywords…" value="${esc(f.search)}" style="flex:1">
+      </div>
+      <div class="filter-row">
+        <label>Source acct</label>
+        <div style="display:flex;gap:4px;flex-wrap:wrap">
+          ${tog('all', 'All',      'cat-filter-src', f.sourceMandatory)}
+          ${tog('yes', 'Required', 'cat-filter-src', f.sourceMandatory)}
+          ${tog('no',  'Optional', 'cat-filter-src', f.sourceMandatory)}
+        </div>
+      </div>
+      <div class="filter-row">
+        <label>Target acct</label>
+        <div style="display:flex;gap:4px;flex-wrap:wrap">
+          ${tog('all', 'All',      'cat-filter-tgt', f.targetMandatory)}
+          ${tog('yes', 'Required', 'cat-filter-tgt', f.targetMandatory)}
+          ${tog('no',  'Optional', 'cat-filter-tgt', f.targetMandatory)}
+        </div>
+      </div>
+      <div class="filter-row">
+        <label>Subscription</label>
+        <div style="display:flex;gap:4px;flex-wrap:wrap">
+          ${tog('all', 'All',          'cat-filter-sub', f.subscriptionEligible)}
+          ${tog('yes', 'Eligible',     'cat-filter-sub', f.subscriptionEligible)}
+          ${tog('no',  'Not eligible', 'cat-filter-sub', f.subscriptionEligible)}
+        </div>
+      </div>
+      <div class="filter-row">
+        <label>Status</label>
+        <div style="display:flex;gap:10px;flex-wrap:wrap">
+          ${['active','inactive','deleted','locked'].map(s =>
+            `<label class="checkbox-label"><input type="checkbox" data-cat-filter-rstat="${s}"${rs.has(s) ? ' checked' : ''}> ${s.charAt(0).toUpperCase() + s.slice(1)}</label>`
+          ).join('')}
+        </div>
+      </div>
+      <div style="margin-top:4px;display:flex;gap:8px;justify-content:flex-end">
+        <button class="btn btn-secondary btn-sm" id="catFClear">Clear</button>
+        <button class="btn btn-primary btn-sm" id="catFSearchBtn">Search</button>
+      </div>
+    </div>
+  </div>`;
 }
 
 // ── Unified form (Add / View / Edit) ─────────────────────────────────────────
@@ -176,10 +309,6 @@ function _renderForm(cat, mode) {
 
 // ── Table ─────────────────────────────────────────────────────────────────────
 
-function _isTransfer(cat) {
-  return cat.source_account_mandatory && cat.target_account_mandatory;
-}
-
 function _renderCatTable(cats) {
   if (!cats.length) {
     return `<p class="placeholder">No categories for this filter. Use &ldquo;+ Add&rdquo; to create one.</p>`;
@@ -192,11 +321,9 @@ function _renderCatTable(cats) {
                    : cat.record_status === 'inactive' ? ' style="opacity:0.5"'
                    : cat.record_status === 'locked'   ? ' style="opacity:0.7"' : '';
 
-    const displayType = _isTransfer(cat) ? 'transfer' : cat.tx_type_key;
-
     if (state.catDeleteRow === cat._row) {
       return `<tr>
-        <td>${_catTypeBadge(displayType)}</td>
+        <td>${_catTypeBadge(cat.tx_type_key)}</td>
         <td colspan="2"><span class="confirm-text">Delete <strong>${esc(cat.major_category_label)} → ${esc(cat.minor_category_label)}</strong>?</span></td>
         <td><div class="row-actions">
           <button class="btn-link danger" data-action="cat-confirm-delete" data-row="${cat._row}">Yes, delete</button>
@@ -206,7 +333,7 @@ function _renderCatTable(cats) {
     }
 
     return `<tr${rowStyle}>
-      <td>${_catTypeBadge(displayType)}</td>
+      <td>${_catTypeBadge(cat.tx_type_key)}</td>
       <td class="td-name">${esc(cat.major_category_label)}</td>
       <td>${esc(cat.minor_category_label)}</td>
       <td><div style="display:flex;align-items:center;justify-content:flex-end;gap:5px">
@@ -218,12 +345,11 @@ function _renderCatTable(cats) {
 
   const cardRows = cats.map(cat => {
     if (state.catDeleteRow === cat._row) return '';
-    const displayType = _isTransfer(cat) ? 'transfer' : cat.tx_type_key;
-    const isArchived  = cat.record_status !== 'active';
+    const isArchived = cat.record_status !== 'active';
     return `<div class="cat-card${isArchived ? ' is-archived' : ''}">
       <div class="cat-card-top">
         <div class="cat-card-name">
-          ${_catTypeDot(displayType)}
+          ${_catTypeDot(cat.tx_type_key)}
           <span class="cat-card-major">${esc(cat.major_category_label)}</span>
           <span class="cat-card-sep">›</span>
           <span class="cat-card-minor">${esc(cat.minor_category_label)}</span>
@@ -291,13 +417,13 @@ function _getCheckedAccountTypes(containerId) {
 // ── Badge ─────────────────────────────────────────────────────────────────────
 
 function _catTypeBadge(type) {
-  const cls   = type === 'money-in' ? 'badge-et-in' : type === 'money-out' ? 'badge-et-out' : 'badge-et-transfer';
-  const label = type === 'money-in' ? 'in'       : type === 'money-out' ? 'out'       : 'xfer';
+  const cls   = type === 'money-in' ? 'badge-et-in' : 'badge-et-out';
+  const label = type === 'money-in' ? 'in' : 'out';
   return `<span class="badge ${cls}">${label}</span>`;
 }
 
 function _catTypeDot(type) {
-  const cls = type === 'money-in' ? 'tx-dot-in' : type === 'money-out' ? 'tx-dot-out' : 'tx-dot-transfer';
+  const cls = type === 'money-in' ? 'tx-dot-in' : 'tx-dot-out';
   return `<span class="tx-type-dot ${cls}">●</span>`;
 }
 
@@ -426,11 +552,7 @@ async function _submitCatImport(categories) {
 
 function _attachCatEvents() {
   el('catExportBtn').addEventListener('click', () => {
-    const rows = state.catFilter === 'all'
-      ? state.categories
-      : state.catFilter === 'transfer'
-        ? state.categories.filter(c => c.source_account_mandatory && c.target_account_mandatory)
-        : state.categories.filter(c => c.tx_type_key === state.catFilter);
+    const rows = _applyFilters(state.categories);
     if (!rows.length) { showMsg('No categories to export.', 'warn'); return; }
     openContextMenu(el('catExportBtn'), [
       { key: 'csv',  label: '↓ CSV'  },
@@ -519,21 +641,93 @@ function _attachCatEvents() {
     });
   }
 
-  el('catFilterBtn').addEventListener('click', () => {
-    openContextMenu(el('catFilterBtn'), [
-      { key: 'all',       label: 'All' },
-      { key: 'money-in',  label: 'Money In' },
-      { key: 'money-out', label: 'Money Out' },
-      { key: 'transfer',  label: 'Transfer' },
-    ], key => {
-      state.catFilter    = key;
-      state.catAddOpen   = false;
-      state.catViewRow   = null;
-      state.catEditRow   = null;
-      state.catDeleteRow = null;
+  el('catFilterToggle').addEventListener('click', () => {
+    state.catFilterOpen = !state.catFilterOpen;
+    if (state.catFilterOpen && !_catDraft) {
+      _catDraft = { ...state.catFilters, recordStatuses: [...state.catFilters.recordStatuses] };
+    }
+    renderCategories();
+  });
+
+  if (state.catFilterOpen) {
+    const content = el('categoriesContent');
+
+    // Toggle button groups — update draft + flip classes in-place (no re-render)
+    const _togGroup = (attr, draftKey) => {
+      content.querySelectorAll(`[data-${attr}]`).forEach(btn => {
+        btn.addEventListener('click', () => {
+          const val = btn.dataset[attr.replace(/-([a-z])/g, (_, c) => c.toUpperCase())];
+          if (_catDraft) _catDraft[draftKey] = val;
+          content.querySelectorAll(`[data-${attr}]`).forEach(b => {
+            b.className = `btn btn-sm ${b.dataset[attr.replace(/-([a-z])/g, (_, c) => c.toUpperCase())] === val ? 'btn-primary' : 'btn-secondary'}`;
+          });
+        });
+      });
+    };
+    _togGroup('cat-filter-type', 'type');
+    _togGroup('cat-filter-src',  'sourceMandatory');
+    _togGroup('cat-filter-tgt',  'targetMandatory');
+    _togGroup('cat-filter-sub',  'subscriptionEligible');
+
+    // Major — update draft + repopulate minor dropdown in-place
+    el('catFMajor').addEventListener('change', () => {
+      const newMajor = el('catFMajor').value;
+      if (_catDraft) { _catDraft.major = newMajor; _catDraft.minor = 'all'; }
+      const minorEl = el('catFMinor');
+      if (!minorEl) return;
+      if (newMajor === 'all') {
+        minorEl.disabled = true;
+        minorEl.innerHTML = `<option value="all">— select major first —</option>`;
+      } else {
+        const mins = [], seen = {};
+        state.categories.filter(c => c.major_category_label === newMajor).forEach(c => {
+          if (!seen[c.minor_category_label]) { seen[c.minor_category_label] = true; mins.push(c.minor_category_label); }
+        });
+        mins.sort();
+        minorEl.disabled = false;
+        minorEl.innerHTML = `<option value="all" selected>All minor</option>` +
+          mins.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
+      }
+    });
+
+    // Minor — update draft only
+    el('catFMinor').addEventListener('change', () => {
+      if (_catDraft) _catDraft.minor = el('catFMinor').value;
+    });
+
+    // Record status checkboxes — update draft only
+    content.querySelectorAll('[data-cat-filter-rstat]').forEach(cb => {
+      cb.addEventListener('change', () => {
+        if (!_catDraft) return;
+        _catDraft.recordStatuses = Array.from(
+          content.querySelectorAll('[data-cat-filter-rstat]:checked')
+        ).map(c => c.dataset.catFilterRstat);
+      });
+    });
+
+    // Apply draft → state on Search / Enter
+    const _applyDraft = () => {
+      if (_catDraft) {
+        _catDraft.search = el('catFSearch').value.trim();
+        state.catFilters = { ..._catDraft, recordStatuses: [..._catDraft.recordStatuses] };
+        _catDraft = null;
+      }
+      renderCategories();
+    };
+    el('catFSearchBtn').addEventListener('click', _applyDraft);
+    el('catFSearch').addEventListener('keydown', e => { if (e.key === 'Enter') _applyDraft(); });
+
+    // Clear — reset both draft and applied
+    el('catFClear').addEventListener('click', () => {
+      _catDraft = null;
+      state.catFilters = {
+        type: 'all', major: 'all', minor: 'all', search: '',
+        sourceMandatory: 'all', targetMandatory: 'all', subscriptionEligible: 'all',
+        recordStatuses: ['active', 'inactive', 'deleted', 'locked'],
+      };
       renderCategories();
     });
-  });
+  }
 
   const handleCatAction = e => {
     const btn    = e.target.closest('[data-action]');

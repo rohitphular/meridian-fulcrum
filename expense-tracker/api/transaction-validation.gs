@@ -89,14 +89,13 @@ function _findCategoryHints(type, major, minor) {
   const sheet  = getOrCreateSheet(CATEGORIES_SHEET, getCategorySheetColumns());
   const values = sheet.getDataRange().getValues();
   const ci = {
-    type:         catColIndex('tx_type'),
-    major:        catColIndex('major_category'),
-    minor:        catColIndex('minor_category'),
+    type:         catColIndex('tx_type_key'),
+    major:        catColIndex('major_category_label'),
+    minor:        catColIndex('minor_category_label'),
     src:          catColIndex('source_account_types'),
     dst:          catColIndex('target_account_types'),
     srcMandatory: catColIndex('source_account_mandatory'),
     dstMandatory: catColIndex('target_account_mandatory'),
-    workflowType: catColIndex('workflow_type'),
   };
   for (let i = 1; i < values.length; i++) {
     if (values[i][ci.type] === type && values[i][ci.major] === major && values[i][ci.minor] === minor) {
@@ -106,7 +105,6 @@ function _findCategoryHints(type, major, minor) {
         target_account_types:      String(values[i][ci.dst]          || '').trim(),
         source_account_mandatory:  toBool(values[i][ci.srcMandatory]),
         target_account_mandatory:  toBool(values[i][ci.dstMandatory]),
-        workflow_type:             String(values[i][ci.workflowType]  || '').trim(),
       };
     }
   }

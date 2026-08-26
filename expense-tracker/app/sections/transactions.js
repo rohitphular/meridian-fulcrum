@@ -68,14 +68,14 @@ function _dispatchTxAction(action, row) {
   }
 }
 
-// ── Category dropdown helpers — respect is_active (greyed-out when archived) ──
+// ── Category dropdown helpers — respect record_status (greyed-out when archived) ──
 
 // Major <option> list for a transaction type.
 // A major is active if at least one of its minors is active.
 function _catMajorOpts(type, selectedVal = '') {
   const cats = state.categories.filter(c => c.tx_type === type);
   const majors = [...new Map(cats.map(c => {
-    const active = cats.some(x => x.major_category === c.major_category && x.is_active === true);
+    const active = cats.some(x => x.major_category === c.major_category && x.record_status === 'active');
     return [c.major_category, { label: c.major_category, active }];
   })).values()];
   return `<option value="">— select —</option>` +
@@ -93,7 +93,7 @@ function _catMinorOpts(type, major, selectedVal = '') {
   return `<option value="">— select —</option>` +
     cats.map(c => {
       const sel = selectedVal === c.minor_category ? 'selected' : '';
-      return c.is_active === true
+      return c.record_status === 'active'
         ? `<option value="${esc(c.minor_category)}" ${sel}>${esc(c.minor_category)}</option>`
         : `<option value="${esc(c.minor_category)}" ${sel} disabled style="color:var(--muted)">${esc(c.minor_category)} (archived)</option>`;
     }).join('');
@@ -119,7 +119,8 @@ function _isCatSubEligible(tx) {
     c.major_category === tx.major_category &&
     c.minor_category === tx.minor_category
   );
-  return cat?.is_subscription_eligible === true;
+  if (!cat) return false;
+  return cat.is_subscription_eligible === true;
 }
 
 function _normTags(str) {
@@ -158,7 +159,7 @@ function _acctOptsWithHints(accounts, allowedTypesStr, selectedId = '') {
 // ── Transaction schema helpers ────────────────────────────────────────────────
 
 function _txTypes() {
-  return state.transactionSchema?.types || [
+  return (state.transactionSchema && state.transactionSchema.types) || [
     { value: 'money-in',       label: 'Money In'  },
     { value: 'money-out',      label: 'Money Out' },
     { value: 'money-transfer', label: 'Transfer'  },
@@ -244,7 +245,7 @@ export function renderTransactions() {
   const txEl = el('transactionsContent');
   const rows = filteredTx();
 
-  const _rawTypes   = state.transactionSchema?.types ?? [];
+  const _rawTypes   = (state.transactionSchema && state.transactionSchema.types) || [];
   const _validTypes = new Set(_rawTypes.length
     ? _rawTypes.map(t => (typeof t === 'string' ? t : t.value))
     : ['money-in', 'money-out', 'money-transfer']);
@@ -273,7 +274,7 @@ export function renderTransactions() {
     ${_renderTxTable(validRows, warnRows)}
   `;
 
-  el('txImportBtn')?.addEventListener('click', () => {
+  el('txImportBtn').addEventListener('click', () => {
     if (state.txImportOpen) {
       state.txImportOpen = false;
       _txImportParsed = null;
@@ -286,7 +287,7 @@ export function renderTransactions() {
     renderTransactions();
   });
 
-  el('txAddBtn')?.addEventListener('click', () => {
+  el('txAddBtn').addEventListener('click', () => {
     if (anyAddOpen) {
       state.txAddOpen = false;
       state.txViewRow = null;
@@ -299,7 +300,7 @@ export function renderTransactions() {
     renderTransactions();
   });
 
-  el('txImportFile')?.addEventListener('change', e => {
+  el('txImportFile').addEventListener('change', e => {
     const file = e.target.files[0];
     if (!file) return;
     const reader = new FileReader();
@@ -314,11 +315,11 @@ export function renderTransactions() {
     reader.readAsText(file);
   });
 
-  el('txImportConfirm')?.addEventListener('click', () => {
+  el('txImportConfirm').addEventListener('click', () => {
     if (_txImportParsed) _submitTxImport(_txImportParsed);
   });
 
-  el('txImportCancel')?.addEventListener('click', () => {
+  el('txImportCancel').addEventListener('click', () => {
     state.txImportOpen = false;
     _txImportParsed = null;
     renderTransactions();
@@ -330,7 +331,7 @@ export function renderTransactions() {
   if (editTx) _attachTxEditCascadeEvents();
   _attachEvents();
 
-  el('txExportBtn')?.addEventListener('click', () => {
+  el('txExportBtn').addEventListener('click', () => {
     openContextMenu(el('txExportBtn'), [
       { key: 'csv',  label: 'CSV'  },
       { key: 'json', label: 'JSON' },
@@ -338,7 +339,7 @@ export function renderTransactions() {
   });
 
   if (warnRows.length) {
-    el('warnToggle')?.addEventListener('click', () => el('warnTable')?.classList.toggle('hidden'));
+    el('warnToggle').addEventListener('click', () => el('warnTable').classList.toggle('hidden'));
   }
 }
 
@@ -371,8 +372,10 @@ function _renderTxTable(validRows, warnRows) {
     const typeLabel = _txTypeMap()[tx.tx_type] || tx.tx_type;
     const missingRate = !state.rateMap[tx.currency];
 
-    const fromName  = state.accountMap[tx.source_account]?.name || '—';
-    const toName    = tx.target_account ? state.accountMap[tx.target_account]?.name : null;
+    const _fromAccTbl = state.accountMap[tx.source_account];
+    const _toAccTbl   = tx.target_account ? state.accountMap[tx.target_account] : null;
+    const fromName  = (_fromAccTbl && _fromAccTbl.name) || '—';
+    const toName    = _toAccTbl ? _toAccTbl.name : null;
     const acctLabel = toName ? `${fromName} → ${toName}` : fromName;
     const catLabel  = [tx.major_category, tx.minor_category].filter(Boolean).join(' → ') || '—';
     const nativeAmt = fmtNative(tx.amount, tx.currency);
@@ -464,9 +467,9 @@ function _attachEvents() {
     }, { signal });
   });
 
-  el('prevPage')?.addEventListener('click', () => { state.txPage--; renderTransactions(); }, { signal });
-  el('nextPage')?.addEventListener('click', () => { state.txPage++; renderTransactions(); }, { signal });
-  el('txPerPage')?.addEventListener('change', e => { state.txPerPage = Number(e.target.value); state.txPage = 1; renderTransactions(); }, { signal });
+  el('prevPage').addEventListener('click', () => { state.txPage--; renderTransactions(); }, { signal });
+  el('nextPage').addEventListener('click', () => { state.txPage++; renderTransactions(); }, { signal });
+  el('txPerPage').addEventListener('change', e => { state.txPerPage = Number(e.target.value); state.txPage = 1; renderTransactions(); }, { signal });
 
   content.addEventListener('click', e => {
     const btn = e.target.closest('[data-action]');
@@ -629,11 +632,11 @@ function _renderAddForm() {
       <button class="btn btn-secondary" id="afReset">Clear</button>
     </div>
     <div class="pin-error" id="afError"></div>
-    ${_datalist('dlAfCounterparty', state.metadata?.counterparties)}
-    ${_datalist('dlAfArea',         state.metadata?.areas)}
-    ${_datalist('dlAfCity',         state.metadata?.cities)}
-    ${_datalist('dlAfCountry',      state.metadata?.countries)}
-    ${_datalist('dlAfTags',         state.metadata?.tags)}
+    ${_datalist('dlAfCounterparty', state.metadata && state.metadata.counterparties)}
+    ${_datalist('dlAfArea',         state.metadata && state.metadata.areas)}
+    ${_datalist('dlAfCity',         state.metadata && state.metadata.cities)}
+    ${_datalist('dlAfCountry',      state.metadata && state.metadata.countries)}
+    ${_datalist('dlAfTags',         state.metadata && state.metadata.tags)}
   </div>`;
 }
 
@@ -683,7 +686,7 @@ function _prefillAddForm(p) {
 }
 
 function _attachAddFormEvents() {
-  el('afType')?.addEventListener('change', () => {
+  el('afType').addEventListener('change', () => {
     const type       = el('afType').value;
     const majorEl    = el('afMajor');
     const minorEl    = el('afMinor');
@@ -711,19 +714,19 @@ function _attachAddFormEvents() {
     _afRefreshFromAccountOpts();
   });
 
-  el('afMajor')?.addEventListener('change', () => {
+  el('afMajor').addEventListener('change', () => {
     const type   = el('afType').value;
     const major  = el('afMajor').value;
     el('afMinor').innerHTML = _catMinorOpts(type, major);
     _afRefreshFromAccountOpts();  // clear any previous category hint
   });
 
-  el('afMinor')?.addEventListener('change', _afRefreshFromAccountOpts);
+  el('afMinor').addEventListener('change', _afRefreshFromAccountOpts);
 
-  el('afFromAccount')?.addEventListener('change', _afRefreshToAccountField);
+  el('afFromAccount').addEventListener('change', _afRefreshToAccountField);
 
-  el('afSubmit')?.addEventListener('click', _saveTransaction);
-  el('afReset')?.addEventListener('click', () => {
+  el('afSubmit').addEventListener('click', _saveTransaction);
+  el('afReset').addEventListener('click', () => {
     ['afDate','afAmount','afCounterparty','afArea','afCity','afCountry','afTags','afDescription','afTimezone','afLatitude','afLongitude','afBeneficiaries']
       .forEach(id => { if (el(id)) el(id).value = id === 'afDate' ? nowLocalISO() : ''; });
     el('afType').value = '';
@@ -740,7 +743,7 @@ function _attachAddFormEvents() {
 
   _attachTagAutocomplete('afTags', 'dlAfTags');
 
-  el('afDetectLocation')?.addEventListener('click', () => {
+  el('afDetectLocation').addEventListener('click', () => {
     if (!navigator.geolocation) return;
     navigator.geolocation.getCurrentPosition(pos => {
       const lat = el('afLatitude');
@@ -758,9 +761,9 @@ function _attachAddFormEvents() {
 }
 
 function _afRefreshFromAccountOpts() {
-  const type   = el('afType')?.value  || '';
-  const major  = el('afMajor')?.value || '';
-  const minor  = el('afMinor')?.value || '';
+  const type   = el('afType').value  || '';
+  const major  = el('afMajor').value || '';
+  const minor  = el('afMinor').value || '';
   const fromEl = el('afFromAccount');
   if (!fromEl) return;
   const cat          = _getCat(type, major, minor);
@@ -774,7 +777,7 @@ function _afRefreshFromAccountOpts() {
     fromEl.disabled  = false;
     const prevVal    = fromEl.value;
     const activeAccs = state.accounts.filter(a => a.record_status === 'active');
-    const srcTypes   = cat?.source_account_types || '';
+    const srcTypes   = (cat && cat.source_account_types) || '';
     fromEl.innerHTML = `<option value="">— select —</option>${_acctOptsWithHints(activeAccs, srcTypes, prevVal)}`;
     if (prevVal) fromEl.value = prevVal;
   }
@@ -782,9 +785,9 @@ function _afRefreshFromAccountOpts() {
 }
 
 function _afRefreshToAccountField() {
-  const type   = el('afType')?.value  || '';
-  const major  = el('afMajor')?.value || '';
-  const minor  = el('afMinor')?.value || '';
+  const type   = el('afType').value  || '';
+  const major  = el('afMajor').value || '';
+  const minor  = el('afMinor').value || '';
   const cat    = _getCat(type, major, minor);
   const isTransfer      = type === 'money-transfer';
   const targetMandatory = cat ? Boolean(cat.target_account_mandatory) : isTransfer;
@@ -794,10 +797,10 @@ function _afRefreshToAccountField() {
 
   if (targetMandatory) {
     toAccEl.disabled  = false;
-    const fromId      = el('afFromAccount')?.value || '';
+    const fromId      = el('afFromAccount').value || '';
     const prevVal     = toAccEl.value;
     const activeAccs  = state.accounts.filter(a => a.record_status === 'active');
-    const dstTypes    = cat?.target_account_types || '';
+    const dstTypes    = (cat && cat.target_account_types) || '';
     const eligible    = activeAccs.filter(a => a.id !== fromId);
     toAccEl.innerHTML = `<option value="">— select —</option>${_acctOptsWithHints(eligible, dstTypes, prevVal)}`;
     if (prevVal && prevVal !== fromId) toAccEl.value = prevVal;
@@ -827,7 +830,7 @@ function _checkBalanceRules(transaction_type, sourceAccount, amount) {
   const fmt = n => Number(n).toFixed(2);
 
   // Rules 1 & 3 — asset accounts
-  if ((state.accountSchema?.asset_types || []).includes(sourceAccount.type)) {
+  if (((state.accountSchema && state.accountSchema.asset_types) || []).includes(sourceAccount.type)) {
     const balance = Number(sourceAccount.current_value);
     if (balance < amount) {
       return (
@@ -879,7 +882,7 @@ function _checkBalanceRules(transaction_type, sourceAccount, amount) {
 function _checkRule5(transaction_type, sourceAccount, major_category, minor_category) {
   if (transaction_type !== 'money-out') return null;
   if (!sourceAccount) return null;
-  const loanTypes = state.accountSchema?.loan_types || [];
+  const loanTypes = (state.accountSchema && state.accountSchema.loan_types) || [];
   if (!loanTypes.includes(sourceAccount.type)) return null;
   if (major_category === 'Debt & finance' && minor_category === 'Interest & charges') return null;
   return (
@@ -897,23 +900,25 @@ async function _saveTransaction() {
   const dateRaw              = el('afDate').value;
   const tx_type              = el('afType').value;
   const source_account       = el('afFromAccount').value;
-  const target_account       = el('afToAccount')?.value || '';
+  const target_account       = el('afToAccount').value || '';
   const amount               = el('afAmount').value;
+  const _saveSrcAcc = state.accountMap[source_account];
+  const _saveTgtAcc = state.accountMap[target_account];
   const currency             = tx_type === 'money-in'
-    ? (state.accountMap[target_account]?.currency || '')
-    : (state.accountMap[source_account]?.currency || '');
+    ? ((_saveTgtAcc && _saveTgtAcc.currency) || '')
+    : ((_saveSrcAcc && _saveSrcAcc.currency) || '');
   const major_category       = el('afMajor').value;
   const minor_category       = el('afMinor').value;
   const counterparty_name    = el('afCounterparty').value.trim();
-  const user_location_area     = el('afArea')?.value.trim()    || '';
-  const user_location_city     = el('afCity')?.value.trim()    || '';
+  const user_location_area     = el('afArea').value.trim()    || '';
+  const user_location_city     = el('afCity').value.trim()    || '';
   const user_location_country  = el('afCountry').value.trim();
   const tx_tags              = el('afTags').value.trim();
   const description          = el('afDescription').value.trim();
-  const tx_timezone            = el('afTimezone')?.value.trim() || '';
-  const user_location_latitude  = el('afLatitude')?.value  !== '' ? Number(el('afLatitude')?.value)  : '';
-  const user_location_longitude = el('afLongitude')?.value !== '' ? Number(el('afLongitude')?.value) : '';
-  const beneficiaries           = el('afBeneficiaries')?.value.trim() || '';
+  const tx_timezone            = el('afTimezone').value.trim() || '';
+  const user_location_latitude  = el('afLatitude').value  !== '' ? Number(el('afLatitude').value)  : '';
+  const user_location_longitude = el('afLongitude').value !== '' ? Number(el('afLongitude').value) : '';
+  const beneficiaries           = el('afBeneficiaries').value.trim() || '';
 
   const isTransfer    = tx_type === 'money-transfer';
   const _saveCat      = _getCat(tx_type, major_category, minor_category);
@@ -952,7 +957,7 @@ async function _saveTransaction() {
       state.txAddOpen = false;
       document.dispatchEvent(new CustomEvent('et:reload'));
     } else {
-      console.warn('[transactions] _saveTransaction failed:', res?.error);
+      console.warn('[transactions] _saveTransaction failed:', res.error);
       errEl.textContent = 'Error: ' + (res.error || 'unknown');
       btn.disabled = false; btn.textContent = 'Save';
     }
@@ -970,8 +975,10 @@ async function _saveTransaction() {
 function _renderTxForm(tx, mode) {
   const badgeCls  = tx.tx_type === 'money-in' ? 'badge-et-in' : tx.tx_type === 'money-out' ? 'badge-et-out' : 'badge-et-transfer';
   const typeLabel = _txTypeMap()[tx.tx_type] || tx.tx_type;
-  const fromName  = state.accountMap[tx.source_account]?.name || '—';
-  const toName    = tx.target_account ? (state.accountMap[tx.target_account]?.name || '—') : 'External';
+  const _fromAccForm = state.accountMap[tx.source_account];
+  const _toAccForm   = tx.target_account ? state.accountMap[tx.target_account] : null;
+  const fromName  = (_fromAccForm && _fromAccForm.name) || '—';
+  const toName    = _toAccForm ? (_toAccForm.name || '—') : 'External';
 
   if (mode === 'view') {
     const f = (label, value) =>
@@ -1006,10 +1013,10 @@ function _renderTxForm(tx, mode) {
   // Edit mode
   const activeAccounts  = state.accounts.filter(a => a.record_status === 'active');
   const _editCat        = _getCat(tx.tx_type, tx.major_category, tx.minor_category);
-  const fromAccountOpts = _acctOptsWithHints(activeAccounts, _editCat?.source_account_types || '', tx.source_account);
+  const fromAccountOpts = _acctOptsWithHints(activeAccounts, (_editCat && _editCat.source_account_types) || '', tx.source_account);
   const toAccountOpts   = _acctOptsWithHints(
     activeAccounts.filter(a => a.id !== tx.source_account),
-    _editCat?.target_account_types || '',
+    (_editCat && _editCat.target_account_types) || '',
     tx.target_account
   );
   const typeOpts = _txTypes().map(t =>
@@ -1121,17 +1128,19 @@ function _renderTxForm(tx, mode) {
       <button class="btn btn-secondary btn-sm" data-action="tx-cancel-edit">Cancel</button>
     </div>
     <div class="pin-error" id="txEditError"></div>
-    ${_datalist('dlEditCounterparty', state.metadata?.counterparties)}
-    ${_datalist('dlEditArea',         state.metadata?.areas)}
-    ${_datalist('dlEditCity',         state.metadata?.cities)}
-    ${_datalist('dlEditCountry',      state.metadata?.countries)}
-    ${_datalist('dlEditTags',         state.metadata?.tags)}
+    ${_datalist('dlEditCounterparty', state.metadata && state.metadata.counterparties)}
+    ${_datalist('dlEditArea',         state.metadata && state.metadata.areas)}
+    ${_datalist('dlEditCity',         state.metadata && state.metadata.cities)}
+    ${_datalist('dlEditCountry',      state.metadata && state.metadata.countries)}
+    ${_datalist('dlEditTags',         state.metadata && state.metadata.tags)}
   </div>`;
 }
 
 function _renderTxDeleteRow(tx) {
-  const fromName = state.accountMap[tx.source_account]?.name || '—';
-  const toName   = tx.target_account ? state.accountMap[tx.target_account]?.name : null;
+  const _fromAccDel = state.accountMap[tx.source_account];
+  const _toAccDel   = tx.target_account ? state.accountMap[tx.target_account] : null;
+  const fromName = (_fromAccDel && _fromAccDel.name) || '—';
+  const toName   = _toAccDel ? _toAccDel.name : null;
   const accLabel = toName ? `${fromName} → ${toName}` : fromName;
   return `<tr>
     <td colspan="6">
@@ -1146,12 +1155,12 @@ function _renderTxDeleteRow(tx) {
 
 function _attachTxEditCascadeEvents() {
   const _refreshFieldVis = () => {
-    const type    = el('txEditType')?.value;
-    const major   = el('txEditMajor')?.value || '';
-    const minor   = el('txEditMinor')?.value || '';
+    const type    = el('txEditType').value;
+    const major   = el('txEditMajor').value || '';
+    const minor   = el('txEditMinor').value || '';
     const cat     = _getCat(type, major, minor);
-    const fromAcc = state.accountMap[el('txEditFromAccount')?.value];
-    const toAcc   = state.accountMap[el('txEditToAccount')?.value];
+    const fromAcc = state.accountMap[el('txEditFromAccount').value];
+    const toAcc   = state.accountMap[el('txEditToAccount').value];
     const isXfer     = type === 'money-transfer';
     const tgtMand    = cat ? Boolean(cat.target_account_mandatory) : isXfer;
 
@@ -1171,12 +1180,12 @@ function _attachTxEditCascadeEvents() {
   };
 
   const _refreshAccountOpts = () => {
-    const type     = el('txEditType')?.value  || '';
-    const major    = el('txEditMajor')?.value || '';
-    const minor    = el('txEditMinor')?.value || '';
+    const type     = el('txEditType').value  || '';
+    const major    = el('txEditMajor').value || '';
+    const minor    = el('txEditMinor').value || '';
     const cat      = _getCat(type, major, minor);
-    const srcTypes = cat?.source_account_types      || '';
-    const dstTypes = cat?.target_account_types || '';
+    const srcTypes = (cat && cat.source_account_types) || '';
+    const dstTypes = (cat && cat.target_account_types) || '';
     const srcMand  = cat ? Boolean(cat.source_account_mandatory) : type !== 'money-in';
     const actives  = state.accounts.filter(a => a.record_status === 'active');
     const fromEl   = el('txEditFromAccount');
@@ -1194,7 +1203,7 @@ function _attachTxEditCascadeEvents() {
       }
     }
     if (toEl) {
-      const fromId = fromEl?.value || '';
+      const fromId = (fromEl && fromEl.value) || '';
       const prev   = toEl.value;
       toEl.innerHTML = `<option value="">— none —</option>${_acctOptsWithHints(actives.filter(a => a.id !== fromId), dstTypes, prev)}`;
       if (prev && prev !== fromId) toEl.value = prev;
@@ -1202,25 +1211,25 @@ function _attachTxEditCascadeEvents() {
     _refreshFieldVis();
   };
 
-  el('txEditType')?.addEventListener('change', () => {
+  el('txEditType').addEventListener('change', () => {
     el('txEditMajor').innerHTML = _catMajorOpts(el('txEditType').value);
     el('txEditMinor').innerHTML = `<option value="">— select major first —</option>`;
     el('txEditToAccount').value = '';
     _refreshFieldVis();
   });
-  el('txEditMajor')?.addEventListener('change', () => {
+  el('txEditMajor').addEventListener('change', () => {
     const type  = el('txEditType').value;
     const major = el('txEditMajor').value;
     el('txEditMinor').innerHTML = _catMinorOpts(type, major);
     _refreshAccountOpts();
   });
-  el('txEditMinor')?.addEventListener('change', _refreshAccountOpts);
-  el('txEditFromAccount')?.addEventListener('change', _refreshFieldVis);
-  el('txEditToAccount')?.addEventListener('change', _refreshFieldVis);
+  el('txEditMinor').addEventListener('change', _refreshAccountOpts);
+  el('txEditFromAccount').addEventListener('change', _refreshFieldVis);
+  el('txEditToAccount').addEventListener('change', _refreshFieldVis);
 
   _attachTagAutocomplete('txEditTags', 'dlEditTags');
 
-  el('txEditDetectLocation')?.addEventListener('click', () => {
+  el('txEditDetectLocation').addEventListener('click', () => {
     if (!navigator.geolocation) return;
     navigator.geolocation.getCurrentPosition(pos => {
       const lat = el('txEditLatitude');
@@ -1239,26 +1248,28 @@ async function _saveEdit() {
   errEl.textContent = '';
 
   const rowNum              = state.txEditRow;
-  const dateRaw             = el('txEditDate')?.value;
-  const tx_type             = el('txEditType')?.value;
-  const source_account      = el('txEditFromAccount')?.value;
-  const target_account      = el('txEditToAccount')?.value  || '';
-  const amount              = el('txEditAmount')?.value;
+  const dateRaw             = el('txEditDate').value;
+  const tx_type             = el('txEditType').value;
+  const source_account      = el('txEditFromAccount').value;
+  const target_account      = el('txEditToAccount').value  || '';
+  const amount              = el('txEditAmount').value;
+  const _editSrcAccCur = state.accountMap[source_account];
+  const _editTgtAccCur = state.accountMap[target_account];
   const currency            = tx_type === 'money-in'
-    ? (state.accountMap[target_account]?.currency || '')
-    : (state.accountMap[source_account]?.currency || '');
-  const major_category      = el('txEditMajor')?.value;
-  const minor_category      = el('txEditMinor')?.value;
-  const counterparty_name   = el('txEditCounterparty')?.value.trim();
-  const user_location_area    = el('txEditArea')?.value.trim();
-  const user_location_city    = el('txEditCity')?.value.trim();
-  const user_location_country = el('txEditCountry')?.value.trim();
-  const tx_tags             = el('txEditTags')?.value.trim();
-  const description         = el('txEditDescription')?.value.trim();
-  const tx_timezone            = el('txEditTimezone')?.value.trim() || '';
-  const user_location_latitude  = el('txEditLatitude')?.value  !== '' ? Number(el('txEditLatitude')?.value)  : '';
-  const user_location_longitude = el('txEditLongitude')?.value !== '' ? Number(el('txEditLongitude')?.value) : '';
-  const beneficiaries           = el('txEditBeneficiaries')?.value.trim() || '';
+    ? ((_editTgtAccCur && _editTgtAccCur.currency) || '')
+    : ((_editSrcAccCur && _editSrcAccCur.currency) || '');
+  const major_category      = el('txEditMajor').value;
+  const minor_category      = el('txEditMinor').value;
+  const counterparty_name   = el('txEditCounterparty').value.trim();
+  const user_location_area    = el('txEditArea').value.trim();
+  const user_location_city    = el('txEditCity').value.trim();
+  const user_location_country = el('txEditCountry').value.trim();
+  const tx_tags             = el('txEditTags').value.trim();
+  const description         = el('txEditDescription').value.trim();
+  const tx_timezone            = el('txEditTimezone').value.trim() || '';
+  const user_location_latitude  = el('txEditLatitude').value  !== '' ? Number(el('txEditLatitude').value)  : '';
+  const user_location_longitude = el('txEditLongitude').value !== '' ? Number(el('txEditLongitude').value) : '';
+  const beneficiaries           = el('txEditBeneficiaries').value.trim() || '';
 
   const isEditTransfer   = tx_type === 'money-transfer';
   const _editSaveCat     = _getCat(tx_type, major_category, minor_category);
@@ -1348,7 +1359,7 @@ async function _saveEdit() {
       state.txEditRow = null;
       document.dispatchEvent(new CustomEvent('et:reload'));
     } else {
-      console.warn('[transactions] _saveEdit failed:', res?.error);
+      console.warn('[transactions] _saveEdit failed:', res.error);
       errEl.textContent = 'Error: ' + (res.error || 'unknown');
     }
   } catch (err) {
@@ -1368,7 +1379,7 @@ async function _confirmDelete(rowNum) {
       state.txDeleteRow = null;
       document.dispatchEvent(new CustomEvent('et:reload'));
     } else {
-      console.warn('[transactions] _confirmDelete failed:', res?.error);
+      console.warn('[transactions] _confirmDelete failed:', res.error);
       showMsg('Delete failed: ' + (res.error || 'unknown'), 'warn');
       state.txDeleteRow = null;
       renderTransactions();
@@ -1411,7 +1422,8 @@ function _renderSuggestionsPanel() {
 
   const cards = visible.map(s => {
     const key      = `${s.counterparty_name}|${s.minor_category}`;
-    const acctName = state.accountMap[s.source_account]?.name || esc(s.source_account);
+    const _suggAcc = state.accountMap[s.source_account];
+    const acctName = (_suggAcc && _suggAcc.name) || esc(s.source_account);
     const sym      = getSymbol(s.currency);
     const amount   = sym + Number(s.typical_amount).toFixed(2);
 
@@ -1471,7 +1483,7 @@ function _refreshFilterAccountDropdown() {
   _attachFilterAccountCheckboxes(dropdown);
   const lbl = el('filterAccountLabel');
   if (lbl) lbl.textContent = state.filters.accounts.length
-    ? state.filters.accounts.map(id => state.accountMap[id]?.name || id).join(', ')
+    ? state.filters.accounts.map(id => { const a = state.accountMap[id]; return (a && a.name) || id; }).join(', ')
     : 'All accounts';
 }
 
@@ -1483,7 +1495,7 @@ function _attachFilterAccountCheckboxes(dropdown) {
       else { state.filters.accounts = state.filters.accounts.filter(x => x !== id); }
       const lbl = el('filterAccountLabel');
       if (lbl) lbl.textContent = state.filters.accounts.length
-        ? state.filters.accounts.map(id => state.accountMap[id]?.name || id).join(', ')
+        ? state.filters.accounts.map(id => { const a = state.accountMap[id]; return (a && a.name) || id; }).join(', ')
         : 'All accounts';
     });
   });
@@ -1525,8 +1537,9 @@ function _attachTagAutocomplete(inputId, datalistId) {
   const dl    = el(datalistId);
   if (!input || !dl) return;
   input.addEventListener('input', () => {
-    const tags = state.metadata?.tags;
-    if (!tags?.length) return;
+    if (!state.metadata) return;
+    const tags = state.metadata.tags;
+    if (!tags || !tags.length) return;
     const val       = input.value;
     const lastComma = val.lastIndexOf(',');
     const prefix    = lastComma >= 0 ? val.slice(0, lastComma + 1) + ' ' : '';
@@ -1553,7 +1566,7 @@ function _renderFilterBar() {
 
   const activeChips = [
     ...f.types.map(t     => ({ label: _txTypeMap()[t] || t,              key: 'types',    val: t })),
-    ...f.accounts.map(id => ({ label: state.accountMap[id]?.name || id,  key: 'accounts', val: id })),
+    ...f.accounts.map(id => { const a = state.accountMap[id]; return { label: (a && a.name) || id, key: 'accounts', val: id }; }),
     ...f.major.map(v     => ({ label: v,                                 key: 'major',    val: v })),
     ...f.minor.map(v     => ({ label: v,                                 key: 'minor',    val: v })),
     ...(f.user_location_country ? [{ label: 'Country: ' + f.user_location_country, key: 'user_location_country', val: '' }] : []),
@@ -1602,7 +1615,7 @@ function _renderFilterBar() {
           </div>
           <div id="filterAccountWrap" style="flex:1;min-width:130px;position:relative">
             <button id="filterAccountTrigger" type="button" style="width:100%;display:flex;justify-content:space-between;align-items:center;text-align:left;background:var(--panel);border:1px solid var(--hair-strong);border-radius:8px;padding:6px 10px;font-size:var(--text-base);color:var(--ink);cursor:pointer;outline:none">
-              <span id="filterAccountLabel">${f.accounts.length ? f.accounts.map(id => state.accountMap[id]?.name || id).join(', ') : 'All accounts'}</span>
+              <span id="filterAccountLabel">${f.accounts.length ? f.accounts.map(id => { const a = state.accountMap[id]; return (a && a.name) || id; }).join(', ') : 'All accounts'}</span>
               <span style="color:var(--muted);font-size:var(--text-2xs);margin-left:8px">▼</span>
             </button>
             <div id="filterAccountDropdown" class="hidden" style="position:fixed;z-index:1000;background:var(--panel);border:1px solid var(--hair-strong);border-radius:8px;padding:8px 10px;display:flex;flex-direction:column;gap:8px;box-shadow:0 4px 16px rgba(0,0,0,.15);max-height:200px;overflow-y:auto">
@@ -1646,17 +1659,17 @@ function _renderFilterBar() {
         <label>Location</label>
         <div style="flex:1;display:flex;gap:8px;flex-wrap:wrap">
           <input type="text" id="filterCountry" value="${esc(f.user_location_country)}" list="dlFCountry" placeholder="Country" autocomplete="off" style="flex:1;min-width:100px">
-          ${_datalist('dlFCountry', m?.countries)}
+          ${_datalist('dlFCountry', m && m.countries)}
           <input type="text" id="filterCity" value="${esc(f.user_location_city)}" list="dlFCity" placeholder="City" autocomplete="off" style="flex:1;min-width:100px">
-          ${_datalist('dlFCity', m?.cities)}
+          ${_datalist('dlFCity', m && m.cities)}
           <input type="text" id="filterArea" value="${esc(f.user_location_area)}" list="dlFArea" placeholder="Area" autocomplete="off" style="flex:1;min-width:100px">
-          ${_datalist('dlFArea', m?.areas)}
+          ${_datalist('dlFArea', m && m.areas)}
         </div>
       </div>
       <div class="filter-row">
         <label>Tag</label>
         <input type="text" id="filterTag" value="${esc(f.tag)}" placeholder="any tag" list="dlFTag" autocomplete="off">
-        ${_datalist('dlFTag', m?.tags)}
+        ${_datalist('dlFTag', m && m.tags)}
       </div>
       <div class="filter-row">
         <label>Search</label>
@@ -1799,7 +1812,7 @@ async function _submitTxImport(transactions) {
     const res = await ExpenseAPI.createTransactionsBulk({ transactions: payload });
 
     if (!res.ok && !res.results) {
-      console.warn('[transactions] _submitTxImport failed:', res?.error);
+      console.warn('[transactions] _submitTxImport failed:', res.error);
       if (errEl) errEl.textContent = 'Error: ' + (res.error || 'unknown');
       if (btn)   { btn.disabled = false; btn.textContent = 'Import'; }
       return;
@@ -1854,7 +1867,7 @@ async function _submitTxImport(transactions) {
 }
 
 function _attachSuggestionEvents() {
-  el('suggestionsToggle')?.addEventListener('click', () => {
+  el('suggestionsToggle').addEventListener('click', () => {
     state.suggestionsOpen = !state.suggestionsOpen;
     renderTransactions();
   });
@@ -1874,11 +1887,11 @@ const _FILTER_DROPDOWN_IDS = ['filterTypeDropdown','filterAccTypeDropdown','filt
 const _FILTER_WRAP_IDS     = ['filterTypeWrap','filterAccTypeWrap','filterAccountWrap','filterMajorWrap','filterMinorWrap'];
 
 function _closeAllFilterDropdowns(exceptId) {
-  _FILTER_DROPDOWN_IDS.forEach(id => { if (id !== exceptId) el(id)?.classList.add('hidden'); });
+  _FILTER_DROPDOWN_IDS.forEach(id => { if (id !== exceptId) el(id).classList.add('hidden'); });
 }
 
 function _attachFilterEvents() {
-  el('filterToggle')?.addEventListener('click', () => { filterOpen = !filterOpen; renderTransactions(); });
+  el('filterToggle').addEventListener('click', () => { filterOpen = !filterOpen; renderTransactions(); });
 
   const typeTrigger  = el('filterTypeTrigger');
   const typeDropdown = el('filterTypeDropdown');
@@ -1985,11 +1998,11 @@ function _attachFilterEvents() {
 
   // ── Global outside-click: close all dropdowns when clicking outside every wrap ──
   document.addEventListener('click', e => {
-    const inAnyWrap = _FILTER_WRAP_IDS.some(id => el(id)?.contains(e.target));
+    const inAnyWrap = _FILTER_WRAP_IDS.some(id => el(id).contains(e.target));
     if (!inAnyWrap) _closeAllFilterDropdowns();
   });
 
-  const bindText = (id, key) => el(id)?.addEventListener('input', e => {
+  const bindText = (id, key) => el(id).addEventListener('input', e => {
     state.filters[key] = e.target.value.trim();
   });
 
@@ -2000,17 +2013,17 @@ function _attachFilterEvents() {
   bindText('filterSearch',  'search');
   _attachTagAutocomplete('filterTag', 'dlFTag');
 
-  el('applyFilters')?.addEventListener('click', () => {
+  el('applyFilters').addEventListener('click', () => {
     state.txPage = 1; renderTransactions();
   });
 
-  el('clearFilters')?.addEventListener('click', () => {
+  el('clearFilters').addEventListener('click', () => {
     _accTypeSel.clear();
     state.filters = { types:[], accounts:[], major:[], minor:[], user_location_country:'', user_location_city:'', user_location_area:'', tag:'', search:'' };
     state.txPage = 1; renderTransactions();
   });
 
-  el('transactionsContent')?.querySelectorAll('.chip-remove').forEach(btn => {
+  el('transactionsContent').querySelectorAll('.chip-remove').forEach(btn => {
     btn.addEventListener('click', () => {
       const key = btn.dataset.chipKey;
       const val = btn.dataset.chipVal;
