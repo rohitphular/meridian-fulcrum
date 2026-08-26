@@ -656,6 +656,10 @@ function _attachCatEvents() {
   });
 
   if (state.catFilterOpen) {
+    if (!_catDraft) {
+      _catDraft = { ...state.catFilters, recordStatuses: [...state.catFilters.recordStatuses] };
+    }
+
     const MENU_OPEN_STYLE = 'display:flex;flex-direction:column;gap:8px;position:fixed;z-index:1000;background:var(--panel);border:1px solid var(--hair-strong);border-radius:8px;padding:8px 10px;box-shadow:0 4px 16px rgba(0,0,0,.15)';
     const OPT_STYLE       = 'display:flex;align-items:center;gap:8px;font-size:var(--text-base);color:var(--ink);cursor:pointer';
 

@@ -53,9 +53,11 @@ function createAccount(body) {
   setCol('current_value', openingValue);
   setCol('record_status', VALID_RECORD_STATUSES.includes(body.record_status) ? body.record_status : 'active');
   setCol('description',   String(body.description || '').trim());
-  setCol('created_at',    now);
-  setCol('sync_status',   SYNC_STATUS_CREATE_PENDING);
-  setCol('sync_notes',    '');
+  setCol('sync_status',    SYNC_STATUS_CREATE_PENDING);
+  setCol('sync_date_time', '');
+  setCol('sync_notes',     '');
+  setCol('created_at',     now);
+  setCol('updated_at',     now);
 
   sheet.appendRow(row);
   return { ok: true, id: id };
@@ -119,15 +121,18 @@ function updateAccount(body) {
   }
 
   writeField('name',          String(body.name).trim());
+  writeField('sub_type',      String(body.sub_type || '').trim());
   writeField('record_status', VALID_RECORD_STATUSES.includes(body.record_status) ? body.record_status : 'active');
   writeField('description',   String(body.description || '').trim());
 
   // sync_status: preserve create-pending if not yet synced; clear sync_notes either way
   const syncStatusCol     = getAccountSchemaField('sync_status').sheet_column_position;
   const syncNotesCol      = getAccountSchemaField('sync_notes').sheet_column_position;
+  const updatedAtCol      = getAccountSchemaField('updated_at').sheet_column_position;
   const currentSyncStatus = String(allRows[rowNum - 1][syncStatusCol - 1] || '');
   sheet.getRange(rowNum, syncStatusCol).setValue(computeSyncStatus(currentSyncStatus));
   sheet.getRange(rowNum, syncNotesCol).setValue('');
+  sheet.getRange(rowNum, updatedAtCol).setValue(new Date().toISOString());
 
   return { ok: true };
 }
@@ -165,11 +170,13 @@ function deleteAccount(body) {
   const recordStatusCol   = getAccountSchemaField('record_status').sheet_column_position;
   const syncStatusCol     = getAccountSchemaField('sync_status').sheet_column_position;
   const syncNotesCol      = getAccountSchemaField('sync_notes').sheet_column_position;
+  const updatedAtCol2     = getAccountSchemaField('updated_at').sheet_column_position;
   const currentSyncStatus = String(sheet.getRange(rowNum, syncStatusCol).getValue() || '');
 
   sheet.getRange(rowNum, recordStatusCol).setValue('deleted');
   sheet.getRange(rowNum, syncStatusCol).setValue(computeSyncStatus(currentSyncStatus));
   sheet.getRange(rowNum, syncNotesCol).setValue('');
+  sheet.getRange(rowNum, updatedAtCol2).setValue(new Date().toISOString());
 
   return { ok: true };
 }

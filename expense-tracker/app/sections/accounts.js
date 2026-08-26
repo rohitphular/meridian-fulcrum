@@ -7,8 +7,10 @@ import { showLoading, hideLoading, showMsg } from '../core/ui.js';
 import { ExpenseAPI } from '../core/api.js';
 
 // Module-level holding area for the current import session's parsed rows.
-let _importParsed = null;
-let _accMenuKey   = null;
+let _importParsed  = null;
+let _accMenuKey    = null;
+let _accDraft      = null;   // pending filter selections; copied to state.accFilters on Search
+let _accDDCleanup  = null;   // cleanup fn for the currently open filter dropdown's outside-click listener
 
 // ── Schema accessors ──────────────────────────────────────────────────────────
 // Schema is loaded at boot into state.accountSchema — no hardcoded constants here.
@@ -43,7 +45,7 @@ function _balanceCell(a) {
   const sym     = getSymbol(a.currency);
   const foreign = a.currency !== state.quoteCurrency;
   const baseTag = foreign
-    ? ` <span class="td-base-amt">/ ${esc(fmtBase(Math.abs(val), a.currency, null))}</span>`
+    ? ` <span class="td-base-amt">${esc(fmtBase(Math.abs(val), a.currency, null))}</span>`
     : '';
 
   if (_isLiability(a)) {
@@ -56,10 +58,12 @@ function _balanceCell(a) {
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 export function renderAccounts() {
+  if (_accDDCleanup) { _accDDCleanup(); _accDDCleanup = null; }
   _accMenuKey = null;
   const viewAcc    = state.accViewRow !== null ? state.accounts.find(a => a._row === state.accViewRow) : null;
   const editAcc    = state.accEditRow !== null ? state.accounts.find(a => a._row === state.accEditRow) : null;
   const anyAddOpen = state.accAddOpen || viewAcc !== null || editAcc !== null;
+  const filtered   = _applyAccFilters(state.accounts);
 
   el('accountsContent').innerHTML = `
     <div class="sec-head">
@@ -74,7 +78,8 @@ export function renderAccounts() {
     ${viewAcc             ? _renderAccountForm(viewAcc, 'view') : ''}
     ${editAcc             ? _renderAccountForm(editAcc, 'edit') : ''}
     ${_renderNetWorth()}
-    ${_renderTable()}
+    ${_renderAccFilterBar()}
+    ${_renderTable(filtered)}
   `;
   _attachEvents();
 }
@@ -121,6 +126,116 @@ function _renderNetWorth() {
         <div class="summary-card-value ${liquidCash >= 0 ? 'positive' : 'negative'}">${liquidCash < 0 ? '−' : ''}${fmt(liquidCash)}</div>
       </div>
     </div>`;
+}
+
+// ── Filter helpers ────────────────────────────────────────────────────────────
+
+function _accFilterCount() {
+  const f = state.accFilters;
+  let n = 0;
+  if (f.type !== 'all') n++;
+  if (f.subType !== 'all') n++;
+  if (f.currency !== 'all') n++;
+  if (f.search) n++;
+  if (f.recordStatuses.length < 4) n++;
+  return n;
+}
+
+function _applyAccFilters(accounts) {
+  const f = state.accFilters;
+  return accounts.filter(a => {
+    if (f.type !== 'all' && a.type !== f.type) return false;
+    if (f.subType !== 'all' && a.sub_type !== f.subType) return false;
+    if (f.currency !== 'all' && a.currency !== f.currency) return false;
+    if (f.search) {
+      const q   = f.search.toLowerCase();
+      const hay = (a.name + ' ' + (a.description || '')).toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    if (f.recordStatuses.length < 4 && !f.recordStatuses.includes(a.record_status)) return false;
+    return true;
+  });
+}
+
+function _renderAccFilterBar() {
+  const activeCount = _accFilterCount();
+  const f           = _accDraft || state.accFilters;
+
+  const currencies = [];
+  const seenC = {};
+  state.accounts.forEach(a => {
+    if (!seenC[a.currency]) { seenC[a.currency] = true; currencies.push(a.currency); }
+  });
+  currencies.sort();
+
+  const subTypes = f.type === 'asset'      ? _assetSubTypes()
+                 : f.type === 'investment' ? _invSubTypes()
+                 : f.type === 'liability'  ? _liabSubTypes()
+                 : [];
+
+  const rs = new Set(f.recordStatuses);
+
+  const typeLabel    = f.type === 'all' ? 'All types' : f.type.charAt(0).toUpperCase() + f.type.slice(1);
+  const subTypeLabel = f.type === 'all' ? '— select type first —' : (f.subType === 'all' ? 'All sub-types' : _subTypeLabel(f.subType));
+  const currLabel    = f.currency === 'all' ? 'All' : f.currency;
+  const statusLabel  = rs.size === 4 ? 'All' : rs.size === 0 ? 'None'
+    : [...rs].map(s => s.charAt(0).toUpperCase() + s.slice(1)).join(', ');
+
+  const trigStyle = 'width:100%;display:flex;justify-content:space-between;align-items:center;text-align:left;background:var(--panel);border:1px solid var(--hair-strong);border-radius:8px;padding:6px 10px;font-size:var(--text-base);color:var(--ink);cursor:pointer;outline:none';
+  const optStyle  = 'display:flex;align-items:center;gap:8px;font-size:var(--text-base);color:var(--ink);cursor:pointer';
+
+  const radioRows = (name, opts, cur) => opts.map(([val, lbl]) =>
+    `<label style="${optStyle}"><input type="radio" name="${name}" value="${val}"${cur === val ? ' checked' : ''}> ${lbl}</label>`
+  ).join('');
+
+  const dd = (triggerId, labelId, menuId, curLabel, items, disabled) => `
+    <div style="flex:1;position:relative">
+      <button type="button" id="${triggerId}"${disabled ? ' disabled' : ''} style="${trigStyle}${disabled ? ';opacity:0.5;cursor:not-allowed' : ''}">
+        <span id="${labelId}">${curLabel}</span>
+        <span style="color:var(--muted);font-size:var(--text-2xs);margin-left:8px">▼</span>
+      </button>
+      <div id="${menuId}" style="display:none">${items}</div>
+    </div>`;
+
+  return `
+  <div class="filter-bar">
+    <button class="filter-toggle" id="accFilterToggle">
+      Filters${activeCount ? ` (${activeCount})` : ''} <span class="filter-arrow">${state.accFilterOpen ? '▲' : '▼'}</span>
+    </button>
+    <div class="filter-body ${state.accFilterOpen ? '' : 'hidden'}" id="accFilterBody">
+      <div class="filter-row">
+        <label>Type</label>
+        ${dd('accFTypeTrigger','accFTypeLabel','accFTypeMenu', typeLabel,
+          radioRows('accFTypeR', [['all','All types'],['asset','Asset'],['investment','Investment'],['liability','Liability']], f.type))}
+      </div>
+      <div class="filter-row">
+        <label>Sub-type</label>
+        ${dd('accFSubTrigger','accFSubLabel','accFSubMenu', subTypeLabel,
+          f.type === 'all' ? '' : radioRows('accFSubR', [['all','All sub-types'], ...subTypes.map(s => [s, _subTypeLabel(s)])], f.subType),
+          f.type === 'all')}
+      </div>
+      <div class="filter-row">
+        <label>Currency</label>
+        ${dd('accFCurrTrigger','accFCurrLabel','accFCurrMenu', currLabel,
+          radioRows('accFCurrR', [['all','All'], ...currencies.map(c => [c, c])], f.currency))}
+      </div>
+      <div class="filter-row">
+        <label>Search</label>
+        <input type="text" id="accFSearch" placeholder="name, notes…" value="${esc(f.search)}" style="flex:1">
+      </div>
+      <div class="filter-row">
+        <label>Status</label>
+        ${dd('accFStatusTrigger','accFStatusLabel','accFStatusMenu', statusLabel,
+          ['active','inactive','deleted','locked'].map(s =>
+            `<label style="${optStyle}"><input type="checkbox" data-acc-filter-rstat="${s}"${rs.has(s) ? ' checked' : ''}> ${s.charAt(0).toUpperCase() + s.slice(1)}</label>`
+          ).join(''))}
+      </div>
+      <div style="margin-top:4px;display:flex;gap:8px;justify-content:flex-end">
+        <button class="btn btn-secondary btn-sm" id="accFClear">Clear</button>
+        <button class="btn btn-primary btn-sm" id="accFSearchBtn">Search</button>
+      </div>
+    </div>
+  </div>`;
 }
 
 // ── Sub-type dropdown options ─────────────────────────────────────────────────
@@ -403,14 +518,15 @@ const TABLE_GROUPS = [
   { key: 'liability',  label: 'Liabilities', isLiab: true  },
 ];
 
-function _renderTable() {
-  if (!state.accounts.length) {
-    return `<p class="placeholder">No accounts yet. Use &ldquo;+ Add&rdquo; to create one.</p>`;
+function _renderTable(accounts) {
+  if (!accounts.length) {
+    if (!state.accounts.length) return `<p class="placeholder">No accounts yet. Use &ldquo;+ Add&rdquo; to create one.</p>`;
+    return `<p class="placeholder">No accounts match the current filters.</p>`;
   }
 
   const sym    = getSymbol(state.quoteCurrency);
   const byGroup = {};
-  state.accounts.forEach(a => {
+  accounts.forEach(a => {
     (byGroup[a.type] = byGroup[a.type] || []).push(a);
   });
 
@@ -480,6 +596,8 @@ function _refreshAddTypeUI() {
 // ── Events ────────────────────────────────────────────────────────────────────
 
 function _attachEvents() {
+  if (_accDDCleanup) { _accDDCleanup(); _accDDCleanup = null; }
+
   el('accImportBtn').addEventListener('click', () => {
     if (state.accImportOpen) {
       state.accImportOpen = false;
@@ -622,6 +740,155 @@ function _attachEvents() {
       { key: 'json', label: 'JSON' },
     ], key => exportAccounts(key, state.accounts));
   });
+
+  // Filter toggle
+  el('accFilterToggle').addEventListener('click', () => {
+    state.accFilterOpen = !state.accFilterOpen;
+    if (state.accFilterOpen && !_accDraft) {
+      _accDraft = { ...state.accFilters, recordStatuses: [...state.accFilters.recordStatuses] };
+    }
+    renderAccounts();
+  });
+
+  if (state.accFilterOpen) {
+    if (!_accDraft) {
+      _accDraft = { ...state.accFilters, recordStatuses: [...state.accFilters.recordStatuses] };
+    }
+
+    const MENU_OPEN_STYLE = 'display:flex;flex-direction:column;gap:8px;position:fixed;z-index:1000;background:var(--panel);border:1px solid var(--hair-strong);border-radius:8px;padding:8px 10px;box-shadow:0 4px 16px rgba(0,0,0,.15)';
+    const OPT_STYLE       = 'display:flex;align-items:center;gap:8px;font-size:var(--text-base);color:var(--ink);cursor:pointer';
+
+    const ALL_DD_MENUS = ['accFTypeMenu','accFSubMenu','accFCurrMenu','accFStatusMenu'];
+
+    const _openDD = (triggerId, menuId) => {
+      ALL_DD_MENUS.filter(id => id !== menuId).forEach(id => {
+        const m = el(id); if (m && m.style.display !== 'none') m.style.cssText = 'display:none';
+      });
+      if (_accDDCleanup) { _accDDCleanup(); _accDDCleanup = null; }
+      const menu = el(menuId);
+      if (!menu) return;
+      if (menu.style.display === 'flex') { menu.style.cssText = 'display:none'; return; }
+      const trig = el(triggerId);
+      if (!trig) return;
+      const r = trig.getBoundingClientRect();
+      menu.style.cssText = `${MENU_OPEN_STYLE};top:${r.bottom + 4}px;left:${r.left}px;width:${r.width}px`;
+      const close = e => {
+        if (trig.contains(e.target) || menu.contains(e.target)) return;
+        menu.style.cssText = 'display:none';
+        document.removeEventListener('click', close, true);
+        _accDDCleanup = null;
+      };
+      document.addEventListener('click', close, true);
+      _accDDCleanup = () => document.removeEventListener('click', close, true);
+    };
+
+    el('accFTypeTrigger').addEventListener('click',   () => _openDD('accFTypeTrigger',   'accFTypeMenu'));
+    el('accFSubTrigger').addEventListener('click',    () => {
+      const trig = el('accFSubTrigger');
+      if (trig && trig.disabled) return;
+      _openDD('accFSubTrigger', 'accFSubMenu');
+    });
+    el('accFCurrTrigger').addEventListener('click',   () => _openDD('accFCurrTrigger',   'accFCurrMenu'));
+    el('accFStatusTrigger').addEventListener('click', () => _openDD('accFStatusTrigger', 'accFStatusMenu'));
+
+    // Type — delegation; also repopulates sub-type menu
+    const typeMenu = el('accFTypeMenu');
+    if (typeMenu) {
+      typeMenu.addEventListener('change', e => {
+        const radio = e.target.closest('input[type="radio"]');
+        if (!radio) return;
+        const val = radio.value;
+        if (_accDraft) { _accDraft.type = val; _accDraft.subType = 'all'; }
+        const lbl = el('accFTypeLabel');
+        if (lbl) lbl.textContent = val === 'all' ? 'All types' : val.charAt(0).toUpperCase() + val.slice(1);
+        typeMenu.style.cssText = 'display:none';
+        if (_accDDCleanup) { _accDDCleanup(); _accDDCleanup = null; }
+
+        const subTrig = el('accFSubTrigger');
+        const subMenu = el('accFSubMenu');
+        const subLbl  = el('accFSubLabel');
+        if (val === 'all') {
+          if (subTrig) { subTrig.disabled = true; subTrig.style.opacity = '0.5'; subTrig.style.cursor = 'not-allowed'; }
+          if (subLbl)  subLbl.textContent = '— select type first —';
+          if (subMenu) subMenu.innerHTML = '';
+        } else {
+          const subs = val === 'asset'      ? _assetSubTypes()
+                     : val === 'investment' ? _invSubTypes()
+                     : val === 'liability'  ? _liabSubTypes()
+                     : [];
+          if (subTrig) { subTrig.disabled = false; subTrig.style.opacity = ''; subTrig.style.cursor = ''; }
+          if (subLbl)  subLbl.textContent = 'All sub-types';
+          if (subMenu) subMenu.innerHTML = [['all','All sub-types'], ...subs.map(s => [s, _subTypeLabel(s)])].map(([v, l]) =>
+            `<label style="${OPT_STYLE}"><input type="radio" name="accFSubR" value="${v}"${v === 'all' ? ' checked' : ''}> ${esc(l)}</label>`
+          ).join('');
+        }
+      });
+    }
+
+    // Sub-type — delegation (handles dynamically repopulated innerHTML)
+    const subMenu = el('accFSubMenu');
+    if (subMenu) {
+      subMenu.addEventListener('change', e => {
+        const radio = e.target.closest('input[type="radio"]');
+        if (!radio) return;
+        const val = radio.value;
+        if (_accDraft) _accDraft.subType = val;
+        const lbl = el('accFSubLabel');
+        if (lbl) lbl.textContent = val === 'all' ? 'All sub-types' : _subTypeLabel(val);
+        subMenu.style.cssText = 'display:none';
+        if (_accDDCleanup) { _accDDCleanup(); _accDDCleanup = null; }
+      });
+    }
+
+    // Currency — delegation
+    const currMenu = el('accFCurrMenu');
+    if (currMenu) {
+      currMenu.addEventListener('change', e => {
+        const radio = e.target.closest('input[type="radio"]');
+        if (!radio) return;
+        const val = radio.value;
+        if (_accDraft) _accDraft.currency = val;
+        const lbl = el('accFCurrLabel');
+        if (lbl) lbl.textContent = val === 'all' ? 'All' : val;
+        currMenu.style.cssText = 'display:none';
+        if (_accDDCleanup) { _accDDCleanup(); _accDDCleanup = null; }
+      });
+    }
+
+    // Status checkboxes — delegation; dropdown stays open while checking
+    const statusMenu = el('accFStatusMenu');
+    if (statusMenu) {
+      statusMenu.addEventListener('change', () => {
+        if (!_accDraft) return;
+        const checked = Array.from(statusMenu.querySelectorAll('[data-acc-filter-rstat]:checked'))
+          .map(c => c.dataset.accFilterRstat);
+        _accDraft.recordStatuses = checked;
+        const lbl = el('accFStatusLabel');
+        if (lbl) lbl.textContent = checked.length === 4 ? 'All' : checked.length === 0 ? 'None'
+          : checked.map(s => s.charAt(0).toUpperCase() + s.slice(1)).join(', ');
+      });
+    }
+
+    const _applyAccDraft = () => {
+      if (_accDraft) {
+        _accDraft.search = el('accFSearch').value.trim();
+        state.accFilters = { ..._accDraft, recordStatuses: [..._accDraft.recordStatuses] };
+        _accDraft = null;
+      }
+      renderAccounts();
+    };
+    el('accFSearchBtn').addEventListener('click', _applyAccDraft);
+    el('accFSearch').addEventListener('keydown', e => { if (e.key === 'Enter') _applyAccDraft(); });
+
+    el('accFClear').addEventListener('click', () => {
+      _accDraft = null;
+      state.accFilters = {
+        type: 'all', subType: 'all', currency: 'all', search: '',
+        recordStatuses: ['active', 'inactive', 'deleted', 'locked'],
+      };
+      renderAccounts();
+    });
+  }
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

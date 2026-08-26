@@ -8,8 +8,8 @@
 
 | Layer    | File                          | What changed                                                                                      |
 | -------- | ----------------------------- | ------------------------------------------------------------------------------------------------- |
-| Backend  | `api/category-schema.gs`      | `record_status` enum includes `locked`; `sync_status` (col 16), `sync_notes` (col 17) added      |
-| Backend  | `api/category-core.gs`        | Soft-delete; locked guard on update/delete; `sync_status` advanced on every mutation              |
+| Backend  | `api/category-schema.gs`      | 20-col schema; cols 8–14 shifted; `record_status` → col 15; `sync_date_time` (col 17), `created_at` (col 19), `updated_at` (col 20) added |
+| Backend  | `api/category-core.gs`        | Soft-delete; locked guard on update/delete; `sync_status` advanced on every mutation; `created_at`/`updated_at` stamped on create/update/delete |
 | Backend  | `api/sync-utils.gs`           | `VALID_RECORD_STATUSES = ['active','inactive','deleted','locked']`; `computeSyncStatus()` added   |
 | Frontend | `app/sections/categories.js`  | `record_status` / sync icons; locked/deleted menu guards; restore flow                            |
 | Frontend | `app/core/utils.js`           | `recordStatusIcon` / `syncStatusIcon` — fixed-size 16×16 inline-flex; `CAT_COLS` excludes sync   |
@@ -26,7 +26,8 @@ Files: `category-schema.gs`, `category-core.gs`, `sync-utils.gs`, `app-router.gs
 ### 2. Migrate sheet
 
 1. Open prod Google Sheet → delete the **Categories** tab
-2. Navigate to Categories in the prod app — `getOrCreateSheet` auto-creates a fresh 17-column tab
+2. Navigate to Categories in the prod app — `getOrCreateSheet` auto-creates a fresh 20-column tab
+   (cols 1–14: core/classification/account-hints/subscription; col 15: `record_status`; col 16: `sync_status`; col 17: `sync_date_time`; col 18: `sync_notes`; col 19: `created_at`; col 20: `updated_at`)
 3. Categories → **↑ Import** → upload `local/files/categories_new.csv`
 
 ### 3. Deploy frontend
@@ -43,10 +44,10 @@ Files: `app/sections/categories.js`, `app/core/utils.js`
 - [ ] Each row shows record status icon and sync status icon — both 16×16, aligned
 - [ ] Add form shows `record_status` dropdown defaulting to Active
 - [ ] View mode shows sync status line below the form fields
-- [ ] Create a category → sheet: `record_status = active`, `sync_status = create-pending`
-- [ ] Edit a synced category → `sync_status = update-pending`
-- [ ] Edit a `create-pending` category → `sync_status` stays `create-pending`
-- [ ] Delete a category → row stays in sheet with `record_status = deleted`; table shows it dimmed with 🗑️
+- [ ] Create a category → sheet col 15 = `active`, col 16 = `create-pending`, col 17 blank, col 18 blank, col 19 = `created_at` ISO timestamp, col 20 = `updated_at` ISO timestamp
+- [ ] Edit a synced category → `sync_status = update-pending`; `updated_at` refreshed
+- [ ] Edit a `create-pending` category → `sync_status` stays `create-pending`; `updated_at` refreshed
+- [ ] Delete a category → row stays in sheet with `record_status = deleted`; `updated_at` refreshed; table shows it dimmed with 🗑️
 - [ ] Locked category → context menu shows View only; edit/delete blocked at backend
 - [ ] Restore deleted category → dup check runs; `record_status = active` on success
 - [ ] Export CSV — no `sync_status` or `sync_notes` columns; `record_status` present
@@ -59,12 +60,15 @@ Files: `app/sections/categories.js`, `app/core/utils.js`
 
 | Layer    | File                            | What changed                                                                                                         |
 | -------- | ------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| Backend  | `api/account-schema.gs`         | `is_active` (col 8) → `record_status` enum; `sync_status` (col 11), `sync_notes` (col 12) added                    |
-| Backend  | `api/account-core.gs`           | `createAccount` sets sync cols; `updateAccount` locked guard + dup name check + sync advance; `deleteAccount` soft-delete + locked guard |
+| Backend  | `api/account-schema.gs`         | 14-col schema; `description` → col 8, `record_status` → col 9, `sync_status` → col 10, `sync_date_time` (col 11) added, `sync_notes` → col 12, `created_at` → col 13, `updated_at` (col 14) added; `sub_type.editable = true` |
+| Backend  | `api/account-core.gs`           | `createAccount` stamps `sync_date_time` + `updated_at`; `updateAccount` writes `sub_type` + locked guard + dup name check + stamps `updated_at`; `deleteAccount` soft-delete + locked guard + stamps `updated_at` |
+| Backend  | `api/account-validation.gs`     | `validateAccountUpdate` validates `sub_type` value against allowed set for the account's type                        |
 | Backend  | `api/sync-utils.gs`             | `VALID_RECORD_STATUSES` includes `locked`                                                                            |
-| Frontend | `app/sections/accounts.js`      | `record_status` / sync icons; locked/deleted menu guards; restore flow; deactivate-instead flow                      |
+| Frontend | `app/sections/accounts.js`      | `record_status` / sync icons; locked/deleted menu guards; restore flow; deactivate-instead flow; filter panel (type / sub-type / currency / search / status); base-amount `/` removed from JS (now CSS `::before`) |
 | Frontend | `app/sections/transactions.js`  | Account dropdowns filter by `record_status === 'active'` (was `is_active === true`)                                  |
-| Frontend | `app/core/utils.js`             | `ACC_COLS` updated; `recordStatusIcon` / `syncStatusIcon` fixed-size inline-flex                                     |
+| Frontend | `app/core/utils.js`             | `ACC_COLS` — `description` before `record_status`; `recordStatusIcon` / `syncStatusIcon` fixed-size inline-flex      |
+| Frontend | `app/core/state.js`             | `accFilterOpen` + `accFilters` (`type`, `subType`, `currency`, `search`, `recordStatuses`) added                     |
+| Frontend | `app/style/expense-tracker.css` | `.td-base-amt::before` injects `/ ` on web; `.acc-card-bal .td-base-amt` hidden on mobile cards                     |
 | Data     | `local/files/accounts_new.csv`  | `is_active` → `record_status`; `true` → `active`, `false` → `inactive`; Finio split into Finio-1 / Finio-2          |
 
 ### 1. Deploy backend
@@ -73,13 +77,13 @@ Files: `app/sections/categories.js`, `app/core/utils.js`
 make api-deploy   # pick prod
 ```
 
-Files: `account-schema.gs`, `account-core.gs`, `sync-utils.gs`, `app-router.gs`
+Files: `account-schema.gs`, `account-core.gs`, `account-validation.gs`, `sync-utils.gs`, `app-router.gs`
 
 ### 2. Migrate sheet
 
 1. Open prod Google Sheet → delete the **Accounts** tab
-2. Navigate to Accounts in the prod app — `getOrCreateSheet` auto-creates a fresh 12-column tab
-   (cols: `id`, `name`, `type`, `sub_type`, `currency`, `opening_value`, `current_value`, `record_status`, `description`, `created_at`, `sync_status`, `sync_notes`)
+2. Navigate to Accounts in the prod app — `getOrCreateSheet` auto-creates a fresh 14-column tab
+   (cols: `id`, `name`, `type`, `sub_type`, `currency`, `opening_value`, `current_value`, `description`, `record_status`, `sync_status`, `sync_date_time`, `sync_notes`, `created_at`, `updated_at`)
 3. Accounts → **↑ Import** → upload `local/files/accounts_new.csv`
 
 The CSV is already prepared: 20 accounts, `is_active` renamed to `record_status`, Finio split.
@@ -90,7 +94,7 @@ The CSV is already prepared: 20 accounts, `is_active` renamed to `record_status`
 git push origin main
 ```
 
-Files: `app/sections/accounts.js`, `app/sections/transactions.js`, `app/core/utils.js`
+Files: `app/sections/accounts.js`, `app/sections/transactions.js`, `app/core/utils.js`, `app/core/state.js`, `app/style/expense-tracker.css`
 
 ### 4. Verify
 
@@ -102,16 +106,33 @@ Files: `app/sections/accounts.js`, `app/sections/transactions.js`, `app/core/uti
 - [ ] Net worth summary excludes deleted accounts from totals
 - [ ] View form — sync status line shown; Edit absent for locked and deleted; Restore present for deleted
 - [ ] Context menu — locked: View + Transactions only; deleted: View + Transactions + Restore; others: full menu
-- [ ] Create → sheet: `record_status = active`, `sync_status = create-pending`, `sync_notes = ''`
+- [ ] Create → sheet col 9 = `active`, col 10 = `create-pending`, col 11 blank, col 12 blank, col 13 = `created_at` ISO, col 14 = `updated_at` ISO
 - [ ] Edit (rename to existing name) → `duplicate_account` error shown in form
-- [ ] Edit synced account → `sync_status = update-pending`; `sync_notes = ''`
-- [ ] Edit `create-pending` account → `sync_status` stays `create-pending`
-- [ ] Delete account with no transactions → `record_status = deleted`; dimmed with 🗑️
+- [ ] Edit — `sub_type` is editable; changing to an invalid value for the account's type returns `invalid_sub_type`
+- [ ] Edit synced account → `sync_status = update-pending`; `sync_notes = ''`; `updated_at` refreshed
+- [ ] Edit `create-pending` account → `sync_status` stays `create-pending`; `updated_at` refreshed
+- [ ] Delete account with no transactions → `record_status = deleted`; dimmed with 🗑️; `updated_at` refreshed
 - [ ] Delete account with transactions → blocked; "Deactivate instead" button shown
 - [ ] Deactivate instead → `record_status = inactive`; account visible, dimmed
 - [ ] Restore deleted account → dup name check runs; `record_status = active` on success
 - [ ] Restore where name conflicts → "Cannot restore: an account with this name already exists."
-- [ ] Export CSV — columns: `name, type, sub_type, currency, opening_value, current_value, record_status, description`; no sync cols
+- [ ] Export CSV — columns: `name, type, sub_type, currency, opening_value, current_value, description, record_status`; no sync cols
+- [ ] Web UI balance: foreign-currency accounts show `−₹200,000.00 / £1,904.76` inline; base-currency accounts show primary value only
+- [ ] Mobile UI balance: primary value only (no grey converted value, no `/`)
+
+**Filter panel**
+
+- [ ] Filter toggle opens/closes panel positioned below net worth summary cards
+- [ ] Filter badge `(N)` appears on toggle button when any filter deviates from default
+- [ ] Type filter (Asset / Investment / Liability) narrows table to matching group(s) only
+- [ ] Sub-type trigger is disabled (greyed out) until a Type is selected; options repopulate based on selected type
+- [ ] Currency dropdown lists only currencies present in loaded accounts
+- [ ] Search matches against account name and notes fields (case-insensitive substring)
+- [ ] Status filter — all 4 checked by default; unchecking a status hides those accounts from the table
+- [ ] Net worth summary cards remain unfiltered regardless of active filter selections
+- [ ] "No accounts match the current filters." placeholder shown when filtered list is empty
+- [ ] Clear button resets all filters and re-renders with full list; Search applies pending selections
+- [ ] Selecting options then clicking Search applies them correctly; re-opening panel shows applied values; further changes work without requiring panel close/reopen
 
 **Transactions regression**
 

@@ -61,8 +61,12 @@ function createCategory(body) {
   setCol('source_account_mandatory', body.source_account_mandatory === true || body.source_account_mandatory === 'true');
   setCol('target_account_mandatory', body.target_account_mandatory === true || body.target_account_mandatory === 'true');
   setCol('is_subscription_eligible', body.is_subscription_eligible === true || body.is_subscription_eligible === 'true');
-  setCol('sync_status', SYNC_STATUS_CREATE_PENDING);
-  setCol('sync_notes',  '');
+  setCol('sync_status',    SYNC_STATUS_CREATE_PENDING);
+  setCol('sync_date_time', '');
+  setCol('sync_notes',     '');
+  const now = new Date().toISOString();
+  setCol('created_at', now);
+  setCol('updated_at', now);
 
   sheet.appendRow(row);
   // Categories have no auto-generated id — the composite (tx_type_key, major_category_key, minor_category_key) is the key.
@@ -129,9 +133,11 @@ function updateCategory(body) {
   // sync_status: preserve create-pending if not yet synced; clear sync_notes either way
   const syncStatusCol = getCategorySchemaField('sync_status').sheet_column_position;
   const syncNotesCol  = getCategorySchemaField('sync_notes').sheet_column_position;
+  const updatedAtCol  = getCategorySchemaField('updated_at').sheet_column_position;
   const currentSyncStatus = String(allRows[rowNum - 1][syncStatusCol - 1] || '');
   sheet.getRange(rowNum, syncStatusCol).setValue(computeSyncStatus(currentSyncStatus));
   sheet.getRange(rowNum, syncNotesCol).setValue('');
+  sheet.getRange(rowNum, updatedAtCol).setValue(new Date().toISOString());
 
   return { ok: true };
 }
@@ -152,9 +158,11 @@ function deleteCategory(body) {
   const syncNotesCol    = getCategorySchemaField('sync_notes').sheet_column_position;
   const currentSyncStatus = String(sheet.getRange(rowNum, syncStatusCol).getValue() || '');
 
+  const updatedAtCol2 = getCategorySchemaField('updated_at').sheet_column_position;
   sheet.getRange(rowNum, recordStatusCol).setValue('deleted');
   sheet.getRange(rowNum, syncStatusCol).setValue(computeSyncStatus(currentSyncStatus));
   sheet.getRange(rowNum, syncNotesCol).setValue('');
+  sheet.getRange(rowNum, updatedAtCol2).setValue(new Date().toISOString());
 
   return { ok: true };
 }
@@ -234,7 +242,7 @@ function onEdit(e) {
   const CI_TYPE   = catColIndex('tx_type_key');          // 0
   const CI_MAJ    = catColIndex('major_category_label'); // 3
   const CI_MIN    = catColIndex('minor_category_label'); // 5
-  const CI_RSTAT  = catColIndex('record_status');        // 7
+  const CI_RSTAT  = catColIndex('record_status');        // 14
 
   if (col === TYPE_COL) {
     const txType = sheet.getRange(row, TYPE_COL).getValue();

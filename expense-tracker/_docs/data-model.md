@@ -22,9 +22,13 @@ All entity shapes. Field types are abstract — choose a concrete type appropria
 | `currency` | ISO-4217 string | yes | no | Must exist in `rates` |
 | `opening_value` | number | optional | no | Balance at import. User enters positive for liabilities; store negates it. |
 | `current_value` | number | derived | no (system-managed) | Updated by transaction lifecycle. Stored negative for liabilities; UI displays `abs(current_value)` labelled "owed" — user never sees a negative number. |
-| `is_active` | boolean | default true | yes | Archived accounts hide from transaction forms |
-| `notes` | string | optional | yes | Free text |
-| `created_at` | timestamp | auto | no | UTC ISO |
+| `description` | string | optional | yes | Free text notes |
+| `record_status` | enum | default `active` | yes | `active` \| `inactive` \| `deleted` \| `locked`. Deleted accounts are soft-deleted; locked accounts cannot be edited or deleted. |
+| `sync_status` | enum | auto | no | `create-pending` \| `update-pending` \| `in-sync` \| `create-failed` \| `update-failed`. Set by system on every mutation; cleared by sync job. |
+| `sync_date_time` | timestamp | auto | no | Set by sync job on successful sync. |
+| `sync_notes` | string | auto | no | Set by sync job; cleared on next mutation. |
+| `created_at` | timestamp | auto | no | UTC ISO. Set once on create. |
+| `updated_at` | timestamp | auto | no | UTC ISO. Updated on every mutation. |
 
 ### Account types
 
@@ -71,18 +75,28 @@ liability:   sub_type ∈ { personal_loan, credit_card, mortgage, auto_loan, hel
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| `transaction_type` | enum | yes | `money-in` \| `money-out` \| `money-transfer` |
-| `major_category` | string | yes | Top-level grouping |
-| `minor_category` | string | yes | Sub-classification |
+| `tx_type_key` | enum | yes | `money-in` \| `money-out` |
+| `tx_type_label` | string | derived | `Money In` or `Money Out`; written by backend |
+| `major_category_key` | string | derived | Slugified form of `major_category_label`; written by backend |
+| `major_category_label` | string | yes | Top-level grouping |
+| `minor_category_key` | string | derived | Slugified form of `minor_category_label`; written by backend |
+| `minor_category_label` | string | yes | Sub-classification |
 | `description` | string | optional | Free text |
-| `tag_keywords` | string | optional | Comma-separated; lowercased on save; reserved for auto-classification |
-| `is_active` | boolean | default true | Archived categories hide from transaction forms |
-| `source_account_mandatory` | boolean | optional | Hint: source account must be present |
-| `source_account_types` | string | optional | Comma-separated allowed source account types |
-| `target_account_mandatory` | boolean | optional | Hint: target account must be present |
-| `target_account_types` | string | optional | Comma-separated allowed target account types |
+| `tag_keywords` | string | optional | Comma-separated; lowercased on save; used for auto-classification hints |
+| `counterparty_examples` | string | optional | Comma-separated merchant/payer examples |
+| `source_account_types` | string | optional | Comma-separated allowed source account sub-types |
+| `target_account_types` | string | optional | Comma-separated allowed target account sub-types |
+| `source_account_mandatory` | boolean | optional | If true, transactions of this category must specify a source account |
+| `target_account_mandatory` | boolean | optional | If true, transactions of this category must specify a target account |
+| `is_subscription_eligible` | boolean | default false | Marks category as usable for subscription tracking |
+| `record_status` | enum | default `active` | `active` \| `inactive` \| `deleted` \| `locked` |
+| `sync_status` | enum | auto | `create-pending` \| `update-pending` \| `in-sync` \| `create-failed` \| `update-failed` |
+| `sync_date_time` | timestamp | auto | Set by sync job on successful sync |
+| `sync_notes` | string | auto | Set by sync job; cleared on next mutation |
+| `created_at` | timestamp | auto | Set once on create |
+| `updated_at` | timestamp | auto | Updated on every mutation |
 
-The `*_mandatory` and `*_types` columns let categories declare account-type contracts (e.g. *Credit card payment* requires `source = current` and `target = credit_card`). The backend validates these on save and rejects mismatched transactions.
+The `*_mandatory` and `*_types` columns let categories declare account-type contracts (e.g. *Loan repayment* requires `target` ∈ loan sub-types). The backend validates these on transaction save and rejects mismatched submissions.
 
 ## Rate
 

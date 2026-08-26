@@ -59,6 +59,15 @@ export const state = {
   accDeleteRow:     null,
   accDeleteBlocked: null,   // { referenced_count: N } when deletion is refused — paired with accDeleteRow
 
+  accFilterOpen: false,
+  accFilters: {
+    type:           'all',
+    subType:        'all',
+    currency:       'all',
+    search:         '',
+    recordStatuses: ['active', 'inactive', 'deleted', 'locked'],
+  },
+
   catImportOpen:  false,
 
   txAddOpen:      false,

@@ -17,7 +17,8 @@ function slugify(str) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Schema — 17 fields in column-position order
+// Schema — 20 fields in column-position order
+// Column positions are append-only — never change an existing position.
 // ─────────────────────────────────────────────────────────────────────────────
 const CATEGORY_SCHEMA = {
 
@@ -95,7 +96,7 @@ const CATEGORY_SCHEMA = {
     default_value:         '',
   },
 
-  // ── Description & status (columns 7–8) ───────────────────────────────────
+  // ── Description (column 7) ────────────────────────────────────────────────
   description: {
     sheet_column_name:     'description',
     sheet_column_position: 7,
@@ -108,23 +109,11 @@ const CATEGORY_SCHEMA = {
     editable:              true,
     default_value:         '',
   },
-  record_status: {
-    sheet_column_name:     'record_status',
-    sheet_column_position: 8,
-    ui_label:              'Record status',
-    type:                  'enum',
-    enum_values:           ['active', 'inactive', 'deleted', 'locked'],
-    group:                 'core',
-    applies_to:            null,
-    required_for:          null,
-    editable:              true,
-    default_value:         'active',
-  },
 
-  // ── Classification (columns 9–10) ─────────────────────────────────────────
+  // ── Classification (columns 8–9) ──────────────────────────────────────────
   tag_keywords: {
     sheet_column_name:     'tag_keywords',
-    sheet_column_position: 9,
+    sheet_column_position: 8,
     ui_label:              'Tag keywords',
     type:                  'string',
     enum_values:           null,
@@ -136,7 +125,7 @@ const CATEGORY_SCHEMA = {
   },
   counterparty_examples: {
     sheet_column_name:     'counterparty_examples',
-    sheet_column_position: 10,
+    sheet_column_position: 9,
     ui_label:              'Counterparty examples',
     type:                  'string',
     enum_values:           null,
@@ -147,7 +136,7 @@ const CATEGORY_SCHEMA = {
     default_value:         '',
   },
 
-  // ── Account hints (columns 11–14) ─────────────────────────────────────────
+  // ── Account hints (columns 10–13) ─────────────────────────────────────────
   // source_account_types / target_account_types: comma-separated account
   // type values used to filter the respective account dropdowns.
   // source_account_mandatory / target_account_mandatory: when true the field
@@ -155,7 +144,7 @@ const CATEGORY_SCHEMA = {
   // (shows "External").
   source_account_types: {
     sheet_column_name:     'source_account_types',
-    sheet_column_position: 11,
+    sheet_column_position: 10,
     ui_label:              'Source account types',
     type:                  'multi-select',
     enum_values:           null, // resolved at runtime: asset sub-types + investment + liability sub-types
@@ -167,7 +156,7 @@ const CATEGORY_SCHEMA = {
   },
   target_account_types: {
     sheet_column_name:     'target_account_types',
-    sheet_column_position: 12,
+    sheet_column_position: 11,
     ui_label:              'Target account types',
     type:                  'multi-select',
     enum_values:           null, // resolved at runtime: asset sub-types + investment + liability sub-types
@@ -179,7 +168,7 @@ const CATEGORY_SCHEMA = {
   },
   source_account_mandatory: {
     sheet_column_name:     'source_account_mandatory',
-    sheet_column_position: 13,
+    sheet_column_position: 12,
     ui_label:              'Source account mandatory',
     type:                  'boolean',
     enum_values:           null,
@@ -191,7 +180,7 @@ const CATEGORY_SCHEMA = {
   },
   target_account_mandatory: {
     sheet_column_name:     'target_account_mandatory',
-    sheet_column_position: 14,
+    sheet_column_position: 13,
     ui_label:              'Target account mandatory',
     type:                  'boolean',
     enum_values:           null,
@@ -202,10 +191,10 @@ const CATEGORY_SCHEMA = {
     default_value:         false,
   },
 
-  // ── Meta (columns 15–17) ─────────────────────────────────────────────────
+  // ── Subscription flag (column 14) ─────────────────────────────────────────
   is_subscription_eligible: {
     sheet_column_name:     'is_subscription_eligible',
-    sheet_column_position: 15,
+    sheet_column_position: 14,
     ui_label:              'Subscription eligible',
     type:                  'boolean',
     enum_values:           null,
@@ -215,28 +204,78 @@ const CATEGORY_SCHEMA = {
     editable:              true,
     default_value:         false,
   },
+
+  // ── Audit / sync (columns 15–20) ──────────────────────────────────────────
+  record_status: {
+    sheet_column_name:     'record_status',
+    sheet_column_position: 15,
+    ui_label:              'Record status',
+    type:                  'enum',
+    enum_values:           ['active', 'inactive', 'deleted', 'locked'],
+    group:                 'audit',
+    applies_to:            null,
+    required_for:          null,
+    editable:              true,
+    default_value:         'active',
+  },
   sync_status: {
     sheet_column_name:     'sync_status',
     sheet_column_position: 16,
     ui_label:              'Sync status',
     type:                  'enum',
     enum_values:           ['create-pending', 'update-pending', 'in-sync', 'create-failed', 'update-failed'],
-    group:                 'meta',
+    group:                 'audit',
     applies_to:            null,
     required_for:          null,
     editable:              false, // set by system on create/update; cleared to 'in-sync' by sync job
     default_value:         'create-pending',
   },
+  sync_date_time: {
+    sheet_column_name:     'sync_date_time',
+    sheet_column_position: 17,
+    ui_label:              'Sync date/time',
+    type:                  'string',
+    enum_values:           null,
+    group:                 'audit',
+    applies_to:            null,
+    required_for:          [],
+    editable:              false, // written by sync job on successful sync
+    default_value:         '',
+  },
   sync_notes: {
     sheet_column_name:     'sync_notes',
-    sheet_column_position: 17,
+    sheet_column_position: 18,
     ui_label:              'Sync notes',
     type:                  'string',
     enum_values:           null,
-    group:                 'meta',
+    group:                 'audit',
     applies_to:            null,
     required_for:          [],
     editable:              false, // written by sync job only
+    default_value:         '',
+  },
+  created_at: {
+    sheet_column_name:     'created_at',
+    sheet_column_position: 19,
+    ui_label:              'Created at',
+    type:                  'string',
+    enum_values:           null,
+    group:                 'audit',
+    applies_to:            null,
+    required_for:          [],
+    editable:              false, // set once on createCategory
+    default_value:         '',
+  },
+  updated_at: {
+    sheet_column_name:     'updated_at',
+    sheet_column_position: 20,
+    ui_label:              'Updated at',
+    type:                  'string',
+    enum_values:           null,
+    group:                 'audit',
+    applies_to:            null,
+    required_for:          [],
+    editable:              false, // set on every mutation
     default_value:         '',
   },
 };

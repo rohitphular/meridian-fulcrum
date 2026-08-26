@@ -53,5 +53,17 @@ function validateAccountUpdate(body, currentType) {
     }
   }
 
+  // Validate sub_type when provided
+  if (body.sub_type !== undefined) {
+    const subType = String(body.sub_type || '').trim();
+    const validSubTypes =
+      currentType === 'asset'      ? ASSET_SUB_TYPES :
+      currentType === 'investment' ? INVESTMENT_SUB_TYPES :
+      currentType === 'liability'  ? LIABILITY_SUB_TYPES : [];
+    if (subType && validSubTypes.indexOf(subType) === -1) {
+      return { ok: false, error: 'invalid_sub_type' };
+    }
+  }
+
   return { ok: true };
 }

@@ -25,8 +25,9 @@ const LOAN_SUB_TYPES = [
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Schema — 10 core fields in column-position order
-// Column positions are append-only — never change an existing position.
+// Schema — 14 columns in column-position order
+// Audit block sequence: record_status → sync_status → sync_date_time →
+//                       sync_notes → created_at → updated_at
 // ─────────────────────────────────────────────────────────────────────────────
 const ACCOUNT_SCHEMA = {
 
@@ -75,7 +76,7 @@ const ACCOUNT_SCHEMA = {
     group: 'core',
     applies_to: null,
     required_for: null,
-    editable: false,
+    editable: true,
     default_value: '',
   },
   currency: {
@@ -114,21 +115,9 @@ const ACCOUNT_SCHEMA = {
     editable: false,
     default_value: 0,
   },
-  record_status: {
-    sheet_column_name: 'record_status',
-    sheet_column_position: 8,
-    ui_label: 'Record status',
-    type: 'enum',
-    enum_values: ['active', 'inactive', 'deleted', 'locked'],
-    group: 'core',
-    applies_to: null,
-    required_for: null,
-    editable: true,
-    default_value: 'active',
-  },
   description: {
     sheet_column_name: 'description',
-    sheet_column_position: 9,
+    sheet_column_position: 8,
     ui_label: 'Notes',
     type: 'string',
     enum_values: null,
@@ -138,23 +127,22 @@ const ACCOUNT_SCHEMA = {
     editable: true,
     default_value: '',
   },
-  created_at: {
-    sheet_column_name: 'created_at',
-    sheet_column_position: 10,
-    ui_label: 'Created At',
-    type: 'string',
-    enum_values: null,
+  record_status: {
+    sheet_column_name: 'record_status',
+    sheet_column_position: 9,
+    ui_label: 'Record status',
+    type: 'enum',
+    enum_values: ['active', 'inactive', 'deleted', 'locked'],
     group: 'core',
     applies_to: null,
-    required_for: [],
-    editable: false,
-    default_value: null,
+    required_for: null,
+    editable: true,
+    default_value: 'active',
   },
-
-  // ── Sync (columns 11–12) ──────────────────────────────────────────────────
+  // ── Sync + audit (columns 10–14) ─────────────────────────────────────────
   sync_status: {
     sheet_column_name: 'sync_status',
-    sheet_column_position: 11,
+    sheet_column_position: 10,
     ui_label: 'Sync status',
     type: 'enum',
     enum_values: ['create-pending', 'update-pending', 'in-sync', 'create-failed', 'update-failed'],
@@ -163,6 +151,18 @@ const ACCOUNT_SCHEMA = {
     required_for: null,
     editable: false,
     default_value: 'create-pending',
+  },
+  sync_date_time: {
+    sheet_column_name: 'sync_date_time',
+    sheet_column_position: 11,
+    ui_label: 'Sync date/time',
+    type: 'string',
+    enum_values: null,
+    group: 'meta',
+    applies_to: null,
+    required_for: [],
+    editable: false,
+    default_value: '',
   },
   sync_notes: {
     sheet_column_name: 'sync_notes',
@@ -175,6 +175,30 @@ const ACCOUNT_SCHEMA = {
     required_for: [],
     editable: false,
     default_value: '',
+  },
+  created_at: {
+    sheet_column_name: 'created_at',
+    sheet_column_position: 13,
+    ui_label: 'Created At',
+    type: 'string',
+    enum_values: null,
+    group: 'meta',
+    applies_to: null,
+    required_for: [],
+    editable: false,
+    default_value: null,
+  },
+  updated_at: {
+    sheet_column_name: 'updated_at',
+    sheet_column_position: 14,
+    ui_label: 'Updated At',
+    type: 'string',
+    enum_values: null,
+    group: 'meta',
+    applies_to: null,
+    required_for: [],
+    editable: false,
+    default_value: null,
   },
 };
 

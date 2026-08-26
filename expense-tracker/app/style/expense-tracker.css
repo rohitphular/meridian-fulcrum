@@ -462,7 +462,8 @@ td.td-mono    { font-family: var(--mono); font-size: var(--text-sm); color: var(
 td.td-muted   { color: var(--muted); }
 td.td-nowrap  { white-space: nowrap; }
 td.td-truncate { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.td-base-amt  { color: var(--muted); font-size: var(--text-xs); }
+.td-base-amt         { color: var(--muted); font-size: var(--text-xs); }
+.td-base-amt::before { content: '/ '; }
 .empty-row td { text-align: center; color: var(--muted); padding: 40px 14px; }
 
 /* ── transaction view row ── */
@@ -991,6 +992,8 @@ td.td-keywords { max-width: 220px; }
 .acc-card-body { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .acc-card-name { font-size: var(--text-md); font-weight: 500; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .acc-card-bal  { font-size: var(--text-sm); font-weight: 600; white-space: nowrap; text-align: right; }
+.acc-card-bal .td-base-amt          { display: block; margin-top: 2px; }
+.acc-card-bal .td-base-amt::before  { content: none; }
 .acc-card-meta { font-size: var(--text-sm); color: var(--muted); }
 .acc-card .row-actions { margin-top: 4px; }
 .acc-card-menu { align-self: center; }
