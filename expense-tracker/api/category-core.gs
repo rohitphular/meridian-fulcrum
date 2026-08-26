@@ -25,16 +25,16 @@ function createCategory(body) {
   const cols  = getCategorySheetColumns();
   const sheet = getOrCreateSheet(CATEGORIES_SHEET, cols);
 
-  // Duplicate guard — reject if (tx_type_key, major_category_label, minor_category_label) already exists
+  // Duplicate guard — reject if (tx_type_key, major_category_key, minor_category_key) already exists
   const ciType  = catColIndex('tx_type_key');
-  const ciMajor = catColIndex('major_category_label');
-  const ciMinor = catColIndex('minor_category_label');
+  const ciMajor = catColIndex('major_category_key');
+  const ciMinor = catColIndex('minor_category_key');
   const existingRows = sheet.getDataRange().getValues();
   for (let i = 1; i < existingRows.length; i++) {
     if (
-      String(existingRows[i][ciType])  === String(body.tx_type_key          || '').trim() &&
-      String(existingRows[i][ciMajor]) === String(body.major_category_label || '').trim() &&
-      String(existingRows[i][ciMinor]) === String(body.minor_category_label || '').trim()
+      String(existingRows[i][ciType])  === String(body.tx_type_key || '').trim() &&
+      String(existingRows[i][ciMajor]) === slugify(String(body.major_category_label || '').trim()) &&
+      String(existingRows[i][ciMinor]) === slugify(String(body.minor_category_label || '').trim())
     ) {
       return { ok: false, error: 'duplicate_category' };
     }
@@ -62,9 +62,11 @@ function createCategory(body) {
   setCol('source_account_mandatory', body.source_account_mandatory === true || body.source_account_mandatory === 'true');
   setCol('target_account_mandatory', body.target_account_mandatory === true || body.target_account_mandatory === 'true');
   setCol('is_subscription_eligible', body.is_subscription_eligible === true || body.is_subscription_eligible === 'true');
+  setCol('sync_status', SYNC_STATUS_CREATE_PENDING);
+  setCol('sync_notes',  '');
 
   sheet.appendRow(row);
-  // Categories have no auto-generated id — the composite (tx_type_key, major_category_label, minor_category_label) is the key.
+  // Categories have no auto-generated id — the composite (tx_type_key, major_category_key, minor_category_key) is the key.
   return { ok: true };
 }
 
@@ -77,6 +79,22 @@ function updateCategory(body) {
   const rowNum  = Number(body.row_num);
   const lastRow = sheet.getLastRow();
   if (rowNum < 2 || rowNum > lastRow) return { ok: false, error: 'invalid_row' };
+
+  // Duplicate guard — reject if (tx_type_key, major_category_key, minor_category_key) already exists on a different row
+  const ciType  = catColIndex('tx_type_key');
+  const ciMajor = catColIndex('major_category_key');
+  const ciMinor = catColIndex('minor_category_key');
+  const allRows = sheet.getDataRange().getValues();
+  for (let i = 1; i < allRows.length; i++) {
+    if (i + 1 === rowNum) continue;
+    if (
+      String(allRows[i][ciType])  === String(body.tx_type_key || '').trim() &&
+      String(allRows[i][ciMajor]) === slugify(String(body.major_category_label || '').trim()) &&
+      String(allRows[i][ciMinor]) === slugify(String(body.minor_category_label || '').trim())
+    ) {
+      return { ok: false, error: 'duplicate_category' };
+    }
+  }
 
   function writeField(key, value) {
     const field = getCategorySchemaField(key);
@@ -105,6 +123,12 @@ function updateCategory(body) {
   writeField('source_account_mandatory', body.source_account_mandatory === true || body.source_account_mandatory === 'true');
   writeField('target_account_mandatory', body.target_account_mandatory === true || body.target_account_mandatory === 'true');
   writeField('is_subscription_eligible', body.is_subscription_eligible === true || body.is_subscription_eligible === 'true');
+  // sync_status: preserve create-pending if not yet synced; clear sync_notes either way
+  const syncStatusCol = getCategorySchemaField('sync_status').sheet_column_position;
+  const syncNotesCol  = getCategorySchemaField('sync_notes').sheet_column_position;
+  const currentSyncStatus = String(sheet.getRange(rowNum, syncStatusCol).getValue() || '');
+  sheet.getRange(rowNum, syncStatusCol).setValue(computeSyncStatus(currentSyncStatus));
+  sheet.getRange(rowNum, syncNotesCol).setValue('');
 
   return { ok: true };
 }
@@ -129,8 +153,8 @@ function createCategoriesBulk(body) {
   const values = sheet.getDataRange().getValues();
 
   const ciType  = catColIndex('tx_type_key');
-  const ciMajor = catColIndex('major_category_label');
-  const ciMinor = catColIndex('minor_category_label');
+  const ciMajor = catColIndex('major_category_key');
+  const ciMinor = catColIndex('minor_category_key');
 
   // Map key → sheet row number (1-indexed) so we can update existing rows
   const existing = {};
@@ -141,7 +165,9 @@ function createCategoriesBulk(body) {
 
   const results = [];
   body.categories.forEach(function(cat) {
-    const key = String(cat.tx_type_key || '') + '|' + String(cat.major_category_label || '') + '|' + String(cat.minor_category_label || '');
+    const majKey = cat.major_category_key || slugify(String(cat.major_category_label || ''));
+    const minKey = cat.minor_category_key || slugify(String(cat.minor_category_label || ''));
+    const key = String(cat.tx_type_key || '') + '|' + majKey + '|' + minKey;
 
     const catBody = {};
     Object.keys(cat).forEach(function(k) { catBody[k] = cat[k]; });

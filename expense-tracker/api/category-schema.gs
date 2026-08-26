@@ -17,7 +17,7 @@ function slugify(str) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Schema — 15 fields in column-position order
+// Schema — 17 fields in column-position order
 // ─────────────────────────────────────────────────────────────────────────────
 const CATEGORY_SCHEMA = {
 
@@ -158,7 +158,7 @@ const CATEGORY_SCHEMA = {
     sheet_column_position: 11,
     ui_label:              'Source account types',
     type:                  'multi-select',
-    enum_values:           null, // resolved at runtime: VALID_ACCOUNT_TYPES
+    enum_values:           null, // resolved at runtime: asset sub-types + investment + liability sub-types
     group:                 'account_hints',
     applies_to:            null,
     required_for:          [],
@@ -170,7 +170,7 @@ const CATEGORY_SCHEMA = {
     sheet_column_position: 12,
     ui_label:              'Target account types',
     type:                  'multi-select',
-    enum_values:           null, // resolved at runtime: VALID_ACCOUNT_TYPES
+    enum_values:           null, // resolved at runtime: asset sub-types + investment + liability sub-types
     group:                 'account_hints',
     applies_to:            null,
     required_for:          [],
@@ -202,7 +202,7 @@ const CATEGORY_SCHEMA = {
     default_value:         false,
   },
 
-  // ── Meta (column 15) ──────────────────────────────────────────────────────
+  // ── Meta (columns 15–17) ─────────────────────────────────────────────────
   is_subscription_eligible: {
     sheet_column_name:     'is_subscription_eligible',
     sheet_column_position: 15,
@@ -214,6 +214,30 @@ const CATEGORY_SCHEMA = {
     required_for:          [],
     editable:              true,
     default_value:         false,
+  },
+  sync_status: {
+    sheet_column_name:     'sync_status',
+    sheet_column_position: 16,
+    ui_label:              'Sync status',
+    type:                  'enum',
+    enum_values:           ['create-pending', 'update-pending', 'in-sync', 'create-failed', 'update-failed'],
+    group:                 'meta',
+    applies_to:            null,
+    required_for:          null,
+    editable:              false, // set by system on create/update; cleared to 'in-sync' by sync job
+    default_value:         'create-pending',
+  },
+  sync_notes: {
+    sheet_column_name:     'sync_notes',
+    sheet_column_position: 17,
+    ui_label:              'Sync notes',
+    type:                  'string',
+    enum_values:           null,
+    group:                 'meta',
+    applies_to:            null,
+    required_for:          [],
+    editable:              false, // written by sync job only
+    default_value:         '',
   },
 };
 

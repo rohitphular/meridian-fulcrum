@@ -8,11 +8,10 @@ let _catMenuKey = null;
 
 function _acctTypeGroups() {
   const schema = state.accountSchema;
-  const assetSubs = schema?.asset_sub_types ?? ['current', 'savings', 'cash'];
   return {
-    asset:  [...assetSubs, 'investment'],
+    asset:  [...schema.asset_sub_types, 'investment'],
     credit: ['credit_card', 'overdraft'],
-    loan:   schema?.loan_sub_types ?? ['personal_loan', 'mortgage', 'auto_loan', 'heloc', 'student_loan', 'medical_loan', 'debt_consolidation'],
+    loan:   schema.loan_sub_types,
   };
 }
 
@@ -42,7 +41,7 @@ export function renderCategories() {
     { key: 'money-out', label: 'Money Out' },
     { key: 'transfer',  label: 'Transfer' },
   ];
-  const filterLabel = CAT_FILTERS.find(o => o.key === (state.catFilter || 'all'))?.label || 'All';
+  const filterLabel = CAT_FILTERS.find(o => o.key === (state.catFilter || 'all')).label;
   const anyFormOpen = state.catAddOpen || state.catViewRow !== null || state.catEditRow !== null;
   const viewCat = state.catViewRow !== null ? state.categories.find(c => c._row === state.catViewRow) : null;
   const editCat = state.catEditRow !== null ? state.categories.find(c => c._row === state.catEditRow) : null;
@@ -57,7 +56,7 @@ export function renderCategories() {
       </div>
     </div>
     ${state.catImportOpen ? _renderCatImportPanel() : ''}
-    ${state.catAddOpen ? _renderForm(null,    'add')  : ''}
+    ${state.catAddOpen ? _renderForm({}, 'add') : ''}
     ${viewCat          ? _renderForm(viewCat, 'view') : ''}
     ${editCat          ? _renderForm(editCat, 'edit') : ''}
     <div class="cat-count-bar">
@@ -79,14 +78,11 @@ function _renderForm(cat, mode) {
   const srcId  = isView ? '' : `${pfx}Src`;
   const tgtId  = isView ? '' : `${pfx}Tgt`;
 
-  const types = state.transactionSchema?.types ?? [
-    { value: 'money-in',  label: 'Money In' },
-    { value: 'money-out', label: 'Money Out' },
-  ];
+  const types = state.categorySchema.types;
   const typeOpts = types.map(t => {
     const v = typeof t === 'string' ? t : t.value;
     const l = typeof t === 'string' ? t : t.label;
-    return `<option value="${esc(v)}" ${cat?.tx_type_key === v ? 'selected' : ''}>${esc(l)}</option>`;
+    return `<option value="${esc(v)}" ${cat.tx_type_key === v ? 'selected' : ''}>${esc(l)}</option>`;
   }).join('');
 
   const header = (isView || isEdit) ? `
@@ -106,27 +102,27 @@ function _renderForm(cat, mode) {
       </div>
       <div class="field">
         <label>Major *</label>
-        <input type="text" id="${pfx}Major" placeholder="e.g. Food" value="${esc(String(cat?.major_category_label || ''))}"${dis}>
+        <input type="text" id="${pfx}Major" placeholder="e.g. Food" value="${esc(String(cat.major_category_label || ''))}"${dis}>
         <div class="field-hint">Top-level category group.</div>
       </div>
       <div class="field form-grid-span-2">
         <label>Minor *</label>
-        <input type="text" id="${pfx}Minor" placeholder="e.g. Groceries" value="${esc(String(cat?.minor_category_label || ''))}"${dis}>
+        <input type="text" id="${pfx}Minor" placeholder="e.g. Groceries" value="${esc(String(cat.minor_category_label || ''))}"${dis}>
         <div class="field-hint">Specific category name shown in dropdowns.</div>
       </div>
       <div class="field form-grid-span-2">
         <label>Description</label>
-        <input type="text" id="${pfx}Desc" placeholder="Short description" value="${esc(String(cat?.description || ''))}"${dis}>
+        <input type="text" id="${pfx}Desc" placeholder="Short description" value="${esc(String(cat.description || ''))}"${dis}>
         <div class="field-hint">Shown in tooltips and reports.</div>
       </div>
       <div class="field form-grid-span-2">
         <label>Tag keywords</label>
-        <input type="text" id="${pfx}Keywords" placeholder="tesco, sainsbury…" value="${esc(String(cat?.tag_keywords || ''))}"${dis}>
+        <input type="text" id="${pfx}Keywords" placeholder="tesco, sainsbury…" value="${esc(String(cat.tag_keywords || ''))}"${dis}>
         <div class="field-hint">Comma-separated, for auto-classification.</div>
       </div>
       <div class="field form-grid-span-2">
         <label>Counterparty examples</label>
-        <input type="text" id="${pfx}Counterparty" placeholder="Tesco, Sainsbury's…" value="${esc(String(cat?.counterparty_examples || ''))}"${dis}>
+        <input type="text" id="${pfx}Counterparty" placeholder="Tesco, Sainsbury's…" value="${esc(String(cat.counterparty_examples || ''))}"${dis}>
         <div class="field-hint">Comma-separated merchant names.</div>
       </div>
     </div>
@@ -134,31 +130,31 @@ function _renderForm(cat, mode) {
       <div class="cat-acct-header">
         <div class="cat-acct-label">Source account types</div>
         <label class="checkbox-label cat-mandatory-check">
-          <input type="checkbox" id="${pfx}SrcMandatory" ${cat?.source_account_mandatory === true ? 'checked' : ''}${dis}> Mandatory
+          <input type="checkbox" id="${pfx}SrcMandatory" ${cat.source_account_mandatory === true ? 'checked' : ''}${dis}> Mandatory
         </label>
       </div>
-      ${_renderAcctTypeCheckboxes(srcId, cat?.source_account_types || '', isView)}
+      ${_renderAcctTypeCheckboxes(srcId, cat.source_account_types || '', isView)}
     </div>
     <div class="cat-acct-section">
       <div class="cat-acct-header">
         <div class="cat-acct-label">Target account types</div>
         <label class="checkbox-label cat-mandatory-check">
-          <input type="checkbox" id="${pfx}TgtMandatory" ${cat?.target_account_mandatory === true ? 'checked' : ''}${dis}> Mandatory
+          <input type="checkbox" id="${pfx}TgtMandatory" ${cat.target_account_mandatory === true ? 'checked' : ''}${dis}> Mandatory
         </label>
       </div>
-      ${_renderAcctTypeCheckboxes(tgtId, cat?.target_account_types || '', isView)}
+      ${_renderAcctTypeCheckboxes(tgtId, cat.target_account_types || '', isView)}
     </div>
     ${(isEdit || isView) ? `
     <label class="checkbox-label cat-mandatory-check" style="margin-top:14px">
-      <input type="checkbox" id="${pfx}IsActive" ${(cat?.is_active !== false) ? 'checked' : ''}${dis}> Active
+      <input type="checkbox" id="${pfx}IsActive" ${(cat.is_active !== false) ? 'checked' : ''}${dis}> Active
     </label>` : ''}
     <label class="checkbox-label cat-mandatory-check" style="margin-top:8px">
-      <input type="checkbox" id="${pfx}IsSubEligible" ${cat?.is_subscription_eligible === true ? 'checked' : ''}${dis}> Subscription eligible
+      <input type="checkbox" id="${pfx}IsSubEligible" ${cat.is_subscription_eligible === true ? 'checked' : ''}${dis}> Subscription eligible
     </label>
     ${isView ? `
     <div class="form-actions" style="margin-top:16px">
       <button class="btn btn-secondary" id="catCancelView">Close</button>
-      <button class="btn btn-primary" id="catViewToEdit" data-row="${cat?._row}">Edit</button>
+      <button class="btn btn-primary" id="catViewToEdit" data-row="${cat._row}">Edit</button>
     </div>
     ` : `
     <div class="form-actions" style="margin-top:16px">
@@ -380,7 +376,7 @@ async function _submitCatImport(categories) {
   try {
     const res = await ExpenseAPI.createCategoriesBulk({ categories });
     if (!res.ok && !res.results) {
-      console.warn('[categories] _submitCatImport failed:', res?.error);
+      console.warn('[categories] _submitCatImport failed:', res.error);
       if (errEl) errEl.textContent = 'Error: ' + (res.error || 'unknown');
       if (btn)   { btn.disabled = false; btn.textContent = 'Import'; }
       return;
@@ -408,7 +404,7 @@ async function _submitCatImport(categories) {
 // ── Events ────────────────────────────────────────────────────────────────────
 
 function _attachCatEvents() {
-  el('catExportBtn')?.addEventListener('click', () => {
+  el('catExportBtn').addEventListener('click', () => {
     const rows = state.catFilter === 'all'
       ? state.categories
       : state.catFilter === 'transfer'
@@ -420,7 +416,7 @@ function _attachCatEvents() {
     ], key => exportCategories(key, rows));
   });
 
-  el('catImportBtn')?.addEventListener('click', () => {
+  el('catImportBtn').addEventListener('click', () => {
     if (state.catImportOpen) {
       state.catImportOpen = false;
       _catImportParsed = null;
@@ -433,32 +429,34 @@ function _attachCatEvents() {
     renderCategories();
   });
 
-  el('catImportFile')?.addEventListener('change', e => {
-    const file = e.target.files[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = ev => {
-      const parsed = _parseCatCsv(ev.target.result);
-      _catImportParsed = parsed.categories.length ? parsed.categories : null;
-      const status = el('catImportStatus');
-      if (status) status.innerHTML = _renderCatImportStatus(parsed);
-      const btn = el('catImportConfirm');
-      if (btn) btn.disabled = !_catImportParsed;
-    };
-    reader.readAsText(file);
-  });
+  if (state.catImportOpen) {
+    el('catImportFile').addEventListener('change', e => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = ev => {
+        const parsed = _parseCatCsv(ev.target.result);
+        _catImportParsed = parsed.categories.length ? parsed.categories : null;
+        const status = el('catImportStatus');
+        if (status) status.innerHTML = _renderCatImportStatus(parsed);
+        const btn = el('catImportConfirm');
+        if (btn) btn.disabled = !_catImportParsed;
+      };
+      reader.readAsText(file);
+    });
 
-  el('catImportConfirm')?.addEventListener('click', () => {
-    if (_catImportParsed) _submitCatImport(_catImportParsed);
-  });
+    el('catImportConfirm').addEventListener('click', () => {
+      if (_catImportParsed) _submitCatImport(_catImportParsed);
+    });
 
-  el('catImportCancel')?.addEventListener('click', () => {
-    state.catImportOpen = false;
-    _catImportParsed = null;
-    renderCategories();
-  });
+    el('catImportCancel').addEventListener('click', () => {
+      state.catImportOpen = false;
+      _catImportParsed = null;
+      renderCategories();
+    });
+  }
 
-  el('catAddBtn')?.addEventListener('click', () => {
+  el('catAddBtn').addEventListener('click', () => {
     if (state.catAddOpen || state.catViewRow !== null || state.catEditRow !== null) {
       state.catAddOpen = false;
       state.catViewRow = null;
@@ -470,23 +468,29 @@ function _attachCatEvents() {
   });
 
   // Add form
-  el('catSaveNew')?.addEventListener('click', _saveNewCategory);
-  el('catCancelNew')?.addEventListener('click', () => { state.catAddOpen = false; renderCategories(); });
+  if (state.catAddOpen) {
+    el('catSaveNew').addEventListener('click', _saveNewCategory);
+    el('catCancelNew').addEventListener('click', () => { state.catAddOpen = false; renderCategories(); });
+  }
 
   // Edit form
-  el('catSaveEdit')?.addEventListener('click', _saveCatEdit);
-  el('catCancelEdit')?.addEventListener('click', () => { state.catEditRow = null; renderCategories(); });
+  if (state.catEditRow !== null) {
+    el('catSaveEdit').addEventListener('click', _saveCatEdit);
+    el('catCancelEdit').addEventListener('click', () => { state.catEditRow = null; renderCategories(); });
+  }
 
   // View form
-  el('catCancelView')?.addEventListener('click', () => { state.catViewRow = null; renderCategories(); });
-  el('catViewToEdit')?.addEventListener('click', e => {
-    const row = Number(e.currentTarget.dataset.row);
-    state.catViewRow = null;
-    state.catEditRow = row;
-    renderCategories();
-  });
+  if (state.catViewRow !== null) {
+    el('catCancelView').addEventListener('click', () => { state.catViewRow = null; renderCategories(); });
+    el('catViewToEdit').addEventListener('click', e => {
+      const row = Number(e.currentTarget.dataset.row);
+      state.catViewRow = null;
+      state.catEditRow = row;
+      renderCategories();
+    });
+  }
 
-  el('catFilterBtn')?.addEventListener('click', () => {
+  el('catFilterBtn').addEventListener('click', () => {
     openContextMenu(el('catFilterBtn'), [
       { key: 'all',       label: 'All' },
       { key: 'money-in',  label: 'Money In' },
@@ -537,25 +541,27 @@ function _attachCatEvents() {
     if (action === 'cat-cancel-delete')  { state.catDeleteRow = null; renderCategories(); }
     if (action === 'cat-confirm-delete') { _deleteCat(row); }
   };
-  el('categoriesContent')?.querySelector('.cat-table-wrap')?.addEventListener('click', handleCatAction);
-  el('categoriesContent')?.querySelector('.cat-cards')?.addEventListener('click', handleCatAction);
+  const tableWrap = el('categoriesContent').querySelector('.cat-table-wrap');
+  if (tableWrap) tableWrap.addEventListener('click', handleCatAction);
+  const catCards = el('categoriesContent').querySelector('.cat-cards');
+  if (catCards) catCards.addEventListener('click', handleCatAction);
 }
 
 // ── Save new ──────────────────────────────────────────────────────────────────
 
 async function _saveNewCategory() {
-  const tx_type_key           = el('catNewType')?.value;
-  const major_category_label  = el('catNewMajor')?.value.trim();
-  const minor_category_label  = el('catNewMinor')?.value.trim();
-  const description           = el('catNewDesc')?.value.trim();
-  const tag_keywords          = el('catNewKeywords')?.value.trim();
-  const counterparty_examples = el('catNewCounterparty')?.value.trim();
+  const tx_type_key           = el('catNewType').value;
+  const major_category_label  = el('catNewMajor').value.trim();
+  const minor_category_label  = el('catNewMinor').value.trim();
+  const description           = el('catNewDesc').value.trim();
+  const tag_keywords          = el('catNewKeywords').value.trim();
+  const counterparty_examples = el('catNewCounterparty').value.trim();
   const source_account_types  = _getCheckedAccountTypes('catNewSrc');
   const target_account_types  = _getCheckedAccountTypes('catNewTgt');
-  const source_account_mandatory = el('catNewSrcMandatory')?.checked === true;
-  const target_account_mandatory = el('catNewTgtMandatory')?.checked === true;
+  const source_account_mandatory = el('catNewSrcMandatory').checked === true;
+  const target_account_mandatory = el('catNewTgtMandatory').checked === true;
   const is_active                = true;
-  const is_subscription_eligible = el('catNewIsSubEligible')?.checked === true;
+  const is_subscription_eligible = el('catNewIsSubEligible').checked === true;
   const errEl                    = el('catAddError');
 
   if (!major_category_label) { if (errEl) errEl.textContent = 'Major category is required.'; return; }
@@ -577,7 +583,7 @@ async function _saveNewCategory() {
       state.catAddOpen = false;
       document.dispatchEvent(new CustomEvent('et:reload'));
     } else {
-      console.warn('[categories] _saveNewCategory failed:', res?.error);
+      console.warn('[categories] _saveNewCategory failed:', res.error);
       const msg = res.error === 'duplicate_category'
         ? 'This category already exists.'
         : 'Error: ' + (res.error || 'unknown');
@@ -599,18 +605,18 @@ async function _saveCatEdit() {
   const rowNum = state.catEditRow;
   if (!rowNum) return;
 
-  const tx_type_key           = el('catEditType')?.value;
-  const major_category_label  = el('catEditMajor')?.value.trim();
-  const minor_category_label  = el('catEditMinor')?.value.trim();
-  const description           = el('catEditDesc')?.value.trim();
-  const tag_keywords          = el('catEditKeywords')?.value.trim();
-  const counterparty_examples = el('catEditCounterparty')?.value.trim();
+  const tx_type_key           = el('catEditType').value;
+  const major_category_label  = el('catEditMajor').value.trim();
+  const minor_category_label  = el('catEditMinor').value.trim();
+  const description           = el('catEditDesc').value.trim();
+  const tag_keywords          = el('catEditKeywords').value.trim();
+  const counterparty_examples = el('catEditCounterparty').value.trim();
   const source_account_types  = _getCheckedAccountTypes('catEditSrc');
   const target_account_types  = _getCheckedAccountTypes('catEditTgt');
-  const source_account_mandatory = el('catEditSrcMandatory')?.checked === true;
-  const target_account_mandatory = el('catEditTgtMandatory')?.checked === true;
-  const is_active                = el('catEditIsActive')?.checked !== false;
-  const is_subscription_eligible = el('catEditIsSubEligible')?.checked === true;
+  const source_account_mandatory = el('catEditSrcMandatory').checked === true;
+  const target_account_mandatory = el('catEditTgtMandatory').checked === true;
+  const is_active                = el('catEditIsActive').checked !== false;
+  const is_subscription_eligible = el('catEditIsSubEligible').checked === true;
   const errEl                    = el('catEditError');
 
   if (!major_category_label || !minor_category_label) {
@@ -634,8 +640,11 @@ async function _saveCatEdit() {
       state.catEditRow = null;
       document.dispatchEvent(new CustomEvent('et:reload'));
     } else {
-      console.warn('[categories] _saveCatEdit failed:', res?.error);
-      if (errEl) errEl.textContent = 'Update failed: ' + (res.error || 'unknown');
+      console.warn('[categories] _saveCatEdit failed:', res.error);
+      const msg = res.error === 'duplicate_category'
+        ? 'This category already exists.'
+        : 'Update failed: ' + (res.error || 'unknown');
+      if (errEl) errEl.textContent = msg;
       if (btn) { btn.disabled = false; btn.textContent = 'Save'; }
     }
   } catch (err) {
@@ -658,7 +667,7 @@ async function _deleteCat(rowNum) {
       state.catDeleteRow = null;
       document.dispatchEvent(new CustomEvent('et:reload'));
     } else {
-      console.warn('[categories] _deleteCat failed:', res?.error);
+      console.warn('[categories] _deleteCat failed:', res.error);
       showMsg('Delete failed: ' + (res.error || 'unknown'), 'warn');
       state.catDeleteRow = null;
       renderCategories();
