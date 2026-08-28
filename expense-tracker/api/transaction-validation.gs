@@ -3,19 +3,78 @@
 // Shared across all transaction .gs files via GAS global scope.
 // =============================================================================
 
-function validateTransactionCreate(body) {
+// ── Category map ─────────────────────────────────────────────────────────────
+// Reads the categories sheet ONCE and returns a lookup map keyed by
+// "tx_type_key|major_category_key|minor_category_key".
+// Call this once per request and pass the result to validateTransactionRecord.
+
+function _buildCategoryMap() {
+  const sheet  = getOrCreateSheet(CATEGORIES_SHEET, getCategorySheetColumns());
+  const values = sheet.getDataRange().getValues();
+  const map    = {};
+  if (values.length <= 1) return map;
+
+  const ci = {
+    type:         catColIndex('tx_type_key'),
+    major:        catColIndex('major_category_key'),
+    minor:        catColIndex('minor_category_key'),
+    src:          catColIndex('source_account_types'),
+    dst:          catColIndex('target_account_types'),
+    srcMandatory: catColIndex('source_account_mandatory'),
+    dstMandatory: catColIndex('target_account_mandatory'),
+    status:       catColIndex('record_status'),
+  };
+
+  const toBool = function(v) { return v === true || String(v).toLowerCase() === 'true'; };
+
+  for (var i = 1; i < values.length; i++) {
+    if (String(values[i][ci.status]) === 'deleted') continue;
+    const key = values[i][ci.type] + '|' + values[i][ci.major] + '|' + values[i][ci.minor];
+    map[key] = {
+      source_account_types:     String(values[i][ci.src] || '').trim(),
+      target_account_types:     String(values[i][ci.dst] || '').trim(),
+      source_account_mandatory: toBool(values[i][ci.srcMandatory]),
+      target_account_mandatory: toBool(values[i][ci.dstMandatory]),
+    };
+  }
+  return map;
+}
+
+// ── Shared transaction record validator ───────────────────────────────────────
+// Used by both createTransaction (UI form) and createTransactionsBulk (CSV import).
+// catMap must be pre-built via _buildCategoryMap() — never fetch it here.
+//
+// Amount rules:
+//   source_amount — always the primary amount; required and > 0.
+//   target_amount — only present for cross-currency transfers; if provided must be > 0.
+//                   Same-currency transfers leave it blank; the core defaults to source_amount.
+
+function validateTransactionRecord(body, catMap) {
   if (!body.tx_date_time)
     return { ok: false, error: 'missing_date' };
   if (!body.tx_type || !VALID_TRANSACTION_TYPES.includes(body.tx_type))
     return { ok: false, error: 'invalid_transaction_type' };
-  if (!body.source_amount || Number(body.source_amount) <= 0)
-    return { ok: false, error: 'invalid_amount' };
-  // money-in: source is external — source_account is not sent by the UI
-  if (body.tx_type !== 'money-in' && !body.source_account)
-    return { ok: false, error: 'missing_source_account' };
+  if (!body.major_category || !body.minor_category)
+    return { ok: false, error: 'missing_category' };
 
-  const acctTypeErr = _validateCategoryAccountTypeHints(body);
-  if (acctTypeErr) return acctTypeErr;
+  const catKey = body.tx_type + '|' + body.major_category + '|' + body.minor_category;
+  const cat    = catMap[catKey];
+  if (!cat)
+    return { ok: false, error: 'unknown_category' };
+
+  if (cat.source_account_mandatory) {
+    if (!body.source_account)
+      return { ok: false, error: 'missing_source_account' };
+    if (!body.source_amount || Number(body.source_amount) <= 0)
+      return { ok: false, error: 'missing_source_amount' };
+  }
+
+  if (cat.target_account_mandatory) {
+    if (!body.target_account)
+      return { ok: false, error: 'missing_target_account' };
+    if (!body.target_amount || Number(body.target_amount) <= 0)
+      return { ok: false, error: 'missing_target_amount' };
+  }
 
   const finErr = _validateFinancialRules(body, null);
   if (!finErr.ok) return finErr;
@@ -23,9 +82,8 @@ function validateTransactionCreate(body) {
   return { ok: true };
 }
 
-// `oldRow` is the existing sheet row (array, indexed by txColIndex). Pass it so
-// financial-rule checks operate on the post-reversal balance projection. T-02
-// will move all validation to BEFORE Phase 1 reversal — this signature anticipates that.
+// ── Update validator (unchanged) ──────────────────────────────────────────────
+
 function validateTransactionUpdate(body, oldRow) {
   if (!body.row_num)
     return { ok: false, error: 'missing_row_num' };
@@ -38,7 +96,6 @@ function validateTransactionUpdate(body, oldRow) {
   if (!body.account_id)
     return { ok: false, error: 'missing_account_id' };
 
-  // Reject immutable fields
   const fields = getFieldsForTransactionType(body.tx_type);
   for (let i = 0; i < fields.length; i++) {
     const field = fields[i];
@@ -47,57 +104,41 @@ function validateTransactionUpdate(body, oldRow) {
     }
   }
 
-  // Financial hard-block rules with post-reversal balance when oldRow is supplied.
   const finErr = _validateFinancialRules(body, oldRow || null);
   if (!finErr.ok) return finErr;
 
   return { ok: true };
 }
 
-// ── Account-type hint validation ──────────────────────────────────────────────
+// ── Financial hard-block rules ────────────────────────────────────────────────
 
-function _validateCategoryAccountTypeHints(body) {
-  const cat = _findCategoryHints(body.tx_type, body.major_category, body.minor_category);
-  if (!cat) return null;
+function _validateFinancialRules(body, oldRow) {
+  const accountMap = _loadAccountMap();
 
-  // Only enforce presence — never reject on account type or record_status.
-  // An account may be inactive/finished but still a valid historical reference.
-  // Account existence is enforced separately by _validateFinancialRules T-03.
-  if (cat.source_account_mandatory && !body.source_account)
-    return { ok: false, error: 'missing_source_account' };
-
-  if (cat.target_account_mandatory && !body.target_account)
-    return { ok: false, error: 'missing_target_account' };
-
-  return null;
-}
-
-function _findCategoryHints(type, major, minor) {
-  if (!type || !major || !minor) return null;
-  const sheet  = getOrCreateSheet(CATEGORIES_SHEET, getCategorySheetColumns());
-  const values = sheet.getDataRange().getValues();
-  const ci = {
-    type:         catColIndex('tx_type_key'),
-    major:        catColIndex('major_category_key'),
-    minor:        catColIndex('minor_category_key'),
-    src:          catColIndex('source_account_types'),
-    dst:          catColIndex('target_account_types'),
-    srcMandatory: catColIndex('source_account_mandatory'),
-    dstMandatory: catColIndex('target_account_mandatory'),
-  };
-  for (let i = 1; i < values.length; i++) {
-    if (values[i][ci.type] === type && values[i][ci.major] === major && values[i][ci.minor] === minor) {
-      const toBool = function(v) { return v === true || String(v).toLowerCase() === 'true'; };
-      return {
-        source_account_types:      String(values[i][ci.src]          || '').trim(),
-        target_account_types:      String(values[i][ci.dst]          || '').trim(),
-        source_account_mandatory:  toBool(values[i][ci.srcMandatory]),
-        target_account_mandatory:  toBool(values[i][ci.dstMandatory]),
-      };
-    }
+  if (body.account_id && !accountMap[String(body.account_id)]) {
+    return { ok: false, error: 'unknown_account_id:' + body.account_id };
   }
-  return null;
+  if (body.source_account && !accountMap[String(body.source_account)]) {
+    return { ok: false, error: 'unknown_source_account:' + body.source_account };
+  }
+  if (body.target_account && !accountMap[String(body.target_account)]) {
+    return { ok: false, error: 'unknown_target_account:' + body.target_account };
+  }
+
+  return { ok: true };
 }
+
+function _loadAccountMap() {
+  const sheet = getOrCreateSheet(ACCOUNTS_SHEET, getAccountSheetColumns());
+  const rows  = sheetToObjectsWithRow(sheet);
+  const out   = {};
+  rows.forEach(function(a) {
+    if (a.id) out[String(a.id)] = a;
+  });
+  return out;
+}
+
+// ── Account-type hint check ───────────────────────────────────────────────────
 
 function _checkAccountTypeHint(accountId, allowedTypesStr, label) {
   if (!accountId || !allowedTypesStr) return null;
@@ -125,44 +166,3 @@ function _checkAccountTypeHint(accountId, allowedTypesStr, label) {
   }
   return null;
 }
-
-// ── Financial hard-block rules — server-side safety net ─────────────────────
-// Mirrors the frontend rule logic in app/sections/transactions.js so a direct
-// POST or a request from a stale UI cannot bypass the rules. Specifications:
-// docs/financial-rules.md.
-//
-//   T-03: unknown account refs are rejected before any sheet mutation.
-
-function _validateFinancialRules(body, oldRow) {
-  const accountMap = _loadAccountMap();
-
-  // T-03 preflight: NEW account refs must exist. Refusing here forces the user
-  // to fix the data before any sheet mutation happens, and means
-  // adjustAccountBalance can't silently no-op on a typo or stale reference.
-  // OLD account refs (read from the stored row during update/delete) are
-  // intentionally NOT preflight-checked here — see adjustAccountBalance.
-  //
-  // Create body uses source_account/target_account; update body uses account_id.
-  if (body.account_id && !accountMap[String(body.account_id)]) {
-    return { ok: false, error: 'unknown_account_id:' + body.account_id };
-  }
-  if (body.source_account && !accountMap[String(body.source_account)]) {
-    return { ok: false, error: 'unknown_source_account:' + body.source_account };
-  }
-  if (body.target_account && !accountMap[String(body.target_account)]) {
-    return { ok: false, error: 'unknown_target_account:' + body.target_account };
-  }
-
-  return { ok: true };
-}
-
-function _loadAccountMap() {
-  const sheet = getOrCreateSheet(ACCOUNTS_SHEET, getAccountSheetColumns());
-  const rows  = sheetToObjectsWithRow(sheet);
-  const out   = {};
-  rows.forEach(function(a) {
-    if (a.id) out[String(a.id)] = a;
-  });
-  return out;
-}
-

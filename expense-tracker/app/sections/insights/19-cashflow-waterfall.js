@@ -51,18 +51,13 @@ function _groupExpenses(outTxs) {
 function _buildWaterfall(txs, accounts, from, C) {
   const startBalance = _startBalance(accounts, from);
 
-  const inTxs      = txs.filter(t => t.tx_type === 'money-in');
-  const outTxs     = txs.filter(t => t.tx_type === 'money-out');
-  const xferTxs    = txs.filter(t => t.tx_type === 'money-transfer');
+  const inTxs   = txs.filter(t => t.tx_type === 'money-in');
+  const outTxs  = txs.filter(t => t.tx_type === 'money-out');
 
-  const income      = sumAmountBase(inTxs);
-  const expGroups   = _groupExpenses(outTxs);
-  // Net transfer effect: positive = net inflow from external accounts, negative = net outflow.
-  // Internal transfers (both sides tracked) cancel out to zero here because amount_base is signed.
-  const netTransfer = sumAmountBase(xferTxs);
+  const income    = sumAmountBase(inTxs);
+  const expGroups = _groupExpenses(outTxs);
 
-  const GREEN  = 'rgba(52,211,153,0.85)';
-  const BLUE   = 'rgba(96,165,250,0.85)'; // transfers
+  const GREEN = 'rgba(52,211,153,0.85)';
 
   const labels     = [];
   const baseVals   = [];
@@ -85,19 +80,12 @@ function _buildWaterfall(txs, accounts, from, C) {
     rt -= exp;
   }
 
-  // Net transfers (only shown when non-zero)
-  if (Math.round(Math.abs(netTransfer)) > 0) {
-    labels.push('Transfers'); baseVals.push(rt); visVals.push(netTransfer);
-    barColors.push(netTransfer >= 0 ? BLUE : C.muted);
-    rt += netTransfer;
-  }
-
   // Closing
   const closing = rt;
   labels.push('Closing'); baseVals.push(0); visVals.push(closing);
   barColors.push(closing >= 0 ? C.teal : C.ember);
 
-  return { labels, baseVals, visVals, barColors, income, expGroups, netTransfer, closing, startBalance };
+  return { labels, baseVals, visVals, barColors, income, expGroups, closing, startBalance };
 }
 
 // ── Chart options ─────────────────────────────────────────────────────────────

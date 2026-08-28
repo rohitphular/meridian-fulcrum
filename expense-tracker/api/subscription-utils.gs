@@ -41,12 +41,13 @@ function computeNextPaymentDate(frequency, dayOfMonth, dayOfWeek) {
   const todayMonth = today.getMonth();   // 0-based
   const todayDay   = today.getDate();    // 1-based
 
-  // Default to day 1 when day_of_month is missing or invalid (0, NaN, empty).
-  const dom = Number(dayOfMonth) || 1;
+  const dom = Number(dayOfMonth);
 
   if (frequency === 'weekly') {
     return _nextWeeklyDate(todayYear, todayMonth, todayDay, Number(dayOfWeek));
   }
+
+  if (!dom || dom < 1 || dom > 31) return '';
 
   if (frequency === 'monthly') {
     return _nextCycleDate(todayYear, todayMonth, todayDay, dom, 1);

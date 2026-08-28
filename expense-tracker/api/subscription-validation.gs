@@ -4,13 +4,13 @@
 // =============================================================================
 
 function validateSubscriptionCreate(body) {
-  if (!String(body.name     || '').trim()) return { ok: false, error: 'missing_name' };
-  if (!String(body.currency || '').trim()) return { ok: false, error: 'missing_currency' };
+  if (!body.name)           return { ok: false, error: 'missing_name' };
+  if (!body.currency)       return { ok: false, error: 'missing_currency' };
 
   const amount = Number(body.amount);
   if (isNaN(amount) || amount <= 0) return { ok: false, error: 'invalid_amount' };
 
-  if (!String(body.source_account || '').trim()) return { ok: false, error: 'missing_source_account' };
+  if (!body.source_account) return { ok: false, error: 'missing_source_account' };
 
   const schedErr = _validateSchedule(body);
   if (!schedErr.ok) return schedErr;
@@ -19,9 +19,9 @@ function validateSubscriptionCreate(body) {
 }
 
 function validateSubscriptionUpdate(body) {
-  if (!body.row_num)                        return { ok: false, error: 'missing_row_num' };
-  if (!String(body.name || '').trim())      return { ok: false, error: 'missing_name' };
-  if (!String(body.source_account || '').trim()) return { ok: false, error: 'missing_source_account' };
+  if (!body.row_num)        return { ok: false, error: 'missing_row_num' };
+  if (!body.name)           return { ok: false, error: 'missing_name' };
+  if (!body.source_account) return { ok: false, error: 'missing_source_account' };
 
   if (body.amount !== undefined && body.amount !== '') {
     const amount = Number(body.amount);
@@ -54,7 +54,8 @@ function validateSubscriptionUpdate(body) {
 }
 
 function _validateSchedule(body) {
-  const frequency = String(body.frequency || '').trim();
+  if (!body.frequency) return { ok: false, error: 'invalid_frequency' };
+  const frequency = String(body.frequency).trim();
   if (VALID_FREQUENCIES.indexOf(frequency) === -1) return { ok: false, error: 'invalid_frequency' };
 
   if (frequency === 'weekly') {

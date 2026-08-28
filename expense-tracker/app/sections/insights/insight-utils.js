@@ -250,9 +250,6 @@ export function computeBalancesAt(accounts, allTxs, date) {
       balance[tx.source_account] = (balance[tx.source_account] || 0) - amt;
     } else if (tx.tx_type === 'money-in' && accountIds.has(tx.target_account)) {
       balance[tx.target_account] = (balance[tx.target_account] || 0) + amt;
-    } else if (tx.tx_type === 'money-transfer') {
-      if (accountIds.has(tx.source_account)) balance[tx.source_account] = (balance[tx.source_account] || 0) - amt;
-      if (accountIds.has(tx.target_account)) balance[tx.target_account] = (balance[tx.target_account] || 0) + amt;
     }
   }
 
@@ -291,9 +288,6 @@ export function computeDailyTotalAssets(assetAccounts, allTxs, from, to) {
         balance[tx.source_account] = (balance[tx.source_account] || 0) - amt;
       } else if (tx.tx_type === 'money-in' && accountIds.has(tx.target_account)) {
         balance[tx.target_account] = (balance[tx.target_account] || 0) + amt;
-      } else if (tx.tx_type === 'money-transfer') {
-        if (accountIds.has(tx.source_account)) balance[tx.source_account] = (balance[tx.source_account] || 0) - amt;
-        if (accountIds.has(tx.target_account)) balance[tx.target_account] = (balance[tx.target_account] || 0) + amt;
       }
       txIdx++;
     }

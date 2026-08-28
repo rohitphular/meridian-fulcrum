@@ -25,14 +25,13 @@ function _payoffDateStr(months) {
     .toLocaleDateString('en-GB', { month: 'long', year: 'numeric' });
 }
 
-// Repayment txs targeting this liability account (money-transfer credits).
+// Repayment txs for this liability account — money-out with debt-repayment category
+// matched by source_account. Loan balance is tracked via opening_value + net transactions.
 function _repaymentTxs(acc) {
   return state.transactions.filter(t =>
-    t.tx_type === 'money-transfer' && (
-      t.target_account === acc.name ||
-      t.to_account     === acc.name ||
-      t.to_account_id  === acc.id
-    )
+    t.tx_type === 'money-out' &&
+    t.major_category === 'debt-repayment' &&
+    t.source_account === acc.id
   ).sort((a, b) => new Date(a.tx_date_time) - new Date(b.tx_date_time));
 }
 

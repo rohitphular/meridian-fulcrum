@@ -1,8 +1,7 @@
 // =============================================================================
 // FULCRUM FORGE — Category Validation
 // All validation is driven by CATEGORY_SCHEMA (category-schema.gs).
-// Note: uses a local type list — do NOT use VALID_TRANSACTION_TYPES which
-// still includes money-transfer for the transactions sheet.
+// Note: uses VALID_CATEGORY_TX_TYPES — keep in sync with VALID_TRANSACTION_TYPES.
 // =============================================================================
 
 const VALID_CATEGORY_TX_TYPES = ['money-in', 'money-out'];

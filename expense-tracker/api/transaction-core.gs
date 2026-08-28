@@ -20,17 +20,18 @@ function listTransactions() {
 //         major_category, minor_category, + location/text fields }
 // ─────────────────────────────────────────────────────────────────────────────
 function createTransaction(body) {
-  const validation = validateTransactionCreate(body);
+  const catMap    = _buildCategoryMap();
+  const validation = validateTransactionRecord(body, catMap);
   if (!validation.ok) return validation;
 
-  const cat = _findCategoryHints(body.tx_type, body.major_category, body.minor_category);
-  const isTransfer = cat && cat.source_account_mandatory && cat.target_account_mandatory
+  const catKey  = body.tx_type + '|' + body.major_category + '|' + body.minor_category;
+  const cat     = catMap[catKey];
+  const isTransfer = cat.source_account_mandatory && cat.target_account_mandatory
     && body.source_account && body.target_account;
 
   if (isTransfer) {
     const srcAmt = Number(body.source_amount);
-    const tgtAmt = body.target_amount && Number(body.target_amount) > 0
-      ? Number(body.target_amount) : srcAmt;
+    const tgtAmt = Number(body.target_amount);
 
     // Parent = the leg matching the submitted tx_type.
     // money-out submitted → source account is the primary leg (parent).
@@ -63,16 +64,14 @@ function createTransaction(body) {
     return { ok: true, ids: [parentResult.id, childResult.id] };
   }
 
-  // Non-transfer: single row.
-  // money-out → account_id from source_account; money-in → from target_account.
-  const account_id = body.tx_type === 'money-in'
-    ? (body.target_account || body.source_account || '')
-    : (body.source_account || '');
+  // Non-transfer: single row. Account and amount come from whichever side is mandatory.
+  const account_id = cat.source_account_mandatory ? body.source_account : body.target_account;
+  const tx_amount  = cat.source_account_mandatory ? Number(body.source_amount) : Number(body.target_amount);
 
   return _writeSingleTransaction(Object.assign(_txSharedFields(body), {
     tx_type:      body.tx_type,
     account_id:   account_id,
-    tx_amount:    Number(body.source_amount),
+    tx_amount:    tx_amount,
     parent_tx_id: '',
   }));
 }
@@ -280,6 +279,9 @@ function createTransactionsBulk(body) {
   const numCols = cols.length;
   const now     = new Date().toISOString();
 
+  // Category map — one sheet read shared across all records in this batch.
+  const catMap = _buildCategoryMap();
+
   // Seed dup set from existing sheet rows so re-importing the same file is safe.
   const dupSet = new Set();
   (function seedDupSet() {
@@ -344,15 +346,6 @@ function createTransactionsBulk(body) {
     return row;
   }
 
-  // Memoised category hints — eliminates repeated category-sheet reads when
-  // multiple rows in the chunk share the same category.
-  const catCache = {};
-  function getCat(type, major, minor) {
-    const k = (type || '') + '|' + (major || '') + '|' + (minor || '');
-    if (!(k in catCache)) catCache[k] = _findCategoryHints(type, major, minor);
-    return catCache[k];
-  }
-
   // ── Process each transaction in-memory ────────────────────────────────────
   const batchRows = [];
   const results   = [];
@@ -362,20 +355,20 @@ function createTransactionsBulk(body) {
     const label  = String(tx.tx_date_time || '').slice(0, 10) + ' ' +
                    String(tx.description || tx.counterparty_name || '').slice(0, 40);
 
-    const val = validateTransactionCreate(txBody);
+    const val = validateTransactionRecord(txBody, catMap);
     if (!val.ok) {
       results.push({ label: label, ok: false, error: val.error, id: null, ids: null });
       return;
     }
 
-    const cat        = getCat(txBody.tx_type, txBody.major_category, txBody.minor_category);
-    const isTransfer = cat && cat.source_account_mandatory && cat.target_account_mandatory
+    const catKey     = txBody.tx_type + '|' + txBody.major_category + '|' + txBody.minor_category;
+    const cat        = catMap[catKey];
+    const isTransfer = cat.source_account_mandatory && cat.target_account_mandatory
       && txBody.source_account && txBody.target_account;
 
     if (isTransfer) {
       const srcAmt = Number(txBody.source_amount);
-      const tgtAmt = txBody.target_amount && Number(txBody.target_amount) > 0
-        ? Number(txBody.target_amount) : srcAmt;
+      const tgtAmt = Number(txBody.target_amount);
 
       var parentAcct, parentAmt, parentType, childAcct, childAmt, childType;
       if (txBody.tx_type === 'money-out') {
@@ -405,11 +398,9 @@ function createTransactionsBulk(body) {
       return;
     }
 
-    // Non-transfer: single row
-    const acct = txBody.tx_type === 'money-in'
-      ? (txBody.target_account || txBody.source_account || '')
-      : (txBody.source_account || '');
-    const amt  = Number(txBody.source_amount);
+    // Non-transfer: single row. Account and amount from whichever side is mandatory.
+    const acct = cat.source_account_mandatory ? txBody.source_account : txBody.target_account;
+    const amt  = cat.source_account_mandatory ? Number(txBody.source_amount) : Number(txBody.target_amount);
     const dKey = dupKey(txBody.tx_date_time, txBody.tx_type, acct, amt);
 
     if (dupSet.has(dKey)) {

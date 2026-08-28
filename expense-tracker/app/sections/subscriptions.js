@@ -25,7 +25,7 @@ const DOW_LABELS = [
 // ── Category helpers ──────────────────────────────────────────────────────────
 
 function _txTypeOpts(selected = '') {
-  const types = state.transactionSchema?.types ?? ['money-in', 'money-out', 'money-transfer'];
+  const types = state.transactionSchema?.types ?? ['money-in', 'money-out'];
   return `<option value="">— select —</option>` +
     types.map(t => {
       const v = typeof t === 'string' ? t : t.value;
@@ -71,7 +71,7 @@ function _minorOpts(txType, major, selectedVal = '') {
 // ── Monthly-cost estimate ─────────────────────────────────────────────────────
 
 function _toMonthly(amount, frequency) {
-  const n = parseFloat(amount) || 0;
+  const n = parseFloat(amount);
   if (frequency === 'weekly')    return n * 4.33;
   if (frequency === 'monthly')   return n;
   if (frequency === 'quarterly') return n / 3;
@@ -98,18 +98,20 @@ function _renderForm(sub = null) {
   const p      = state.subPrefill;   // null when opening a fresh form; non-null when subscribing from a tx
   const isEdit = sub !== null;
 
-  const nameVal        = isEdit ? (sub.name             || '') : (p ? (p.name              ?? 'FAILURE') : '');
-  const cpVal          = isEdit ? (sub.counterparty_name || '') : (p ? (p.counterparty_name ?? 'FAILURE') : '');
-  const amountVal      = isEdit ? (sub.amount            || '') : (p ? (p.amount            ?? 'FAILURE') : '');
-  const currencyVal    = isEdit ? (sub.currency          || '') : (p ? (p.currency          ?? 'FAILURE') : '');
-  const freqVal        = isEdit ? (sub.frequency         || 'monthly') : (p ? (p.frequency  ?? 'monthly') : 'monthly');
-  const srcAccVal      = isEdit ? (sub.source_account    || '') : (p ? (p.source_account    ?? 'FAILURE') : '');
-  const txTypeVal      = isEdit ? (sub.tx_type  || '') : (p ? (p.tx_type  ?? 'FAILURE') : '');
-  const majorVal       = isEdit ? (sub.major_category    || '') : (p ? (p.major_category    ?? 'FAILURE') : '');
-  const minorVal       = isEdit ? (sub.minor_category    || '') : (p ? (p.minor_category    ?? 'FAILURE') : '');
-  const tagsVal        = isEdit ? (String(sub.tags       || '').replace(/;/g, ', ')) : (p ? String(p.tags ?? '').replace(/;/g, ', ') : '');
-  const descriptionVal = isEdit ? (sub.description        || '') : '';
-  const dayVal         = isEdit ? (sub.day_of_week || sub.day_of_month || '') : '';
+  const nameVal        = isEdit ? sub.name             : (p ? (p.name              ?? 'FAILURE') : '');
+  const cpVal          = isEdit ? sub.counterparty_name : (p ? (p.counterparty_name ?? 'FAILURE') : '');
+  const amountVal      = isEdit ? sub.amount            : (p ? (p.amount            ?? 'FAILURE') : '');
+  const currencyVal    = isEdit ? sub.currency          : (p ? (p.currency          ?? 'FAILURE') : '');
+  const freqVal        = isEdit ? sub.frequency         : (p ? (p.frequency         ?? 'monthly') : 'monthly');
+  const srcAccVal      = isEdit ? sub.source_account    : (p ? (p.source_account    ?? 'FAILURE') : '');
+  const txTypeVal      = isEdit ? sub.tx_type           : (p ? (p.tx_type           ?? 'FAILURE') : '');
+  const majorVal       = isEdit ? sub.major_category    : (p ? (p.major_category    ?? 'FAILURE') : '');
+  const minorVal       = isEdit ? sub.minor_category    : (p ? (p.minor_category    ?? 'FAILURE') : '');
+  const tagsVal        = isEdit ? String(sub.tags).replace(/;/g, ', ') : (p ? String(p.tags ?? '').replace(/;/g, ', ') : '');
+  const descriptionVal = isEdit ? sub.description       : '';
+  const dayVal         = isEdit ? (sub.frequency === 'weekly' ? sub.day_of_week : sub.day_of_month) : '';
+  const startDateVal   = isEdit ? sub.subscription_start_date : '';
+  const endDateVal     = isEdit ? sub.subscription_end_date   : '';
 
   const freqOpts = FREQUENCIES.map(f =>
     `<option value="${esc(f.value)}" ${freqVal === f.value ? 'selected' : ''}>${esc(f.label)}</option>`
@@ -159,6 +161,14 @@ function _renderForm(sub = null) {
         ${_dayFieldHtml(freqVal, dayVal)}
       </div>
       <div class="field form-grid-span-2">
+        <label for="subStartDate">Start date</label>
+        <input type="date" id="subStartDate" value="${esc(String(startDateVal))}">
+      </div>
+      <div class="field form-grid-span-2">
+        <label for="subEndDate">End date</label>
+        <input type="date" id="subEndDate" value="${esc(String(endDateVal))}">
+      </div>
+      <div class="field form-grid-span-2">
         <label for="subSourceAccount">Source account</label>
         <select id="subSourceAccount">${accOpts}</select>
       </div>
@@ -182,12 +192,6 @@ function _renderForm(sub = null) {
         <label for="subDescription">Notes</label>
         <input type="text" id="subDescription" value="${esc(descriptionVal)}" placeholder="Optional note">
       </div>
-      ${isEdit ? `
-      <div class="field form-grid-span-4">
-        <label class="field-check">
-          <input type="checkbox" id="subIsActive" ${sub.is_active ? 'checked' : ''}> Active
-        </label>
-      </div>` : ''}
     </div>
     <div class="form-actions">
       <button id="subSaveBtn" class="btn btn-primary btn-sm" data-action="sub-save">Save</button>
@@ -202,9 +206,9 @@ function _renderForm(sub = null) {
 function _renderStats() {
   const subs   = state.subscriptions;
   const total  = subs.length;
-  const active = subs.filter(s => s.is_active).length;
+  const active = subs.filter(s => s.record_status === 'active').length;
   const estMonthly = subs
-    .filter(s => s.is_active)
+    .filter(s => s.record_status === 'active')
     .reduce((sum, s) => {
       const monthly = _toMonthly(s.amount, s.frequency);
       return sum + toBase(monthly, s.currency, null);
@@ -250,15 +254,16 @@ function _renderSubCard(sub) {
   }
 
   const sym         = getSymbol(sub.currency);
-  const amtFmt      = `${sym}${parseFloat(sub.amount || 0).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const amtFmt      = `${sym}${parseFloat(sub.amount).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   const freqLabel   = _freqLabel(sub.frequency);
-  const dotCls      = sub.is_active ? 'sub-status-active' : 'sub-status-paused';
-  const inactiveCls = sub.is_active ? '' : ' sub-card-inactive';
+  const isActive    = sub.record_status === 'active';
+  const dotCls      = isActive ? 'sub-status-active' : 'sub-status-paused';
+  const inactiveCls = isActive ? '' : ' sub-card-inactive';
 
-  const metaLine = state.accountMap[sub.source_account]?.name || '';
+  const metaLine = state.accountMap[sub.source_account]?.name;
 
   let nextLine = '';
-  if (sub.is_active && sub.next_payment_date) {
+  if (isActive && sub.next_payment_date) {
     const nextDate  = new Date(sub.next_payment_date);
     const nextFmt   = nextDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
     const today     = new Date(); today.setHours(0, 0, 0, 0);
@@ -303,15 +308,15 @@ function _renderCards() {
 
   // Sort: active by next_payment_date asc, then amount desc; inactive to bottom by amount desc
   const sorted = [...subs].sort((a, b) => {
-    const aActive = a.is_active;
-    const bActive = b.is_active;
+    const aActive = a.record_status === 'active';
+    const bActive = b.record_status === 'active';
     if (aActive !== bActive) return aActive ? -1 : 1;
     if (aActive) {
       const aDate = a.next_payment_date || '9999-12-31';
       const bDate = b.next_payment_date || '9999-12-31';
       if (aDate !== bDate) return aDate < bDate ? -1 : 1;
     }
-    return parseFloat(b.amount || 0) - parseFloat(a.amount || 0);
+    return parseFloat(b.amount) - parseFloat(a.amount);
   });
 
   // Group by major_category; ungrouped subs fall into 'Uncategorised' at the end
@@ -326,7 +331,7 @@ function _renderCards() {
 
   return [...groupMap.entries()].map(([groupName, groupSubs]) => {
     const monthlyTotal = groupSubs
-      .filter(s => s.is_active)
+      .filter(s => s.record_status === 'active')
       .reduce((sum, s) => sum + toBase(_toMonthly(s.amount, s.frequency), s.currency, null), 0);
     const totalFmt = monthlyTotal > 0
       ? `${sym}${monthlyTotal.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}/mo`
@@ -356,7 +361,7 @@ function _renderImportPanel() {
       <div class="field form-grid-span-2">
         <label for="subImportFile">CSV file</label>
         <input type="file" id="subImportFile" accept=".csv">
-        <div class="field-hint">Columns: name, counterparty_name, amount, currency, frequency, day_of_month, day_of_week, source_account, tx_type, major_category, minor_category, tags, is_active, description</div>
+        <div class="field-hint">Columns: name, counterparty_name, amount, currency, frequency, day_of_month, day_of_week, source_account, tx_type, major_category, minor_category, description, subscription_start_date, subscription_end_date</div>
       </div>
     </div>
     <div id="subImportStatus"></div>
@@ -393,7 +398,7 @@ function _parseSubscriptionsCsv(text) {
   for (let i = 1; i < lines.length; i++) {
     const vals = _parseCsvRow(lines[i]);
     const row  = {};
-    headers.forEach((h, idx) => { row[h] = (vals[idx] || '').trim(); });
+    headers.forEach((h, idx) => { row[h] = (vals[idx] !== undefined ? vals[idx] : '').trim(); });
 
     if (!row.name)      { errors.push(`Row ${i + 1}: missing name`);      continue; }
     if (!row.amount)    { errors.push(`Row ${i + 1}: missing amount`);    continue; }
@@ -408,19 +413,20 @@ function _parseSubscriptionsCsv(text) {
 
     subscriptions.push({
       name:              row.name,
-      counterparty_name: row.counterparty_name || '',
+      counterparty_name: row.counterparty_name,
       amount,
       currency:          row.currency.toUpperCase(),
       frequency:         row.frequency,
-      day_of_month:      row.day_of_month || '',
-      day_of_week:       row.day_of_week  || '',
-      source_account:    row.source_account || '',
-      tx_type:           row.tx_type        || '',
-      major_category:    row.major_category  || '',
-      minor_category:    row.minor_category  || '',
-      tags:              row.tags            || '',
-      is_active:         row.is_active !== 'false' && row.is_active !== 'FALSE',
-      description:       row.description     || '',
+      day_of_month:      row.day_of_month,
+      day_of_week:       row.day_of_week,
+      source_account:    row.source_account,
+      tx_type:           row.tx_type,
+      major_category:    row.major_category,
+      minor_category:    row.minor_category,
+      tags:                    row.tags,
+      description:             row.description,
+      subscription_start_date: row.subscription_start_date,
+      subscription_end_date:   row.subscription_end_date,
     });
   }
 
@@ -452,9 +458,9 @@ async function _submitImport(subscriptions) {
       return;
     }
 
-    const created = res.created || 0;
-    const skipped = res.skipped || 0;
-    const failed  = res.failed  || 0;
+    const created = res.created;
+    const skipped = res.skipped;
+    const failed  = res.failed;
 
     if (failed === 0) {
       _importParsed = null;
@@ -518,7 +524,7 @@ export function renderSubscriptions() {
     </div>
     ${state.subImportOpen ? _renderImportPanel() : ''}
     ${anyFormOpen ? _renderForm(state.subEditRow !== null
-      ? state.subscriptions.find(s => s._row === state.subEditRow) || null
+      ? (state.subscriptions.find(s => s._row === state.subEditRow) ?? null)
       : null) : ''}
     ${_renderStats()}
     ${_renderCards()}
@@ -607,7 +613,7 @@ function _attachEvents() {
   }, { signal });
 
   el('subMajor')?.addEventListener('change', () => {
-    const txType  = el('subTxType')?.value || '';
+    const txType  = el('subTxType').value;
     const major   = el('subMajor').value;
     const minorEl = el('subMinor');
     if (minorEl) minorEl.innerHTML = _minorOpts(txType, major, '');
@@ -637,7 +643,7 @@ function _attachEvents() {
       }
       _subMenuKey = row;
       const sub = state.subscriptions.find(s => s._row === row);
-      const pauseLabel = sub?.is_active ? 'Pause' : 'Resume';
+      const pauseLabel = sub?.record_status === 'active' ? 'Pause' : 'Resume';
       openContextMenu(btn, [
         { key: 'edit',   label: 'Edit'              },
         { key: 'toggle', label: pauseLabel           },
@@ -649,7 +655,7 @@ function _attachEvents() {
         if (key === 'toggle') { _toggle(row); }
         if (key === 'delete') { state.subDeleteRow = row; renderSubscriptions(); }
         if (key === 'txs') {
-          const searchTerm = sub?.counterparty_name || sub?.name || '';
+          const searchTerm = sub ? (sub.counterparty_name ? sub.counterparty_name : sub.name) : '';
           state.filters = { types: [], accounts: [], major: [], minor: [], tx_location_country: '', tag: '', search: searchTerm };
           document.dispatchEvent(new CustomEvent('et:show-section', { detail: 'transactions' }));
         }
@@ -670,24 +676,26 @@ function _attachEvents() {
 // ── Form collection helper ────────────────────────────────────────────────────
 
 function _collectForm() {
-  const freq = el('subFrequency')?.value || 'monthly';
-  const dayOfWeek  = freq === 'weekly'  ? (el('subDayOfWeek')?.value  || '') : '';
-  const dayOfMonth = freq !== 'weekly'  ? (el('subDayOfMonth')?.value || '') : '';
+  const freq       = el('subFrequency').value;
+  const dayOfWeek  = freq === 'weekly' ? el('subDayOfWeek').value  : '';
+  const dayOfMonth = freq !== 'weekly' ? el('subDayOfMonth').value : '';
 
   return {
-    name:              (el('subName')?.value          || '').trim(),
-    counterparty_name: (el('subCounterparty')?.value  || '').trim(),
-    amount:            parseFloat(el('subAmount')?.value || '0'),
-    currency:          el('subCurrency')?.value        || '',
+    name:              el('subName').value.trim(),
+    counterparty_name: el('subCounterparty').value.trim(),
+    amount:            parseFloat(el('subAmount').value),
+    currency:          el('subCurrency').value,
     frequency:         freq,
     day_of_week:       dayOfWeek,
     day_of_month:      dayOfMonth,
-    source_account:    el('subSourceAccount')?.value   || '',
-    tx_type:           el('subTxType')?.value          || '',
-    major_category:    el('subMajor')?.value           || '',
-    minor_category:    el('subMinor')?.value           || '',
-    tags:              (el('subTags')?.value           || '').trim(),
-    description:       (el('subDescription')?.value     || '').trim(),
+    source_account:    el('subSourceAccount').value,
+    tx_type:           el('subTxType').value,
+    major_category:    el('subMajor').value,
+    minor_category:    el('subMinor').value,
+    tags:                    el('subTags').value.trim(),
+    description:             el('subDescription').value.trim(),
+    subscription_start_date: el('subStartDate').value,
+    subscription_end_date:   el('subEndDate').value,
   };
 }
 
@@ -714,7 +722,7 @@ async function _saveAdd() {
 
   // FE duplicate check by name
   const norm = body.name.toLowerCase();
-  const nameDupe = state.subscriptions.find(s => (s.name || '').toLowerCase() === norm);
+  const nameDupe = state.subscriptions.find(s => s.name.toLowerCase() === norm);
   if (nameDupe) {
     if (errEl) errEl.textContent = `A subscription named "${nameDupe.name}" already exists.`;
     return;
@@ -724,7 +732,7 @@ async function _saveAdd() {
   const saveBtn = el('subSaveBtn');
   if (saveBtn) saveBtn.disabled = true;
   try {
-    const res = await ExpenseAPI.createSubscription({ ...body, is_active: true });
+    const res = await ExpenseAPI.createSubscription(body);
     if (res.ok) {
       showMsg('Subscription added.');
       state.subAddOpen = false;
@@ -765,13 +773,11 @@ async function _saveEdit(row) {
     return;
   }
 
-  const isActive = el('subIsActive')?.checked ?? true;
-
   showLoading();
   const saveBtn = el('subSaveBtn');
   if (saveBtn) saveBtn.disabled = true;
   try {
-    const res = await ExpenseAPI.updateSubscription({ ...body, row_num: row, is_active: isActive });
+    const res = await ExpenseAPI.updateSubscription({ ...body, row_num: row });
     if (res.ok) {
       showMsg('Subscription updated.');
       state.subEditRow = null;
@@ -792,28 +798,30 @@ async function _saveEdit(row) {
 async function _toggle(row) {
   const sub = state.subscriptions.find(s => s._row === row);
   if (!sub) return;
-  const newActive = !sub.is_active;
+  const newStatus = sub.record_status === 'active' ? 'inactive' : 'active';
   showLoading();
   try {
     const res = await ExpenseAPI.updateSubscription({
-      row_num:          row,
-      name:             sub.name,
-      counterparty_name: sub.counterparty_name || '',
-      amount:           sub.amount,
-      currency:         sub.currency,
-      frequency:        sub.frequency,
-      day_of_month:     sub.day_of_month || '',
-      day_of_week:      sub.day_of_week  || '',
-      source_account:   sub.source_account || '',
-      tx_type:          sub.tx_type || '',
-      major_category:   sub.major_category || '',
-      minor_category:   sub.minor_category || '',
-      tags:             sub.tags || '',
-      description:      sub.description || '',
-      is_active:        newActive,
+      row_num:                 row,
+      name:                    sub.name,
+      counterparty_name:       sub.counterparty_name,
+      amount:                  sub.amount,
+      currency:                sub.currency,
+      frequency:               sub.frequency,
+      day_of_month:            sub.day_of_month,
+      day_of_week:             sub.day_of_week,
+      source_account:          sub.source_account,
+      tx_type:                 sub.tx_type,
+      major_category:          sub.major_category,
+      minor_category:          sub.minor_category,
+      tags:                    sub.tags,
+      description:             sub.description,
+      subscription_start_date: sub.subscription_start_date,
+      subscription_end_date:   sub.subscription_end_date,
+      record_status:           newStatus,
     });
     if (res.ok) {
-      showMsg(newActive ? 'Subscription resumed.' : 'Subscription paused.');
+      showMsg(newStatus === 'active' ? 'Subscription resumed.' : 'Subscription paused.');
       document.dispatchEvent(new CustomEvent('et:reload'));
     } else {
       console.warn('[subscriptions] _toggle failed:', res?.error);

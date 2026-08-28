@@ -157,7 +157,7 @@ function _buildSystemPrompt(snapshot) {
     '## Requesting Additional Data\n' +
     'If you need specific transactions to answer accurately, respond with ONLY this JSON (nothing else — the user will not see it):\n' +
     '{"data_request":{"tx_type":"money-out","major_category":"Food","months_back":3,"limit":50}}\n' +
-    'Filters: tx_type (money-in/money-out/money-transfer), major_category, minor_category, account_id, ' +
+    'Filters: tx_type (money-in/money-out), major_category, minor_category, account_id, ' +
     'months_back (max 12, default 3), limit (max 100, default 50).\n' +
     'Only request data when the snapshot is genuinely insufficient. For general questions the snapshot is enough.';
 }
