@@ -1,7 +1,7 @@
 import { state } from '../core/state.js';
 import { el, esc, fmtDateTime, fmtDateTimeCompact, fmtNative, fmtBase, nowLocalISO, toDateInputVal, exportData, getSymbol, localToUtcISO, utcToLocalInput, openContextMenu, closeContextMenu, syncStatusIcon, recordStatusIcon } from '../core/utils.js';
 import { showLoading, hideLoading, showMsg } from '../core/ui.js';
-import { filteredTx } from '../core/daterange.js';
+import { filteredTx, getRangeBounds } from '../core/daterange.js';
 import { ExpenseAPI } from '../core/api.js';
 
 const SUGGESTIONS_CACHE_KEY = 'et_suggestions_v1';
@@ -146,12 +146,34 @@ function _getCat(type, majorKey, minorKey) {
   ) || null;
 }
 
-// Resolves stored keys to display labels. Falls back to key if no match found.
-function _catLabel(type, majorKey, minorKey) {
-  if (!majorKey && !minorKey) return '—';
+// Normalizes stored major/minor values to keys — accepts both keys (new data)
+// and labels (old sheet data before migration). Returns {majorKey, minorKey}.
+function _normCatKeys(type, majorVal, minorVal) {
+  if (!majorVal) return { majorKey: '', minorKey: '' };
+  // Try key match first
+  let cat = state.categories.find(c =>
+    c.tx_type_key        === type &&
+    c.major_category_key === majorVal &&
+    (!minorVal || c.minor_category_key === minorVal)
+  );
+  if (cat) return { majorKey: cat.major_category_key, minorKey: minorVal || '' };
+  // Fall back to label match (old sheet data)
+  cat = state.categories.find(c =>
+    c.tx_type_key          === type &&
+    c.major_category_label === majorVal &&
+    (!minorVal || c.minor_category_label === minorVal)
+  );
+  if (cat) return { majorKey: cat.major_category_key, minorKey: (minorVal ? cat.minor_category_key : '') };
+  return { majorKey: majorVal, minorKey: minorVal || '' };
+}
+
+// Resolves stored keys (or legacy labels) to display string. Falls back gracefully.
+function _catLabel(type, majorVal, minorVal) {
+  if (!majorVal && !minorVal) return '—';
+  const { majorKey, minorKey } = _normCatKeys(type, majorVal, minorVal);
   const cat = _getCat(type, majorKey, minorKey);
   if (cat) return cat.major_category_label + ' → ' + cat.minor_category_label;
-  return [majorKey, minorKey].filter(Boolean).join(' → ');
+  return [majorVal, minorVal].filter(Boolean).join(' → ');
 }
 
 // Formats beneficiaries string (e.g. "Alice:60;Bob:40") as readable HTML chips.
@@ -166,17 +188,18 @@ function _fmtBeneficiaries(str) {
   }).join(' &middot; ');
 }
 
-// Forward geocode: city+country → lat/lon via Nominatim.
-async function _geocodeCity(cityId, countryId, latId, lonId) {
+// Forward geocode: area+city+country → lat/lon via Nominatim.
+async function _geocodeCity(areaId, cityId, countryId, latId, lonId) {
+  const area    = (el(areaId)    || {}).value || '';
   const city    = (el(cityId)    || {}).value || '';
   const country = (el(countryId) || {}).value || '';
-  if (!city && !country) return;
+  if (!area && !city && !country) return;
   const latEl = el(latId);
   const lonEl = el(lonId);
   if (!latEl || !lonEl) return;
   if (latEl.value && lonEl.value) return; // already set
   try {
-    const q   = encodeURIComponent([city, country].filter(Boolean).join(', '));
+    const q   = encodeURIComponent([area, city, country].filter(Boolean).join(', '));
     const url = `https://nominatim.openstreetmap.org/search?q=${q}&format=json&limit=1`;
     const res = await fetch(url, { headers: { 'Accept': 'application/json' } });
     const data = await res.json();
@@ -215,11 +238,8 @@ async function _reverseGeocode(latId, lonId, areaId, cityId, countryId) {
 
 function _isCatSubEligible(tx) {
   if (!tx.major_category || !tx.minor_category) return false;
-  const cat = state.categories.find(c =>
-    c.tx_type_key        === tx.tx_type &&
-    c.major_category_key === tx.major_category &&
-    c.minor_category_key === tx.minor_category
-  );
+  const { majorKey, minorKey } = _normCatKeys(tx.tx_type, tx.major_category, tx.minor_category);
+  const cat = _getCat(tx.tx_type, majorKey, minorKey);
   if (!cat) return false;
   return cat.is_subscription_eligible === true;
 }
@@ -260,10 +280,11 @@ function _acctOptsWithHints(accounts, allowedTypesStr, selectedId = '') {
 // ── Transaction schema helpers ────────────────────────────────────────────────
 
 function _txTypes() {
-  return (state.transactionSchema && state.transactionSchema.types) || [
+  const all = (state.transactionSchema && state.transactionSchema.types) || [
     { value: 'money-in',  label: 'Money In'  },
     { value: 'money-out', label: 'Money Out' },
   ];
+  return all.filter(t => t.value === 'money-in' || t.value === 'money-out');
 }
 function _txTypeMap() {
   return Object.fromEntries(_txTypes().map(t => [t.value, t.label]));
@@ -369,8 +390,8 @@ export function renderTransactions() {
     ${state.txAddOpen    ? _renderAddForm()              : ''}
     ${viewTx             ? _renderTxForm(viewTx, 'view') : ''}
     ${editTx             ? _renderTxForm(editTx, 'edit') : ''}
-    ${_renderSuggestionsPanel()}
     ${_renderFilterBar()}
+    ${_renderSuggestionsPanel()}
     ${warnRows.length ? `<div class="warning-count" id="warnToggle">⚠ ${warnRows.length} row${warnRows.length > 1 ? 's' : ''} have warnings — click to expand</div>` : ''}
     ${_renderTxTable(validRows, warnRows)}
   `;
@@ -415,8 +436,9 @@ export function renderTransactions() {
       reader.readAsText(file);
     });
 
-    el('txImportConfirm').addEventListener('click', () => {
-      if (_txImportParsed) _submitTxImport(_txImportParsed);
+    el('txImportConfirm').addEventListener('click', async () => {
+      if (!_txImportParsed) return;
+      _submitTxImport(await _geocodeImportRows(_txImportParsed));
     });
 
     el('txImportCancel').addEventListener('click', () => {
@@ -781,9 +803,10 @@ function _prefillAddForm(p) {
 
   // 2. Major → populate minor (skip for transfers — legitimately no category)
   if (p.major_category) {
-    majorEl.value     = p.major_category;
-    minorEl.innerHTML = _catMinorOpts(p.tx_type, p.major_category);
-    minorEl.value     = p.minor_category ?? 'FAILURE';
+    const { majorKey: _pfMaj, minorKey: _pfMin } = _normCatKeys(p.tx_type, p.major_category, p.minor_category);
+    majorEl.value     = _pfMaj;
+    minorEl.innerHTML = _catMinorOpts(p.tx_type, _pfMaj);
+    minorEl.value     = _pfMin || (p.minor_category ? 'FAILURE' : '');
   }
 
   // 3. Refresh source account opts (category-filtered), then set value
@@ -880,8 +903,9 @@ function _attachAddFormEvents() {
     });
   });
 
-  el('afCity').addEventListener('blur',    () => _geocodeCity('afCity', 'afCountry', 'afLatitude', 'afLongitude'));
-  el('afCountry').addEventListener('blur', () => _geocodeCity('afCity', 'afCountry', 'afLatitude', 'afLongitude'));
+  el('afArea').addEventListener('blur',    () => _geocodeCity('afArea', 'afCity', 'afCountry', 'afLatitude', 'afLongitude'));
+  el('afCity').addEventListener('blur',    () => _geocodeCity('afArea', 'afCity', 'afCountry', 'afLatitude', 'afLongitude'));
+  el('afCountry').addEventListener('blur', () => _geocodeCity('afArea', 'afCity', 'afCountry', 'afLatitude', 'afLongitude'));
   el('afLatitude').addEventListener('blur',  () => _reverseGeocode('afLatitude', 'afLongitude', 'afArea', 'afCity', 'afCountry'));
   el('afLongitude').addEventListener('blur', () => _reverseGeocode('afLatitude', 'afLongitude', 'afArea', 'afCity', 'afCountry'));
 
@@ -1139,7 +1163,8 @@ function _renderTxForm(tx, mode) {
       `<div class="field ${span}"><label>${label}</label><div class="field-val">${value}</div></div>`;
 
     const hasCoords = tx.user_location_latitude || tx.user_location_longitude;
-    const _viewCat  = _getCat(tx.tx_type, tx.major_category, tx.minor_category);
+    const { majorKey: _vMajKey, minorKey: _vMinKey } = _normCatKeys(tx.tx_type, tx.major_category, tx.minor_category);
+    const _viewCat  = _getCat(tx.tx_type, _vMajKey, _vMinKey);
     const majorLbl  = (_viewCat && _viewCat.major_category_label) || tx.major_category || '—';
     const minorLbl  = (_viewCat && _viewCat.minor_category_label) || tx.minor_category || '—';
 
@@ -1197,8 +1222,9 @@ function _renderTxForm(tx, mode) {
   const typeOpts       = _txTypes().map(t =>
     `<option value="${esc(t.value)}" ${tx.tx_type === t.value ? 'selected' : ''}>${esc(t.label)}</option>`
   ).join('');
-  const majorOpts = _catMajorOpts(tx.tx_type, tx.major_category);
-  const minorOpts = _catMinorOpts(tx.tx_type, tx.major_category, tx.minor_category);
+  const { majorKey: _editMajorKey, minorKey: _editMinorKey } = _normCatKeys(tx.tx_type, tx.major_category, tx.minor_category);
+  const majorOpts = _catMajorOpts(tx.tx_type, _editMajorKey);
+  const minorOpts = _catMinorOpts(tx.tx_type, _editMajorKey, _editMinorKey);
   const dateVal   = utcToLocalInput(tx.tx_date_time);
   const transferNote = _siblingForm
     ? `<div style="font-size:var(--text-sm);color:var(--muted);margin-bottom:4px">Linked transfer — edit this leg only. The other leg (${esc(_sibAccForm ? _sibAccForm.name : '—')}) is a separate row.</div>`
@@ -1369,8 +1395,9 @@ function _attachTxEditCascadeEvents() {
     });
   });
 
-  el('txEditCity').addEventListener('blur',    () => _geocodeCity('txEditCity', 'txEditCountry', 'txEditLatitude', 'txEditLongitude'));
-  el('txEditCountry').addEventListener('blur', () => _geocodeCity('txEditCity', 'txEditCountry', 'txEditLatitude', 'txEditLongitude'));
+  el('txEditArea').addEventListener('blur',    () => _geocodeCity('txEditArea', 'txEditCity', 'txEditCountry', 'txEditLatitude', 'txEditLongitude'));
+  el('txEditCity').addEventListener('blur',    () => _geocodeCity('txEditArea', 'txEditCity', 'txEditCountry', 'txEditLatitude', 'txEditLongitude'));
+  el('txEditCountry').addEventListener('blur', () => _geocodeCity('txEditArea', 'txEditCity', 'txEditCountry', 'txEditLatitude', 'txEditLongitude'));
   el('txEditLatitude').addEventListener('blur',  () => _reverseGeocode('txEditLatitude', 'txEditLongitude', 'txEditArea', 'txEditCity', 'txEditCountry'));
   el('txEditLongitude').addEventListener('blur', () => _reverseGeocode('txEditLatitude', 'txEditLongitude', 'txEditArea', 'txEditCity', 'txEditCountry'));
 }
@@ -1682,7 +1709,26 @@ function _renderFilterBar() {
 
   const m = state.metadata;
 
+  const RANGE_OPTS = [
+    { value: 'last_30',    label: 'Last 30 days' },
+    { value: 'this_month', label: 'This month'   },
+    { value: 'last_month', label: 'Last month'   },
+    { value: 'last_3',     label: 'Last 3 mo'    },
+    { value: 'last_6',     label: 'Last 6 mo'    },
+    { value: 'last_12',    label: 'Last 12 mo'   },
+    { value: 'ytd',        label: 'Year to date' },
+    { value: 'all',        label: 'All'          },
+    { value: 'custom',     label: 'Custom'       },
+  ];
+  const isCustomRange = state.dateRange === 'custom';
+  const _rangeInputFmt = d => { const y = d.getFullYear(), mo = String(d.getMonth()+1).padStart(2,'0'), day = String(d.getDate()).padStart(2,'0'); return `${y}-${mo}-${day}`; };
+  const { from: _rFrom, to: _rTo } = getRangeBounds();
+  const rangeFromStr = isCustomRange ? (state.customFrom || '') : _rangeInputFmt(_rFrom);
+  const rangeToStr   = isCustomRange ? (state.customTo   || '') : _rangeInputFmt(_rTo);
+  const rangeDateStyle = (editable) => `background:var(--panel);border:1px solid var(--hair-strong);border-radius:8px;padding:6px 10px;font-size:var(--text-base);font-family:var(--grotesk);color:${editable ? 'var(--ink)' : 'var(--muted)'};cursor:${editable ? 'auto' : 'default'}`;
+
   const activeChips = [
+    ...(state.dateRange !== 'last_30' ? [{ label: (RANGE_OPTS.find(o => o.value === state.dateRange) || {}).label || state.dateRange, key: 'dateRange', val: '' }] : []),
     ...f.types.map(t     => ({ label: _txTypeMap()[t] || t,              key: 'types',    val: t })),
     ...f.accounts.map(id => { const a = state.accountMap[id]; return { label: (a && a.name) || id, key: 'accounts', val: id }; }),
     ...f.major.map(v     => ({ label: (_majorMap.get(v) || v),          key: 'major',    val: v })),
@@ -1700,6 +1746,23 @@ function _renderFilterBar() {
       Filters${activeChips.length ? ` (${activeChips.length})` : ''} <span class="filter-arrow">${filterOpen ? '▲' : '▼'}</span>
     </button>
     <div class="filter-body ${filterOpen ? '' : 'hidden'}" id="filterBody">
+      <div class="filter-row">
+        <label>Date range</label>
+        <div style="flex:1;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <div id="filterDateRangeWrap" style="flex:0 0 auto;min-width:140px;position:relative">
+            <button id="filterDateRangeTrigger" type="button" style="width:100%;display:flex;justify-content:space-between;align-items:center;text-align:left;background:var(--panel);border:1px solid var(--hair-strong);border-radius:8px;padding:6px 10px;font-size:var(--text-base);color:var(--ink);cursor:pointer;outline:none">
+              <span id="filterDateRangeLabel">${esc((RANGE_OPTS.find(o => o.value === state.dateRange) || RANGE_OPTS[0]).label)}</span>
+              <span style="color:var(--muted);font-size:var(--text-2xs);margin-left:8px">▼</span>
+            </button>
+            <div id="filterDateRangeDropdown" class="hidden" style="position:fixed;z-index:1000;background:var(--panel);border:1px solid var(--hair-strong);border-radius:8px;padding:4px;display:flex;flex-direction:column;gap:2px;box-shadow:0 4px 16px rgba(0,0,0,.15)">
+              ${RANGE_OPTS.map(o => `<div data-range-val="${esc(o.value)}" style="padding:6px 10px;font-size:var(--text-base);color:${state.dateRange === o.value ? 'var(--ember)' : 'var(--ink)'};background:${state.dateRange === o.value ? 'var(--hair)' : 'transparent'};border-radius:6px;cursor:pointer">${esc(o.label)}</div>`).join('')}
+            </div>
+          </div>
+          <input type="date" id="filterDateFrom" value="${esc(rangeFromStr)}" ${isCustomRange ? '' : 'readonly'} style="${rangeDateStyle(isCustomRange)}">
+          <span style="color:var(--muted)">–</span>
+          <input type="date" id="filterDateTo" value="${esc(rangeToStr)}" ${isCustomRange ? '' : 'readonly'} style="${rangeDateStyle(isCustomRange)}">
+        </div>
+      </div>
       <div class="filter-row">
         <label>Type</label>
         <div id="filterTypeWrap" style="flex:1;min-width:120px;position:relative">
@@ -1915,6 +1978,95 @@ function _renderTxImportStatus(parsed) {
 
 const _TX_IMPORT_CHUNK = 25;
 
+async function _geocodeImportRows(rows) {
+  const status = el('txImportStatus');
+
+  // Forward: has area/city/country but missing lat+lon.
+  const fwdPairs = new Map();
+  rows.forEach(r => {
+    if (r.user_location_latitude || r.user_location_longitude) return;
+    const area    = (r.user_location_area    || '').trim();
+    const city    = (r.user_location_city    || '').trim();
+    const country = (r.user_location_country || '').trim();
+    if (!area && !city && !country) return;
+    const key = area + '|' + city + '|' + country;
+    if (!fwdPairs.has(key)) fwdPairs.set(key, { area, city, country });
+  });
+
+  // Reverse: has lat+lon but missing all of area/city/country.
+  const revPairs = new Map();
+  rows.forEach(r => {
+    if (!r.user_location_latitude || !r.user_location_longitude) return;
+    if (r.user_location_area || r.user_location_city || r.user_location_country) return;
+    const key = String(r.user_location_latitude).trim() + '|' + String(r.user_location_longitude).trim();
+    if (!revPairs.has(key)) revPairs.set(key, { lat: r.user_location_latitude, lon: r.user_location_longitude });
+  });
+
+  const total = fwdPairs.size + revPairs.size;
+  if (total === 0) return rows; // nothing to do — skip with zero delay
+
+  const fwdResolved = new Map();
+  const revResolved = new Map();
+  let done = 0;
+
+  const showGeoProgress = () => {
+    if (!status) return;
+    status.innerHTML = `
+      <p style="font-size:13px;color:var(--muted);margin:0 0 6px">
+        Geocoding… ${done} / ${total} unique locations
+      </p>
+      <div style="height:4px;border-radius:2px;background:var(--border)">
+        <div style="height:100%;border-radius:2px;background:var(--ember);width:${Math.round(done/total*100)}%;transition:width .3s"></div>
+      </div>`;
+  };
+
+  for (const [key, { area, city, country }] of fwdPairs) {
+    done++;
+    showGeoProgress();
+    try {
+      const q   = encodeURIComponent([area, city, country].filter(Boolean).join(', '));
+      const res = await fetch(`https://nominatim.openstreetmap.org/search?q=${q}&format=json&limit=1`, { headers: { Accept: 'application/json' } });
+      const data = await res.json();
+      if (data && data[0]) fwdResolved.set(key, { lat: parseFloat(data[0].lat).toFixed(6), lon: parseFloat(data[0].lon).toFixed(6) });
+    } catch (_) {}
+    if (done < total) await new Promise(r => setTimeout(r, 1050));
+  }
+
+  for (const [key, { lat, lon }] of revPairs) {
+    done++;
+    showGeoProgress();
+    try {
+      const res = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}&format=json`, { headers: { Accept: 'application/json' } });
+      const data = await res.json();
+      if (data && data.address) {
+        const addr = data.address;
+        revResolved.set(key, {
+          area:    addr.suburb || addr.neighbourhood || addr.county || '',
+          city:    addr.city || addr.town || addr.village || addr.municipality || '',
+          country: addr.country || '',
+        });
+      }
+    } catch (_) {}
+    if (done < total) await new Promise(r => setTimeout(r, 1050));
+  }
+
+  return rows.map(r => {
+    const out = Object.assign({}, r);
+    if (!out.user_location_latitude && !out.user_location_longitude) {
+      const area    = (r.user_location_area    || '').trim();
+      const city    = (r.user_location_city    || '').trim();
+      const country = (r.user_location_country || '').trim();
+      const coords  = fwdResolved.get(area + '|' + city + '|' + country);
+      if (coords) { out.user_location_latitude = coords.lat; out.user_location_longitude = coords.lon; }
+    } else if (!r.user_location_area && !r.user_location_city && !r.user_location_country) {
+      const key  = String(r.user_location_latitude).trim() + '|' + String(r.user_location_longitude).trim();
+      const addr = revResolved.get(key);
+      if (addr) { out.user_location_area = addr.area; out.user_location_city = addr.city; out.user_location_country = addr.country; }
+    }
+    return out;
+  });
+}
+
 async function _submitTxImport(transactions) {
   const btn    = el('txImportConfirm');
   const errEl  = el('txImportError');
@@ -2029,8 +2181,8 @@ function _positionDropdown(triggerId, dropdownId) {
   dropdown.style.width = rect.width + 'px';
 }
 
-const _FILTER_DROPDOWN_IDS = ['filterTypeDropdown','filterAccTypeDropdown','filterAccountDropdown','filterMajorDropdown','filterMinorDropdown'];
-const _FILTER_WRAP_IDS     = ['filterTypeWrap','filterAccTypeWrap','filterAccountWrap','filterMajorWrap','filterMinorWrap'];
+const _FILTER_DROPDOWN_IDS = ['filterDateRangeDropdown','filterTypeDropdown','filterAccTypeDropdown','filterAccountDropdown','filterMajorDropdown','filterMinorDropdown'];
+const _FILTER_WRAP_IDS     = ['filterDateRangeWrap','filterTypeWrap','filterAccTypeWrap','filterAccountWrap','filterMajorWrap','filterMinorWrap'];
 
 function _closeAllFilterDropdowns(exceptId) {
   _FILTER_DROPDOWN_IDS.forEach(id => { if (id !== exceptId) el(id).classList.add('hidden'); });
@@ -2038,6 +2190,37 @@ function _closeAllFilterDropdowns(exceptId) {
 
 function _attachFilterEvents() {
   el('filterToggle').addEventListener('click', () => { filterOpen = !filterOpen; renderTransactions(); });
+
+  // ── Date range ────────────────────────────────────────────────────────────
+  const dateRangeTrigger  = el('filterDateRangeTrigger');
+  const dateRangeDropdown = el('filterDateRangeDropdown');
+  if (dateRangeTrigger && dateRangeDropdown) {
+    dateRangeTrigger.addEventListener('click', e => {
+      e.stopPropagation();
+      const opening = dateRangeDropdown.classList.contains('hidden');
+      if (opening) _closeAllFilterDropdowns('filterDateRangeDropdown');
+      dateRangeDropdown.classList.toggle('hidden');
+      if (opening) _positionDropdown('filterDateRangeTrigger', 'filterDateRangeDropdown');
+    });
+    dateRangeDropdown.querySelectorAll('[data-range-val]').forEach(item => {
+      item.addEventListener('click', () => {
+        state.dateRange  = item.dataset.rangeVal;
+        state.customFrom = '';
+        state.customTo   = '';
+        renderTransactions();
+      });
+    });
+  }
+  el('filterDateFrom').addEventListener('change', e => {
+    state.customFrom = e.target.value;
+    state.dateRange  = 'custom';
+    renderTransactions();
+  });
+  el('filterDateTo').addEventListener('change', e => {
+    state.customTo  = e.target.value;
+    state.dateRange = 'custom';
+    renderTransactions();
+  });
 
   const typeTrigger  = el('filterTypeTrigger');
   const typeDropdown = el('filterTypeDropdown');
@@ -2177,8 +2360,15 @@ function _attachFilterEvents() {
     btn.addEventListener('click', () => {
       const key = btn.dataset.chipKey;
       const val = btn.dataset.chipVal;
-      if (Array.isArray(state.filters[key])) state.filters[key] = state.filters[key].filter(x => x !== val);
-      else state.filters[key] = '';
+      if (key === 'dateRange') {
+        state.dateRange  = 'last_30';
+        state.customFrom = '';
+        state.customTo   = '';
+      } else if (Array.isArray(state.filters[key])) {
+        state.filters[key] = state.filters[key].filter(x => x !== val);
+      } else {
+        state.filters[key] = '';
+      }
       state.txPage = 1; renderTransactions();
     });
   });

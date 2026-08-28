@@ -7,7 +7,7 @@ export const state = {
   rateMap:       {},   // { GBP: 1, INR: 105, … }  units per 1 GBP
   quoteCurrency: 'GBP',
 
-  dateRange:  'this_month',
+  dateRange:  'last_30',
   customFrom: '',
   customTo:   '',
 

@@ -8,6 +8,7 @@ export function getRangeBounds() {
   const today = new Date(y, m, now.getDate());
 
   switch (state.dateRange) {
+    case 'last_30':     return { from: new Date(y, m, now.getDate() - 29), to: today };
     case 'this_month':  return { from: new Date(y, m, 1),    to: today };
     case 'last_month':  return { from: new Date(y, m-1, 1),  to: new Date(y, m, 0) };
     case 'last_3':      return { from: new Date(y, m-2, 1),  to: today };
@@ -20,7 +21,7 @@ export function getRangeBounds() {
       const to   = state.customTo   ? parseLocalDate(state.customTo)   : today;
       return { from: isNaN(from) ? new Date(2000, 0, 1) : from, to: isNaN(to) ? today : to };
     }
-    default: return { from: new Date(y, m, 1), to: today };
+    default: return { from: new Date(y, m, now.getDate() - 29), to: today };
   }
 }
 

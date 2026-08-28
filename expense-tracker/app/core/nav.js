@@ -20,7 +20,6 @@ export function showSection(id) {
   el('tabNav').querySelectorAll('.tab-btn').forEach(btn =>
     btn.classList.toggle('active', btn.dataset.section === id)
   );
-  el('dateRangeBar').style.display = id === 'transactions' ? '' : 'none';
   sessionStorage.setItem('et_section', id);
 
   if (id === 'home')          renderHome();

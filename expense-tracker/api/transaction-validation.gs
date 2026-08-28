@@ -60,23 +60,14 @@ function _validateCategoryAccountTypeHints(body) {
   const cat = _findCategoryHints(body.tx_type, body.major_category, body.minor_category);
   if (!cat) return null;
 
-  if (cat.source_account_mandatory) {
-    if (!body.source_account)
-      return { ok: false, error: 'missing_source_account' };
-    if (cat.source_account_types) {
-      const err = _checkAccountTypeHint(body.source_account, cat.source_account_types, 'source');
-      if (err) return err;
-    }
-  }
+  // Only enforce presence — never reject on account type or record_status.
+  // An account may be inactive/finished but still a valid historical reference.
+  // Account existence is enforced separately by _validateFinancialRules T-03.
+  if (cat.source_account_mandatory && !body.source_account)
+    return { ok: false, error: 'missing_source_account' };
 
-  if (cat.target_account_mandatory) {
-    if (!body.target_account)
-      return { ok: false, error: 'missing_target_account' };
-    if (cat.target_account_types) {
-      const err = _checkAccountTypeHint(body.target_account, cat.target_account_types, 'target');
-      if (err) return err;
-    }
-  }
+  if (cat.target_account_mandatory && !body.target_account)
+    return { ok: false, error: 'missing_target_account' };
 
   return null;
 }

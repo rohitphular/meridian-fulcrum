@@ -120,22 +120,6 @@ async function init() {
     if (btn) showSection(btn.dataset.section);
   });
 
-  // Date range buttons
-  el('dateRangeBar')?.querySelectorAll('.range-btn').forEach(btn => {
-    btn.classList.toggle('active', btn.dataset.range === state.dateRange);
-    btn.addEventListener('click', () => {
-      state.dateRange = btn.dataset.range;
-      el('customDates').classList.toggle('hidden', state.dateRange !== 'custom');
-      el('dateRangeBar').querySelectorAll('.range-btn').forEach(b =>
-        b.classList.toggle('active', b.dataset.range === state.dateRange)
-      );
-      if (state.transactions.length) renderTransactions();
-    });
-  });
-
-  el('customFrom')?.addEventListener('change', e => { state.customFrom = e.target.value; if (state.transactions.length) renderTransactions(); });
-  el('customTo')?.addEventListener('change',   e => { state.customTo   = e.target.value; if (state.transactions.length) renderTransactions(); });
-
   // Quote currency change
   el('quoteCurrencySelect')?.addEventListener('change', e => {
     state.quoteCurrency = e.target.value;
