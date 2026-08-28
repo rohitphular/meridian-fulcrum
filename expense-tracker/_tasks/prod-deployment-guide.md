@@ -146,53 +146,67 @@ Files: `app/sections/accounts.js`, `app/sections/transactions.js`, `app/core/uti
 
 ### Changed files
 
-| Layer    | File                              | What changed                                                                                                                    |
-| -------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| Backend  | `api/transaction-schema.gs`       | 21-column schema; `tx_timezone` (col 3), location cols (7–11), `beneficiaries` (col 19), `sync_status` (col 20), `sync_notes` (col 21) |
-| Backend  | `api/transaction-core.gs`         | Writes all new fields; sets `sync_status = 'create-pending'` on create, advances via `computeSyncStatus` on update             |
-| Backend  | `api/transaction-validation.gs`   | Fixed `_findCategoryHints`: stale `catColIndex` keys renamed; `workflow_type` lookup removed                                    |
-| Backend  | `api/transaction-utils.gs`        | Removed dead `applyFxNote` function                                                                                             |
-| Frontend | `app/sections/transactions.js`    | Fixed category dropdowns (`is_active` → `record_status`); removed all `?.` optional chaining (122 occurrences)                 |
+| Layer    | File                              | What changed                                                                                                                   |
+| -------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| Backend  | `api/transaction-schema.gs`       | 24-col schema; `parent_tx_id` added (col 4); `account_id` replaces `source_account`+`target_account` (col 6); `tx_amount` replaces `source_amount`+`target_amount` (col 12); currency no longer stored |
+| Backend  | `api/transaction-core.gs`         | Full rewrite: create maps source/target body → 1 row (non-transfer) or 2 linked rows (transfer); `_writeSingleTransaction` uses `account_id`/`tx_amount`; `updateTransaction` takes `account_id`/`tx_amount`; `_checkDuplicate` on (tx_date_time, tx_type, account_id, tx_amount) |
+| Backend  | `api/transaction-validation.gs`   | `validateTransactionUpdate` checks `account_id`/`tx_amount`; `_validateFinancialRules` checks `account_id` on update path    |
+| Backend  | `api/account-core.gs`             | `_countTransactionsReferencingAccount` uses `account_id` (not source/target)                                                  |
+| Backend  | `api/transaction-suggestions.gs`  | `outTx` augmentation uses `account_id`/`tx_amount`; suggestion output emits `account_id`                                      |
+| Backend  | `api/advisor-core.gs`             | `_buildSnapshot` + `_fetchRequestedData` use `tx_amount`/`account_id`                                                         |
+| Backend  | `api/rate-core.gs`                | `_countTransactionsWithCurrency` always returns 0 (currency no longer in transactions)                                         |
+| Frontend | `app/sections/transactions.js`    | Table display uses `account_id`/`tx_amount`/sibling map for transfer arrows; edit form is single-row (one account, one amount); balance rules use post-reversal `account_id`; copy prefill reconstructs source/target from sibling; delete/view forms updated |
+| Frontend | `app/core/utils.js`               | `exportData` reconstructs source/target pairs from `parent_tx_id` sibling links; skips child rows (exported via parent)       |
+| Frontend | `app/core/daterange.js`           | Account filter uses `tx.account_id`; location/tag filter fields corrected to `user_location_*`/`tx_tags`                      |
+| Frontend | `app/core/state.js`               | Filter keys `tx_location_*` renamed to `user_location_*` to match transaction schema                                          |
 
-### Sheet migration — MANUAL STEP (dev first, then prod)
+### Sheet migration — EXPORT → DROP → REIMPORT
 
-The Transactions tab **cannot be dropped and recreated** — it holds live data. Columns must be inserted manually in Google Sheets.
+The schema change (source/target → account_id, split transfer rows) cannot be done with column inserts. The safest migration is export-drop-reimport.
 
-**Target schema — 21 columns:**
+**Before starting:**
 
-| Col | Name                    | Action vs old sheet                         |
-| --- | ----------------------- | ------------------------------------------- |
-| 1   | `id`                    | no change                                   |
-| 2   | `tx_date_time`          | no change                                   |
-| 3   | `tx_timezone`           | **INSERT** — blank for existing rows        |
-| 4   | `tx_type`               | was col 3                                   |
-| 5   | `source_account`        | was col 4                                   |
-| 6   | `target_account`        | was col 5                                   |
-| 7   | `user_location_area`    | **INSERT** — blank                          |
-| 8   | `user_location_city`    | **INSERT** — blank                          |
-| 9   | `user_location_country` | **INSERT** — blank                          |
-| 10  | `user_location_latitude`| **INSERT** — blank                          |
-| 11  | `user_location_longitude`| **INSERT** — blank                         |
-| 12  | `amount`                | was col 6                                   |
-| 13  | `currency`              | was col 7                                   |
-| 14  | `major_category`        | was col 8                                   |
-| 15  | `minor_category`        | was col 9                                   |
-| 16  | `description`           | was col 10                                  |
-| 17  | `counterparty_name`     | was col 11                                  |
-| 18  | `tx_tags`               | was col 12                                  |
-| 19  | `beneficiaries`         | was col 13 (if present) or **INSERT** blank |
-| 20  | `sync_status`           | **INSERT** — blank for existing rows        |
-| 21  | `sync_notes`            | **INSERT** — blank                          |
+1. Open prod app → Transactions → **↓ Export → CSV** — save the file (this is the backup)
+2. Verify the export has all rows and looks correct
 
-**Steps:**
+**New 24-col schema:**
 
-1. Open Google Sheet → Transactions tab
-2. Right-click col C header → "Insert 1 column left" → set C1 = `tx_timezone`; leave data rows blank
-3. Right-click col G header → "Insert 5 columns left" → set G1–K1 = `user_location_area`, `user_location_city`, `user_location_country`, `user_location_latitude`, `user_location_longitude`; leave data rows blank
-4. Confirm `beneficiaries` is now col S (19); if it didn't exist, insert a blank column at S with that header
-5. Set T1 = `sync_status`, U1 = `sync_notes`; leave data rows blank
-6. Row 1 should now read: `id | tx_date_time | tx_timezone | tx_type | source_account | target_account | user_location_area | … | sync_notes`
-7. Spot-check 3 data rows — confirm amounts, categories, and accounts are still in the correct columns
+| Col | Name                      |
+| --- | ------------------------- |
+| 1   | `id`                      |
+| 2   | `tx_date_time`            |
+| 3   | `tx_timezone`             |
+| 4   | `parent_tx_id`            |
+| 5   | `tx_type`                 |
+| 6   | `account_id`              |
+| 7   | `tx_amount`               |
+| 8   | `major_category`          |
+| 9   | `minor_category`          |
+| 10  | `description`             |
+| 11  | `counterparty_name`       |
+| 12  | `tx_tags`                 |
+| 13  | `beneficiaries`           |
+| 14  | `user_location_area`      |
+| 15  | `user_location_city`      |
+| 16  | `user_location_country`   |
+| 17  | `user_location_latitude`  |
+| 18  | `user_location_longitude` |
+| 19  | `record_status`           |
+| 20  | `sync_status`             |
+| 21  | `sync_date_time`          |
+| 22  | `sync_notes`              |
+| 23  | `created_at`              |
+| 24  | `updated_at`              |
+
+**Migration steps:**
+
+1. Export transactions to CSV (step above)
+2. Open Google Sheet → **delete the Transactions tab**
+3. Deploy the new backend (step 1 below) — `getOrCreateSheet` will auto-create a fresh 24-col tab on first request
+4. Deploy the new frontend (step 2 below)
+5. Navigate to Transactions in the app — the empty sheet creates with correct headers
+6. Import the exported CSV in batches of ≤100 rows (import still processes row-by-row; batching avoids GAS timeout)
+   - The backend `createTransactionsBulk` will split any transfer rows (those with both source_account and target_account set in the CSV) into 2 linked rows automatically
 
 ### 1. Deploy backend
 
@@ -200,7 +214,7 @@ The Transactions tab **cannot be dropped and recreated** — it holds live data.
 make api-deploy   # pick dev/prod
 ```
 
-Files: `transaction-schema.gs`, `transaction-core.gs`, `transaction-validation.gs`, `transaction-utils.gs`, `app-router.gs`
+Files: `transaction-schema.gs`, `transaction-core.gs`, `transaction-validation.gs`, `account-core.gs`, `transaction-suggestions.gs`, `advisor-core.gs`, `rate-core.gs`
 
 ### 2. Deploy frontend
 
@@ -208,16 +222,23 @@ Files: `transaction-schema.gs`, `transaction-core.gs`, `transaction-validation.g
 git push origin main
 ```
 
-Files: `app/sections/transactions.js`
+Files: `app/sections/transactions.js`, `app/core/utils.js`, `app/core/daterange.js`, `app/core/state.js`
 
 ### 3. Verify
 
-- [ ] Transaction list loads; existing transactions display correctly (amounts, categories, dates)
-- [ ] Add transaction — major/minor category dropdowns populate (was broken by `is_active` bug)
-- [ ] Add transaction — form submits without error (was broken by `catColIndex` crash)
-- [ ] Add transaction — source account dropdown shows only `active` accounts
-- [ ] New transaction in sheet: col 3 = timezone, cols 7–11 = location, col 20 = `sync_status = create-pending`, col 21 blank
-- [ ] Edit transaction → `sync_status` advances to `update-pending`
-- [ ] `tx_timezone`, location fields, `beneficiaries` save correctly for new transactions
-- [ ] Existing rows with blank location/timezone cols display without error
-- [ ] View, delete, filter by account / category / type all unaffected
+- [ ] Transaction list loads; account column shows account name (single name, or "A → B" for transfers)
+- [ ] Amount column shows `tx_amount`; transfers show correct per-leg amounts
+- [ ] Add `money-out` transaction → single account dropdown, single amount; creates 1 row in sheet (col 6 = `account_id`, col 12 = `tx_amount`)
+- [ ] Add `money-in` transaction → single account dropdown; creates 1 row
+- [ ] Add transfer (category with both accounts mandatory) → both account dropdowns shown; creates 2 rows linked by `parent_tx_id` (col 4); money-out row is parent, money-in row has `parent_tx_id = parent.id`
+- [ ] Transfer display → table shows "SourceAcc → TargetAcc" for both rows
+- [ ] Edit transaction → form shows single `account_id` dropdown and single `tx_amount`; transfer note shown if linked
+- [ ] Edit submit → sends `account_id`/`tx_amount` (not source/target); sheet updated correctly
+- [ ] Delete transaction → row stays with `record_status = deleted`; `updated_at` refreshed
+- [ ] Restore deleted → `record_status = active`; `updated_at` refreshed
+- [ ] Copy a transfer row → add form opens with source/target reconstructed from sibling
+- [ ] Export CSV → file has 18 cols in source/target format; transfer pairs merged into 1 CSV row
+- [ ] Import CSV → transfer rows split into 2 sheet rows; money-out/money-in linked via `parent_tx_id`
+- [ ] Rate delete blocked → still works (currency check via accounts, not transactions)
+- [ ] Account filter (in filter bar) → `account_id` filter matches correctly
+- [ ] `_checkDuplicate` skips deleted rows; key = (tx_date_time, tx_type, account_id, tx_amount)

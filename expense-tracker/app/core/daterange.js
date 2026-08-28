@@ -39,20 +39,20 @@ export function filteredTx() {
   return state.transactions.filter(tx => {
     if (!txInRange(tx)) return false;
     if (f.types.length    && !f.types.includes(tx.tx_type))                                                     return false;
-    if (f.accounts.length && !f.accounts.includes(tx.source_account) && !f.accounts.includes(tx.target_account)) return false;
-    if (f.major.length    && !f.major.includes(tx.major_category))                                             return false;
-    if (f.minor.length    && !f.minor.includes(tx.minor_category))                                             return false;
-    if (f.tx_location_country && !String(tx.tx_location_country || '').toLowerCase().includes(f.tx_location_country.toLowerCase())) return false;
-    if (f.tx_location_city    && !String(tx.tx_location_city    || '').toLowerCase().includes(f.tx_location_city.toLowerCase()))    return false;
-    if (f.tx_location_area    && !String(tx.tx_location_area    || '').toLowerCase().includes(f.tx_location_area.toLowerCase()))    return false;
+    if (f.accounts.length && !f.accounts.includes(tx.account_id))                          return false;
+    if (f.major.length    && !f.major.includes(tx.major_category))                        return false;
+    if (f.minor.length    && !f.minor.includes(tx.minor_category))                        return false;
+    if (f.user_location_country && !String(tx.user_location_country || '').toLowerCase().includes(f.user_location_country.toLowerCase())) return false;
+    if (f.user_location_city    && !String(tx.user_location_city    || '').toLowerCase().includes(f.user_location_city.toLowerCase()))    return false;
+    if (f.user_location_area    && !String(tx.user_location_area    || '').toLowerCase().includes(f.user_location_area.toLowerCase()))    return false;
     if (f.tag) {
-      const tags = String(tx.tags || '').split(';').map(t => t.trim().toLowerCase()).filter(Boolean);
+      const tags = String(tx.tx_tags || '').split(';').map(t => t.trim().toLowerCase()).filter(Boolean);
       if (!tags.some(t => t.includes(f.tag.toLowerCase()))) return false;
     }
     if (f.search) {
       const q           = f.search.toLowerCase();
-      const accountName = state.accountMap[tx.source_account]?.name || '';
-      const hay         = [tx.counterparty_name, tx.description, accountName].join(' ').toLowerCase();
+      const acctEntry   = state.accountMap[tx.account_id] || {};
+      const hay         = [tx.counterparty_name, tx.description, acctEntry.name || ''].join(' ').toLowerCase();
       if (!hay.includes(q)) return false;
     }
     return true;

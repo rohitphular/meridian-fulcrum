@@ -8,7 +8,7 @@ function validateTransactionCreate(body) {
     return { ok: false, error: 'missing_date' };
   if (!body.tx_type || !VALID_TRANSACTION_TYPES.includes(body.tx_type))
     return { ok: false, error: 'invalid_transaction_type' };
-  if (!body.amount || Number(body.amount) <= 0)
+  if (!body.source_amount || Number(body.source_amount) <= 0)
     return { ok: false, error: 'invalid_amount' };
   // money-in: source is external — source_account is not sent by the UI
   if (body.tx_type !== 'money-in' && !body.source_account)
@@ -33,10 +33,10 @@ function validateTransactionUpdate(body, oldRow) {
     return { ok: false, error: 'missing_date' };
   if (!body.tx_type || !VALID_TRANSACTION_TYPES.includes(body.tx_type))
     return { ok: false, error: 'invalid_transaction_type' };
-  if (!body.amount || Number(body.amount) <= 0)
+  if (!body.tx_amount || Number(body.tx_amount) <= 0)
     return { ok: false, error: 'invalid_amount' };
-  if (body.tx_type !== 'money-in' && !body.source_account)
-    return { ok: false, error: 'missing_source_account' };
+  if (!body.account_id)
+    return { ok: false, error: 'missing_account_id' };
 
   // Reject immutable fields
   const fields = getFieldsForTransactionType(body.tx_type);
@@ -46,9 +46,6 @@ function validateTransactionUpdate(body, oldRow) {
       return { ok: false, error: 'field_not_editable:' + field.key };
     }
   }
-
-  const acctTypeErr = _validateCategoryAccountTypeHints(body);
-  if (acctTypeErr) return acctTypeErr;
 
   // Financial hard-block rules with post-reversal balance when oldRow is supplied.
   const finErr = _validateFinancialRules(body, oldRow || null);
@@ -90,8 +87,8 @@ function _findCategoryHints(type, major, minor) {
   const values = sheet.getDataRange().getValues();
   const ci = {
     type:         catColIndex('tx_type_key'),
-    major:        catColIndex('major_category_label'),
-    minor:        catColIndex('minor_category_label'),
+    major:        catColIndex('major_category_key'),
+    minor:        catColIndex('minor_category_key'),
     src:          catColIndex('source_account_types'),
     dst:          catColIndex('target_account_types'),
     srcMandatory: catColIndex('source_account_mandatory'),
@@ -153,6 +150,11 @@ function _validateFinancialRules(body, oldRow) {
   // adjustAccountBalance can't silently no-op on a typo or stale reference.
   // OLD account refs (read from the stored row during update/delete) are
   // intentionally NOT preflight-checked here — see adjustAccountBalance.
+  //
+  // Create body uses source_account/target_account; update body uses account_id.
+  if (body.account_id && !accountMap[String(body.account_id)]) {
+    return { ok: false, error: 'unknown_account_id:' + body.account_id };
+  }
   if (body.source_account && !accountMap[String(body.source_account)]) {
     return { ok: false, error: 'unknown_source_account:' + body.source_account };
   }

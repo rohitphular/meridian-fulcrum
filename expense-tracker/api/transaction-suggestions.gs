@@ -18,9 +18,17 @@ function getSuggestedTransactions() {
   const allTx = listTransactions();
   console.log(fnName + ': total_transactions=' + allTx.length);
 
-  // Filter to money-out only — all signals operate on this subset
+  const accountMap = _loadAccountMap();
+
+  // Filter to money-out only; augment each tx with derived currency and normalised amount
   const outTx = allTx.filter(function(tx) {
     return String(tx.tx_type) === 'money-out';
+  }).map(function(tx) {
+    const acc = accountMap[String(tx.account_id || '')] || {};
+    return Object.assign({}, tx, {
+      currency: acc.currency || '',
+      amount:   Number(tx.tx_amount) || 0,
+    });
   });
   console.log(fnName + ': money_out_count=' + outTx.length);
 
@@ -100,7 +108,7 @@ function _applyRecurringMonthly(outTx, today, map) {
       counterparty_name:   String(occs[0].tx.counterparty_name || ''),
       major_category:      _mostFrequent(occs.map(function(o) { return String(o.tx.major_category     || ''); })),
       minor_category:      String(occs[0].tx.minor_category || ''),
-      source_account:      _mostFrequent(occs.map(function(o) { return String(o.tx.source_account     || ''); })),
+      account_id:          _mostFrequent(occs.map(function(o) { return String(o.tx.account_id         || ''); })),
       typical_amount:      _median(occs.map(function(o) { return Number(o.tx.amount) || 0; })),
       currency:            _mostFrequent(occs.map(function(o) { return String(o.tx.currency           || ''); })),
       user_location_area:    _mostFrequent(occs.map(function(o) { return String(o.tx.user_location_area   || ''); })),
@@ -171,7 +179,7 @@ function _applyRecurringWeekly(outTx, today, map) {
       counterparty_name:   String(occs[0].tx.counterparty_name || ''),
       major_category:      _mostFrequent(occs.map(function(o) { return String(o.tx.major_category     || ''); })),
       minor_category:      String(occs[0].tx.minor_category || ''),
-      source_account:      _mostFrequent(occs.map(function(o) { return String(o.tx.source_account     || ''); })),
+      account_id:          _mostFrequent(occs.map(function(o) { return String(o.tx.account_id         || ''); })),
       typical_amount:      _median(occs.map(function(o) { return Number(o.tx.amount) || 0; })),
       currency:            _mostFrequent(occs.map(function(o) { return String(o.tx.currency           || ''); })),
       user_location_area:    _mostFrequent(occs.map(function(o) { return String(o.tx.user_location_area   || ''); })),
@@ -256,7 +264,7 @@ function _applyTimeOfDay(outTx, today, map) {
       counterparty_name:   group.counterparty_name,
       major_category:      _mostFrequent(occs.map(function(o) { return String(o.tx.major_category     || ''); })),
       minor_category:      group.minor_category,
-      source_account:      _mostFrequent(occs.map(function(o) { return String(o.tx.source_account     || ''); })),
+      account_id:          _mostFrequent(occs.map(function(o) { return String(o.tx.account_id         || ''); })),
       typical_amount:      _median(occs.map(function(o) { return Number(o.tx.amount) || 0; })),
       currency:            _mostFrequent(occs.map(function(o) { return String(o.tx.currency           || ''); })),
       user_location_area:    _mostFrequent(occs.map(function(o) { return String(o.tx.user_location_area   || ''); })),
@@ -281,7 +289,7 @@ function _applyTimeOfDay(outTx, today, map) {
       counterparty_name: c.counterparty_name,
       major_category:    c.major_category,
       minor_category:    c.minor_category,
-      source_account:    c.source_account,
+      account_id:        c.account_id,
       typical_amount:    c.typical_amount,
       currency:          c.currency,
       confidence:        c.confidence,
@@ -345,7 +353,7 @@ function _applyRecentFrequent(outTx, today, map) {
       counterparty_name:   cpName,
       major_category:      _mostFrequent(occs.map(function(o) { return String(o.tx.major_category     || ''); })),
       minor_category:      String(occs[0].tx.minor_category || ''),
-      source_account:      _mostFrequent(occs.map(function(o) { return String(o.tx.source_account     || ''); })),
+      account_id:          _mostFrequent(occs.map(function(o) { return String(o.tx.account_id         || ''); })),
       typical_amount:      _median(occs.map(function(o) { return Number(o.tx.amount) || 0; })),
       currency:            _mostFrequent(occs.map(function(o) { return String(o.tx.currency           || ''); })),
       user_location_area:    _mostFrequent(occs.map(function(o) { return String(o.tx.user_location_area   || ''); })),

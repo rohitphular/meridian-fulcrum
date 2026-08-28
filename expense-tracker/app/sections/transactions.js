@@ -1,5 +1,5 @@
 import { state } from '../core/state.js';
-import { el, esc, fmtDateTime, fmtDateTimeCompact, fmtNative, fmtBase, nowLocalISO, toDateInputVal, exportData, getSymbol, localToUtcISO, utcToLocalInput, openContextMenu, closeContextMenu } from '../core/utils.js';
+import { el, esc, fmtDateTime, fmtDateTimeCompact, fmtNative, fmtBase, nowLocalISO, toDateInputVal, exportData, getSymbol, localToUtcISO, utcToLocalInput, openContextMenu, closeContextMenu, syncStatusIcon, recordStatusIcon } from '../core/utils.js';
 import { showLoading, hideLoading, showMsg } from '../core/ui.js';
 import { filteredTx } from '../core/daterange.js';
 import { ExpenseAPI } from '../core/api.js';
@@ -14,7 +14,22 @@ let filterOpen      = false;
 let _txImportParsed = null;
 let _txMenuKey      = null;
 let _txEventsAbort  = null;
-let _accTypeSel = new Set(); // "type:subtype" keys e.g. "asset:current"
+let _accTypeSel     = new Set();
+let _siblingMap     = {};   // tx.id → sibling tx (rebuilt on each render)
+
+function _buildSiblingMap(allTx) {
+  const byId = {};
+  allTx.forEach(tx => { if (tx.id) byId[tx.id] = tx; });
+  const out = {};
+  allTx.forEach(tx => {
+    if (!tx.parent_tx_id) return;
+    const parent = byId[tx.parent_tx_id];
+    if (!parent) return;
+    out[tx.id]     = parent;
+    out[parent.id] = tx;
+  });
+  return out;
+}
 
 function _dispatchTxAction(action, row) {
   if (action === 'tx-view')           { state.txViewRow = row; state.txEditRow = null; state.txDeleteRow = null; state.txAddOpen = false; renderTransactions(); }
@@ -25,20 +40,40 @@ function _dispatchTxAction(action, row) {
   if (action === 'tx-delete')         { state.txDeleteRow = row; state.txEditRow = null; state.txViewRow = null; renderTransactions(); }
   if (action === 'tx-cancel-delete')  { state.txDeleteRow = null; renderTransactions(); }
   if (action === 'tx-confirm-delete') { _confirmDelete(row); }
+  if (action === 'tx-restore')        { _restoreTx(row); }
   if (action === 'tx-copy') {
     const tx = state.transactions.find(t => t._row === row);
     if (!tx) return;
+    const _copySibling = _siblingMap[tx.id] || null;
+    const _copyAcct    = state.accountMap[tx.account_id] || {};
+    const _copySibAcct = _copySibling ? state.accountMap[_copySibling.account_id] || {} : null;
+    // Reconstruct source/target for the add form (which still uses source/target format)
+    let _cpySrcAcc = '', _cpyTgtAcc = '', _cpySrcAmt = Number(tx.tx_amount) || 0, _cpyTgtAmt = '';
+    if (tx.tx_type === 'money-out') {
+      _cpySrcAcc = tx.account_id || '';
+      if (_copySibling && _copySibling.tx_type === 'money-in') {
+        _cpyTgtAcc = _copySibling.account_id || '';
+        _cpyTgtAmt = Number(_copySibling.tx_amount) !== _cpySrcAmt ? String(_copySibling.tx_amount) : '';
+      }
+    } else {
+      _cpyTgtAcc = tx.account_id || '';
+      if (_copySibling && _copySibling.tx_type === 'money-out') {
+        _cpySrcAcc = _copySibling.account_id || '';
+        _cpySrcAmt = Number(_copySibling.tx_amount) || _cpySrcAmt;
+      }
+    }
     state.txCopyPrefill = {
       tx_type:              tx.tx_type              || '',
       major_category:       tx.major_category       || '',
       minor_category:       tx.minor_category       || '',
-      source_account:       tx.source_account       || '',
-      target_account:       tx.target_account       || '',
-      amount:               tx.amount,
+      source_account:       _cpySrcAcc,
+      target_account:       _cpyTgtAcc,
+      source_amount:        _cpySrcAmt,
+      target_amount:        _cpyTgtAmt,
       counterparty_name:    tx.counterparty_name    || '',
-      user_location_area:     tx.user_location_area     || '',
-      user_location_city:     tx.user_location_city     || '',
-      user_location_country:  tx.user_location_country  || '',
+      user_location_area:   tx.user_location_area   || '',
+      user_location_city:   tx.user_location_city   || '',
+      user_location_country: tx.user_location_country || '',
       tx_tags:              tx.tx_tags              || '',
       description:          tx.description          || '',
     };
@@ -55,9 +90,9 @@ function _dispatchTxAction(action, row) {
     state.subPrefill = {
       name:              tx.counterparty_name || '',
       counterparty_name: tx.counterparty_name || '',
-      amount:            tx.amount,
-      currency:          tx.currency,
-      source_account:    tx.source_account,
+      amount:            Number(tx.tx_amount) || 0,
+      currency:          (state.accountMap[tx.account_id] || {}).currency || '',
+      source_account:    tx.account_id || '',
       tx_type:           tx.tx_type || '',
       major_category:    tx.major_category || '',
       minor_category:    tx.minor_category || '',
@@ -70,44 +105,110 @@ function _dispatchTxAction(action, row) {
 
 // ── Category dropdown helpers — respect record_status (greyed-out when archived) ──
 
-// Major <option> list for a transaction type.
+// Major <option> list for a transaction type. Values are major_category_key.
 // A major is active if at least one of its minors is active.
 function _catMajorOpts(type, selectedVal = '') {
-  const cats = state.categories.filter(c => c.tx_type === type);
+  const cats = state.categories.filter(c => c.tx_type_key === type);
   const majors = [...new Map(cats.map(c => {
-    const active = cats.some(x => x.major_category === c.major_category && x.record_status === 'active');
-    return [c.major_category, { label: c.major_category, active }];
+    const active = cats.some(x => x.major_category_key === c.major_category_key && x.record_status === 'active');
+    return [c.major_category_key, { key: c.major_category_key, label: c.major_category_label, active }];
   })).values()];
   return `<option value="">— select —</option>` +
-    majors.map(({ label, active }) => {
-      const sel = selectedVal === label ? 'selected' : '';
+    majors.map(({ key, label, active }) => {
+      const sel = selectedVal === key ? 'selected' : '';
       return active
-        ? `<option value="${esc(label)}" ${sel}>${esc(label)}</option>`
-        : `<option value="${esc(label)}" ${sel} disabled style="color:var(--muted)">${esc(label)} (archived)</option>`;
+        ? `<option value="${esc(key)}" ${sel}>${esc(label)}</option>`
+        : `<option value="${esc(key)}" ${sel} disabled style="color:var(--muted)">${esc(label)} (archived)</option>`;
     }).join('');
 }
 
-// Minor <option> list for a type + major combo.
-function _catMinorOpts(type, major, selectedVal = '') {
-  const cats = state.categories.filter(c => c.tx_type === type && c.major_category === major);
+// Minor <option> list for a type + major key combo. Values are minor_category_key.
+function _catMinorOpts(type, majorKey, selectedVal = '') {
+  const cats = state.categories.filter(c => c.tx_type_key === type && c.major_category_key === majorKey);
   return `<option value="">— select —</option>` +
     cats.map(c => {
-      const sel = selectedVal === c.minor_category ? 'selected' : '';
+      const sel = selectedVal === c.minor_category_key ? 'selected' : '';
       return c.record_status === 'active'
-        ? `<option value="${esc(c.minor_category)}" ${sel}>${esc(c.minor_category)}</option>`
-        : `<option value="${esc(c.minor_category)}" ${sel} disabled style="color:var(--muted)">${esc(c.minor_category)} (archived)</option>`;
+        ? `<option value="${esc(c.minor_category_key)}" ${sel}>${esc(c.minor_category_label)}</option>`
+        : `<option value="${esc(c.minor_category_key)}" ${sel} disabled style="color:var(--muted)">${esc(c.minor_category_label)} (archived)</option>`;
     }).join('');
 }
 
 // ── Account dropdown helpers — filter by category source/dest account types ──
 
-function _getCat(type, major, minor) {
-  if (!type || !major || !minor) return null;
+// Looks up a category by type + major_category_key + minor_category_key.
+function _getCat(type, majorKey, minorKey) {
+  if (!type || !majorKey || !minorKey) return null;
   return state.categories.find(c =>
-    c.tx_type        === type &&
-    c.major_category === major &&
-    c.minor_category === minor
+    c.tx_type_key        === type &&
+    c.major_category_key === majorKey &&
+    c.minor_category_key === minorKey
   ) || null;
+}
+
+// Resolves stored keys to display labels. Falls back to key if no match found.
+function _catLabel(type, majorKey, minorKey) {
+  if (!majorKey && !minorKey) return '—';
+  const cat = _getCat(type, majorKey, minorKey);
+  if (cat) return cat.major_category_label + ' → ' + cat.minor_category_label;
+  return [majorKey, minorKey].filter(Boolean).join(' → ');
+}
+
+// Formats beneficiaries string (e.g. "Alice:60;Bob:40") as readable HTML chips.
+function _fmtBeneficiaries(str) {
+  if (!str) return '—';
+  return str.split(';').map(part => {
+    const idx = part.indexOf(':');
+    if (idx === -1) return esc(part.trim());
+    const name = part.slice(0, idx).trim();
+    const pct  = part.slice(idx + 1).trim();
+    return `${esc(name)} <span style="color:var(--muted)">(${esc(pct)}%)</span>`;
+  }).join(' &middot; ');
+}
+
+// Forward geocode: city+country → lat/lon via Nominatim.
+async function _geocodeCity(cityId, countryId, latId, lonId) {
+  const city    = (el(cityId)    || {}).value || '';
+  const country = (el(countryId) || {}).value || '';
+  if (!city && !country) return;
+  const latEl = el(latId);
+  const lonEl = el(lonId);
+  if (!latEl || !lonEl) return;
+  if (latEl.value && lonEl.value) return; // already set
+  try {
+    const q   = encodeURIComponent([city, country].filter(Boolean).join(', '));
+    const url = `https://nominatim.openstreetmap.org/search?q=${q}&format=json&limit=1`;
+    const res = await fetch(url, { headers: { 'Accept': 'application/json' } });
+    const data = await res.json();
+    if (data && data[0]) {
+      latEl.value = parseFloat(data[0].lat).toFixed(6);
+      lonEl.value = parseFloat(data[0].lon).toFixed(6);
+    }
+  } catch (_) {}
+}
+
+// Reverse geocode: lat/lon → area/city/country via Nominatim.
+async function _reverseGeocode(latId, lonId, areaId, cityId, countryId) {
+  const latEl = el(latId);
+  const lonEl = el(lonId);
+  if (!latEl || !lonEl) return;
+  const lat = latEl.value.trim();
+  const lon = lonEl.value.trim();
+  if (!lat || !lon) return;
+  try {
+    const url = `https://nominatim.openstreetmap.org/reverse?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}&format=json`;
+    const res = await fetch(url, { headers: { 'Accept': 'application/json' } });
+    const data = await res.json();
+    if (data && data.address) {
+      const addr     = data.address;
+      const cityEl   = el(cityId);
+      const ctryEl   = el(countryId);
+      const areaEl   = el(areaId);
+      if (cityEl && !cityEl.value) cityEl.value   = addr.city || addr.town || addr.village || addr.municipality || '';
+      if (ctryEl && !ctryEl.value) ctryEl.value   = addr.country || '';
+      if (areaEl && !areaEl.value) areaEl.value   = addr.suburb || addr.neighbourhood || addr.county || '';
+    }
+  } catch (_) {}
 }
 
 // ── Subscription eligibility helpers ─────────────────────────────────────────
@@ -115,9 +216,9 @@ function _getCat(type, major, minor) {
 function _isCatSubEligible(tx) {
   if (!tx.major_category || !tx.minor_category) return false;
   const cat = state.categories.find(c =>
-    c.tx_type        === tx.tx_type &&
-    c.major_category === tx.major_category &&
-    c.minor_category === tx.minor_category
+    c.tx_type_key        === tx.tx_type &&
+    c.major_category_key === tx.major_category &&
+    c.minor_category_key === tx.minor_category
   );
   if (!cat) return false;
   return cat.is_subscription_eligible === true;
@@ -149,7 +250,7 @@ function _acctOptsWithHints(accounts, allowedTypesStr, selectedId = '') {
     ? new Set(allowedTypesStr.split(',').map(s => s.trim().toLowerCase()).filter(Boolean))
     : new Set();
   const filtered = allowed.size
-    ? accounts.filter(a => allowed.has((a.type || '').toLowerCase()))
+    ? accounts.filter(a => allowed.has((a.type || '').toLowerCase()) || allowed.has((a.sub_type || '').toLowerCase()))
     : accounts;
   return filtered.map(a =>
     `<option value="${esc(a.id)}" ${a.id === selectedId ? 'selected' : ''}>${esc(a.name)} (${esc(a.currency)})</option>`
@@ -160,9 +261,8 @@ function _acctOptsWithHints(accounts, allowedTypesStr, selectedId = '') {
 
 function _txTypes() {
   return (state.transactionSchema && state.transactionSchema.types) || [
-    { value: 'money-in',       label: 'Money In'  },
-    { value: 'money-out',      label: 'Money Out' },
-    { value: 'money-transfer', label: 'Transfer'  },
+    { value: 'money-in',  label: 'Money In'  },
+    { value: 'money-out', label: 'Money Out' },
   ];
 }
 function _txTypeMap() {
@@ -170,7 +270,8 @@ function _txTypeMap() {
 }
 
 export function renderTransactions() {
-  _txMenuKey = null;
+  _txMenuKey  = null;
+  _siblingMap = _buildSiblingMap(state.transactions);
 
   // Load suggestions: serve from localStorage cache (6 h TTL), else fetch from API.
   if (!state.suggestionsLoaded) {
@@ -248,7 +349,7 @@ export function renderTransactions() {
   const _rawTypes   = (state.transactionSchema && state.transactionSchema.types) || [];
   const _validTypes = new Set(_rawTypes.length
     ? _rawTypes.map(t => (typeof t === 'string' ? t : t.value))
-    : ['money-in', 'money-out', 'money-transfer']);
+    : ['money-in', 'money-out']);
   const validRows = rows.filter(tx =>  tx.id && tx.tx_date_time && _validTypes.has(tx.tx_type));
   const warnRows  = rows.filter(tx => !tx.id || !tx.tx_date_time || !_validTypes.has(tx.tx_type));
 
@@ -300,30 +401,30 @@ export function renderTransactions() {
     renderTransactions();
   });
 
-  el('txImportFile').addEventListener('change', e => {
-    const file = e.target.files[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = ev => {
-      const parsed = _parseTxCsv(ev.target.result);
-      _txImportParsed = parsed.transactions.length && !parsed.errors.length ? parsed.transactions : null;
-      const status = el('txImportStatus');
-      if (status) status.innerHTML = _renderTxImportStatus(parsed);
-      const btn = el('txImportConfirm');
-      if (btn) btn.disabled = !_txImportParsed;
-    };
-    reader.readAsText(file);
-  });
+  if (state.txImportOpen) {
+    el('txImportFile').addEventListener('change', e => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = ev => {
+        const parsed = _parseTxCsv(ev.target.result);
+        _txImportParsed = parsed.transactions.length ? parsed.transactions : null;
+        el('txImportStatus').innerHTML = _renderTxImportStatus(parsed);
+        el('txImportConfirm').disabled = !_txImportParsed;
+      };
+      reader.readAsText(file);
+    });
 
-  el('txImportConfirm').addEventListener('click', () => {
-    if (_txImportParsed) _submitTxImport(_txImportParsed);
-  });
+    el('txImportConfirm').addEventListener('click', () => {
+      if (_txImportParsed) _submitTxImport(_txImportParsed);
+    });
 
-  el('txImportCancel').addEventListener('click', () => {
-    state.txImportOpen = false;
-    _txImportParsed = null;
-    renderTransactions();
-  });
+    el('txImportCancel').addEventListener('click', () => {
+      state.txImportOpen = false;
+      _txImportParsed = null;
+      renderTransactions();
+    });
+  }
 
   _attachSuggestionEvents();
   _attachFilterEvents();
@@ -332,6 +433,7 @@ export function renderTransactions() {
   _attachEvents();
 
   el('txExportBtn').addEventListener('click', () => {
+    if (!rows.length) { showMsg('No transactions to export.', 'warn'); return; }
     openContextMenu(el('txExportBtn'), [
       { key: 'csv',  label: 'CSV'  },
       { key: 'json', label: 'JSON' },
@@ -368,20 +470,25 @@ function _renderTxTable(validRows, warnRows) {
   const rowData = paged.map(tx => {
     if (state.txDeleteRow === tx._row) return { tr: _renderTxDeleteRow(tx), card: '' };
 
-    const badgeCls  = tx.tx_type === 'money-in' ? 'badge-et-in' : tx.tx_type === 'money-out' ? 'badge-et-out' : 'badge-et-transfer';
-    const typeLabel = _txTypeMap()[tx.tx_type] || tx.tx_type;
-    const missingRate = !state.rateMap[tx.currency];
-
-    const _fromAccTbl = state.accountMap[tx.source_account];
-    const _toAccTbl   = tx.target_account ? state.accountMap[tx.target_account] : null;
-    const fromName  = (_fromAccTbl && _fromAccTbl.name) || '—';
-    const toName    = _toAccTbl ? _toAccTbl.name : null;
-    const acctLabel = toName ? `${fromName} → ${toName}` : fromName;
-    const catLabel  = [tx.major_category, tx.minor_category].filter(Boolean).join(' → ') || '—';
-    const nativeAmt = fmtNative(tx.amount, tx.currency);
-    const baseAmt   = fmtBase(tx.amount, tx.currency);
-    const amtCell   = tx.currency !== state.quoteCurrency
-      ? `${esc(nativeAmt)} <span class="td-base-amt">/ ${esc(baseAmt)}</span>`
+    const badgeCls    = tx.tx_type === 'money-in' ? 'badge-et-in' : tx.tx_type === 'money-out' ? 'badge-et-out' : 'badge-et-transfer';
+    const typeLabel   = _txTypeMap()[tx.tx_type] || tx.tx_type;
+    const _txAccTbl   = state.accountMap[tx.account_id] || {};
+    const txCur       = _txAccTbl.currency || '';
+    const missingRate = !state.rateMap[txCur];
+    const displayAmt  = Number(tx.tx_amount) || 0;
+    const acctName    = _txAccTbl.name || '—';
+    const _sibling    = _siblingMap[tx.id];
+    const _sibAccTbl  = _sibling ? state.accountMap[_sibling.account_id] || {} : null;
+    const acctLabel   = _sibAccTbl
+      ? (tx.tx_type === 'money-out'
+          ? acctName + ' → ' + (_sibAccTbl.name || '—')
+          : (_sibAccTbl.name || '—') + ' → ' + acctName)
+      : acctName;
+    const catLabel  = _catLabel(tx.tx_type, tx.major_category, tx.minor_category);
+    const nativeAmt = fmtNative(displayAmt, txCur);
+    const baseAmt   = fmtBase(displayAmt, txCur);
+    const amtCell   = txCur !== state.quoteCurrency
+      ? `${esc(nativeAmt)} <span class="td-base-amt">${esc(baseAmt)}</span>`
       : esc(nativeAmt);
 
     return {
@@ -391,7 +498,9 @@ function _renderTxTable(validRows, warnRows) {
         <td class="td-truncate" title="${esc(acctLabel)}">${esc(acctLabel)}</td>
         <td class="td-mono td-nowrap">${amtCell}${missingRate ? ' <span class="badge badge-warn" title="Currency not in rates tab">?</span>' : ''}</td>
         <td class="td-truncate" title="${esc(catLabel)}">${esc(catLabel)}</td>
-        <td style="text-align:right">
+        <td style="text-align:right;white-space:nowrap">
+          ${recordStatusIcon(tx.record_status)}
+          ${syncStatusIcon(tx.sync_status)}
           <button class="tx-menu-trigger" data-action="tx-menu" data-row="${tx._row}" title="Actions">⋮</button>
         </td>
       </tr>`,
@@ -402,8 +511,12 @@ function _renderTxTable(validRows, warnRows) {
             <div class="tx-card-name"><span class="tx-type-dot ${dotCls}">●</span> ${esc(fmtDateTimeCompact(tx.tx_date_time))} · ${esc(acctLabel)}</div>
             ${catLabel !== '—' ? `<div class="tx-card-cat">${esc(catLabel)}</div>` : ''}
           </div>
-          <div class="tx-card-amt td-mono">${esc(nativeAmt)}</div>
-          <button class="tx-menu-trigger" data-action="tx-menu" data-row="${tx._row}" title="Actions">⋮</button>
+          <div class="tx-card-amt td-mono">${esc(fmtNative(displayAmt, txCur))}</div>
+          <div style="display:flex;align-items:center;gap:2px">
+            ${recordStatusIcon(tx.record_status)}
+            ${syncStatusIcon(tx.sync_status)}
+            <button class="tx-menu-trigger" data-action="tx-menu" data-row="${tx._row}" title="Actions">⋮</button>
+          </div>
         </div>`;
       })()
     };
@@ -435,7 +548,7 @@ function _renderTxTable(validRows, warnRows) {
         <thead><tr>
           ${thSort('tx_date_time','Date')}
           ${thSort('tx_type','Type')}
-          ${thSort('source_account','Account')}
+          ${thSort('account_id','Account')}
           <th>Amount</th>
           ${thSort('major_category','Category')}
           <th style="width:40px"></th>
@@ -481,14 +594,21 @@ function _attachEvents() {
       if (!tx) return;
       if (_txMenuKey === row) { closeContextMenu(); _txMenuKey = null; return; }
       _txMenuKey = row;
+      const rstat = tx.record_status || 'active';
       const isSub = _isCatSubEligible(tx) && !_isAlreadySubscribed(tx);
-      openContextMenu(btn, [
-        { key: 'tx-view',     label: 'View',         cls: '' },
-        { key: 'tx-edit',     label: 'Edit',         cls: '' },
-        { key: 'tx-copy',     label: 'Copy',         cls: '' },
-        { key: 'tx-delete',   label: 'Delete',       cls: 'danger' },
-        ...(isSub ? [{ key: 'tx-mark-sub', label: 'Subscribe', cls: '' }] : []),
-      ], key => { _txMenuKey = null; _dispatchTxAction(key, row); });
+      const items = rstat === 'locked'
+        ? [{ key: 'tx-view', label: 'View', cls: '' }]
+        : rstat === 'deleted'
+          ? [{ key: 'tx-view',    label: 'View',    cls: '' },
+             { key: 'tx-restore', label: 'Restore', cls: '' }]
+          : [
+              { key: 'tx-view',   label: 'View',   cls: '' },
+              { key: 'tx-edit',   label: 'Edit',   cls: '' },
+              { key: 'tx-copy',   label: 'Copy',   cls: '' },
+              { key: 'tx-delete', label: 'Delete', cls: 'danger' },
+              ...(isSub ? [{ key: 'tx-mark-sub', label: 'Subscribe', cls: '' }] : []),
+            ];
+      openContextMenu(btn, items, key => { _txMenuKey = null; _dispatchTxAction(key, row); });
       return;
     }
     if (action === 'sugg-add') {
@@ -496,20 +616,20 @@ function _attachEvents() {
       const s = state.suggestions.find(x => `${x.counterparty_name}|${x.minor_category}` === key);
       if (!s) return;
       state.txCopyPrefill = {
-        tx_type:             'money-out',
-        major_category:      s.major_category,
-        minor_category:      s.minor_category,
-        source_account:      s.source_account,
-        target_account:      '',
-        amount:              s.typical_amount,
-        currency:            s.currency,
-        counterparty_name:   s.counterparty_name,
-        user_location_area:    s.user_location_area    || '',
-        user_location_city:    s.user_location_city    || '',
+        tx_type:              'money-out',
+        major_category:       s.major_category,
+        minor_category:       s.minor_category,
+        source_account:       s.account_id             || '',
+        target_account:       '',
+        source_amount:        s.typical_amount,
+        target_amount:        '',
+        counterparty_name:    s.counterparty_name,
+        user_location_area:   s.user_location_area    || '',
+        user_location_city:   s.user_location_city    || '',
         user_location_country: s.user_location_country || '',
-        tx_tags:             s.tx_tags                || '',
-        beneficiaries:       s.beneficiaries          || '',
-        description:         '',
+        tx_tags:              s.tx_tags               || '',
+        beneficiaries:        s.beneficiaries         || '',
+        description:          '',
       };
       state.txAddOpen    = true;
       state.txImportOpen = false;
@@ -528,8 +648,9 @@ function _sortTx(rows) {
     if (col === 'tx_date_time') {
       const ts = s => { const d = new Date(String(s)); return isNaN(d) ? 0 : d.getTime(); };
       va = ts(va); vb = ts(vb);
-    } else if (col === 'amount') {
-      va = parseFloat(va) || 0; vb = parseFloat(vb) || 0;
+    } else if (col === 'tx_amount') {
+      va = parseFloat(a.tx_amount) || 0;
+      vb = parseFloat(b.tx_amount) || 0;
     } else {
       va = String(va).toLowerCase(); vb = String(vb).toLowerCase();
     }
@@ -572,7 +693,7 @@ function _renderAddForm() {
           <option value="">External</option>
         </select>
       </div>
-      <!-- Row 3: Date & time | Timezone | Amount -->
+      <!-- Row 3: Date & time | Timezone | Source amount | Target amount -->
       <div class="field form-grid-span-2" id="afDateField">
         <label for="afDate">Date &amp; time *</label>
         <input type="datetime-local" id="afDate" value="${nowLocalISO()}">
@@ -581,9 +702,13 @@ function _renderAddForm() {
         <label for="afTimezone">Timezone <span class="optional">optional</span></label>
         <input type="text" id="afTimezone" placeholder="e.g. Asia/Kolkata" autocomplete="off">
       </div>
-      <div class="field form-grid-span-2" id="afAmountField">
-        <label for="afAmount">Amount *</label>
-        <input type="number" id="afAmount" min="0.01" step="0.01" placeholder="0.00">
+      <div class="field form-grid-span-2" id="afSourceAmountField">
+        <label for="afSourceAmount" id="afSourceAmountLabel">Amount *</label>
+        <input type="number" id="afSourceAmount" min="0.01" step="0.01" placeholder="0.00">
+      </div>
+      <div class="field form-grid-span-1 hidden" id="afTargetAmountField">
+        <label for="afTargetAmount">Target amount</label>
+        <input type="number" id="afTargetAmount" min="0.01" step="0.01" placeholder="0.00">
       </div>
       <!-- Row 4: Counterparty | Tags -->
       <div class="field form-grid-span-3" id="afCounterpartyField">
@@ -672,7 +797,8 @@ function _prefillAddForm(p) {
   if (toEl) toEl.value = p.target_account ?? 'FAILURE';
 
   // 5. Remaining text fields — date stays as nowLocalISO()
-  const afAmount  = el('afAmount');      if (afAmount)  afAmount.value  = p.amount              ?? 'FAILURE';
+  const afSourceAmount = el('afSourceAmount'); if (afSourceAmount) afSourceAmount.value = p.source_amount ?? 'FAILURE';
+  const afTargetAmount = el('afTargetAmount'); if (afTargetAmount) afTargetAmount.value = p.target_amount || '';
   const afCp      = el('afCounterparty'); if (afCp)     afCp.value      = p.counterparty_name   ?? 'FAILURE';
   const afArea    = el('afArea');        if (afArea)    afArea.value    = p.user_location_area    ?? 'FAILURE';
   const afCity    = el('afCity');        if (afCity)    afCity.value    = p.user_location_city    ?? 'FAILURE';
@@ -727,7 +853,7 @@ function _attachAddFormEvents() {
 
   el('afSubmit').addEventListener('click', _saveTransaction);
   el('afReset').addEventListener('click', () => {
-    ['afDate','afAmount','afCounterparty','afArea','afCity','afCountry','afTags','afDescription','afTimezone','afLatitude','afLongitude','afBeneficiaries']
+    ['afDate','afSourceAmount','afTargetAmount','afCounterparty','afArea','afCity','afCountry','afTags','afDescription','afTimezone','afLatitude','afLongitude','afBeneficiaries']
       .forEach(id => { if (el(id)) el(id).value = id === 'afDate' ? nowLocalISO() : ''; });
     el('afType').value = '';
     const fromEl = el('afFromAccount');
@@ -750,8 +876,14 @@ function _attachAddFormEvents() {
       const lon = el('afLongitude');
       if (lat) lat.value = pos.coords.latitude.toFixed(6);
       if (lon) lon.value = pos.coords.longitude.toFixed(6);
+      _reverseGeocode('afLatitude', 'afLongitude', 'afArea', 'afCity', 'afCountry');
     });
   });
+
+  el('afCity').addEventListener('blur',    () => _geocodeCity('afCity', 'afCountry', 'afLatitude', 'afLongitude'));
+  el('afCountry').addEventListener('blur', () => _geocodeCity('afCity', 'afCountry', 'afLatitude', 'afLongitude'));
+  el('afLatitude').addEventListener('blur',  () => _reverseGeocode('afLatitude', 'afLongitude', 'afArea', 'afCity', 'afCountry'));
+  el('afLongitude').addEventListener('blur', () => _reverseGeocode('afLatitude', 'afLongitude', 'afArea', 'afCity', 'afCountry'));
 
   // If a copy was triggered, populate the form now that events are wired
   if (state.txCopyPrefill) {
@@ -789,8 +921,8 @@ function _afRefreshToAccountField() {
   const major  = el('afMajor').value || '';
   const minor  = el('afMinor').value || '';
   const cat    = _getCat(type, major, minor);
-  const isTransfer      = type === 'money-transfer';
-  const targetMandatory = cat ? Boolean(cat.target_account_mandatory) : isTransfer;
+  const isTransfer      = cat && cat.source_account_mandatory === true && cat.target_account_mandatory === true;
+  const targetMandatory = cat ? Boolean(cat.target_account_mandatory) : false;
 
   const toAccEl = el('afToAccount');
   if (!toAccEl) return;
@@ -809,6 +941,22 @@ function _afRefreshToAccountField() {
     toAccEl.innerHTML = `<option value="">External</option>`;
     toAccEl.value     = '';
   }
+
+  const srcAmtLbl   = el('afSourceAmountLabel');
+  const srcAmtField = el('afSourceAmountField');
+  const tgtAmtField = el('afTargetAmountField');
+  if (srcAmtLbl) srcAmtLbl.textContent = isTransfer ? 'Source amount *' : 'Amount *';
+  if (tgtAmtField) {
+    if (isTransfer) {
+      tgtAmtField.classList.remove('hidden');
+      if (srcAmtField) { srcAmtField.classList.remove('form-grid-span-2'); srcAmtField.classList.add('form-grid-span-1'); }
+    } else {
+      tgtAmtField.classList.add('hidden');
+      if (srcAmtField) { srcAmtField.classList.remove('form-grid-span-1'); srcAmtField.classList.add('form-grid-span-2'); }
+      const tgtEl = el('afTargetAmount');
+      if (tgtEl) tgtEl.value = '';
+    }
+  }
 }
 
 
@@ -818,12 +966,11 @@ function _afRefreshToAccountField() {
 // Rules 1 & 3 — insufficient balance (asset accounts).
 // Rules 2 & 4 — credit limit exceeded (credit-card accounts).
 // Rule 5     — money-out from a loan account (with exemption for interest/charges).
-// Rule 6     — FX rate required for cross-currency money-transfer.
+// Rule 6     — FX transfer: source_amount and target_amount may differ for cross-currency transfers.
 
-function _checkBalanceRules(transaction_type, sourceAccount, amount) {
+function _checkBalanceRules(transaction_type, sourceAccount, isTransfer, amount) {
   if (!sourceAccount) return null;
   const isMoneyOut      = transaction_type === 'money-out';
-  const isTransfer      = transaction_type === 'money-transfer';
   if (!isMoneyOut && !isTransfer) return null;
 
   const sym = getSymbol(sourceAccount.currency);
@@ -884,7 +1031,7 @@ function _checkRule5(transaction_type, sourceAccount, major_category, minor_cate
   if (!sourceAccount) return null;
   const loanTypes = (state.accountSchema && state.accountSchema.loan_types) || [];
   if (!loanTypes.includes(sourceAccount.type)) return null;
-  if (major_category === 'Debt & finance' && minor_category === 'Interest & charges') return null;
+  if (major_category === 'debt-finance' && minor_category === 'interest-charges') return null;
   return (
     `Cannot record money-out from a loan account.\n` +
     `Loan accounts track what you owe. To record a loan fee or charge, add it as a money-out from your current account, or record it directly in the sheet.`
@@ -901,12 +1048,8 @@ async function _saveTransaction() {
   const tx_type              = el('afType').value;
   const source_account       = el('afFromAccount').value;
   const target_account       = el('afToAccount').value || '';
-  const amount               = el('afAmount').value;
-  const _saveSrcAcc = state.accountMap[source_account];
-  const _saveTgtAcc = state.accountMap[target_account];
-  const currency             = tx_type === 'money-in'
-    ? ((_saveTgtAcc && _saveTgtAcc.currency) || '')
-    : ((_saveSrcAcc && _saveSrcAcc.currency) || '');
+  const source_amount_raw    = el('afSourceAmount').value;
+  const target_amount_raw    = el('afTargetAmount').value;
   const major_category       = el('afMajor').value;
   const minor_category       = el('afMinor').value;
   const counterparty_name    = el('afCounterparty').value.trim();
@@ -920,21 +1063,24 @@ async function _saveTransaction() {
   const user_location_longitude = el('afLongitude').value !== '' ? Number(el('afLongitude').value) : '';
   const beneficiaries           = el('afBeneficiaries').value.trim() || '';
 
-  const isTransfer    = tx_type === 'money-transfer';
   const _saveCat      = _getCat(tx_type, major_category, minor_category);
+  const isTransfer    = _saveCat && _saveCat.source_account_mandatory === true && _saveCat.target_account_mandatory === true;
   const srcMandatory  = _saveCat ? Boolean(_saveCat.source_account_mandatory) : tx_type !== 'money-in';
-  const tgtMandatory  = _saveCat ? Boolean(_saveCat.target_account_mandatory) : isTransfer;
+  const tgtMandatory  = _saveCat ? Boolean(_saveCat.target_account_mandatory) : false;
   if (!dateRaw)                                  { errEl.textContent = 'Date is required.';                          return; }
   if (!tx_type)                                  { errEl.textContent = 'Type is required.';                          return; }
   if (srcMandatory && !source_account)           { errEl.textContent = 'Source account is required.';                return; }
   if (tgtMandatory && !target_account)           { errEl.textContent = 'Target account is required.';                return; }
-  if (!amount || parseFloat(amount) <= 0)        { errEl.textContent = 'Enter a positive amount.';                   return; }
-  if (!isTransfer && !major_category)            { errEl.textContent = 'Major category is required.';                return; }
-  if (!isTransfer && !minor_category)            { errEl.textContent = 'Minor category is required.';                return; }
+  if (!source_amount_raw || parseFloat(source_amount_raw) <= 0) { errEl.textContent = 'Enter a positive amount.';   return; }
+  if (!major_category)                           { errEl.textContent = 'Major category is required.';                return; }
+  if (!minor_category)                           { errEl.textContent = 'Minor category is required.';                return; }
+
+  const source_amount = parseFloat(source_amount_raw);
+  const target_amount = target_amount_raw && parseFloat(target_amount_raw) > 0 ? parseFloat(target_amount_raw) : source_amount;
 
   const sourceAcc     = state.accountMap[source_account];
   const targetAcc     = state.accountMap[target_account];
-  const balanceError  = _checkBalanceRules(tx_type, sourceAcc, parseFloat(amount));
+  const balanceError  = _checkBalanceRules(tx_type, sourceAcc, isTransfer, source_amount);
   if (balanceError) { errEl.textContent = balanceError; return; }
 
   const rule5Error    = _checkRule5(tx_type, sourceAcc, major_category, minor_category);
@@ -946,14 +1092,14 @@ async function _saveTransaction() {
     const res = await ExpenseAPI.createTransaction({
       tx_date_time: localToUtcISO(dateRaw),
       tx_type, source_account, target_account,
-      amount: parseFloat(amount), currency,
+      source_amount, target_amount,
       major_category, minor_category,
       counterparty_name, user_location_area, user_location_city, user_location_country,
       tx_tags, description,
       tx_timezone, user_location_latitude, user_location_longitude, beneficiaries,
     });
     if (res.ok) {
-      showMsg('Transaction saved.');
+      showMsg(res.ids ? '2 transactions saved (transfer split).' : 'Transaction saved.');
       state.txAddOpen = false;
       document.dispatchEvent(new CustomEvent('et:reload'));
     } else {
@@ -975,34 +1121,65 @@ async function _saveTransaction() {
 function _renderTxForm(tx, mode) {
   const badgeCls  = tx.tx_type === 'money-in' ? 'badge-et-in' : tx.tx_type === 'money-out' ? 'badge-et-out' : 'badge-et-transfer';
   const typeLabel = _txTypeMap()[tx.tx_type] || tx.tx_type;
-  const _fromAccForm = state.accountMap[tx.source_account];
-  const _toAccForm   = tx.target_account ? state.accountMap[tx.target_account] : null;
-  const fromName  = (_fromAccForm && _fromAccForm.name) || '—';
-  const toName    = _toAccForm ? (_toAccForm.name || '—') : 'External';
+  const _txAccForm   = state.accountMap[tx.account_id] || {};
+  const _siblingForm = _siblingMap[tx.id];
+  const _sibAccForm  = _siblingForm ? state.accountMap[_siblingForm.account_id] || {} : null;
+  const acctFormName  = _txAccForm.name || '—';
 
   if (mode === 'view') {
-    const f = (label, value) =>
-      `<div class="tx-detail-field"><div class="tx-detail-label">${label}</div><div class="tx-detail-value">${value}</div></div>`;
+    const txCurView = _txAccForm.currency || '';
+    const viewAmt   = Number(tx.tx_amount) || 0;
+    const viewAcct  = _sibAccForm
+      ? (tx.tx_type === 'money-out'
+          ? acctFormName + ' → ' + (_sibAccForm.name || '—')
+          : (_sibAccForm.name || '—') + ' → ' + acctFormName)
+      : acctFormName;
+
+    const vf = (label, value, span = 'form-grid-span-2') =>
+      `<div class="field ${span}"><label>${label}</label><div class="field-val">${value}</div></div>`;
+
+    const hasCoords = tx.user_location_latitude || tx.user_location_longitude;
+    const _viewCat  = _getCat(tx.tx_type, tx.major_category, tx.minor_category);
+    const majorLbl  = (_viewCat && _viewCat.major_category_label) || tx.major_category || '—';
+    const minorLbl  = (_viewCat && _viewCat.minor_category_label) || tx.minor_category || '—';
 
     return `
     <div class="card" style="margin-bottom:16px">
-      <div class="tx-detail-grid">
-        ${f('Date & time',      esc(fmtDateTime(tx.tx_date_time)))}
-        ${f('Type',             `<span class="badge ${badgeCls}">${esc(typeLabel)}</span>`)}
-        ${f('Source account',   esc(fromName))}
-        ${f('Target account',   esc(toName))}
-        ${f('Amount',           esc(fmtNative(tx.amount, tx.currency)))}
-        ${f('≈ ' + state.quoteCurrency, esc(fmtBase(tx.amount, tx.currency)))}
-        ${f('Category',         esc([tx.major_category, tx.minor_category].filter(Boolean).join(' → ') || '—'))}
-        ${f('Counterparty',     esc(tx.counterparty_name || '—'))}
-        ${tx.user_location_area    ? f('Area',    esc(tx.user_location_area))    : ''}
-        ${tx.user_location_city    ? f('City',    esc(tx.user_location_city))    : ''}
-        ${tx.user_location_country ? f('Country', esc(tx.user_location_country)) : ''}
-        ${f('Tags',             esc(String(tx.tx_tags || '').replace(/;/g, ', ') || '—'))}
-        ${f('Description',      esc(tx.description || '—'))}
-        ${tx.sync_status ? `<span class="badge badge-${_syncBadgeClass(tx.sync_status)}">${esc(tx.sync_status)}</span>` : ''}
-        ${tx.sync_status === 'sync-failure' && tx.sync_notes ? `<div class="sync-notes">${esc(tx.sync_notes)}</div>` : ''}
+      <div class="form-grid form-grid-6">
+        <!-- Row 1: Type | Major category | Minor category -->
+        <div class="field form-grid-span-2">
+          <label>Type</label>
+          <div class="field-val"><span class="badge ${badgeCls}">${esc(typeLabel)}</span></div>
+        </div>
+        ${vf('Major category', esc(majorLbl))}
+        ${vf('Minor category', esc(minorLbl))}
+        <!-- Row 2: Account (full width) -->
+        ${vf('Account', esc(viewAcct), 'form-grid-full')}
+        <!-- Row 3: Date & time | Timezone | Amount -->
+        ${vf('Date &amp; time', esc(fmtDateTime(tx.tx_date_time)))}
+        ${vf('Timezone', esc(tx.tx_timezone || '—'))}
+        <div class="field form-grid-span-2">
+          <label>Amount</label>
+          <div class="field-val">
+            ${esc(fmtNative(viewAmt, txCurView))}
+            <span style="color:var(--muted);font-size:var(--text-sm)">≈ ${esc(fmtBase(viewAmt, txCurView))}</span>
+          </div>
+        </div>
+        <!-- Row 4: Counterparty | Tags -->
+        ${vf('Counterparty', esc(tx.counterparty_name || '—'), 'form-grid-span-3')}
+        ${vf('Tags', esc(String(tx.tx_tags || '').replace(/;/g, ', ') || '—'), 'form-grid-span-3')}
+        <!-- Row 5: Description -->
+        ${vf('Description', esc(tx.description || '—'), 'form-grid-full')}
+        <!-- Row 6: Beneficiaries -->
+        ${vf('Beneficiaries', _fmtBeneficiaries(tx.beneficiaries), 'form-grid-full')}
+        <!-- Row 7: Area | City | Country -->
+        ${vf('Area',    esc(tx.user_location_area    || '—'))}
+        ${vf('City',    esc(tx.user_location_city    || '—'))}
+        ${vf('Country', esc(tx.user_location_country || '—'))}
+        <!-- Row 8: Coordinates (only if set) -->
+        ${hasCoords ? vf('Coordinates', esc(`${tx.user_location_latitude || ''}, ${tx.user_location_longitude || ''}`), 'form-grid-full') : ''}
       </div>
+      ${tx.sync_status ? `<div style="margin-top:8px;display:flex;align-items:center;gap:6px">${syncStatusIcon(tx.sync_status)}<span style="font-size:var(--text-sm);color:var(--muted)">${esc(tx.sync_status)}</span>${tx.sync_notes ? `<span style="font-size:var(--text-sm)">— ${esc(tx.sync_notes)}</span>` : ''}</div>` : ''}
       <div class="form-actions" style="margin-top:12px">
         <button class="btn btn-secondary btn-sm" data-action="tx-cancel-view">Close</button>
         <button class="btn btn-primary btn-sm" data-action="tx-edit" data-row="${tx._row}">Edit</button>
@@ -1010,28 +1187,26 @@ function _renderTxForm(tx, mode) {
     </div>`;
   }
 
-  // Edit mode
-  const activeAccounts  = state.accounts.filter(a => a.record_status === 'active');
-  const _editCat        = _getCat(tx.tx_type, tx.major_category, tx.minor_category);
-  const fromAccountOpts = _acctOptsWithHints(activeAccounts, (_editCat && _editCat.source_account_types) || '', tx.source_account);
-  const toAccountOpts   = _acctOptsWithHints(
-    activeAccounts.filter(a => a.id !== tx.source_account),
-    (_editCat && _editCat.target_account_types) || '',
-    tx.target_account
-  );
-  const typeOpts = _txTypes().map(t =>
+  // Edit mode — single-row edit: one account_id, one tx_amount (no source/target split)
+  const activeAccounts = state.accounts.filter(a => a.record_status === 'active');
+  const _editCat       = _getCat(tx.tx_type, tx.major_category, tx.minor_category);
+  const _editAccTypes  = tx.tx_type === 'money-out'
+    ? ((_editCat && _editCat.source_account_types) || '')
+    : ((_editCat && _editCat.target_account_types) || '');
+  const accountOpts    = _acctOptsWithHints(activeAccounts, _editAccTypes, tx.account_id);
+  const typeOpts       = _txTypes().map(t =>
     `<option value="${esc(t.value)}" ${tx.tx_type === t.value ? 'selected' : ''}>${esc(t.label)}</option>`
   ).join('');
   const majorOpts = _catMajorOpts(tx.tx_type, tx.major_category);
   const minorOpts = _catMinorOpts(tx.tx_type, tx.major_category, tx.minor_category);
-
-  const dateVal = utcToLocalInput(tx.tx_date_time);
-
-  const isXfer     = tx.tx_type === 'money-transfer';
-  const tgtMand    = _editCat ? Boolean(_editCat.target_account_mandatory) : isXfer;
+  const dateVal   = utcToLocalInput(tx.tx_date_time);
+  const transferNote = _siblingForm
+    ? `<div style="font-size:var(--text-sm);color:var(--muted);margin-bottom:4px">Linked transfer — edit this leg only. The other leg (${esc(_sibAccForm ? _sibAccForm.name : '—')}) is a separate row.</div>`
+    : '';
 
   return `
   <div class="card" style="margin-bottom:16px">
+    ${transferNote}
     <div class="form-grid form-grid-6">
       <!-- Row 1: Type | Major category | Minor category -->
       <div class="field form-grid-span-2">
@@ -1052,20 +1227,12 @@ function _renderTxForm(tx, mode) {
           ${minorOpts}
         </select>
       </div>
-      <!-- Row 2: Source account | Target account -->
-      <div class="field form-grid-span-3">
-        <label>Source account</label>
-        <select id="txEditFromAccount">
+      <!-- Row 2: Account (full width) -->
+      <div class="field form-grid-full">
+        <label>Account</label>
+        <select id="txEditAccount">
           <option value="">— select —</option>
-          ${fromAccountOpts}
-        </select>
-      </div>
-      <div class="field form-grid-span-3" id="txEditToAccountWrap">
-        <label>Target account</label>
-        <select id="txEditToAccount" ${tgtMand ? '' : 'disabled'}>
-          ${tgtMand
-            ? `<option value="">— select —</option>${toAccountOpts}`
-            : `<option value="">External</option>`}
+          ${accountOpts}
         </select>
       </div>
       <!-- Row 3: Date & time | Timezone | Amount -->
@@ -1079,7 +1246,7 @@ function _renderTxForm(tx, mode) {
       </div>
       <div class="field form-grid-span-2">
         <label>Amount</label>
-        <input type="number" id="txEditAmount" min="0.01" step="0.01" value="${esc(String(tx.amount || ''))}">
+        <input type="number" id="txEditAmount" min="0.01" step="0.01" value="${esc(String(Number(tx.tx_amount) || ''))}">
       </div>
       <!-- Row 4: Counterparty | Tags -->
       <div class="field form-grid-span-3">
@@ -1137,14 +1304,19 @@ function _renderTxForm(tx, mode) {
 }
 
 function _renderTxDeleteRow(tx) {
-  const _fromAccDel = state.accountMap[tx.source_account];
-  const _toAccDel   = tx.target_account ? state.accountMap[tx.target_account] : null;
-  const fromName = (_fromAccDel && _fromAccDel.name) || '—';
-  const toName   = _toAccDel ? _toAccDel.name : null;
-  const accLabel = toName ? `${fromName} → ${toName}` : fromName;
+  const _txAccDel   = state.accountMap[tx.account_id] || {};
+  const _delSibling = _siblingMap[tx.id];
+  const _delSibAcc  = _delSibling ? state.accountMap[_delSibling.account_id] || {} : null;
+  const acctName    = _txAccDel.name || '—';
+  const accLabel    = _delSibAcc
+    ? (tx.tx_type === 'money-out'
+        ? acctName + ' → ' + (_delSibAcc.name || '—')
+        : (_delSibAcc.name || '—') + ' → ' + acctName)
+    : acctName;
+  const delAmt = Number(tx.tx_amount) || 0;
   return `<tr>
     <td colspan="6">
-      <span class="confirm-text">Delete <strong>${esc(fmtDateTime(tx.tx_date_time))}</strong> — ${esc(accLabel)} — ${esc(fmtNative(tx.amount, tx.currency))}?</span>
+      <span class="confirm-text">Delete <strong>${esc(fmtDateTime(tx.tx_date_time))}</strong> — ${esc(accLabel)} — ${esc(fmtNative(delAmt, _txAccDel.currency || ''))}?</span>
       <span style="display:inline-flex;gap:8px;margin-left:16px">
         <button class="btn-link danger" data-action="tx-confirm-delete" data-row="${tx._row}">Yes, delete</button>
         <button class="btn-link" data-action="tx-cancel-delete">Cancel</button>
@@ -1154,68 +1326,27 @@ function _renderTxDeleteRow(tx) {
 }
 
 function _attachTxEditCascadeEvents() {
-  const _refreshFieldVis = () => {
-    const type    = el('txEditType').value;
-    const major   = el('txEditMajor').value || '';
-    const minor   = el('txEditMinor').value || '';
-    const cat     = _getCat(type, major, minor);
-    const fromAcc = state.accountMap[el('txEditFromAccount').value];
-    const toAcc   = state.accountMap[el('txEditToAccount').value];
-    const isXfer     = type === 'money-transfer';
-    const tgtMand    = cat ? Boolean(cat.target_account_mandatory) : isXfer;
-
-    const toEl = el('txEditToAccount');
-    if (toEl) {
-      if (tgtMand) {
-        toEl.disabled = false;
-        if (toEl.innerHTML.trim().startsWith('<option value="">External')) {
-          toEl.innerHTML = `<option value="">— select —</option>`;
-        }
-      } else {
-        toEl.disabled  = true;
-        toEl.innerHTML = `<option value="">External</option>`;
-        toEl.value     = '';
-      }
-    }
-  };
-
   const _refreshAccountOpts = () => {
     const type     = el('txEditType').value  || '';
     const major    = el('txEditMajor').value || '';
     const minor    = el('txEditMinor').value || '';
     const cat      = _getCat(type, major, minor);
-    const srcTypes = (cat && cat.source_account_types) || '';
-    const dstTypes = (cat && cat.target_account_types) || '';
-    const srcMand  = cat ? Boolean(cat.source_account_mandatory) : type !== 'money-in';
+    const typeHint = type === 'money-out'
+      ? ((cat && cat.source_account_types) || '')
+      : ((cat && cat.target_account_types) || '');
     const actives  = state.accounts.filter(a => a.record_status === 'active');
-    const fromEl   = el('txEditFromAccount');
-    const toEl     = el('txEditToAccount');
-    if (fromEl) {
-      if (!srcMand) {
-        fromEl.disabled  = true;
-        fromEl.innerHTML = `<option value="">External</option>`;
-        fromEl.value     = '';
-      } else {
-        fromEl.disabled  = false;
-        const prev = fromEl.value;
-        fromEl.innerHTML = `<option value="">— select —</option>${_acctOptsWithHints(actives, srcTypes, prev)}`;
-        if (prev) fromEl.value = prev;
-      }
+    const acctEl   = el('txEditAccount');
+    if (acctEl) {
+      const prev   = acctEl.value;
+      acctEl.innerHTML = `<option value="">— select —</option>${_acctOptsWithHints(actives, typeHint, prev)}`;
+      if (prev) acctEl.value = prev;
     }
-    if (toEl) {
-      const fromId = (fromEl && fromEl.value) || '';
-      const prev   = toEl.value;
-      toEl.innerHTML = `<option value="">— none —</option>${_acctOptsWithHints(actives.filter(a => a.id !== fromId), dstTypes, prev)}`;
-      if (prev && prev !== fromId) toEl.value = prev;
-    }
-    _refreshFieldVis();
   };
 
   el('txEditType').addEventListener('change', () => {
     el('txEditMajor').innerHTML = _catMajorOpts(el('txEditType').value);
     el('txEditMinor').innerHTML = `<option value="">— select major first —</option>`;
-    el('txEditToAccount').value = '';
-    _refreshFieldVis();
+    _refreshAccountOpts();
   });
   el('txEditMajor').addEventListener('change', () => {
     const type  = el('txEditType').value;
@@ -1224,8 +1355,6 @@ function _attachTxEditCascadeEvents() {
     _refreshAccountOpts();
   });
   el('txEditMinor').addEventListener('change', _refreshAccountOpts);
-  el('txEditFromAccount').addEventListener('change', _refreshFieldVis);
-  el('txEditToAccount').addEventListener('change', _refreshFieldVis);
 
   _attachTagAutocomplete('txEditTags', 'dlEditTags');
 
@@ -1236,11 +1365,14 @@ function _attachTxEditCascadeEvents() {
       const lon = el('txEditLongitude');
       if (lat) lat.value = pos.coords.latitude.toFixed(6);
       if (lon) lon.value = pos.coords.longitude.toFixed(6);
+      _reverseGeocode('txEditLatitude', 'txEditLongitude', 'txEditArea', 'txEditCity', 'txEditCountry');
     });
   });
 
-  // Initial render: apply source/target disabled state based on category flags
-  _refreshAccountOpts();
+  el('txEditCity').addEventListener('blur',    () => _geocodeCity('txEditCity', 'txEditCountry', 'txEditLatitude', 'txEditLongitude'));
+  el('txEditCountry').addEventListener('blur', () => _geocodeCity('txEditCity', 'txEditCountry', 'txEditLatitude', 'txEditLongitude'));
+  el('txEditLatitude').addEventListener('blur',  () => _reverseGeocode('txEditLatitude', 'txEditLongitude', 'txEditArea', 'txEditCity', 'txEditCountry'));
+  el('txEditLongitude').addEventListener('blur', () => _reverseGeocode('txEditLatitude', 'txEditLongitude', 'txEditArea', 'txEditCity', 'txEditCountry'));
 }
 
 async function _saveEdit() {
@@ -1250,14 +1382,8 @@ async function _saveEdit() {
   const rowNum              = state.txEditRow;
   const dateRaw             = el('txEditDate').value;
   const tx_type             = el('txEditType').value;
-  const source_account      = el('txEditFromAccount').value;
-  const target_account      = el('txEditToAccount').value  || '';
-  const amount              = el('txEditAmount').value;
-  const _editSrcAccCur = state.accountMap[source_account];
-  const _editTgtAccCur = state.accountMap[target_account];
-  const currency            = tx_type === 'money-in'
-    ? ((_editTgtAccCur && _editTgtAccCur.currency) || '')
-    : ((_editSrcAccCur && _editSrcAccCur.currency) || '');
+  const account_id          = el('txEditAccount').value;
+  const tx_amount_raw       = el('txEditAmount').value;
   const major_category      = el('txEditMajor').value;
   const minor_category      = el('txEditMinor').value;
   const counterparty_name   = el('txEditCounterparty').value.trim();
@@ -1266,89 +1392,43 @@ async function _saveEdit() {
   const user_location_country = el('txEditCountry').value.trim();
   const tx_tags             = el('txEditTags').value.trim();
   const description         = el('txEditDescription').value.trim();
-  const tx_timezone            = el('txEditTimezone').value.trim() || '';
+  const tx_timezone         = el('txEditTimezone').value.trim() || '';
   const user_location_latitude  = el('txEditLatitude').value  !== '' ? Number(el('txEditLatitude').value)  : '';
   const user_location_longitude = el('txEditLongitude').value !== '' ? Number(el('txEditLongitude').value) : '';
-  const beneficiaries           = el('txEditBeneficiaries').value.trim() || '';
+  const beneficiaries       = el('txEditBeneficiaries').value.trim() || '';
 
-  const isEditTransfer   = tx_type === 'money-transfer';
-  const _editSaveCat     = _getCat(tx_type, major_category, minor_category);
-  const editSrcMandatory = _editSaveCat ? Boolean(_editSaveCat.source_account_mandatory) : tx_type !== 'money-in';
-  const editTgtMandatory = _editSaveCat ? Boolean(_editSaveCat.target_account_mandatory) : isEditTransfer;
-  if (!dateRaw)                                 { errEl.textContent = 'Date is required.';                          return; }
-  if (!tx_type)                                 { errEl.textContent = 'Type is required.';                          return; }
-  if (editSrcMandatory && !source_account)      { errEl.textContent = 'Source account is required.';                return; }
-  if (editTgtMandatory && !target_account)      { errEl.textContent = 'Target account is required.';                return; }
-  if (!amount || parseFloat(amount) <= 0)       { errEl.textContent = 'Enter a positive amount.';                   return; }
-  if (!isEditTransfer && !major_category)       { errEl.textContent = 'Major category is required.';                return; }
-  if (!isEditTransfer && !minor_category)       { errEl.textContent = 'Minor category is required.';                return; }
+  if (!dateRaw)                                      { errEl.textContent = 'Date is required.';           return; }
+  if (!tx_type)                                      { errEl.textContent = 'Type is required.';           return; }
+  if (!account_id)                                   { errEl.textContent = 'Account is required.';        return; }
+  if (!tx_amount_raw || parseFloat(tx_amount_raw) <= 0) { errEl.textContent = 'Enter a positive amount.'; return; }
+  if (!major_category)                               { errEl.textContent = 'Major category is required.'; return; }
+  if (!minor_category)                               { errEl.textContent = 'Minor category is required.'; return; }
 
-  const fromAccEdit = state.accountMap[source_account];
-  const toAccEdit   = state.accountMap[target_account];
+  const tx_amount  = parseFloat(tx_amount_raw);
+  const oldTx      = state.transactions.find(t => t._row === rowNum);
+  const acctEdit   = state.accountMap[account_id];
 
-  // Locate the original transaction so we can compute post-reversal balances.
-  const oldTx = state.transactions.find(t => t._row === rowNum);
-
-  // Post-reversal balance for source_account:
-  // Phase 1 of the backend edit reverses the old transaction before Phase 2 applies new values.
-  // We only undo the old debit/credit if the source_account hasn't changed.
-  let fromPostRevBal = fromAccEdit ? Number(fromAccEdit.current_value) : 0;
-  if (oldTx && String(oldTx.source_account) === String(source_account)) {
-    const oldAmt = Number(oldTx.amount) || 0;
-    if (oldTx.tx_type === 'money-in')       fromPostRevBal -= oldAmt; // reversal removes the credit
-    if (oldTx.tx_type === 'money-out')      fromPostRevBal += oldAmt; // reversal restores the debit
-    if (oldTx.tx_type === 'money-transfer') fromPostRevBal += oldAmt; // reversal restores the debit
+  // Post-reversal balance: backend reverses the old row before writing the new values.
+  // Undo the old movement only when the account hasn't changed.
+  let postRevBal = acctEdit ? Number(acctEdit.current_value) : 0;
+  if (oldTx && String(oldTx.account_id) === String(account_id)) {
+    const oldAmt = Number(oldTx.tx_amount) || 0;
+    if (oldTx.tx_type === 'money-in')  postRevBal -= oldAmt;
+    if (oldTx.tx_type === 'money-out') postRevBal += oldAmt;
   }
-  // Proxy object with post-reversal balance — passed to _checkBalanceRules instead of fromAccEdit.
-  const fromAccPR = fromAccEdit ? { ...fromAccEdit, current_value: fromPostRevBal } : fromAccEdit;
+  const acctPR = acctEdit ? Object.assign({}, acctEdit, { current_value: postRevBal }) : acctEdit;
 
-  const balanceErrorEdit = _checkBalanceRules(tx_type, fromAccPR, parseFloat(amount));
+  const balanceErrorEdit = _checkBalanceRules(tx_type, acctPR, false, tx_amount);
   if (balanceErrorEdit) { errEl.textContent = balanceErrorEdit; return; }
 
-  const rule5ErrorEdit = _checkRule5(tx_type, fromAccEdit, major_category, minor_category);
+  const rule5ErrorEdit = _checkRule5(tx_type, acctEdit, major_category, minor_category);
   if (rule5ErrorEdit) { errEl.textContent = rule5ErrorEdit; return; }
-
-  // target_account credit-card check (transfer edits only)
-  if (
-    tx_type === 'money-transfer' &&
-    toAccEdit && toAccEdit.type === 'credit_card' &&
-    Number(toAccEdit.credit_card_limit) > 0
-  ) {
-    // How much will be credited to target_account in Phase 2?
-    const newCredited = parseFloat(amount);
-
-    // Post-reversal balance of target_account: undo old credited amount (if same target_account).
-    let toPostRevBal = Number(toAccEdit.current_value);
-    if (oldTx && String(oldTx.target_account) === String(target_account)) {
-      const oldCredited = Number(oldTx.amount);
-      toPostRevBal     -= oldCredited; // reversal removes the old credit
-    }
-
-    const toAvailable = Number(toAccEdit.credit_card_limit) + toPostRevBal;
-    if (newCredited > toAvailable) {
-      const sym  = getSymbol(toAccEdit.currency);
-      const fmt  = n => Number(n).toFixed(2);
-      const owed = Math.abs(toPostRevBal);
-      if (toAvailable < 0) {
-        errEl.textContent =
-          `Credit limit exceeded.\n` +
-          `${toAccEdit.name} — limit ${sym}${fmt(toAccEdit.credit_card_limit)}, currently ${sym}${fmt(owed)} owed, already ${sym}${fmt(Math.abs(toAvailable))} over the limit.\n` +
-          `This credit of ${sym}${fmt(newCredited)} cannot be applied.`;
-      } else {
-        errEl.textContent =
-          `Credit limit exceeded.\n` +
-          `${toAccEdit.name} — limit ${sym}${fmt(toAccEdit.credit_card_limit)}, currently ${sym}${fmt(owed)} owed, available ${sym}${fmt(toAvailable)}.\n` +
-          `This credit of ${sym}${fmt(newCredited)} would exceed the limit by ${sym}${fmt(newCredited - toAvailable)}.`;
-      }
-      return;
-    }
-  }
 
   showLoading();
   try {
     const res = await ExpenseAPI.updateTransaction({
       row_num: rowNum, tx_date_time: localToUtcISO(dateRaw), tx_type,
-      source_account, target_account, amount: parseFloat(amount), currency,
+      account_id, tx_amount,
       major_category, minor_category, counterparty_name,
       user_location_area, user_location_city, user_location_country,
       tx_tags, description,
@@ -1394,6 +1474,27 @@ async function _confirmDelete(rowNum) {
   }
 }
 
+async function _restoreTx(rowNum) {
+  showLoading();
+  try {
+    const res = await ExpenseAPI.restoreTransaction({ row_num: rowNum });
+    if (res.ok) {
+      showMsg('Transaction restored.');
+      document.dispatchEvent(new CustomEvent('et:reload'));
+    } else {
+      console.warn('[transactions] _restoreTx failed:', res.error);
+      showMsg('Restore failed: ' + (res.error || 'unknown'), 'warn');
+      renderTransactions();
+    }
+  } catch (err) {
+    console.error('[transactions] _restoreTx failed:', err);
+    showMsg('Connection error.', 'warn');
+    renderTransactions();
+  } finally {
+    hideLoading();
+  }
+}
+
 // ── Suggestions panel ─────────────────────────────────────────────────────────
 
 function _renderSuggestionsPanel() {
@@ -1421,16 +1522,18 @@ function _renderSuggestionsPanel() {
   const countLabel = visible.length > 0 ? ` (${visible.length})` : '';
 
   const cards = visible.map(s => {
-    const key      = `${s.counterparty_name}|${s.minor_category}`;
-    const _suggAcc = state.accountMap[s.source_account];
-    const acctName = (_suggAcc && _suggAcc.name) || esc(s.source_account);
-    const sym      = getSymbol(s.currency);
-    const amount   = sym + Number(s.typical_amount).toFixed(2);
+    const key        = `${s.counterparty_name}|${s.minor_category}`;
+    const _suggAcc   = state.accountMap[s.account_id] || {};
+    const acctName   = _suggAcc.name || esc(s.account_id || '');
+    const sym        = getSymbol(s.currency);
+    const amount     = sym + Number(s.typical_amount).toFixed(2);
+    const _minorCat  = state.categories.find(c => c.minor_category_key === s.minor_category);
+    const minorLabel = (_minorCat && _minorCat.minor_category_label) || s.minor_category || '';
 
     return `
       <div class="suggestion-card" data-key="${esc(key)}">
         <div class="suggestion-name" title="${esc(s.counterparty_name)}">${esc(s.counterparty_name)}</div>
-        <div class="suggestion-meta" title="${esc(s.minor_category)} · ${esc(acctName)}">${esc(s.minor_category)} · ${esc(acctName)}</div>
+        <div class="suggestion-meta" title="${esc(minorLabel)} · ${esc(acctName)}">${esc(minorLabel)} · ${esc(acctName)}</div>
         <div class="suggestion-amount">${esc(amount)}</div>
         <div class="suggestion-reason" title="${esc(s.reason)}">${esc(s.reason)}</div>
         <button class="btn btn-primary btn-sm suggestion-add" data-action="sugg-add" data-key="${esc(key)}">Add</button>
@@ -1504,14 +1607,17 @@ function _attachFilterAccountCheckboxes(dropdown) {
 function _refreshFilterMinorDropdown() {
   const dropdown = el('filterMinorDropdown');
   if (!dropdown) return;
-  const minors = state.filters.major.length
-    ? [...new Set(state.categories.filter(c => state.filters.major.includes(c.major_category)).map(c => c.minor_category))].sort()
-    : [...new Set(state.categories.map(c => c.minor_category))].sort();
-  const validSet = new Set(minors);
+  const cats = state.filters.major.length
+    ? state.categories.filter(c => state.filters.major.includes(c.major_category_key))
+    : state.categories;
+  const minorMap = new Map();
+  cats.forEach(c => minorMap.set(c.minor_category_key, c.minor_category_label));
+  const minors = [...minorMap.entries()].map(([key, label]) => ({ key, label })).sort((a, b) => a.label.localeCompare(b.label));
+  const validSet = new Set(minors.map(m => m.key));
   state.filters.minor = state.filters.minor.filter(v => validSet.has(v));
   dropdown.innerHTML = minors.length
-    ? minors.map(v => `<label style="display:flex;align-items:center;gap:8px;font-size:var(--text-base);color:var(--ink);cursor:pointer">
-        <input type="checkbox" data-filter-minor="${esc(v)}" ${state.filters.minor.includes(v) ? 'checked' : ''}> ${esc(v)}
+    ? minors.map(({ key, label }) => `<label style="display:flex;align-items:center;gap:8px;font-size:var(--text-base);color:var(--ink);cursor:pointer">
+        <input type="checkbox" data-filter-minor="${esc(key)}" ${state.filters.minor.includes(key) ? 'checked' : ''}> ${esc(label)}
       </label>`).join('')
     : `<span style="font-size:var(--text-sm);color:var(--muted)">No minor categories</span>`;
   dropdown.querySelectorAll('[data-filter-minor]').forEach(cb => {
@@ -1520,11 +1626,15 @@ function _refreshFilterMinorDropdown() {
       if (cb.checked) { if (!state.filters.minor.includes(v)) state.filters.minor.push(v); }
       else { state.filters.minor = state.filters.minor.filter(x => x !== v); }
       const lbl = el('filterMinorLabel');
-      if (lbl) lbl.textContent = state.filters.minor.length ? state.filters.minor.join(', ') : 'All minor';
+      if (lbl) lbl.textContent = state.filters.minor.length
+        ? state.filters.minor.map(k => { const c = state.categories.find(x => x.minor_category_key === k); return (c && c.minor_category_label) || k; }).join(', ')
+        : 'All minor';
     });
   });
   const lbl = el('filterMinorLabel');
-  if (lbl) lbl.textContent = state.filters.minor.length ? state.filters.minor.join(', ') : 'All minor';
+  if (lbl) lbl.textContent = state.filters.minor.length
+    ? state.filters.minor.map(k => { const c = state.categories.find(x => x.minor_category_key === k); return (c && c.minor_category_label) || k; }).join(', ')
+    : 'All minor';
 }
 
 function _datalist(id, items) {
@@ -1556,19 +1666,27 @@ function _renderFilterBar() {
   const f        = state.filters;
   const allTypes = _txTypes();
   const allAccs  = state.accounts;
-  const allMajor = [...new Set(state.categories.map(c => c.major_category))].sort();
-
-  const allMinor = f.major.length
-    ? [...new Set(state.categories.filter(c => f.major.includes(c.major_category)).map(c => c.minor_category))].sort()
-    : [...new Set(state.categories.map(c => c.minor_category))].sort();
+  const _majorMap = new Map();
+  const _minorMap = new Map();
+  state.categories.forEach(c => {
+    _majorMap.set(c.major_category_key, c.major_category_label);
+    _minorMap.set(c.minor_category_key, c.minor_category_label);
+  });
+  const allMajor = [..._majorMap.entries()].map(([key, label]) => ({ key, label })).sort((a, b) => a.label.localeCompare(b.label));
+  const _minorSrc = f.major.length
+    ? state.categories.filter(c => f.major.includes(c.major_category_key))
+    : state.categories;
+  const _minorMapF = new Map();
+  _minorSrc.forEach(c => _minorMapF.set(c.minor_category_key, c.minor_category_label));
+  const allMinor = [..._minorMapF.entries()].map(([key, label]) => ({ key, label })).sort((a, b) => a.label.localeCompare(b.label));
 
   const m = state.metadata;
 
   const activeChips = [
     ...f.types.map(t     => ({ label: _txTypeMap()[t] || t,              key: 'types',    val: t })),
     ...f.accounts.map(id => { const a = state.accountMap[id]; return { label: (a && a.name) || id, key: 'accounts', val: id }; }),
-    ...f.major.map(v     => ({ label: v,                                 key: 'major',    val: v })),
-    ...f.minor.map(v     => ({ label: v,                                 key: 'minor',    val: v })),
+    ...f.major.map(v     => ({ label: (_majorMap.get(v) || v),          key: 'major',    val: v })),
+    ...f.minor.map(v     => ({ label: (_minorMap.get(v) || v),          key: 'minor',    val: v })),
     ...(f.user_location_country ? [{ label: 'Country: ' + f.user_location_country, key: 'user_location_country', val: '' }] : []),
     ...(f.user_location_city    ? [{ label: 'City: '    + f.user_location_city,    key: 'user_location_city',    val: '' }] : []),
     ...(f.user_location_area    ? [{ label: 'Area: '    + f.user_location_area,    key: 'user_location_area',    val: '' }] : []),
@@ -1631,24 +1749,24 @@ function _renderFilterBar() {
         <div style="flex:1;display:flex;gap:8px;flex-wrap:wrap">
           <div id="filterMajorWrap" style="flex:1;min-width:130px;position:relative">
             <button id="filterMajorTrigger" type="button" style="width:100%;display:flex;justify-content:space-between;align-items:center;text-align:left;background:var(--panel);border:1px solid var(--hair-strong);border-radius:8px;padding:6px 10px;font-size:var(--text-base);color:var(--ink);cursor:pointer;outline:none">
-              <span id="filterMajorLabel">${f.major.length ? f.major.join(', ') : 'All major'}</span>
+              <span id="filterMajorLabel">${f.major.length ? f.major.map(k => _majorMap.get(k) || k).join(', ') : 'All major'}</span>
               <span style="color:var(--muted);font-size:var(--text-2xs);margin-left:8px">▼</span>
             </button>
             <div id="filterMajorDropdown" class="hidden" style="position:fixed;z-index:1000;background:var(--panel);border:1px solid var(--hair-strong);border-radius:8px;padding:8px 10px;display:flex;flex-direction:column;gap:8px;box-shadow:0 4px 16px rgba(0,0,0,.15);max-height:240px;overflow-y:auto">
-              ${allMajor.map(v => `<label style="display:flex;align-items:center;gap:8px;font-size:var(--text-base);color:var(--ink);cursor:pointer">
-                <input type="checkbox" data-filter-major="${esc(v)}" ${f.major.includes(v) ? 'checked' : ''}> ${esc(v)}
+              ${allMajor.map(({ key, label }) => `<label style="display:flex;align-items:center;gap:8px;font-size:var(--text-base);color:var(--ink);cursor:pointer">
+                <input type="checkbox" data-filter-major="${esc(key)}" ${f.major.includes(key) ? 'checked' : ''}> ${esc(label)}
               </label>`).join('')}
             </div>
           </div>
           <div id="filterMinorWrap" style="flex:1;min-width:130px;position:relative">
             <button id="filterMinorTrigger" type="button" style="width:100%;display:flex;justify-content:space-between;align-items:center;text-align:left;background:var(--panel);border:1px solid var(--hair-strong);border-radius:8px;padding:6px 10px;font-size:var(--text-base);color:var(--ink);cursor:pointer;outline:none">
-              <span id="filterMinorLabel">${f.minor.length ? f.minor.join(', ') : 'All minor'}</span>
+              <span id="filterMinorLabel">${f.minor.length ? f.minor.map(k => _minorMap.get(k) || k).join(', ') : 'All minor'}</span>
               <span style="color:var(--muted);font-size:var(--text-2xs);margin-left:8px">▼</span>
             </button>
             <div id="filterMinorDropdown" class="hidden" style="position:fixed;z-index:1000;background:var(--panel);border:1px solid var(--hair-strong);border-radius:8px;padding:8px 10px;display:flex;flex-direction:column;gap:8px;box-shadow:0 4px 16px rgba(0,0,0,.15);max-height:240px;overflow-y:auto">
               ${allMinor.length
-                ? allMinor.map(v => `<label style="display:flex;align-items:center;gap:8px;font-size:var(--text-base);color:var(--ink);cursor:pointer">
-                    <input type="checkbox" data-filter-minor="${esc(v)}" ${f.minor.includes(v) ? 'checked' : ''}> ${esc(v)}
+                ? allMinor.map(({ key, label }) => `<label style="display:flex;align-items:center;gap:8px;font-size:var(--text-base);color:var(--ink);cursor:pointer">
+                    <input type="checkbox" data-filter-minor="${esc(key)}" ${f.minor.includes(key) ? 'checked' : ''}> ${esc(label)}
                   </label>`).join('')
                 : `<span style="font-size:var(--text-sm);color:var(--muted)">No minor categories</span>`}
             </div>
@@ -1693,7 +1811,7 @@ function _renderTxImportPanel() {
       <div class="field form-grid-span-2">
         <label for="txImportFile">CSV file</label>
         <input type="file" id="txImportFile" accept=".csv">
-        <div class="field-hint">Columns: tx_date_time, tx_timezone, tx_type, source_account, target_account, user_location_area, user_location_city, user_location_country, user_location_latitude, user_location_longitude, amount, currency, major_category, minor_category, description, counterparty_name, tx_tags, beneficiaries</div>
+        <div class="field-hint">Columns: tx_date_time, tx_timezone, tx_type, source_account, target_account, source_amount, target_amount, major_category, minor_category, description, counterparty_name, tx_tags, beneficiaries, user_location_area, user_location_city, user_location_country, user_location_latitude, user_location_longitude</div>
       </div>
     </div>
     <div id="txImportStatus"></div>
@@ -1738,8 +1856,7 @@ function _parseTxCsv(text) {
     const rowErrors = [];
     if (!row.tx_date_time)    rowErrors.push('missing tx_date_time');
     if (!row.tx_type)         rowErrors.push('missing tx_type');
-    if (!row.amount)          rowErrors.push('missing amount');
-    if (!row.currency)        rowErrors.push('missing currency');
+    if (!row.source_amount && !row.target_amount) rowErrors.push('missing amount (source_amount or target_amount)');
     if (!row.major_category)  rowErrors.push('missing major_category');
     if (!row.minor_category)  rowErrors.push('missing minor_category');
 
@@ -1769,8 +1886,8 @@ function _parseTxCsv(text) {
       user_location_country:    row.user_location_country || '',
       user_location_latitude:   row.user_location_latitude  !== '' ? parseFloat(row.user_location_latitude)  : '',
       user_location_longitude:  row.user_location_longitude !== '' ? parseFloat(row.user_location_longitude) : '',
-      amount:                   parseFloat(row.amount),
-      currency:                 row.currency.toUpperCase(),
+      source_amount:            row.source_amount ? parseFloat(row.source_amount) : '',
+      target_amount:            row.target_amount && row.target_amount !== '' ? parseFloat(row.target_amount) : '',
       major_category:           row.major_category,
       minor_category:           row.minor_category,
       description:              row.description || '',
@@ -1791,61 +1908,90 @@ function _renderTxImportStatus(parsed) {
     ? `<div class="pin-error" style="margin-bottom:8px">${errors.map(e => esc(e)).join('<br>')}</div>`
     : '';
   if (!transactions.length) return errHtml + '<p class="placeholder">No valid rows found.</p>';
-  return `${errHtml}<p style="font-size:13px;color:var(--muted);margin:0">${transactions.length} transaction${transactions.length !== 1 ? 's' : ''} ready to import</p>`;
+  const countMsg = `${transactions.length} transaction${transactions.length !== 1 ? 's' : ''} ready to import` +
+    (errors.length ? ` · ${errors.length} row${errors.length !== 1 ? 's' : ''} skipped` : '');
+  return `${errHtml}<p style="font-size:13px;color:var(--muted);margin:0">${countMsg}</p>`;
 }
 
+const _TX_IMPORT_CHUNK = 25;
+
 async function _submitTxImport(transactions) {
-  const btn   = el('txImportConfirm');
-  const errEl = el('txImportError');
+  const btn    = el('txImportConfirm');
+  const errEl  = el('txImportError');
+  const status = el('txImportStatus');
   if (btn)   { btn.disabled = true; btn.textContent = 'Importing…'; }
   if (errEl) errEl.textContent = '';
+
+  // Strip display-only fields and deduplicate before chunking.
+  const seen    = new Set();
+  const payload = [];
+  transactions.forEach(tx => {
+    const clean = Object.assign({}, tx);
+    delete clean._src_name;
+    delete clean._tgt_name;
+    const key = [clean.tx_date_time, clean.tx_type, clean.source_account || '', clean.target_account || '', clean.source_amount].join('|');
+    if (!seen.has(key)) { seen.add(key); payload.push(clean); }
+  });
+
+  const chunks = [];
+  for (let i = 0; i < payload.length; i += _TX_IMPORT_CHUNK)
+    chunks.push(payload.slice(i, i + _TX_IMPORT_CHUNK));
+
+  let totalCreated = 0;
+  let totalFailed  = 0;
+  let allResults   = [];
+
+  const setProgress = (chunkIdx) => {
+    if (!status) return;
+    const done = Math.min(chunkIdx * _TX_IMPORT_CHUNK, payload.length);
+    const pct  = payload.length ? Math.round((done / payload.length) * 100) : 0;
+    status.innerHTML = `
+      <p style="font-size:13px;color:var(--muted);margin:0 0 6px">
+        Importing… ${done} / ${payload.length} rows (chunk ${chunkIdx} of ${chunks.length})
+      </p>
+      <div style="height:4px;border-radius:2px;background:var(--border)">
+        <div style="height:100%;border-radius:2px;background:var(--ember);width:${pct}%;transition:width .3s"></div>
+      </div>`;
+  };
+
   showLoading();
   try {
-    // Strip display-only fields before sending
-    const payload = transactions.map(tx => {
-      const clean = Object.assign({}, tx);
-      delete clean._src_name;
-      delete clean._tgt_name;
-      return clean;
-    });
+    for (let c = 0; c < chunks.length; c++) {
+      setProgress(c);
+      const res = await ExpenseAPI.createTransactionsBulk({ transactions: chunks[c] });
 
-    const res = await ExpenseAPI.createTransactionsBulk({ transactions: payload });
+      if (!res.ok && !res.results) {
+        if (errEl) errEl.textContent = 'Error on chunk ' + (c + 1) + ': ' + (res.error || 'unknown');
+        if (btn)   { btn.disabled = false; btn.textContent = 'Import'; }
+        return;
+      }
 
-    if (!res.ok && !res.results) {
-      console.warn('[transactions] _submitTxImport failed:', res.error);
-      if (errEl) errEl.textContent = 'Error: ' + (res.error || 'unknown');
-      if (btn)   { btn.disabled = false; btn.textContent = 'Import'; }
-      return;
+      totalCreated += res.created || 0;
+      totalFailed  += res.failed  || 0;
+      allResults    = allResults.concat(res.results || []);
     }
 
-    const created = res.created || 0;
-    const skipped = res.skipped || 0;
-    const failed  = res.failed  || 0;
-
-    if (failed === 0) {
-      _txImportParsed = null;
+    // All chunks done
+    if (totalFailed === 0) {
+      _txImportParsed    = null;
       state.txImportOpen = false;
-      const msg = [
-        created ? `${created} transaction${created !== 1 ? 's' : ''} imported` : '',
-        skipped ? `${skipped} already existed` : '',
-      ].filter(Boolean).join(' · ');
-      showMsg(msg || 'Nothing to import.');
+      showMsg(`${totalCreated} transaction${totalCreated !== 1 ? 's' : ''} imported.`);
       document.dispatchEvent(new CustomEvent('et:reload'));
     } else {
-      // Keep panel open — show per-row results so user can see what failed and why
-      const resultRows = (res.results || []).map(r => `
+      const resultRows = allResults.map(r => `
         <tr>
           <td style="font-size:12px;color:var(--muted)">${esc(r.label || '')}</td>
           <td>${r.ok
             ? `<span class="badge badge-et-in">created</span>`
             : r.error === 'duplicate_transaction'
-              ? `<span class="badge" style="color:var(--muted)">already exists</span>`
+              ? `<span class="badge" style="color:var(--muted)">skipped</span>`
               : `<span class="badge badge-et-out">${esc(r.error || 'unknown')}</span>`}
           </td>
         </tr>`).join('');
-      const status = el('txImportStatus');
       if (status) status.innerHTML = `
-        <div style="margin-bottom:8px;font-size:13px">${created} created${skipped ? ` · ${skipped} already existed` : ''} · <span style="color:var(--ember)">${failed} failed</span></div>
+        <div style="margin-bottom:8px;font-size:13px">
+          ${totalCreated} created · <span style="color:var(--ember)">${totalFailed} failed</span>
+        </div>
         <div class="table-wrap" style="margin-bottom:8px">
           <table>
             <thead><tr><th>Transaction</th><th>Result</th></tr></thead>
@@ -1854,8 +2000,8 @@ async function _submitTxImport(transactions) {
         </div>`;
       _txImportParsed = null;
       if (btn) { btn.disabled = true; btn.textContent = 'Import'; }
-      if (created > 0) { document.dispatchEvent(new CustomEvent('et:reload')); }
-      showMsg(`${created} imported · ${skipped} skipped · ${failed} failed`, 'warn');
+      if (totalCreated > 0) document.dispatchEvent(new CustomEvent('et:reload'));
+      showMsg(`${totalCreated} imported · ${totalFailed} failed`, 'warn');
     }
   } catch (err) {
     console.error('[transactions] _submitTxImport failed:', err);
@@ -1968,7 +2114,9 @@ function _attachFilterEvents() {
         if (cb.checked) { if (!state.filters.major.includes(v)) state.filters.major.push(v); }
         else { state.filters.major = state.filters.major.filter(x => x !== v); }
         const lbl = el('filterMajorLabel');
-        if (lbl) lbl.textContent = state.filters.major.length ? state.filters.major.join(', ') : 'All major';
+        if (lbl) lbl.textContent = state.filters.major.length
+          ? state.filters.major.map(k => { const c = state.categories.find(x => x.major_category_key === k); return (c && c.major_category_label) || k; }).join(', ')
+          : 'All major';
         _refreshFilterMinorDropdown();
       });
     });
@@ -1991,7 +2139,9 @@ function _attachFilterEvents() {
         if (cb.checked) { if (!state.filters.minor.includes(v)) state.filters.minor.push(v); }
         else { state.filters.minor = state.filters.minor.filter(x => x !== v); }
         const lbl = el('filterMinorLabel');
-        if (lbl) lbl.textContent = state.filters.minor.length ? state.filters.minor.join(', ') : 'All minor';
+        if (lbl) lbl.textContent = state.filters.minor.length
+          ? state.filters.minor.map(k => { const c = state.categories.find(x => x.minor_category_key === k); return (c && c.minor_category_label) || k; }).join(', ')
+          : 'All minor';
       });
     });
   }

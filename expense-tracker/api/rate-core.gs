@@ -106,13 +106,8 @@ function _countAccountsWithCurrency(currency) {
   return count;
 }
 
-function _countTransactionsWithCurrency(currency) {
-  const sheet  = getOrCreateSheet(TRANSACTIONS_SHEET, getTransactionSheetColumns());
-  const values = sheet.getDataRange().getValues();
-  const ci     = txColIndex('currency');
-  let count = 0;
-  for (let i = 1; i < values.length; i++) {
-    if (String(values[i][ci] || '') === String(currency)) count++;
-  }
-  return count;
+function _countTransactionsWithCurrency(_currency) {
+  // Currency is no longer stored in transactions — it is derived from the account at runtime.
+  // The account-level check (_countAccountsWithCurrency) is the authoritative guard.
+  return 0;
 }

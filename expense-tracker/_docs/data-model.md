@@ -52,24 +52,40 @@ liability:   sub_type ∈ { personal_loan, credit_card, mortgage, auto_loan, hel
 
 ## Transaction
 
-| Field | Type | Required | Notes |
-|---|---|---|---|
-| `id` | string | auto | `YYYY-MM-DD-NNN` |
-| `transaction_date_utc` | timestamp | yes | ISO UTC |
-| `transaction_type` | enum | yes | `money-in` \| `money-out` \| `money-transfer` |
-| `amount` | number | yes | Must be > 0; in `source_account`'s currency for out/transfer, in `target_account`'s currency for money-in |
-| `currency` | ISO-4217 | yes | Derived at save time from the relevant account |
-| `source_account` | Account ID | type-dependent | Required for `money-out` and `money-transfer`; omitted for `money-in` |
-| `target_account` | Account ID | type-dependent | Required for `money-transfer`; required for `money-in`; optional for `money-out` (used for repayments to owned accounts) |
-| `major_category` | string | for in/out | References `categories.major_category`; omitted for `money-transfer` |
-| `minor_category` | string | for in/out | References `categories.minor_category` |
-| `counterparty` | string | optional | Merchant, employer, payer, etc. |
-| `country` | string | optional | Where it happened |
-| `tags` | string | optional | Semicolon-separated on storage; comma-separated in UI input |
-| `notes` | string | optional | Free text |
-| `fx_rate` | number > 0 | conditional | Required when `source_account.currency ≠ target_account.currency` |
-| `transfer_id` | string | reserved | Not currently populated |
-| `payment_method` | string | reserved | Not currently populated |
+26-column schema. Audit block: `record_status → sync_status → sync_date_time → sync_notes → created_at → updated_at`.
+
+| Col | Field | Type | Required | Notes |
+|---|---|---|---|---|
+| 1 | `id` | string | auto | `YYYY-MM-DD-NNN` — date + sequential counter per day |
+| 2 | `tx_date_time` | timestamp | yes | ISO UTC |
+| 3 | `tx_timezone` | string | optional | IANA timezone string e.g. `Europe/London` |
+| 4 | `tx_type` | enum | yes | `money-in` \| `money-out` |
+| 5 | `source_account` | Account ID | type-dependent | Required for `money-out`; omitted for `money-in`. Category `source_account_mandatory` flag may require it for `money-in`. |
+| 6 | `target_account` | Account ID | type-dependent | Required for `money-in`; optional for `money-out` (repayments). Category `target_account_mandatory` flag may require it. |
+| 7 | `user_location_area` | string | optional | Sub-district / neighbourhood |
+| 8 | `user_location_city` | string | optional | City |
+| 9 | `user_location_country` | string | optional | Country |
+| 10 | `user_location_latitude` | number | optional | GPS latitude |
+| 11 | `user_location_longitude` | number | optional | GPS longitude |
+| 12 | `source_amount` | number | yes | Must be > 0; amount in the source account's currency (or target account's for `money-in`) |
+| 13 | `target_amount` | number | conditional | Amount credited to the target account when source/target currencies differ; blank when same-currency or no target account |
+| 14 | `currency` | ISO-4217 | auto | Derived at save time from the relevant account |
+| 15 | `major_category` | string | yes (in/out) | References `categories.major_category_label` |
+| 16 | `minor_category` | string | yes (in/out) | References `categories.minor_category_label` |
+| 17 | `description` | string | optional | Free text |
+| 18 | `counterparty_name` | string | optional | Merchant, employer, payer, etc. |
+| 19 | `tx_tags` | string | optional | Semicolon-separated |
+| 20 | `beneficiaries` | string | optional | Semicolon-separated names |
+| 21 | `record_status` | enum | default `active` | `active` \| `inactive` \| `deleted` \| `locked`. Deleted transactions are soft-deleted; the row stays in the sheet. Locked rows cannot be edited or deleted. |
+| 22 | `sync_status` | enum | auto | `create-pending` \| `update-pending` \| `in-sync` \| `create-failed` \| `update-failed` |
+| 23 | `sync_date_time` | timestamp | auto | Set by sync job on successful sync |
+| 24 | `sync_notes` | string | auto | Set by sync job; cleared on next mutation |
+| 25 | `created_at` | timestamp | auto | UTC ISO. Set once on create. |
+| 26 | `updated_at` | timestamp | auto | UTC ISO. Updated on every mutation. |
+
+Transfers (moving money between owned accounts) are modelled as a category whose `source_account_mandatory` and `target_account_mandatory` are both true — not as a separate `tx_type`. `target_amount` captures the credited amount when source and target currencies differ.
+
+`fx_rate` is not a stored column — when a cross-currency conversion note is needed, the backend appends an `[FX: …]` marker to `description`. The stored row-level rate is embedded in that marker and used for balance reversal on edit/delete.
 
 ## Category
 
@@ -107,7 +123,7 @@ The `*_mandatory` and `*_types` columns let categories declare account-type cont
 | `rate` | number > 0 | Units of this currency per 1 base currency |
 | `updated_at` | timestamp | UTC ISO |
 
-The base currency row (`GBP` in the reference) is read-only with rate = 1. Other rows can be upserted.
+The base currency row (`XAU`) is read-only with rate = 1. Other rows can be upserted.
 
 ## Audit entry
 

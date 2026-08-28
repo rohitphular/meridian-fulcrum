@@ -112,7 +112,7 @@ function _buildSnapshot() {
   const catSpend = {}, cpSpend = {};
   let totalIn = 0, totalOut = 0;
   recentTx.forEach(function(tx) {
-    const amt = Number(tx.amount) || 0;
+    const amt = Number(tx.tx_amount) || 0;
     if (tx.tx_type === 'money-out') {
       totalOut += amt;
       const key = (tx.major_category || 'Uncategorised') + ' / ' + (tx.minor_category || 'Other');
@@ -219,25 +219,28 @@ function _fetchRequestedData(request) {
   const cutoff = new Date();
   cutoff.setMonth(cutoff.getMonth() - monthsBack);
 
-  const allTx = sheetToObjects(txSheet);
+  const allTx      = sheetToObjects(txSheet);
+  const accountMap = _loadAccountMap();
+
   const filtered = allTx.filter(function(tx) {
     const d = new Date(tx.tx_date_time);
     if (isNaN(d.getTime()) || d < cutoff) return false;
     if (request.tx_type        && tx.tx_type        !== request.tx_type)        return false;
     if (request.major_category && tx.major_category !== request.major_category) return false;
     if (request.minor_category && tx.minor_category !== request.minor_category) return false;
-    if (request.account_id && tx.source_account !== request.account_id && tx.target_account !== request.account_id) return false;
+    if (request.account_id && tx.account_id !== request.account_id) return false;
     return true;
   });
 
   filtered.sort(function(a, b) { return new Date(b.tx_date_time) - new Date(a.tx_date_time); });
 
   return filtered.slice(0, limit).map(function(tx) {
+    const acc = accountMap[String(tx.account_id || '')] || {};
     return {
       date:             tx.tx_date_time,
       type:             tx.tx_type,
-      amount:           tx.amount,
-      currency:         tx.currency,
+      amount:           Number(tx.tx_amount) || 0,
+      currency:         acc.currency || '',
       major:            tx.major_category,
       minor:            tx.minor_category,
       counterparty:     tx.counterparty_name,

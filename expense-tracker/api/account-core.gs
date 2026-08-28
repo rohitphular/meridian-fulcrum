@@ -181,17 +181,14 @@ function deleteAccount(body) {
   return { ok: true };
 }
 
-// Counts transactions where source_account or target_account equals accountId.
+// Counts transactions where account_id equals accountId.
 function _countTransactionsReferencingAccount(accountId) {
   const txSheet = getOrCreateSheet(TRANSACTIONS_SHEET, getTransactionSheetColumns());
   const values  = txSheet.getDataRange().getValues();
-  const srcIdx  = txColIndex('source_account');
-  const tgtIdx  = txColIndex('target_account');
-  let count   = 0;
+  const acctIdx = txColIndex('account_id');
+  let count = 0;
   for (let i = 1; i < values.length; i++) {
-    const src = String(values[i][srcIdx] || '');
-    const tgt = String(values[i][tgtIdx] || '');
-    if (src === accountId || tgt === accountId) count++;
+    if (String(values[i][acctIdx] || '') === String(accountId)) count++;
   }
   return count;
 }

@@ -281,6 +281,12 @@ h2 { font-size: var(--text-xl); font-weight: 700; margin: 0; }
 .field .err-msg { font-size: var(--text-sm); color: var(--ember); margin-top: 4px; display: none; }
 .field.error .err-msg { display: block; }
 .field-hidden { display: none; }
+.field-val {
+  font-family: var(--grotesk); font-size: var(--text-md); color: var(--ink);
+  border: 1px solid var(--hair-strong); border-radius: 9px;
+  padding: 9px 11px; width: 100%; background: var(--panel);
+  box-sizing: border-box; display: flex; align-items: center; gap: 6px; min-height: 41px;
+}
 
 .form-actions { display: flex; gap: 10px; margin-top: 18px; flex-wrap: wrap; align-items: center; }
 

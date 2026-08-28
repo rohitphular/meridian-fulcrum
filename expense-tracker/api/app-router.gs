@@ -69,9 +69,10 @@ function doPost(e) {
   }
   recordAccess(meta, true);
 
-  if (body.action === 'create_transaction') return json(createTransaction(body));
-  if (body.action === 'update_transaction') return json(updateTransaction(body));
-  if (body.action === 'delete_transaction') return json(deleteTransaction(body));
+  if (body.action === 'create_transaction')      return json(createTransaction(body));
+  if (body.action === 'update_transaction')      return json(updateTransaction(body));
+  if (body.action === 'delete_transaction')      return json(deleteTransaction(body));
+  if (body.action === 'restore_transaction')     return json(restoreTransaction(body));
   if (body.action === 'create_transactions_bulk') return json(createTransactionsBulk(body));
   if (body.action === 'upsert_rate')        return json(upsertRate(body));
   if (body.action === 'delete_rate')        return json(deleteRate(body));

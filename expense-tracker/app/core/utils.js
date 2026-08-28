@@ -31,7 +31,7 @@ const ET_COLS  = [
   'tx_date_time', 'tx_timezone', 'tx_type', 'source_account', 'target_account',
   'user_location_area', 'user_location_city', 'user_location_country',
   'user_location_latitude', 'user_location_longitude',
-  'amount', 'currency', 'major_category', 'minor_category',
+  'source_amount', 'target_amount', 'major_category', 'minor_category',
   'description', 'counterparty_name', 'tx_tags', 'beneficiaries',
 ];
 const ACC_COLS = ['name', 'type', 'sub_type', 'currency', 'opening_value', 'current_value', 'description', 'record_status'];
@@ -47,14 +47,71 @@ const CAT_COLS = [
   'is_subscription_eligible', 'record_status',
 ];
 
-export const exportData          = (format, rows) => {
-  const normalised = rows.map(r => ({
-    ...r,
-    tx_date_time:   utcToLocalInput(r.tx_date_time),
-    source_account: (state.accountMap[r.source_account] && state.accountMap[r.source_account].name) || r.source_account || '',
-    target_account: (state.accountMap[r.target_account] && state.accountMap[r.target_account].name) || r.target_account || '',
-  }));
-  return _exportData(format, normalised, 'expenses', ET_COLS);
+export const exportData = (format, rows) => {
+  // Build sibling map from all loaded transactions (not just the filtered rows)
+  // so transfers export correctly even when only one leg is in the date range.
+  const allTx = state.transactions;
+  const byId  = {};
+  allTx.forEach(tx => { if (tx.id) byId[tx.id] = tx; });
+  const siblingMap = {};
+  allTx.forEach(tx => {
+    if (!tx.parent_tx_id) return;
+    const parent = byId[tx.parent_tx_id];
+    if (!parent) return;
+    siblingMap[tx.id]     = parent;
+    siblingMap[parent.id] = tx;
+  });
+
+  // Reconstruct source/target from account_id + sibling relationship.
+  // Skip child rows (parent_tx_id set) — they are exported via the parent row.
+  const exported = [];
+  const seen = {};
+  rows.forEach(tx => {
+    if (tx.parent_tx_id) return; // child leg: will be handled when parent is encountered
+    const acct   = state.accountMap[tx.account_id] || {};
+    const sib    = siblingMap[tx.id];
+    const sibAcc = sib ? state.accountMap[sib.account_id] || {} : null;
+
+    let source_account, target_account, source_amount, target_amount;
+    if (sibAcc) {
+      // Transfer: parent leg determines direction
+      if (tx.tx_type === 'money-out') {
+        source_account = acct.name || tx.account_id || '';
+        target_account = sibAcc.name || sib.account_id || '';
+        source_amount  = Number(tx.tx_amount)  || 0;
+        target_amount  = Number(sib.tx_amount) || source_amount;
+      } else {
+        source_account = sibAcc.name || sib.account_id || '';
+        target_account = acct.name   || tx.account_id  || '';
+        source_amount  = Number(sib.tx_amount) || 0;
+        target_amount  = Number(tx.tx_amount)  || source_amount;
+      }
+    } else {
+      // Non-transfer
+      if (tx.tx_type === 'money-out') {
+        source_account = acct.name || tx.account_id || '';
+        target_account = '';
+        source_amount  = Number(tx.tx_amount) || 0;
+        target_amount  = '';
+      } else {
+        source_account = '';
+        target_account = acct.name || tx.account_id || '';
+        source_amount  = Number(tx.tx_amount) || 0;
+        target_amount  = '';
+      }
+    }
+
+    exported.push(Object.assign({}, tx, {
+      tx_date_time:   utcToLocalInput(tx.tx_date_time),
+      source_account,
+      target_account,
+      source_amount,
+      target_amount,
+    }));
+    if (sib) seen[sib.id] = true;
+  });
+
+  return _exportData(format, exported, 'expenses', ET_COLS);
 };
 export const exportAccounts      = (format, rows) => _exportData(format, rows, 'accounts', ACC_COLS);
 export const exportSubscriptions = (format, rows) => {

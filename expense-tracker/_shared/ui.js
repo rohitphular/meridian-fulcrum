@@ -32,7 +32,7 @@ export function showMsg(text, type = 'success') {
   document.getElementById('msgIco').textContent = type === 'warn' ? '!' : '›';
   b.className = `banner ${type === 'warn' ? 'warn' : 'success'}`;
   clearTimeout(showMsg._t);
-  showMsg._t = setTimeout(() => b.classList.add('hidden'), 5000);
+  showMsg._t = setTimeout(() => b.classList.add('hidden'), 20000);
   const close = document.getElementById('msgClose');
   if (close && !close._bound) {
     close._bound = true;

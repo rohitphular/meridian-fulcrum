@@ -705,7 +705,7 @@ function _attachEvents() {
         if (key === 'acc-txs') {
           const acc = state.accounts.find(a => a._row === row);
           if (acc) {
-            state.filters = { types: [], accounts: [acc.id], major: [], minor: [], tx_location_country: '', tag: '', search: '' };
+            state.filters = { types: [], accounts: [acc.id], major: [], minor: [], user_location_country: '', tag: '', search: '' };
             document.dispatchEvent(new CustomEvent('et:show-section', { detail: 'transactions' }));
           }
         }

@@ -2,11 +2,23 @@
 // FULCRUM FORGE — Transaction Schema: field registry
 // Single source of truth for column positions, UI labels, types, groups,
 // and applicability rules. No magic column numbers anywhere else in the codebase.
+//
+// Storage model: one row per account movement.
+//   account_id  — the single account involved in this row
+//   tx_amount   — the amount moved (always positive; direction from tx_type)
+//   parent_tx_id — blank for standalone/root; set on derived rows pointing to parent.id
+//                  Enables chains: money-out parent → money-in child (transfer),
+//                  or any future multi-leg derivation regardless of tx_type.
+//
+// Currency is NOT stored — derived at runtime from the account's currency field.
+// Column block order: identity → core → financial → categorisation → location → audit
+// Audit block sequence: record_status → sync_status → sync_date_time →
+//                       sync_notes → created_at → updated_at
 // =============================================================================
 
-const VALID_TRANSACTION_TYPES = ['money-in', 'money-out', 'money-transfer'];
+const VALID_TRANSACTION_TYPES = ['money-in', 'money-out'];
 
-// Schema — 21 fields in column-position order
+// Schema — 24 fields in column-position order
 const TRANSACTION_SCHEMA = {
 
   // ── Identity (column 1) ──────────────────────────────────────────────────
@@ -39,9 +51,18 @@ const TRANSACTION_SCHEMA = {
     editable: true,
     default_value: '',
   },
+  parent_tx_id: {
+    sheet_column_name: 'parent_tx_id',
+    sheet_column_position: 4,
+    ui_label: 'Parent Tx',
+    type: 'string',
+    group: 'system',
+    editable: false,
+    default_value: '',
+  },
   tx_type: {
     sheet_column_name: 'tx_type',
-    sheet_column_position: 4,
+    sheet_column_position: 5,
     ui_label: 'Type',
     type: 'enum',
     enum_values: VALID_TRANSACTION_TYPES,
@@ -49,96 +70,31 @@ const TRANSACTION_SCHEMA = {
     editable: true,
     default_value: null,
   },
-  source_account: {
-    sheet_column_name: 'source_account',
-    sheet_column_position: 5,
-    ui_label: 'Source Account',
+  account_id: {
+    sheet_column_name: 'account_id',
+    sheet_column_position: 6,
+    ui_label: 'Account',
     type: 'string',
     group: 'core',
     editable: true,
     default_value: null,
   },
-  target_account: {
-    sheet_column_name: 'target_account',
-    sheet_column_position: 6,
-    ui_label: 'Target Account',
-    type: 'string',
-    group: 'core',
-    editable: true,
-    default_value: '',
-  },
 
-  // ── Location (columns 7–11) ───────────────────────────────────────────────
-  user_location_area: {
-    sheet_column_name: 'user_location_area',
+  // ── Financial (column 7) ─────────────────────────────────────────────────
+  tx_amount: {
+    sheet_column_name: 'tx_amount',
     sheet_column_position: 7,
-    ui_label: 'Area',
-    type: 'string',
-    group: 'location',
-    editable: true,
-    default_value: '',
-  },
-  user_location_city: {
-    sheet_column_name: 'user_location_city',
-    sheet_column_position: 8,
-    ui_label: 'City',
-    type: 'string',
-    group: 'location',
-    editable: true,
-    default_value: '',
-  },
-  user_location_country: {
-    sheet_column_name: 'user_location_country',
-    sheet_column_position: 9,
-    ui_label: 'Country',
-    type: 'string',
-    group: 'location',
-    editable: true,
-    default_value: '',
-  },
-  user_location_latitude: {
-    sheet_column_name: 'user_location_latitude',
-    sheet_column_position: 10,
-    ui_label: 'Latitude',
-    type: 'number',
-    group: 'location',
-    editable: true,
-    default_value: '',
-  },
-  user_location_longitude: {
-    sheet_column_name: 'user_location_longitude',
-    sheet_column_position: 11,
-    ui_label: 'Longitude',
-    type: 'number',
-    group: 'location',
-    editable: true,
-    default_value: '',
-  },
-
-  // ── Financial (columns 12–13) ─────────────────────────────────────────────
-  amount: {
-    sheet_column_name: 'amount',
-    sheet_column_position: 12,
     ui_label: 'Amount',
     type: 'number',
     group: 'core',
     editable: true,
     default_value: null,
   },
-  currency: {
-    sheet_column_name: 'currency',
-    sheet_column_position: 13,
-    ui_label: 'Currency',
-    type: 'string',
-    group: 'core',
-    editable: true,
-    default_value: '',
-  },
 
-  // ── Categorisation (columns 14–19) ───────────────────────────────────────
+  // ── Categorisation (columns 8–13) ───────────────────────────────────────
   major_category: {
     sheet_column_name: 'major_category',
-    sheet_column_position: 14,
+    sheet_column_position: 8,
     ui_label: 'Category',
     type: 'string',
     group: 'categorisation',
@@ -148,7 +104,7 @@ const TRANSACTION_SCHEMA = {
   },
   minor_category: {
     sheet_column_name: 'minor_category',
-    sheet_column_position: 15,
+    sheet_column_position: 9,
     ui_label: 'Sub-category',
     type: 'string',
     group: 'categorisation',
@@ -158,7 +114,7 @@ const TRANSACTION_SCHEMA = {
   },
   description: {
     sheet_column_name: 'description',
-    sheet_column_position: 16,
+    sheet_column_position: 10,
     ui_label: 'Description',
     type: 'string',
     group: 'categorisation',
@@ -167,7 +123,7 @@ const TRANSACTION_SCHEMA = {
   },
   counterparty_name: {
     sheet_column_name: 'counterparty_name',
-    sheet_column_position: 17,
+    sheet_column_position: 11,
     ui_label: 'Counterparty',
     type: 'string',
     group: 'categorisation',
@@ -177,7 +133,7 @@ const TRANSACTION_SCHEMA = {
   },
   tx_tags: {
     sheet_column_name: 'tx_tags',
-    sheet_column_position: 18,
+    sheet_column_position: 12,
     ui_label: 'Tags',
     type: 'string',
     group: 'categorisation',
@@ -186,7 +142,7 @@ const TRANSACTION_SCHEMA = {
   },
   beneficiaries: {
     sheet_column_name: 'beneficiaries',
-    sheet_column_position: 19,
+    sheet_column_position: 13,
     ui_label: 'Beneficiaries',
     type: 'string',
     group: 'categorisation',
@@ -194,7 +150,64 @@ const TRANSACTION_SCHEMA = {
     default_value: '',
   },
 
-  // ── Sync metadata (columns 20–21) — written by GAS and ledger-extract; never by the user ──
+  // ── Location (columns 14–18) ─────────────────────────────────────────────
+  user_location_area: {
+    sheet_column_name: 'user_location_area',
+    sheet_column_position: 14,
+    ui_label: 'Area',
+    type: 'string',
+    group: 'location',
+    editable: true,
+    default_value: '',
+  },
+  user_location_city: {
+    sheet_column_name: 'user_location_city',
+    sheet_column_position: 15,
+    ui_label: 'City',
+    type: 'string',
+    group: 'location',
+    editable: true,
+    default_value: '',
+  },
+  user_location_country: {
+    sheet_column_name: 'user_location_country',
+    sheet_column_position: 16,
+    ui_label: 'Country',
+    type: 'string',
+    group: 'location',
+    editable: true,
+    default_value: '',
+  },
+  user_location_latitude: {
+    sheet_column_name: 'user_location_latitude',
+    sheet_column_position: 17,
+    ui_label: 'Latitude',
+    type: 'number',
+    group: 'location',
+    editable: true,
+    default_value: '',
+  },
+  user_location_longitude: {
+    sheet_column_name: 'user_location_longitude',
+    sheet_column_position: 18,
+    ui_label: 'Longitude',
+    type: 'number',
+    group: 'location',
+    editable: true,
+    default_value: '',
+  },
+
+  // ── Audit block (columns 19–24) ──────────────────────────────────────────
+  record_status: {
+    sheet_column_name: 'record_status',
+    sheet_column_position: 19,
+    ui_label: 'Record Status',
+    type: 'enum',
+    enum_values: ['active', 'inactive', 'deleted', 'locked'],
+    group: 'system',
+    editable: false,
+    default_value: 'active',
+  },
   sync_status: {
     sheet_column_name: 'sync_status',
     sheet_column_position: 20,
@@ -204,14 +217,41 @@ const TRANSACTION_SCHEMA = {
     editable: false,
     default_value: '',
   },
+  sync_date_time: {
+    sheet_column_name: 'sync_date_time',
+    sheet_column_position: 21,
+    ui_label: 'Sync Date/Time',
+    type: 'string',
+    group: 'system',
+    editable: false,
+    default_value: '',
+  },
   sync_notes: {
     sheet_column_name: 'sync_notes',
-    sheet_column_position: 21,
+    sheet_column_position: 22,
     ui_label: 'Sync Notes',
     type: 'string',
     group: 'system',
     editable: false,
     default_value: '',
+  },
+  created_at: {
+    sheet_column_name: 'created_at',
+    sheet_column_position: 23,
+    ui_label: 'Created At',
+    type: 'string',
+    group: 'system',
+    editable: false,
+    default_value: null,
+  },
+  updated_at: {
+    sheet_column_name: 'updated_at',
+    sheet_column_position: 24,
+    ui_label: 'Updated At',
+    type: 'string',
+    group: 'system',
+    editable: false,
+    default_value: null,
   },
 };
 
@@ -220,9 +260,8 @@ const TRANSACTION_SCHEMA = {
 // ─────────────────────────────────────────────────────────────────────────────
 function getTransactionSchemaForClient() {
   const TYPE_LABELS = {
-    'money-in':       'Money In',
-    'money-out':      'Money Out',
-    'money-transfer': 'Transfer',
+    'money-in':  'Money In',
+    'money-out': 'Money Out',
   };
   return {
     types: VALID_TRANSACTION_TYPES.map(function(v) {
@@ -231,10 +270,6 @@ function getTransactionSchemaForClient() {
     categorisation_fields: Object.keys(TRANSACTION_SCHEMA).filter(function(key) {
       return TRANSACTION_SCHEMA[key].group === 'categorisation';
     }),
-    transfer_fields: Object.keys(TRANSACTION_SCHEMA).filter(function(key) {
-      const f = TRANSACTION_SCHEMA[key];
-      return f.group === 'transfer' && f.editable;
-    }),
   };
 }
 
@@ -242,14 +277,12 @@ function getTransactionSchemaForClient() {
 // Helper functions
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Ordered column headers array — drives getOrCreateSheet() initialisation
 function getTransactionSheetColumns() {
   return Object.values(TRANSACTION_SCHEMA)
     .sort(function(a, b) { return a.sheet_column_position - b.sheet_column_position; })
     .map(function(f) { return f.sheet_column_name; });
 }
 
-// All schema fields applicable to a given transaction type
 function getFieldsForTransactionType(type) {
   return Object.keys(TRANSACTION_SCHEMA)
     .filter(function(key) {
@@ -259,7 +292,6 @@ function getFieldsForTransactionType(type) {
     .map(function(key) { return Object.assign({ key: key }, TRANSACTION_SCHEMA[key]); });
 }
 
-// Single field entry by key
 function getTransactionSchemaField(key) {
   return TRANSACTION_SCHEMA[key] || null;
 }
