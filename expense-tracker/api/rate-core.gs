@@ -2,11 +2,14 @@
 // FULCRUM FORGE — Rate core operations
 // =============================================================================
 
+// Rates are GBP-relative: how many units of each currency equal 1 GBP.
+// XAU = grams of gold per 1 GBP (~0.013 at £77/g — update via the UI after first run).
 const DEFAULT_RATES = [
-  { currency: 'GBP', rate: 1,    symbol: '£' },
-  { currency: 'INR', rate: 105,  symbol: '₹' },
-  { currency: 'USD', rate: 1.27, symbol: '$' },
-  { currency: 'EUR', rate: 1.17, symbol: '€' },
+  { currency: 'GBP', rate: 1,     symbol: '£'  },
+  { currency: 'XAU', rate: 0.013, symbol: '⊕'  },
+  { currency: 'INR', rate: 105,   symbol: '₹'  },
+  { currency: 'USD', rate: 1.27,  symbol: '$'  },
+  { currency: 'EUR', rate: 1.17,  symbol: '€'  },
 ];
 
 function listRates() {
@@ -59,8 +62,8 @@ function upsertRate(body) {
 }
 
 function deleteRate(body) {
-  if (!body.currency)          return { ok: false, error: 'missing_currency' };
-  if (body.currency === 'GBP') return { ok: false, error: 'base_currency_readonly' };
+  if (!body.currency)                                      return { ok: false, error: 'missing_currency' };
+  if (body.currency === 'GBP' || body.currency === 'XAU') return { ok: false, error: 'base_currency_readonly' };
 
   // T-05 FK checks: refuse if any account or transaction is in this currency.
   // Without the guards, deletion silently breaks net-worth math (toBase falls

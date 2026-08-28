@@ -3,9 +3,47 @@
 // =============================================================================
 
 function listAccounts() {
-  const cols  = getAccountSheetColumns();
-  const sheet = getOrCreateSheet(ACCOUNTS_SHEET, cols);
-  return sheetToObjectsWithRow(sheet);
+  const cols     = getAccountSheetColumns();
+  const sheet    = getOrCreateSheet(ACCOUNTS_SHEET, cols);
+  const accounts = sheetToObjectsWithRow(sheet);
+  const netMap   = _buildAccountNetMap(accounts);
+  return accounts.map(function(a) {
+    const opening = Number(a.opening_value);
+    const net     = netMap[a.name];
+    return Object.assign({}, a, { current_value: opening + net });
+  });
+}
+
+// Scans the transactions sheet and returns a map of { accountName → net change }.
+// tx_amount is always stored as a positive value; tx_type (money-in / money-out)
+// determines the sign applied to the running balance.
+function _buildAccountNetMap(accounts) {
+  const txSheet  = getOrCreateSheet(TRANSACTIONS_SHEET, getTransactionSheetColumns());
+  const values   = txSheet.getDataRange().getValues();
+  if (values.length <= 1) return {};
+
+  const accIdx  = txColIndex('account_id');    // stores account name, not UUID
+  const amtIdx  = txColIndex('tx_amount');
+  const typeIdx = txColIndex('tx_type');
+  const statIdx = txColIndex('record_status');
+
+  // Index valid names for O(1) lookup
+  const validNames = {};
+  accounts.forEach(function(a) { validNames[a.name] = true; });
+
+  const net = {};
+  accounts.forEach(function(a) { net[a.name] = 0; });
+
+  for (var i = 1; i < values.length; i++) {
+    if (String(values[i][statIdx]) === 'deleted') continue;
+    const name   = String(values[i][accIdx]).trim();
+    const amount = Number(values[i][amtIdx]);
+    const type   = String(values[i][typeIdx]).trim();
+    if (!name || !validNames[name]) continue;
+    if (type === 'money-in')       net[name] += amount;
+    else if (type === 'money-out') net[name] -= amount;
+  }
+  return net;
 }
 
 function createAccount(body) {
@@ -22,7 +60,7 @@ function createAccount(body) {
   const existingRows = sheet.getDataRange().getValues();
   const normName     = String(body.name).trim().toLowerCase();
   for (let i = 1; i < existingRows.length; i++) {
-    if (String(existingRows[i][nameColIdx] || '').trim().toLowerCase() === normName) {
+    if (String(existingRows[i][nameColIdx]).trim().toLowerCase() === normName) {
       return { ok: false, error: 'duplicate_account' };
     }
   }
@@ -34,8 +72,8 @@ function createAccount(body) {
 
   // Liabilities stored as negative; user always inputs positive
   const openingValue = isLiabilityAccount
-    ? -(Math.abs(Number(body.opening_value) || 0))
-    : (Number(body.opening_value) || 0);
+    ? -(Math.abs(Number(body.opening_value)))
+    : Number(body.opening_value);
 
   const row = new Array(cols.length).fill('');
 
@@ -47,12 +85,12 @@ function createAccount(body) {
   setCol('id',            id);
   setCol('name',          String(body.name).trim());
   setCol('type',          type);
-  setCol('sub_type',      String(body.sub_type || '').trim());
+  setCol('sub_type',      String(body.sub_type).trim());
   setCol('currency',      normCurrency);
   setCol('opening_value', openingValue);
   setCol('current_value', openingValue);
   setCol('record_status', VALID_RECORD_STATUSES.includes(body.record_status) ? body.record_status : 'active');
-  setCol('description',   String(body.description || '').trim());
+  setCol('description',   String(body.description).trim());
   setCol('sync_status',    SYNC_STATUS_CREATE_PENDING);
   setCol('sync_date_time', '');
   setCol('sync_notes',     '');
@@ -73,7 +111,7 @@ function createAccountsBulk(body) {
     Object.keys(acct).forEach(function(k) { acctBody[k] = acct[k]; });
     acctBody.pin = body.pin;
     const r = createAccount(acctBody);
-    results.push({ name: acct.name || '', ok: r.ok, error: r.error || null, id: r.id || null });
+    results.push({ name: acct.name, ok: r.ok, error: r.error, id: r.id });
   });
 
   const failed  = results.filter(function(r) { return !r.ok && r.error !== 'duplicate_account'; });
@@ -96,10 +134,10 @@ function updateAccount(body) {
 
   const allRows = sheet.getDataRange().getValues();
 
-  if (String(allRows[rowNum - 1][acctColIndex('record_status')] || '') === 'locked')
+  if (String(allRows[rowNum - 1][acctColIndex('record_status')]) === 'locked')
     return { ok: false, error: 'record_locked' };
 
-  const currentType = String(allRows[rowNum - 1][acctColIndex('type')] || '');
+  const currentType = String(allRows[rowNum - 1][acctColIndex('type')]);
 
   const validation = validateAccountUpdate(body, currentType);
   if (!validation.ok) return validation;
@@ -109,7 +147,7 @@ function updateAccount(body) {
   const normName = String(body.name).trim().toLowerCase();
   for (let i = 1; i < allRows.length; i++) {
     if (i + 1 === rowNum) continue;
-    if (String(allRows[i][nameIdx] || '').trim().toLowerCase() === normName) {
+    if (String(allRows[i][nameIdx]).trim().toLowerCase() === normName) {
       return { ok: false, error: 'duplicate_account' };
     }
   }
@@ -121,15 +159,15 @@ function updateAccount(body) {
   }
 
   writeField('name',          String(body.name).trim());
-  writeField('sub_type',      String(body.sub_type || '').trim());
+  writeField('sub_type',      String(body.sub_type).trim());
   writeField('record_status', VALID_RECORD_STATUSES.includes(body.record_status) ? body.record_status : 'active');
-  writeField('description',   String(body.description || '').trim());
+  writeField('description',   String(body.description).trim());
 
   // sync_status: preserve create-pending if not yet synced; clear sync_notes either way
   const syncStatusCol     = getAccountSchemaField('sync_status').sheet_column_position;
   const syncNotesCol      = getAccountSchemaField('sync_notes').sheet_column_position;
   const updatedAtCol      = getAccountSchemaField('updated_at').sheet_column_position;
-  const currentSyncStatus = String(allRows[rowNum - 1][syncStatusCol - 1] || '');
+  const currentSyncStatus = String(allRows[rowNum - 1][syncStatusCol - 1]);
   sheet.getRange(rowNum, syncStatusCol).setValue(computeSyncStatus(currentSyncStatus));
   sheet.getRange(rowNum, syncNotesCol).setValue('');
   sheet.getRange(rowNum, updatedAtCol).setValue(new Date().toISOString());
@@ -149,11 +187,11 @@ function deleteAccount(body) {
   // Deactivate (record_status = inactive) is the recommended path for retiring
   // an account while keeping its transaction history intact.
   const rstatColPos2 = getAccountSchemaField('record_status').sheet_column_position;
-  if (String(sheet.getRange(rowNum, rstatColPos2).getValue() || '') === 'locked')
+  if (String(sheet.getRange(rowNum, rstatColPos2).getValue()) === 'locked')
     return { ok: false, error: 'record_locked' };
 
   const idColPos  = getAccountSchemaField('id').sheet_column_position;
-  const accountId = String(sheet.getRange(rowNum, idColPos).getValue() || '');
+  const accountId = String(sheet.getRange(rowNum, idColPos).getValue());
   if (!accountId) return { ok: false, error: 'missing_account_id' };
 
   const refCount = _countTransactionsReferencingAccount(accountId);
@@ -171,7 +209,7 @@ function deleteAccount(body) {
   const syncStatusCol     = getAccountSchemaField('sync_status').sheet_column_position;
   const syncNotesCol      = getAccountSchemaField('sync_notes').sheet_column_position;
   const updatedAtCol2     = getAccountSchemaField('updated_at').sheet_column_position;
-  const currentSyncStatus = String(sheet.getRange(rowNum, syncStatusCol).getValue() || '');
+  const currentSyncStatus = String(sheet.getRange(rowNum, syncStatusCol).getValue());
 
   sheet.getRange(rowNum, recordStatusCol).setValue('deleted');
   sheet.getRange(rowNum, syncStatusCol).setValue(computeSyncStatus(currentSyncStatus));
@@ -188,7 +226,7 @@ function _countTransactionsReferencingAccount(accountId) {
   const acctIdx = txColIndex('account_id');
   let count = 0;
   for (let i = 1; i < values.length; i++) {
-    if (String(values[i][acctIdx] || '') === String(accountId)) count++;
+    if (String(values[i][acctIdx]) === String(accountId)) count++;
   }
   return count;
 }

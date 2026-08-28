@@ -37,11 +37,11 @@ function _subTypeLabel(v) {
 }
 
 function _fmtBal(n) {
-  return Math.abs(parseFloat(n || 0)).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return Math.abs(parseFloat(n)).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 function _balanceCell(a) {
-  const val     = parseFloat(a.current_value || 0);
+  const val     = parseFloat(a.current_value);
   const sym     = getSymbol(a.currency);
   const foreign = a.currency !== state.quoteCurrency;
   const baseTag = foreign
@@ -95,15 +95,15 @@ function _renderNetWorth() {
 
   const totalAssets = state.accounts
     .filter(a => a.record_status !== 'deleted' && (a.type === 'asset' || a.type === 'investment'))
-    .reduce((s, a) => s + toBase(parseFloat(a.current_value || 0), a.currency, null), 0);
+    .reduce((s, a) => s + toBase(parseFloat(a.current_value), a.currency, null), 0);
 
   const totalLiab = state.accounts
     .filter(a => a.record_status !== 'deleted' && a.type === 'liability')
-    .reduce((s, a) => s + Math.abs(toBase(parseFloat(a.current_value || 0), a.currency, null)), 0);
+    .reduce((s, a) => s + Math.abs(toBase(parseFloat(a.current_value), a.currency, null)), 0);
 
   const liquidCash = state.accounts
     .filter(a => a.record_status !== 'deleted' && a.type === 'asset' && LIQUID_SUB_TYPES.has(a.sub_type))
-    .reduce((s, a) => s + toBase(parseFloat(a.current_value || 0), a.currency, null), 0);
+    .reduce((s, a) => s + toBase(parseFloat(a.current_value), a.currency, null), 0);
 
   const netWorth = totalAssets - totalLiab;
 
@@ -149,7 +149,7 @@ function _applyAccFilters(accounts) {
     if (f.currency !== 'all' && a.currency !== f.currency) return false;
     if (f.search) {
       const q   = f.search.toLowerCase();
-      const hay = (a.name + ' ' + (a.description || '')).toLowerCase();
+      const hay = (a.name + ' ' + a.description).toLowerCase();
       if (!hay.includes(q)) return false;
     }
     if (f.recordStatuses.length < 4 && !f.recordStatuses.includes(a.record_status)) return false;
@@ -306,14 +306,14 @@ function _parseAccountsCsv(text) {
   for (let i = 1; i < lines.length; i++) {
     const vals = _parseCsvRow(lines[i]);
     const row  = {};
-    headers.forEach((h, idx) => { row[h] = (vals[idx] || '').trim(); });
+    headers.forEach((h, idx) => { row[h] = vals[idx].trim(); });
 
     if (!row.name)     { errors.push(`Row ${i + 1}: missing name`);     continue; }
     if (!row.type)     { errors.push(`Row ${i + 1}: missing type`);     continue; }
     if (!row.sub_type) { errors.push(`Row ${i + 1}: missing sub_type`); continue; }
     if (!row.currency) { errors.push(`Row ${i + 1}: missing currency`); continue; }
 
-    const openingVal = row.opening_value ? parseFloat(row.opening_value) : 0;
+    const openingVal = parseFloat(row.opening_value);
     const currentVal = row.current_value ? parseFloat(row.current_value) : undefined;
 
     accounts.push({
@@ -326,7 +326,7 @@ function _parseAccountsCsv(text) {
         ? (row.type === 'liability' ? -(Math.abs(currentVal)) : currentVal)
         : undefined,
       record_status: ['active', 'inactive', 'deleted', 'locked'].includes(row.record_status) ? row.record_status : 'active',
-      description:   row.description || '',
+      description:   row.description,
     });
   }
 
@@ -350,9 +350,9 @@ function _renderAccountForm(a, mode) {
   const dis    = isView ? ' disabled' : '';
   const pfx    = isAdd  ? 'accNew' : 'accEdit';
 
-  const type = isAdd ? '' : (a.type || '');
+  const type = isAdd ? '' : a.type;
 
-  const v = val => esc(String(val || ''));
+  const v = val => esc(String(val));
 
   const currencyOpts = state.rates.map(r =>
     `<option value="${esc(r.currency)}" ${(!isAdd && a.currency === r.currency) ? 'selected' : ''}>${esc(r.currency)}</option>`
@@ -369,7 +369,7 @@ function _renderAccountForm(a, mode) {
 
   const subTypeField = isAdd
     ? `<select id="accNewSubType"><option value="">— select —</option></select>`
-    : `<input type="text" id="accEditSubType" value="${esc(_subTypeLabel(a.sub_type || ''))}" disabled>`;
+    : `<input type="text" id="accEditSubType" value="${esc(_subTypeLabel(a.sub_type))}" disabled>`;
 
   const sym = isAdd ? '' : getSymbol(a.currency);
 
@@ -386,7 +386,7 @@ function _renderAccountForm(a, mode) {
 
   const syncStatusLine = isView ? `
     <div class="field-hint" style="margin-top:8px">
-      Sync: ${syncStatusIcon(a.sync_status)} ${esc(a.sync_notes || '')}
+      Sync: ${syncStatusIcon(a.sync_status)} ${esc(a.sync_notes)}
     </div>` : '';
 
   return `
@@ -425,18 +425,18 @@ function _renderAccountForm(a, mode) {
       </div>` : `
       <div class="field">
         <label>Opening value</label>
-        <input type="text" value="${_isLiability(a) ? v('−' + sym + _fmtBal(Math.abs(parseFloat(a.opening_value || 0)))) : v(sym + _fmtBal(parseFloat(a.opening_value || 0)))}" disabled>
+        <input type="text" value="${_isLiability(a) ? v('−' + sym + _fmtBal(Math.abs(parseFloat(a.opening_value)))) : v(sym + _fmtBal(parseFloat(a.opening_value)))}" disabled>
       </div>
       <div class="field">
         <label>Current value</label>
         <input type="text" value="${_isLiability(a)
-          ? v('−' + sym + _fmtBal(Math.abs(parseFloat(a.current_value || 0))))
-          : v(sym + _fmtBal(parseFloat(a.current_value || 0)))}" disabled>
+          ? v('−' + sym + _fmtBal(Math.abs(parseFloat(a.current_value))))
+          : v(sym + _fmtBal(parseFloat(a.current_value)))}" disabled>
       </div>`}
       <div class="field">
         <label for="${pfx}Description">Notes</label>
         <input type="text" id="${pfx}Description"
-               value="${isAdd ? '' : v(a.description || '')}"
+               value="${isAdd ? '' : v(a.description)}"
                ${isAdd ? 'placeholder="Optional notes"' : ''}${dis}>
       </div>
     </div>
@@ -465,7 +465,7 @@ function _renderAccountRow(a) {
 
   if (state.accDeleteRow === a._row) {
     if (state.accDeleteBlocked) {
-      const n    = state.accDeleteBlocked.referenced_count || 0;
+      const n    = state.accDeleteBlocked.referenced_count;
       const noun = n === 1 ? 'transaction refers' : 'transactions refer';
       return `<tr${rowStyle}>
         <td colspan="5">
@@ -492,7 +492,7 @@ function _renderAccountRow(a) {
   return `<tr${rowStyle}>
     <td class="td-mono" style="color:var(--muted);font-size:11px">${esc(a.id)}</td>
     <td>${esc(a.name)}${a.description ? `<span class="info-icon-wrap"><span style="cursor:help;color:var(--teal);font-size:13px">ⓘ</span><span class="info-tooltip">${esc(a.description)}</span></span>` : ''}</td>
-    <td style="color:var(--muted);font-size:12px">${esc(_subTypeLabel(a.sub_type || ''))}</td>
+    <td style="color:var(--muted);font-size:12px">${esc(_subTypeLabel(a.sub_type))}</td>
     <td>${esc(a.currency)}</td>
     <td>${_balanceCell(a)}</td>
     <td><div style="display:flex;align-items:center;justify-content:flex-end;gap:5px">
@@ -533,9 +533,10 @@ function _renderTable(accounts) {
   const bodyRows = TABLE_GROUPS.flatMap(g => {
     const accs = byGroup[g.key];
     if (!accs || !accs.length) return [];
+    const countable = accs.filter(a => a.record_status !== 'deleted');
     const total = g.isLiab
-      ? accs.reduce((s, a) => s + Math.abs(toBase(parseFloat(a.current_value || 0), a.currency, null)), 0)
-      : accs.reduce((s, a) => s + toBase(parseFloat(a.current_value || 0), a.currency, null), 0);
+      ? countable.reduce((s, a) => s + Math.abs(toBase(parseFloat(a.current_value), a.currency, null)), 0)
+      : countable.reduce((s, a) => s + toBase(parseFloat(a.current_value), a.currency, null), 0);
     return [_groupHeader(g.label, total, sym, g.isLiab), ...accs.map(_renderAccountRow)];
   }).join('');
 
@@ -912,7 +913,7 @@ async function _saveNew() {
   if (!currency || !(currency in state.rateMap)) { errEl.textContent = 'Currency is required.'; return; }
   errEl.textContent = '';
 
-  const openingVal = parseFloat(_v('accNewOpeningValue')) || 0;
+  const openingVal = parseFloat(_v('accNewOpeningValue'));
 
   const payload = {
     name,
@@ -966,7 +967,7 @@ async function _saveEdit() {
     row_num:       rowNum,
     name,
     record_status: el('accEditRecordStatus').value,
-    description:   el('accEditDescription').value.trim() || '',
+    description:   el('accEditDescription').value.trim(),
   };
 
   const btn = el('accSaveEdit');
@@ -1016,7 +1017,7 @@ async function _confirmDelete(rowNum) {
       // Backend refused because transactions reference this account.
       // Keep the row in delete-confirm state, switch to the blocked variant
       // which offers a "Deactivate instead" CTA.
-      state.accDeleteBlocked = { referenced_count: res.referenced_count || 0 };
+      state.accDeleteBlocked = { referenced_count: res.referenced_count };
       renderAccounts();
     } else {
       console.warn('[accounts] _confirmDelete failed:', res.error);
@@ -1044,9 +1045,9 @@ async function _deactivateAccount(rowNum) {
   try {
     const res = await ExpenseAPI.updateAccount({
       row_num:       rowNum,
-      name:          acc.name || '',
+      name:          acc.name,
       record_status: 'inactive',
-      description:   acc.description || '',
+      description:   acc.description,
     });
     if (res.ok) {
       showMsg('Account deactivated.');
@@ -1078,9 +1079,9 @@ async function _restoreAccount(rowNum) {
   try {
     const res = await ExpenseAPI.updateAccount({
       row_num:       rowNum,
-      name:          acc.name || '',
+      name:          acc.name,
       record_status: 'active',
-      description:   acc.description || '',
+      description:   acc.description,
     });
     if (res.ok) {
       showMsg('Account restored.');
@@ -1122,9 +1123,9 @@ async function _submitImport(accounts) {
       return;
     }
 
-    const created = res.created || 0;
-    const skipped = res.skipped || 0;
-    const failed  = res.failed  || 0;
+    const created = res.created;
+    const skipped = res.skipped;
+    const failed  = res.failed;
 
     if (failed === 0) {
       _importParsed = null;
