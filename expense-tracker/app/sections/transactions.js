@@ -11,7 +11,8 @@ const METADATA_CACHE_KEY = 'et_metadata_v1';
 const METADATA_TTL_MS    = 6 * 60 * 60 * 1000;
 
 let filterOpen      = false;
-let _txImportParsed = null;
+let _txImportParsed  = null;
+let _txImportResult  = null;   // persists failure table HTML across re-renders
 let _txMenuKey      = null;
 let _txEventsAbort  = null;
 let _accTypeSel     = new Set();
@@ -400,6 +401,7 @@ export function renderTransactions() {
     if (state.txImportOpen) {
       state.txImportOpen = false;
       _txImportParsed = null;
+      _txImportResult = null;
     } else {
       state.txImportOpen = true;
       state.txAddOpen = false;
@@ -426,6 +428,7 @@ export function renderTransactions() {
     el('txImportFile').addEventListener('change', e => {
       const file = e.target.files[0];
       if (!file) return;
+      _txImportResult = null;
       const reader = new FileReader();
       reader.onload = ev => {
         const parsed = _parseTxCsv(ev.target.result);
@@ -444,6 +447,7 @@ export function renderTransactions() {
     el('txImportCancel').addEventListener('click', () => {
       state.txImportOpen = false;
       _txImportParsed = null;
+      _txImportResult = null;
       renderTransactions();
     });
   }
@@ -1749,7 +1753,7 @@ function _renderFilterBar() {
       <div class="filter-row">
         <label>Date range</label>
         <div style="flex:1;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-          <div id="filterDateRangeWrap" style="flex:0 0 auto;min-width:140px;position:relative">
+          <div id="filterDateRangeWrap" style="flex:1;min-width:140px;position:relative">
             <button id="filterDateRangeTrigger" type="button" style="width:100%;display:flex;justify-content:space-between;align-items:center;text-align:left;background:var(--panel);border:1px solid var(--hair-strong);border-radius:8px;padding:6px 10px;font-size:var(--text-base);color:var(--ink);cursor:pointer;outline:none">
               <span id="filterDateRangeLabel">${esc((RANGE_OPTS.find(o => o.value === state.dateRange) || RANGE_OPTS[0]).label)}</span>
               <span style="color:var(--muted);font-size:var(--text-2xs);margin-left:8px">▼</span>
@@ -1877,7 +1881,7 @@ function _renderTxImportPanel() {
         <div class="field-hint">Columns: tx_date_time, tx_timezone, tx_type, source_account, target_account, source_amount, target_amount, major_category, minor_category, description, counterparty_name, tx_tags, beneficiaries, user_location_area, user_location_city, user_location_country, user_location_latitude, user_location_longitude</div>
       </div>
     </div>
-    <div id="txImportStatus"></div>
+    <div id="txImportStatus">${_txImportResult || ''}</div>
     <div class="form-actions" style="margin-top:16px">
       <button class="btn btn-primary" id="txImportConfirm" disabled>Import</button>
       <button class="btn btn-secondary" id="txImportCancel">Cancel</button>
@@ -2126,34 +2130,58 @@ async function _submitTxImport(transactions) {
     // All chunks done
     if (totalFailed === 0) {
       _txImportParsed    = null;
+      _txImportResult    = null;
       state.txImportOpen = false;
       showMsg(`${totalCreated} transaction${totalCreated !== 1 ? 's' : ''} imported.`);
       document.dispatchEvent(new CustomEvent('et:reload'));
     } else {
-      const resultRows = allResults.map(r => `
-        <tr>
-          <td style="font-size:12px;color:var(--muted)">${esc(r.label || '')}</td>
-          <td>${r.ok
-            ? `<span class="badge badge-et-in">created</span>`
-            : r.error === 'duplicate_transaction'
-              ? `<span class="badge" style="color:var(--muted)">skipped</span>`
-              : `<span class="badge badge-et-out">${esc(r.error || 'unknown')}</span>`}
+      const enriched   = allResults.map((r, i) => ({ ...r, tx: payload[i] || {} }));
+      const failedOnly = enriched.filter(r => !r.ok);
+      const dupCount   = failedOnly.filter(r => r.error === 'duplicate_transaction').length;
+      const errCount   = failedOnly.length - dupCount;
+
+      const resultRows = failedOnly.map(r => {
+        const tx    = r.tx;
+        const isDup = r.error === 'duplicate_transaction';
+        const parts = [
+          tx.source_amount != null ? `${tx.source_amount}${tx.source_currency ? ' ' + tx.source_currency : ''}` : '',
+          tx.account_id || tx.source_account || '',
+          tx.major_category ? (tx.minor_category ? `${tx.major_category} / ${tx.minor_category}` : tx.major_category) : '',
+        ].filter(Boolean);
+        return `<tr>
+          <td style="font-size:12px">
+            <div style="color:var(--ink);font-family:var(--mono)">${esc(r.label || '')}</div>
+            ${parts.length ? `<div style="color:var(--muted);font-size:11px;margin-top:2px">${esc(parts.join(' · '))}</div>` : ''}
           </td>
-        </tr>`).join('');
-      if (status) status.innerHTML = `
-        <div style="margin-bottom:8px;font-size:13px">
-          ${totalCreated} created · <span style="color:var(--ember)">${totalFailed} failed</span>
-        </div>
+          <td>${isDup
+            ? `<span class="badge" style="color:var(--muted)">duplicate</span>`
+            : `<span class="badge badge-et-out" style="font-family:var(--mono);font-size:11px">${esc(r.error || 'unknown')}</span>`}
+          </td>
+        </tr>`;
+      }).join('');
+
+      const summary = [
+        `${totalCreated} created`,
+        errCount  ? `<span style="color:var(--ember)">${errCount} error${errCount > 1 ? 's' : ''}</span>` : '',
+        dupCount  ? `<span style="color:var(--muted)">${dupCount} duplicate${dupCount > 1 ? 's' : ''}</span>` : '',
+      ].filter(Boolean).join(' · ');
+
+      _txImportResult = `
+        <div style="margin-bottom:8px;font-size:13px">${summary}</div>
         <div class="table-wrap" style="margin-bottom:8px">
           <table>
-            <thead><tr><th>Transaction</th><th>Result</th></tr></thead>
+            <thead><tr><th>Failed transaction</th><th>Error</th></tr></thead>
             <tbody>${resultRows}</tbody>
           </table>
         </div>`;
+      if (status) status.innerHTML = _txImportResult;
       _txImportParsed = null;
       if (btn) { btn.disabled = true; btn.textContent = 'Import'; }
       if (totalCreated > 0) document.dispatchEvent(new CustomEvent('et:reload'));
-      showMsg(`${totalCreated} imported · ${totalFailed} failed`, 'warn');
+      const toastParts = [`${totalCreated} imported`];
+      if (errCount)  toastParts.push(`${errCount} error${errCount > 1 ? 's' : ''}`);
+      if (dupCount)  toastParts.push(`${dupCount} duplicate${dupCount > 1 ? 's' : ''}`);
+      showMsg(toastParts.join(' · '), 'warn');
     }
   } catch (err) {
     console.error('[transactions] _submitTxImport failed:', err);
@@ -2185,7 +2213,7 @@ const _FILTER_DROPDOWN_IDS = ['filterDateRangeDropdown','filterTypeDropdown','fi
 const _FILTER_WRAP_IDS     = ['filterDateRangeWrap','filterTypeWrap','filterAccTypeWrap','filterAccountWrap','filterMajorWrap','filterMinorWrap'];
 
 function _closeAllFilterDropdowns(exceptId) {
-  _FILTER_DROPDOWN_IDS.forEach(id => { if (id !== exceptId) el(id).classList.add('hidden'); });
+  _FILTER_DROPDOWN_IDS.forEach(id => { const d = el(id); if (d && id !== exceptId) d.classList.add('hidden'); });
 }
 
 function _attachFilterEvents() {
@@ -2331,7 +2359,7 @@ function _attachFilterEvents() {
 
   // ── Global outside-click: close all dropdowns when clicking outside every wrap ──
   document.addEventListener('click', e => {
-    const inAnyWrap = _FILTER_WRAP_IDS.some(id => el(id).contains(e.target));
+    const inAnyWrap = _FILTER_WRAP_IDS.some(id => { const w = el(id); return w && w.contains(e.target); });
     if (!inAnyWrap) _closeAllFilterDropdowns();
   });
 

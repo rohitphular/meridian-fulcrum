@@ -77,8 +77,8 @@ export function renderAccounts() {
     ${state.accAddOpen    ? _renderAccountForm(null,    'add')  : ''}
     ${viewAcc             ? _renderAccountForm(viewAcc, 'view') : ''}
     ${editAcc             ? _renderAccountForm(editAcc, 'edit') : ''}
-    ${_renderNetWorth()}
     ${_renderAccFilterBar()}
+    ${_renderNetWorth()}
     ${_renderTable(filtered)}
   `;
   _attachEvents();
