@@ -262,13 +262,12 @@ function restoreTransaction(body) {
 // Bulk create — chunked import path.
 //
 // The frontend sends rows in chunks of 25. Each chunk completes well inside
-// the 30-second GAS doPost limit, and this function never reads the
-// transactions sheet at all — scales to any sheet size:
+// the 30-second GAS doPost limit. One sheet read seeds the dup set from
+// existing rows; the write remains a single setValues() for the whole chunk.
 //
-//   IDs       — Utilities.getUuid() suffix; no row scan.
-//   Dup-check — within this chunk only (frontend deduplicates the CSV first).
+//   IDs       — Utilities.getUuid() suffix; no row scan needed.
+//   Dup-check — existing sheet rows + within this chunk.
 //   Write     — single setValues() for the whole chunk.
-//   Sheet reads — zero transaction-sheet reads.
 //
 // body: { transactions: [ { same shape as createTransaction body } ] }
 // ─────────────────────────────────────────────────────────────────────────────
@@ -281,8 +280,26 @@ function createTransactionsBulk(body) {
   const numCols = cols.length;
   const now     = new Date().toISOString();
 
-  // Within-chunk dup set only — no full sheet scan.
+  // Seed dup set from existing sheet rows so re-importing the same file is safe.
   const dupSet = new Set();
+  (function seedDupSet() {
+    const existing = sheet.getDataRange().getValues();
+    if (existing.length <= 1) return;
+    const ciDate  = txColIndex('tx_date_time');
+    const ciType  = txColIndex('tx_type');
+    const ciAcct  = txColIndex('account_id');
+    const ciAmt   = txColIndex('tx_amount');
+    const ciRstat = txColIndex('record_status');
+    for (var i = 1; i < existing.length; i++) {
+      if (String(existing[i][ciRstat]) === 'deleted') continue;
+      dupSet.add(
+        String(existing[i][ciDate]) + '|' +
+        String(existing[i][ciType]) + '|' +
+        String(existing[i][ciAcct]) + '|' +
+        String(Number(existing[i][ciAmt]) || 0)
+      );
+    }
+  })();
 
   // ID = YYYY-MM-DD-{8 hex chars from UUID} — globally unique, no scan needed.
   function nextId(dateStr) {

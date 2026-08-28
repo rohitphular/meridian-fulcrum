@@ -9,7 +9,7 @@ function listAccounts() {
   const netMap   = _buildAccountNetMap(accounts);
   return accounts.map(function(a) {
     const opening = Number(a.opening_value);
-    const net     = netMap[a.name];
+    const net     = netMap[a.id];
     return Object.assign({}, a, { current_value: opening + net });
   });
 }
@@ -27,21 +27,21 @@ function _buildAccountNetMap(accounts) {
   const typeIdx = txColIndex('tx_type');
   const statIdx = txColIndex('record_status');
 
-  // Index valid names for O(1) lookup
-  const validNames = {};
-  accounts.forEach(function(a) { validNames[a.name] = true; });
+  // Index by account ID — that is what the transactions sheet stores in account_id
+  const validIds = {};
+  accounts.forEach(function(a) { validIds[a.id] = true; });
 
   const net = {};
-  accounts.forEach(function(a) { net[a.name] = 0; });
+  accounts.forEach(function(a) { net[a.id] = 0; });
 
   for (var i = 1; i < values.length; i++) {
     if (String(values[i][statIdx]) === 'deleted') continue;
-    const name   = String(values[i][accIdx]).trim();
+    const accId  = String(values[i][accIdx]).trim();
     const amount = Number(values[i][amtIdx]);
     const type   = String(values[i][typeIdx]).trim();
-    if (!name || !validNames[name]) continue;
-    if (type === 'money-in')       net[name] += amount;
-    else if (type === 'money-out') net[name] -= amount;
+    if (!accId || !validIds[accId]) continue;
+    if (type === 'money-in')       net[accId] += amount;
+    else if (type === 'money-out') net[accId] -= amount;
   }
   return net;
 }
