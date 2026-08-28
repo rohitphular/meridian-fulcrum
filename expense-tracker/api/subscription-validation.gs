@@ -28,14 +28,6 @@ function validateSubscriptionUpdate(body) {
     if (isNaN(amount) || amount <= 0) return { ok: false, error: 'invalid_amount' };
   }
 
-  if (body.is_active !== undefined && body.is_active !== '') {
-    const isActive = body.is_active;
-    if (isActive !== true && isActive !== false &&
-        isActive !== 'true' && isActive !== 'false') {
-      return { ok: false, error: 'invalid_is_active' };
-    }
-  }
-
   if (body.frequency !== undefined && body.frequency !== '') {
     const schedErr = _validateSchedule(body);
     if (!schedErr.ok) return schedErr;

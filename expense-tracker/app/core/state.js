@@ -103,4 +103,13 @@ export const state = {
   subEditRow:     null,
   subDeleteRow:   null,
   subPrefill:     null,  // { name, counterparty_name, amount, currency, source_account, major_category, minor_category, tags }
+
+  subFilterOpen:  false,
+  subFilters: {
+    recordStatuses: ['active', 'inactive', 'deleted', 'locked'],
+    majorCategory:  'all',
+    frequency:      'all',
+    search:         '',
+  },
+  subSort: { col: 'next_payment_date', dir: 'asc' },
 };

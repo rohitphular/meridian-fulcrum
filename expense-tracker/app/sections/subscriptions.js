@@ -1,5 +1,5 @@
 import { state } from '../core/state.js';
-import { el, esc, getSymbol, toBase, exportSubscriptions, openContextMenu, closeContextMenu } from '../core/utils.js';
+import { el, esc, getSymbol, toBase, exportSubscriptions, openContextMenu, closeContextMenu, syncStatusIcon, recordStatusIcon } from '../core/utils.js';
 import { showLoading, hideLoading, showMsg } from '../core/ui.js';
 import { ExpenseAPI } from '../core/api.js';
 
@@ -201,20 +201,176 @@ function _renderForm(sub = null) {
   </div>`;
 }
 
-// ── Stats cards ───────────────────────────────────────────────────────────────
+// ── Card list ─────────────────────────────────────────────────────────────────
 
-function _renderStats() {
-  const subs   = state.subscriptions;
-  const total  = subs.length;
-  const active = subs.filter(s => s.record_status === 'active').length;
-  const estMonthly = subs
-    .filter(s => s.record_status === 'active')
-    .reduce((sum, s) => {
-      const monthly = _toMonthly(s.amount, s.frequency);
-      return sum + toBase(monthly, s.currency, null);
-    }, 0);
+function _freqLabel(f) {
+  return FREQUENCIES.find(x => x.value === f)?.label || f || '—';
+}
 
+const _FREQ_SHORT = { weekly: 'wk', monthly: 'mo', quarterly: 'qtr', annual: 'yr' };
+function _freqShort(f) { return _FREQ_SHORT[f] || f || '—'; }
+
+function _subFilterCount() {
+  const f = state.subFilters;
+  let n = 0;
+  if (f.recordStatuses.length < 4) n++;
+  if (f.majorCategory !== 'all') n++;
+  if (f.frequency !== 'all') n++;
+  if (f.search) n++;
+  return n;
+}
+
+function _applySubFilters(subs) {
+  const f = state.subFilters;
+  return subs.filter(s => {
+    if (f.recordStatuses.length < 4 && !f.recordStatuses.includes(s.record_status)) return false;
+    if (f.majorCategory !== 'all' && s.major_category !== f.majorCategory) return false;
+    if (f.frequency !== 'all' && s.frequency !== f.frequency) return false;
+    if (f.search) {
+      const q   = f.search.toLowerCase();
+      const hay = (s.name + ' ' + (s.counterparty_name || '') + ' ' + (s.description || '')).toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+}
+
+function _sortSubs(subs) {
+  const { col, dir } = state.subSort;
+  const sign = dir === 'asc' ? 1 : -1;
+  return [...subs].sort((a, b) => {
+    let va, vb;
+    if (col === 'amount_base') {
+      va = toBase(_toMonthly(parseFloat(a.amount), a.frequency), a.currency, null);
+      vb = toBase(_toMonthly(parseFloat(b.amount), b.frequency), b.currency, null);
+    } else if (col === 'next_payment_date') {
+      va = a.next_payment_date || '9999-12-31';
+      vb = b.next_payment_date || '9999-12-31';
+    } else {
+      va = String(a[col] || '').toLowerCase();
+      vb = String(b[col] || '').toLowerCase();
+    }
+    return va < vb ? -sign : va > vb ? sign : 0;
+  });
+}
+
+function _renderSubFilterBar() {
+  const activeCount = _subFilterCount();
+  const f = state.subFilters;
+
+  const majors = [...new Set(state.subscriptions.map(s => s.major_category).filter(Boolean))].sort();
+
+  const rs = new Set(f.recordStatuses);
+  const optStyle = 'display:flex;align-items:center;gap:8px;font-size:var(--text-base);color:var(--ink);cursor:pointer';
+
+  return `
+  <div class="filter-bar">
+    <button class="filter-toggle" id="subFilterToggle">
+      Filters${activeCount ? ` (${activeCount})` : ''} <span class="filter-arrow">${state.subFilterOpen ? '▲' : '▼'}</span>
+    </button>
+    <div class="filter-body ${state.subFilterOpen ? '' : 'hidden'}" id="subFilterBody">
+      <div class="filter-row">
+        <label>Status</label>
+        <div style="display:flex;flex-wrap:wrap;gap:12px">
+          ${['active','inactive','deleted','locked'].map(s =>
+            `<label style="${optStyle}"><input type="checkbox" data-sub-filter-rstat="${esc(s)}"${rs.has(s) ? ' checked' : ''}> ${s.charAt(0).toUpperCase() + s.slice(1)}</label>`
+          ).join('')}
+        </div>
+      </div>
+      <div class="filter-row">
+        <label>Category</label>
+        <select id="subFMajor" style="flex:1">
+          <option value="all">All categories</option>
+          ${majors.map(m => `<option value="${esc(m)}"${f.majorCategory === m ? ' selected' : ''}>${esc(m)}</option>`).join('')}
+        </select>
+      </div>
+      <div class="filter-row">
+        <label>Frequency</label>
+        <select id="subFFrequency" style="flex:1">
+          <option value="all">All</option>
+          ${FREQUENCIES.map(fr => `<option value="${esc(fr.value)}"${f.frequency === fr.value ? ' selected' : ''}>${esc(fr.label)}</option>`).join('')}
+        </select>
+      </div>
+      <div class="filter-row">
+        <label>Search</label>
+        <input type="text" id="subFSearch" placeholder="name, counterparty, notes…" value="${esc(f.search)}" style="flex:1">
+      </div>
+      <div class="filter-actions">
+        <button class="btn btn-secondary btn-sm" id="subFilterClear">Clear</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+function _renderSubRow(sub, sym) {
+  const row = sub._row;
+
+  if (state.subDeleteRow === row) {
+    return `<tr>
+      <td colspan="5">
+        <span class="confirm-text">Delete <strong>${esc(sub.name)}</strong>?</span>
+        <span style="display:inline-flex;gap:8px;margin-left:16px">
+          <button class="btn-link danger" data-action="sub-confirm-delete" data-row="${row}">Yes, delete</button>
+          <button class="btn-link" data-action="sub-cancel-delete">Cancel</button>
+        </span>
+      </td>
+    </tr>`;
+  }
+
+  const isActive    = sub.record_status === 'active';
+  const dotCls      = isActive ? 'sub-status-active' : 'sub-status-paused';
+  const amtFmt      = `${getSymbol(sub.currency)}${parseFloat(sub.amount).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}/${_freqShort(sub.frequency)}`;
+  const isForeign   = sub.currency && sub.currency !== state.quoteCurrency;
+  const baseAmt     = isForeign
+    ? `<span class="td-base-amt">${sym}${toBase(_toMonthly(parseFloat(sub.amount), sub.frequency), sub.currency, null).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}/mo</span>`
+    : '';
+
+  let nextCell = '—';
+  if (isActive && sub.next_payment_date) {
+    const nextDate = new Date(sub.next_payment_date);
+    const nextFmt  = nextDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+    const today    = new Date(); today.setHours(0, 0, 0, 0);
+    const diffDays = Math.round((nextDate - today) / 86400000);
+    const duePart  = diffDays === 0 ? 'today'
+                   : diffDays === 1 ? 'tomorrow'
+                   : diffDays  >  0 ? `in ${diffDays}d`
+                   : `${Math.abs(diffDays)}d overdue`;
+    nextCell = `${esc(nextFmt)} <span class="sub-card-due">(${esc(duePart)})</span>`;
+  }
+
+  const accName  = state.accountMap[sub.source_account]?.name || '—';
+
+  return `<tr${isActive ? '' : ' style="opacity:0.6"'}>
+    <td><span class="sub-status-dot ${dotCls}">●</span> ${esc(sub.name)}</td>
+    <td class="td-truncate" title="${esc(accName)}">${esc(accName)}</td>
+    <td class="td-nowrap">${nextCell}</td>
+    <td class="td-mono td-nowrap">${esc(amtFmt)}${baseAmt}</td>
+    <td style="text-align:right;white-space:nowrap">
+      ${recordStatusIcon(sub.record_status)}
+      ${syncStatusIcon(sub.sync_status)}
+      <button class="tx-menu-trigger" data-action="sub-menu" data-row="${row}" title="Actions">⋮</button>
+    </td>
+  </tr>`;
+}
+
+function _renderTable(subs) {
   const sym = getSymbol(state.quoteCurrency);
+
+  const thSort = (col, label, style = '') => {
+    const active = state.subSort.col === col;
+    const cls    = active ? `sort-${state.subSort.dir}` : '';
+    return `<th class="${cls}" data-sub-sort="${esc(col)}"${style ? ` style="${style}"` : ''}>${esc(label)}</th>`;
+  };
+
+  if (!subs.length) {
+    return `<p class="placeholder">No subscriptions match the current filters.</p>`;
+  }
+
+  const total   = state.subscriptions.length;
+  const active  = state.subscriptions.filter(s => s.record_status === 'active').length;
+  const estMonthly = state.subscriptions
+    .filter(s => s.record_status === 'active')
+    .reduce((sum, s) => sum + toBase(_toMonthly(s.amount, s.frequency), s.currency, null), 0);
 
   return `
     <div class="summary-grid" style="margin-bottom:20px">
@@ -227,129 +383,24 @@ function _renderStats() {
         <div class="summary-card-value">${sym}${estMonthly.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
       </div>
     </div>
-    <p class="field-hint" style="margin-bottom:12px">Amounts converted to ${esc(state.quoteCurrency)}. Quarterly ÷ 3, Annual ÷ 12, Weekly × 4.33.</p>`;
-}
-
-// ── Card list ─────────────────────────────────────────────────────────────────
-
-function _freqLabel(f) {
-  return FREQUENCIES.find(x => x.value === f)?.label || f || '—';
-}
-
-const _FREQ_SHORT = { weekly: 'wk', monthly: 'mo', quarterly: 'qtr', annual: 'yr' };
-function _freqShort(f) { return _FREQ_SHORT[f] || f || '—'; }
-
-function _renderSubCard(sub) {
-  const row = sub._row;
-
-  if (state.subDeleteRow === row) {
-    return `
-      <div class="sub-card">
-        <span class="confirm-text">Delete <strong>${esc(sub.name)}</strong>?</span>
-        <div class="row-actions" style="margin-top:6px">
-          <button class="btn-link danger" data-action="sub-confirm-delete" data-row="${row}">Yes, delete</button>
-          <button class="btn-link" data-action="sub-cancel-delete">Cancel</button>
-        </div>
-      </div>`;
-  }
-
-  const sym         = getSymbol(sub.currency);
-  const amtFmt      = `${sym}${parseFloat(sub.amount).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-  const freqLabel   = _freqLabel(sub.frequency);
-  const isActive    = sub.record_status === 'active';
-  const dotCls      = isActive ? 'sub-status-active' : 'sub-status-paused';
-  const inactiveCls = isActive ? '' : ' sub-card-inactive';
-
-  const metaLine = state.accountMap[sub.source_account]?.name;
-
-  let nextLine = '';
-  if (isActive && sub.next_payment_date) {
-    const nextDate  = new Date(sub.next_payment_date);
-    const nextFmt   = nextDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
-    const today     = new Date(); today.setHours(0, 0, 0, 0);
-    const diffMs    = nextDate - today;
-    const diffDays  = Math.round(diffMs / 86400000);
-    const duePart   = diffDays === 0 ? 'today'
-                    : diffDays === 1 ? 'tomorrow'
-                    : diffDays  >  0 ? `in ${diffDays}d`
-                    : `${Math.abs(diffDays)}d overdue`;
-    nextLine = `<div class="sub-card-next">Next: ${esc(nextFmt)} <span class="sub-card-due">(${esc(duePart)})</span></div>`;
-  }
-
-  const isForeign = sub.currency && sub.currency !== state.quoteCurrency;
-  let convertedLine = '';
-  if (isForeign) {
-    const monthlyBase = toBase(_toMonthly(sub.amount, sub.frequency), sub.currency, null);
-    const baseSym     = getSymbol(state.quoteCurrency);
-    const baseFmt     = `${baseSym}${monthlyBase.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}/mo`;
-    convertedLine     = `<div class="sub-card-converted">${esc(baseFmt)}</div>`;
-  }
-
-  return `
-    <div class="sub-card${inactiveCls}">
-      <div class="sub-card-body">
-        <div class="sub-card-name"><span class="sub-status-dot ${dotCls}">●</span> ${esc(sub.name)}</div>
-        ${metaLine ? `<div class="sub-card-meta">${esc(metaLine)}</div>` : ''}
-        ${nextLine}
-      </div>
-      <div class="sub-card-amt-wrap">
-        <div class="sub-card-amt">${esc(amtFmt)}/${esc(_freqShort(sub.frequency))}</div>
-        ${convertedLine}
-      </div>
-      <button class="tx-menu-trigger" data-action="sub-menu" data-row="${row}" title="Actions">⋮</button>
+    <p class="field-hint" style="margin-bottom:12px">Amounts converted to ${esc(state.quoteCurrency)}. Quarterly ÷ 3, Annual ÷ 12, Weekly × 4.33.</p>
+    <div class="table-wrap acc-table-wrap${state.subDeleteRow !== null ? ' acc-has-active' : ''}">
+      <table class="acc-table">
+        <thead><tr>
+          ${thSort('name', 'Name')}
+          <th>Account</th>
+          ${thSort('next_payment_date', 'Next payment')}
+          ${thSort('amount_base', 'Amount')}
+          <th style="width:40px"></th>
+        </tr></thead>
+        <tbody>${subs.map(s => _renderSubRow(s, sym)).join('')}</tbody>
+      </table>
     </div>`;
 }
 
-function _renderCards() {
-  const subs = state.subscriptions;
-  if (!subs.length) {
-    return `<div class="empty-state"><strong>No subscriptions yet</strong>Add your first recurring subscription above.</div>`;
-  }
-
-  // Sort: active by next_payment_date asc, then amount desc; inactive to bottom by amount desc
-  const sorted = [...subs].sort((a, b) => {
-    const aActive = a.record_status === 'active';
-    const bActive = b.record_status === 'active';
-    if (aActive !== bActive) return aActive ? -1 : 1;
-    if (aActive) {
-      const aDate = a.next_payment_date || '9999-12-31';
-      const bDate = b.next_payment_date || '9999-12-31';
-      if (aDate !== bDate) return aDate < bDate ? -1 : 1;
-    }
-    return parseFloat(b.amount) - parseFloat(a.amount);
-  });
-
-  // Group by major_category; ungrouped subs fall into 'Uncategorised' at the end
-  const groupMap = new Map();
-  sorted.forEach(s => {
-    const key = s.major_category || 'Uncategorised';
-    if (!groupMap.has(key)) groupMap.set(key, []);
-    groupMap.get(key).push(s);
-  });
-
-  const sym = getSymbol(state.quoteCurrency);
-
-  return [...groupMap.entries()].map(([groupName, groupSubs]) => {
-    const monthlyTotal = groupSubs
-      .filter(s => s.record_status === 'active')
-      .reduce((sum, s) => sum + toBase(_toMonthly(s.amount, s.frequency), s.currency, null), 0);
-    const totalFmt = monthlyTotal > 0
-      ? `${sym}${monthlyTotal.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}/mo`
-      : '';
-
-    return `
-      <div class="sub-group">
-        <div class="sub-group-header">
-          <span class="sub-group-name">${esc(groupName)}</span>
-          ${totalFmt ? `<span class="sub-group-total">${esc(totalFmt)}</span>` : ''}
-        </div>
-        <div class="sub-list">${groupSubs.map(_renderSubCard).join('')}</div>
-      </div>`;
-  }).join('');
-}
-
-let _importParsed = null;
-let _subMenuKey   = null;
+let _importParsed    = null;
+let _subMenuKey      = null;
+let _subImportResult = null;
 
 // ── CSV import ────────────────────────────────────────────────────────────────
 
@@ -364,7 +415,7 @@ function _renderImportPanel() {
         <div class="field-hint">Columns: name, counterparty_name, amount, currency, frequency, day_of_month, day_of_week, source_account, tx_type, major_category, minor_category, description, subscription_start_date, subscription_end_date</div>
       </div>
     </div>
-    <div id="subImportStatus"></div>
+    <div id="subImportStatus">${_subImportResult || ''}</div>
     <div class="form-actions" style="margin-top:16px">
       <button class="btn btn-primary" id="subImportConfirm" disabled>Import</button>
       <button class="btn btn-secondary" id="subImportCancel">Cancel</button>
@@ -482,8 +533,7 @@ async function _submitImport(subscriptions) {
               : `<span class="badge badge-et-out">${esc(r.error || 'unknown')}</span>`}
           </td>
         </tr>`).join('');
-      const status = el('subImportStatus');
-      if (status) status.innerHTML = `
+      _subImportResult = `
         <div style="margin-bottom:8px;font-size:13px">${created} created${skipped ? ` · ${skipped} already existed` : ''} · <span style="color:var(--ember)">${failed} failed</span></div>
         <div class="table-wrap" style="margin-bottom:8px">
           <table class="acc-table">
@@ -491,6 +541,8 @@ async function _submitImport(subscriptions) {
             <tbody>${resultRows}</tbody>
           </table>
         </div>`;
+      const status = el('subImportStatus');
+      if (status) status.innerHTML = _subImportResult;
       _importParsed = null;
       if (btn) { btn.disabled = true; btn.textContent = 'Import'; }
       if (created > 0) { document.dispatchEvent(new CustomEvent('et:reload')); }
@@ -514,6 +566,8 @@ export function renderSubscriptions() {
   const addBtnText   = anyFormOpen ? '× Close' : '+ Add';
   const impBtnText   = state.subImportOpen ? '× Close' : '↑ Import';
 
+  const filtered = _sortSubs(_applySubFilters(state.subscriptions));
+
   content.innerHTML = `
     <div class="sec-head">
       <div style="display:flex;gap:8px;margin-left:auto">
@@ -526,8 +580,8 @@ export function renderSubscriptions() {
     ${anyFormOpen ? _renderForm(state.subEditRow !== null
       ? (state.subscriptions.find(s => s._row === state.subEditRow) ?? null)
       : null) : ''}
-    ${_renderStats()}
-    ${_renderCards()}
+    ${_renderSubFilterBar()}
+    ${_renderTable(filtered)}
   `;
 
   _attachEvents();
@@ -549,6 +603,7 @@ function _attachEvents() {
     if (state.subImportOpen) {
       state.subImportOpen = false;
       _importParsed = null;
+      _subImportResult = null;
     } else {
       state.subImportOpen = true;
       state.subAddOpen    = false;
@@ -561,6 +616,7 @@ function _attachEvents() {
   el('subImportFile')?.addEventListener('change', e => {
     const file = e.target.files[0];
     if (!file) return;
+    _subImportResult = null;
     const reader = new FileReader();
     reader.onload = ev => {
       const parsed = _parseSubscriptionsCsv(ev.target.result);
@@ -580,6 +636,7 @@ function _attachEvents() {
   el('subImportCancel')?.addEventListener('click', () => {
     state.subImportOpen = false;
     _importParsed = null;
+    _subImportResult = null;
     renderSubscriptions();
   }, { signal });
 
@@ -670,6 +727,56 @@ function _attachEvents() {
       { key: 'csv',  label: 'CSV'  },
       { key: 'json', label: 'JSON' },
     ], key => exportSubscriptions(key, state.subscriptions));
+  }, { signal });
+
+  content.querySelectorAll('th[data-sub-sort]').forEach(th => {
+    th.addEventListener('click', () => {
+      const col = th.dataset.subSort;
+      if (state.subSort.col === col) {
+        state.subSort.dir = state.subSort.dir === 'asc' ? 'desc' : 'asc';
+      } else {
+        state.subSort.col = col;
+        state.subSort.dir = col === 'next_payment_date' ? 'asc' : 'desc';
+      }
+      renderSubscriptions();
+    }, { signal });
+  });
+
+  el('subFilterToggle')?.addEventListener('click', () => {
+    state.subFilterOpen = !state.subFilterOpen;
+    const body  = el('subFilterBody');
+    const arrow = el('subFilterToggle')?.querySelector('.filter-arrow');
+    if (body)  body.classList.toggle('hidden', !state.subFilterOpen);
+    if (arrow) arrow.textContent = state.subFilterOpen ? '▲' : '▼';
+  }, { signal });
+
+  el('subFilterBody')?.querySelectorAll('[data-sub-filter-rstat]').forEach(cb => {
+    cb.addEventListener('change', () => {
+      const all = Array.from(el('subFilterBody').querySelectorAll('[data-sub-filter-rstat]:checked'))
+        .map(c => c.dataset.subFilterRstat);
+      state.subFilters.recordStatuses = all;
+      renderSubscriptions();
+    }, { signal });
+  });
+
+  el('subFMajor')?.addEventListener('change', e => {
+    state.subFilters.majorCategory = e.target.value;
+    renderSubscriptions();
+  }, { signal });
+
+  el('subFFrequency')?.addEventListener('change', e => {
+    state.subFilters.frequency = e.target.value;
+    renderSubscriptions();
+  }, { signal });
+
+  el('subFSearch')?.addEventListener('input', e => {
+    state.subFilters.search = e.target.value;
+    renderSubscriptions();
+  }, { signal });
+
+  el('subFilterClear')?.addEventListener('click', () => {
+    state.subFilters = { recordStatuses: ['active','inactive','deleted','locked'], majorCategory: 'all', frequency: 'all', search: '' };
+    renderSubscriptions();
   }, { signal });
 }
 
