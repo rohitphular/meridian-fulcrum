@@ -126,7 +126,7 @@ Check each item against the standard. Mark PASS or FAIL with file and line refer
 - [ ] Each migration contains exactly one `upgrade(client) -> None` function
 - [ ] `upgrade` wraps all DDL in a single `with client.cursor() as cursor:` block and calls `client.commit()` at the end
 - [ ] No migration creates a table without `CREATE TABLE IF NOT EXISTS`
-- [ ] Seed data INSERTs in `0001_create_account_types.py` supply `now()` explicitly for `created_at` — the column has no DEFAULT
+- [ ] Seed data INSERTs in `0002_create_account_types.py` supply `now()` explicitly for `created_at` — the column has no DEFAULT
 
 ### Type annotations
 
@@ -134,28 +134,23 @@ Check each item against the standard. Mark PASS or FAIL with file and line refer
 - [ ] Every function parameter has a type annotation
 - [ ] Local variables are NOT annotated unless the type is non-obvious from assignment
 
-### ETL load behaviour
+### ETL load behaviour (sync-status model)
 
-These checks enforce the incremental load invariants specific to this job. They are the highest-risk items in any PR.
+These checks enforce the sync-status model invariants. They are the highest-risk items in any PR.
 
-- [ ] **Hash — raw values**: `ordered_values` in every `transforms/*.py` uses raw sheet string variables, not typed Python values — `raw_tx_type` not `tx_type`; `raw_is_active` not `is_active` (`str(True)` is `"True"` but the sheet contains `"TRUE"`, producing a different hash on every run)
-- [ ] **Hash — token normalisation**: `source_account_types` and `target_account_types` are passed through `_normalise_account_types_for_hash` before inclusion in `ordered_values`, not included raw — this ensures `"asset,investment"` and `"investment,asset"` hash-equivalent
-- [ ] **Hash — column order**: `ordered_values` column order in every `transforms/*.py` exactly matches the schema order declared in the entity's task doc — any reordering silently invalidates all existing hashes
-- [ ] **Zero-row guard**: if `sheets_client.read_sheet(tab)` returns 0 rows, the job raises immediately before the soft-delete pass — an empty read must never trigger a full wipe
-- [ ] **Soft-delete atomicity**: the `ledger_data_checksums` DELETE and the entity table soft-delete UPDATE are in the same transaction — `ledger_data_checksums` must never hold a row for a soft-deleted entity row
-- [ ] **Resurrection**: the new-row INSERT uses `ON CONFLICT (...) DO UPDATE SET is_deleted = FALSE, deleted_at = NULL, ...` — a row returning to the sheet after soft-delete must be fully restored, not rejected by the unique constraint
+- [ ] **Zero-row guard**: if `sheets_client.read_sheet(tab)` returns 0 rows on the first batch, the entity method raises `RuntimeError` immediately — an empty first read must never proceed
+- [ ] **sync_status routing**: `in-sync` rows are skipped with no DB write and no write-back; missing or unrecognised `sync_status` logs a warning and skips with no write-back; `create-pending`/`create-failed` take the INSERT path; `update-pending`/`update-failed` take the UPDATE path
+- [ ] **Transform errors**: `ValueError` from `transform()` writes `create-failed`/`update-failed` + error message to the sheet and continues to the next row — it does not abort the job
+- [ ] **Narrow except**: each row's DB `except` block catches only `UniqueViolation`, `ForeignKeyViolation`, `CheckViolation`, `NotNullViolation` — all other exceptions propagate and abort the job
+- [ ] **Batch write-back**: write-backs are accumulated in a `list[WriteBack]` during the per-row loop and flushed in a single `batch_update_rows` call at the end of each batch — never flushed per-row
 - [ ] **account_types expansion — fetchall**: `_expand_account_types` uses `cursor.fetchall()` + inner loop, not `cursor.fetchone()` — a single type token (e.g. `"asset"`) matches multiple sub-types; one join row per sub-type must be inserted
 - [ ] **account_types expansion — conflict safety**: join table inserts use `ON CONFLICT DO NOTHING` — duplicate type tokens in a cell (e.g. `"asset,asset"`) must not raise a PK violation
 - [ ] **account_types expansion — rowcount**: `inserted += cursor.rowcount` after each INSERT, not `inserted += 1` — `ON CONFLICT DO NOTHING` skips return rowcount 0 and must not be counted
 
-Note: `major_category` and `minor_category` are stored and hashed as raw sheet strings (not stripped) — this is intentional so whitespace changes are detected as edits. Do not flag the absence of `.strip()` on these fields.
-
 ### Transaction boundaries
 
-- [ ] Every per-row write (insert, update, or hash-only `last_seen_at` update) commits before the next row begins — a rollback on row N must not undo row N-1
-- [ ] `hashes_db.update_last_seen` is the only function in `database/ledger_data_checksums.py` that calls `conn.commit()` — `insert_hash`, `update_hash`, `delete_hash`, and `get_all_keys` must not commit or rollback
+- [ ] Every per-row write commits before the next row begins — a rollback on row N must not undo row N-1
 - [ ] `_expand_account_types` does not call `conn.commit()` or `conn.rollback()` — it runs inside the caller's transaction
-- [ ] `hashes_db.get_all_keys` is called after the per-row loop completes, not inside it — it must read the fully committed final state of `ledger_data_checksums`
 
 ### Error handling
 
@@ -213,7 +208,7 @@ Check each item. Mark PASS or FAIL with file and line reference.
 - [ ] Column names: `snake_case`; booleans prefixed `is_`; timestamps suffixed `_at`; FK references suffixed `_id`
 - [ ] Primary key column: `id UUID NOT NULL DEFAULT gen_random_uuid()` — plain `id`, not entity-prefixed
 - [ ] Constraint names follow `{type_prefix}_{table}_{column(s)}` — e.g. `pk_category_master`, `uq_category_master_nat_key`, `fk_csat_category`, `chk_cm_account_mandatory`
-- [ ] No indexes defined yet — if any are added, verify they follow `idx_{table}_{columns}`
+- [ ] All indexes follow `idx_{table}_{purpose}` naming — the 7 partial unique indexes in `0004_create_accounts.py` for SCD current-record enforcement are named `idx_{extension_table}_current`
 
 ### Banned generic names
 

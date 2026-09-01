@@ -25,12 +25,12 @@ def _to_sync_notes(e: Exception) -> str:
     if isinstance(e, pg_errors.ForeignKeyViolation):
         return "Unknown account type/subtype combination — check that account_type and account_subtype match a row in account_types"
     if isinstance(e, pg_errors.CheckViolation):
-        constraint = e.diag.constraint_name or ""
-        if "opening_value_sign" in constraint:
+        constraint = e.diag.constraint_name
+        if constraint is not None and "opening_value_sign" in constraint:
             return "Opening value sign mismatch: liabilities must be ≤ 0, assets/investments must be ≥ 0"
-        if "record_status" in constraint:
+        if constraint is not None and "record_status" in constraint:
             return "Invalid record_status — must be active, inactive, deleted, or locked"
-        if "currency" in constraint:
+        if constraint is not None and "currency" in constraint:
             return "currency_code must be a 3-character uppercase ISO code"
         return f"DB constraint violation: {constraint}"
     if isinstance(e, pg_errors.NotNullViolation):
@@ -39,6 +39,11 @@ def _to_sync_notes(e: Exception) -> str:
 
 
 def upsert_accounts(conn: Any, sheets_client: SheetsClient, rows: list[dict[str, Any]], row_start: int) -> None:
+    """Process a batch of account rows and write all sync column updates back in one API call.
+
+    row_start is the 1-indexed data row number of the first row in this batch
+    (1 = first row after header). Sheet row = row_start + row_index + 1.
+    """
     in_sync_count = sum(1 for row in rows if row.get("sync_status") == "in-sync")
     actionable_count = sum(1 for row in rows if row.get("sync_status") in _ACTIONABLE)
     logger.info(f"upsert_accounts: batch_start entity=accounts row_start={row_start} total={len(rows)} in_sync={in_sync_count} actionable={actionable_count}")

@@ -120,10 +120,12 @@ entities:
   categories:
     enabled: true
   accounts:
+    enabled: true
+  transactions:
     enabled: false
 ```
 
-When an entity is disabled, both its extraction and its soft-delete pass are skipped. Rows deleted from the sheet while an entity is disabled will remain active in the DB until the entity is re-enabled and a run observes them absent.
+When an entity is disabled, both its extraction and write-back pass are skipped.
 
 ---
 
@@ -163,10 +165,18 @@ exclude           = ["schema_migrations_ledger_extract"]   # py-db-migrate track
 ## `Makefile`
 
 ```makefile
-.PHONY: generate-models
+.PHONY: run
+run: ## Run the extract job — ENV=dev|prod required  (e.g. make run ENV=dev)
+    bash cicd/start-up.sh $(ENV)
 
+.PHONY: lint
+lint: ## Lint and format-check — must pass before deploy
+    uv run ruff check .
+    uv run ruff format --check .
+
+.PHONY: generate-models
 generate-models: ## Regenerate typed model files (spins up a fresh Docker PostgreSQL container — requires Docker running)
-	uv run py-db-schema generate --db postgres
+    uv run py-db-schema generate --db postgres
 ```
 
 ---
@@ -202,9 +212,9 @@ Stores the last-seen spreadsheet modified time to enable the early-exit optimisa
 
 ---
 
-## Sync-status model (categories)
+## Sync-status model (all entities)
 
-Categories use a GAS-stamped `sync_status` column rather than hash comparison. The sheet is the source of truth for intent; the DB reflects what has been applied.
+All entities use a GAS-stamped `sync_status` column. The sheet is the source of truth for intent; the DB reflects what has been applied. There is no hash comparison, no `ledger_data_checksums` involvement, and no soft-delete pass — when a user deletes a row via the app, GAS sets `record_status = 'deleted'` and `sync_status = 'update-pending'`; the extract job picks it up via the normal update path.
 
 **Status values**
 
@@ -216,22 +226,22 @@ Categories use a GAS-stamped `sync_status` column rather than hash comparison. T
 | `create-failed` | Extract job | Last create attempt failed — will retry |
 | `update-failed` | Extract job | Last update attempt failed — will retry |
 
-**How a run works for categories**
+**How a run works for each entity**
 
-1. Read sheet in batches of up to 1000 rows.
-2. For each row: skip if `in-sync`; skip with warning if `sync_status` is missing or unrecognised.
-3. For `create-pending` / `create-failed`: INSERT via `ON CONFLICT DO UPDATE`. On success write back `in-sync`. On known integrity error write back `create-failed` + human-readable `sync_notes`.
-4. For `update-pending` / `update-failed`: UPDATE by natural key with `RETURNING id`. If 0 rows returned, fall back to INSERT. On success write back `in-sync`. On known integrity error write back `update-failed` + `sync_notes`.
+1. Read sheet in batches of up to 1000 rows. If the first batch returns 0 rows, abort with `RuntimeError` — do not proceed.
+2. For each row: skip if `in-sync`; skip with warning if `sync_status` is missing or unrecognised (do not write back).
+3. For `create-pending` / `create-failed`: INSERT via `ON CONFLICT DO UPDATE`. On success write back `in-sync`. On known integrity error (`UniqueViolation`, `ForeignKeyViolation`, `CheckViolation`, `NotNullViolation`) rollback and write back `create-failed` + human-readable `sync_notes`. All other exceptions propagate and abort the job.
+4. For `update-pending` / `update-failed`: UPDATE by natural key with `RETURNING id`. If 0 rows returned, fall back to INSERT path. On success write back `in-sync`. On known integrity error rollback and write back `update-failed` + `sync_notes`.
 5. Each row is committed independently before the next row begins.
-6. All write-backs for the batch are flushed in a single `batch_update_rows` API call at the end of the batch.
+6. All write-backs for the batch are accumulated in a `list[WriteBack]` and flushed in a single `batch_update_rows` API call at the end of the batch.
 
-There is no soft-delete pass for categories — removed rows are left in the DB untouched.
+There is no soft-delete pass for any entity — removed rows are left in the DB with `record_status = 'deleted'` (set by GAS before extract).
 
 ---
 
-## Incremental load approach (Decision 2 — confirmed Option A)
+## Incremental load approach
 
-`get_modified_time()` operates at **spreadsheet level**, not tab level. The early-exit only fires when nothing in the entire spreadsheet has changed. Any edit to any tab (including unrelated tabs) will cause all enabled entities to be read and hash-compared.
+`get_modified_time()` operates at **spreadsheet level**, not tab level. The early-exit only fires when nothing in the entire spreadsheet has changed. Any edit to any tab (including unrelated tabs) will cause all enabled entities to be processed.
 
 Every run is structured in three phases:
 
@@ -242,11 +252,8 @@ Every run is structured in three phases:
 
 **Phase 2 — Entity extraction (each entity in sequence)**
 4. For each enabled entity (categories → accounts → transactions → subscriptions):
-   a. Read all rows from sheet tab
-   b. Compute a deterministic SHA-256 hash of each row's content
-   c. Compare against `(entity, natural_key, row_hash)` stored in `ledger_data_checksums`
-   d. Upsert rows where hash changed or key is new — **each row's writes within a single DB transaction**
-   e. After all rows for this entity processed, query `ledger_data_checksums` for keys not seen this run — soft-delete those rows — **each deletion within a single DB transaction**
+   a. Read sheet in batches of up to 1000 rows. If the first batch returns 0 rows, abort immediately with `RuntimeError` — never proceed on an empty first read.
+   b. For each row: route by `sync_status` per the sync-status model above. Each row is committed independently. Write-backs are accumulated per batch and flushed in a single `batch_update_rows` call at the end of the batch.
 
 **Phase 3 — Finalise**
 5. Update job_execution_details using the `get_modified_time()` value cached in Phase 1:
@@ -260,69 +267,9 @@ ON CONFLICT (job_name) DO UPDATE
 ```
    where `$1` is the timestamp returned by `get_modified_time()` in Phase 1 step 3.
 
-> **Partial failure:** If the job fails before Phase 3 completes, `last_sheet_modified_at` is not updated. The next run re-processes all entities from Phase 2, which is safe because all entity upserts are idempotent.
+> **Partial failure:** If the job fails before Phase 3 completes, `last_sheet_modified_at` is not updated. The next run re-processes all entities from Phase 2, which is safe because all entity upserts are idempotent via `ON CONFLICT DO UPDATE`.
 
-> **Single-instance assumption:** The job is designed to run as a single instance at a time (e.g. scheduled cron). Concurrent runs are not safe — the soft-delete pass computes `db_keys − seen_keys` in memory; a second instance inserting new `ledger_data_checksums` rows between `get_all_keys()` and the soft-delete loop would cause those new rows to be incorrectly treated as stale and soft-deleted.
-
----
-
-## Hash format (all entities)
-
-SHA-256 of all source columns joined in fixed schema order. Rules:
-- **Separator:** `|`
-- **NULL / blank cell:** empty string `""`
-- **All values cast to `str` before joining**
-- **Column order:** exactly as listed in the entity's task document (source columns only — no extended columns)
-
-```python
-import hashlib
-
-hashlib.sha256("|".join("" if v is None else str(v) for v in ordered_values).encode()).hexdigest()
-```
-
-Each entity's `transforms/*.py` is responsible for assembling `ordered_values` in the correct column order.
-
-**Important:** hash is computed from **raw sheet strings before any type conversion**. Pass raw cell values into `ordered_values` — never typed Python values. For example, the sheet's `"TRUE"` not Python's `True` (which `str()` renders as `"True"`, producing a different hash on every run).
-
-**Exception:** entity task documents may specify pre-processing for individual fields before inclusion in `ordered_values` (e.g. token normalisation for comma-separated type lists in categories). Where specified, that pre-processing takes precedence over the raw-values rule for that field only.
-
----
-
-## Natural key encoding per entity
-
-| Entity | `natural_key` encoding |
-|---|---|
-| `categories` | `{tx_type}\|{major_category}\|{minor_category}` |
-| `accounts` | `{id}` |
-| `transactions` | `{id}` |
-| `subscriptions` | `{id}` |
-
----
-
-## Extended schema additions (Decision 3 — confirmed)
-
-All four entity tables get:
-
-| Column | Type | Notes |
-|---|---|---|
-| `id` | `UUID NOT NULL DEFAULT gen_random_uuid()` | Surrogate PK |
-| `row_hash` | `TEXT NOT NULL` | SHA-256 of source row content |
-| `is_deleted` | `BOOLEAN NOT NULL DEFAULT FALSE` | Soft-delete flag |
-| `created_at` | `TIMESTAMPTZ NOT NULL` | When this row was first written by the extract job |
-| `updated_at` | `TIMESTAMPTZ NOT NULL` | When this row was last updated by the extract job |
-| `deleted_at` | `TIMESTAMPTZ` | Set when soft-deleted |
-
-Note: `accounts` and `subscriptions` have a GAS-sourced `created_at` column — stored as `account_created_at` and `subscription_created_at` respectively to avoid collision with the extract-added `created_at`.
-
-Type transformations:
-
-| Sheet type | DB type |
-|---|---|
-| `tx_date_time` string | `TIMESTAMPTZ` |
-| `amount`, `fx_rate`, `opening_value`, `current_value` | `NUMERIC(19,6)` |
-| `is_*` boolean strings | `BOOLEAN` |
-| `created_at` string | `TIMESTAMPTZ` |
-| `tags` | `TEXT` (semicolons preserved) |
+> **Single-instance assumption:** The job is designed to run as a single instance at a time (e.g. scheduled cron). Concurrent runs are not safe.
 
 ---
 

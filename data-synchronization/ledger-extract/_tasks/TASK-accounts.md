@@ -1,6 +1,6 @@
 # TASK — accounts
 
-**Status:** READY TO BUILD
+**Status:** IMPLEMENTED (Phase 1 — account_master only)
 **Build order:** 2 of 4 — no dependencies on other entities
 
 ---
@@ -93,7 +93,7 @@ None — all design decisions confirmed.
 
 All 8 tables created in a single migration in dependency order: `account_master` first, then all 7 extension tables (all FK to `account_master.id`).
 
-**Migration status:** `0004_create_accounts.py` exists but is inconsistent with this task doc and must be fully rewritten. Specific divergences: uses `account_status` (wrong) not `record_status`; has extra columns `institution_name` and `account_opening_date` (not in scope for Phase 1); is missing `opening_value`; has `deleted_at` column (not needed — sync_status model); record_status CHECK has wrong values. See "What to build" checklist.
+**Migration status:** `0004_create_accounts.py` is complete — rewritten to match this task doc. All 8 tables created with correct constraints.
 
 ---
 
@@ -485,11 +485,11 @@ Missing or unrecognised `sync_status` → skip with a `warning` log; do not writ
    | Exception | Human-readable sync_notes |
    |---|---|
    | `UniqueViolation` | `"Duplicate account_id — already exists in DB"` |
-   | `ForeignKeyViolation` | `"Unknown account type/subtype combination: {account_type}/{account_subtype}"` |
+   | `ForeignKeyViolation` | `"Unknown account type/subtype combination — check that account_type and account_subtype match a row in account_types"` |
    | `CheckViolation` (sign guard) | `"Opening value sign mismatch: liabilities must be ≤ 0, assets/investments must be ≥ 0"` |
-   | `CheckViolation` (record_status) | `"Invalid record_status value — must be active, inactive, deleted, or locked"` |
+   | `CheckViolation` (record_status) | `"Invalid record_status — must be active, inactive, deleted, or locked"` |
    | `CheckViolation` (currency_code) | `"currency_code must be a 3-character uppercase ISO code"` |
-   | `CheckViolation` (other) | `"DB constraint violation: {str(e)}"` |
+   | `CheckViolation` (other) | `"DB constraint violation: {constraint_name}"` where `constraint_name = e.diag.constraint_name or ""` |
    | `NotNullViolation` | `"Required field is null: {column name from e.diag.column_name}"` |
 
 4. On success: commit, write back `in-sync` + UTC timestamp + `''`.
@@ -521,4 +521,4 @@ Each row is committed independently. All write-backs for the batch are accumulat
 
 - [ ] `database/accounts.py` — `upsert_accounts(conn, rows)` (Phase 1 only; no extension table writes)
 
-- [ ] Wire `_extract_accounts` into `core/extractor.py` — already partially wired; confirm signature matches `upsert_accounts(conn, rows)`
+- [ ] Wire `_extract_accounts` into `core/extractor.py` — already partially wired; confirm signature matches `upsert_accounts(conn, sheets_client, rows, row_start)`

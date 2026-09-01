@@ -124,3 +124,19 @@ Categories use the sync_status model. If a row is stuck with `create-failed` or 
 After fixing the sheet data, change `sync_status` back to `create-pending` or `update-pending` and re-run the job. The job retries all rows with `create-failed` or `update-failed` status on every run.
 
 If the job fails mid-batch before writing sync columns back (e.g. a Sheets API error), rows processed in that batch will retain their previous `sync_status`. Re-running the job will retry them safely — all DB writes are per-row transactions and idempotent via `ON CONFLICT DO UPDATE`.
+
+---
+
+## Recovering from a failed sync row (accounts)
+
+Accounts use the same sync_status model as categories. If a row is stuck with `create-failed` or `update-failed`, check the `sync_notes` column in the sheet for the human-readable reason. Common causes:
+
+- **Unknown account type/subtype combination** — the `type` / `sub_type` combination does not exist in the `account_types` reference table. Correct the sheet values to match a valid combination.
+- **Opening value sign mismatch** — a liability account has a positive `opening_value`, or an asset/investment account has a negative one. The GAS backend should prevent this, but correct it in the sheet if it occurs.
+- **Invalid record_status** — `record_status` is not one of `active`, `inactive`, `deleted`, `locked`. Correct the value in the sheet.
+- **Invalid currency_code** — `currency` is not a 3-character uppercase ISO code (e.g. `GBP`, `USD`, `XAU`). Correct the value.
+- **Check constraint (other)** — a field value violates a DB constraint. The `sync_notes` will include the constraint name — cross-reference against the `account_master` schema.
+
+After fixing the sheet data, change `sync_status` back to `create-pending` or `update-pending` and re-run the job. The job retries all rows with `create-failed` or `update-failed` status on every run.
+
+If the job fails mid-batch before writing sync columns back, rows processed in that batch will retain their previous `sync_status`. Re-running the job will retry them safely — all DB writes are per-row transactions and idempotent via `ON CONFLICT DO UPDATE`.

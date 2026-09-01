@@ -16,6 +16,11 @@ run: upgrade-libs ## Run the extract job — ENV=dev|prod required  (e.g. make r
 
 ##@ Dev
 
+.PHONY: lint
+lint: ## Lint and format-check — must pass before deploy
+	uv run ruff check .
+	uv run ruff format --check .
+
 .PHONY: upgrade-libs
 upgrade-libs: ## Re-resolve all meridian-common-libs packages to their latest commits on main
 	uv lock --upgrade-package py-logging --upgrade-package py-db-migrate --upgrade-package py-google-workspace --upgrade-package py-db-schema

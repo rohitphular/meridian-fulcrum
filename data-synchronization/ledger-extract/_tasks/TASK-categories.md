@@ -149,12 +149,12 @@ The extractor does not compute hashes. The sheet's `sync_status` column (col 16)
 | `update-pending` | UPDATE path |
 | `update-failed` | Retry — UPDATE path |
 
-**Sheet write-back:** After processing each non-`in-sync` row, the extractor writes three cells back to the Google Sheet via the Sheets API using the row's sheet position:
+**Sheet write-back:** After processing each non-`in-sync` row, the extractor accumulates three-cell write-back entries for the Google Sheet:
 - `sync_status` (col 16): `'in-sync'` on success; `'create-failed'` or `'update-failed'` (matching the path taken) on DB error or validation failure
 - `sync_date_time` (col 17): UTC ISO timestamp of the operation
 - `sync_notes` (col 18): `''` on success; error message on failure
 
-Write-back is performed per-row immediately after the DB operation completes — not batched at end of run. This ensures the sheet reflects the latest state even if the job aborts mid-run.
+Write-backs are accumulated in a `list[WriteBack]` during the per-row loop and flushed in a single `batch_update_rows` API call at the end of each batch — not per-row. If the job aborts mid-batch before the flush, rows processed in that batch retain their previous `sync_status`; re-running the job retries them safely (all DB writes are idempotent via `ON CONFLICT DO UPDATE`).
 
 **Natural key:** `{tx_type_key}|{major_category_key}|{minor_category_key}`. `|` is a prohibited character in each of the three key fields; each must also be non-empty after stripping whitespace. Violations are row-level validation failures — write `create-failed`/`update-failed` + error message to the sheet and continue.
 
