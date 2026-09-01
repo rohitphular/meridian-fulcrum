@@ -20,7 +20,7 @@ function _buildData(txs, from, to) {
   while (cursor <= end) {
     const key     = `${cursor.getFullYear()}-${_pad(cursor.getMonth() + 1)}-${_pad(cursor.getDate())}`;
     const mon     = cursor.toLocaleDateString('en-GB', { month: 'short' });
-    const txsDay  = byDay.get(key) || [];
+    const txsDay  = byDay.get(key) ?? [];
     labels.push(`${cursor.getDate()} ${mon}`);
     values.push(sumAmountBase(txsDay));
     dayTxs.push(txsDay);
@@ -117,9 +117,9 @@ export async function render(containerId, { txs, from, to, sym }) {
     onClick: (_evt, elements) => {
       if (!elements.length) return;
       const idx    = elements[0].index;
-      const drillEl = document.getElementById('ds-drill');
+      const drillEl = el('ds-drill');
       if (!drillEl) return;
-      const txsDay = dayTxs[idx] || [];
+      const txsDay = dayTxs[idx] ?? [];
       drillEl.innerHTML = `
         <div style="display:flex;align-items:baseline;gap:8px;margin:16px 0 8px;padding-top:12px;border-top:1px solid var(--hair)">
           <strong style="font-size:var(--text-sm)">${esc(labels[idx])}</strong>

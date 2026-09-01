@@ -9,7 +9,6 @@ Schema reference: [data-model.md § Category](data-model.md#category).
 - CRUD on category rows (`type`, `major`, `minor`, `description`, `tag_keywords`, `counterparty_examples`, account-type hints, `is_subscription_eligible`)
 - Filter list by type, major, minor, search, account hint flags, subscription eligibility, record status
 - Soft-delete (`record_status → deleted`) with restore; lock (`record_status → locked`) prevents any further edits or deletes
-- Auto-seed a default category list on first run when the store is empty
 - Declare per-category account-type hints that the transaction layer enforces
 - CSV bulk import — upload a CSV file in the import panel; preview before committing
 
@@ -20,10 +19,10 @@ Schema reference: [data-model.md § Category](data-model.md#category).
 | `tx_type_key` | Required; must be `money-in` or `money-out` |
 | `major_category_label`, `minor_category_label` | Both required; non-empty strings |
 | `description`, `tag_keywords`, `counterparty_examples` | Optional |
-| `tag_keywords` storage | Lowercased on save; stored as a comma-separated string |
-| Uniqueness | Enforced on `(tx_type_key, major_category_key, minor_category_key)`. Duplicate on individual create → `duplicate_category`. Duplicate on bulk import → counted as `updated` in results. |
+| `tag_keywords` storage | Lowercased on save; stored as a comma-and-space-separated string (e.g. `'tag1, tag2, tag3'` via `join(', ')`) |
+| Uniqueness | Enforced on the three-part composite key `(tx_type_key, major_category_key, minor_category_key)` — not just major+minor. Duplicate on individual create → `duplicate_category`. On bulk import, rows whose composite key matches an existing sheet row are attempted as updates; the outcome (`updated` or `failed`) depends on whether the update succeeds. Within-batch duplicates of newly created rows are counted as `failed`. |
 | Soft-delete | `delete_category` sets `record_status → deleted`; the row stays in the sheet. Transactions retain their stored `major`/`minor` strings — no cascade. |
-| Restore | `restore_category` sets `record_status → active`; runs duplicate check before restoring. |
+| Restore | Done via `update_category` by passing `record_status: 'active'`. There is no separate `restore_category` action. |
 | Lock | `record_status = locked` blocks edits and deletes at the backend. Locked rows appear in the UI with View only — all mutation options are hidden. |
 
 ## Account-type hints (optional per-row)
@@ -33,9 +32,9 @@ A category row may carry four extra columns that the transaction layer enforces:
 | Column | Type | Meaning |
 |---|---|---|
 | `source_account_mandatory` | boolean | If true, transactions of this category MUST specify a source account |
-| `source_account_types` | string | Comma-separated allowed source account types (e.g. `current,savings`) |
+| `source_account_types` | string | Comma-and-space-separated allowed source account types (e.g. `current, savings`) |
 | `target_account_mandatory` | boolean | If true, transactions of this category MUST specify a target account |
-| `target_account_types` | string | Comma-separated allowed target account types |
+| `target_account_types` | string | Comma-and-space-separated allowed target account types |
 
 When a category with these hints is used on a transaction:
 
@@ -48,25 +47,49 @@ Example from the default seed:
 
 Categories without hints have no account-type constraints.
 
-## Default seed
+## Seeding
 
-On the first `list_categories` call, if the store is empty, the server appends a comprehensive default category set covering common income and expense scenarios. The seed includes:
-
-- ~25 `money-in` (major, minor) combinations
-- ~70 `money-out` (major, minor) combinations
-
-The list is not authoritative — users freely edit, delete, or restore any seeded row, and add their own.
+No automatic seeding exists. Categories must be populated via the bulk CSV import panel or the Add Category form.
 
 ## API surface
 
 | Operation | Behaviour |
 |---|---|
-| `list_categories` | Return all rows; seed defaults if empty |
-| `create_category` | Validate required fields; duplicate check → `duplicate_category`; append; stamps `created_at`, `updated_at`, `sync_status = create-pending` |
-| `create_categories_bulk` | Accept `categories[]`; dedup within batch and against sheet; return `{ created, updated, failed, results }` |
-| `update_category` | Validate required fields; locked guard; overwrite the row; stamps `updated_at` |
+| `list_categories` | Return all rows |
+| `create_category` | Validate required fields; duplicate check → `duplicate_category`; append; stamps `created_at`, `updated_at`, `sync_status = create-pending`. `record_status` is always written as `active` on create — passing any other value (including `'inactive'`) returns `invalid_record_status`. The add form therefore only offers `active` as a choice. |
+| `create_categories_bulk` | Accept `categories[]`; deduplicates against the sheet (existing rows are updated rather than re-created); within-batch duplicates of newly created rows are treated as failures and appear in the `failed` count; return `{ created, updated, failed, results }` |
+| `update_category` | Validate required fields (including optional `record_status` if present); locked guard; FK check if composite key is changing (see below); overwrite the row; stamps `updated_at`. `record_status` is written only if present in the request body — if absent, the existing status is preserved. To restore a deleted category, pass `record_status: 'active'` via this action. Optional parameter: `force` (boolean). |
 | `delete_category` | Locked guard; soft-delete (`record_status → deleted`); stamps `updated_at` |
-| `restore_category` | Duplicate check; sets `record_status → active`; stamps `updated_at` |
+
+### `update_category` — FK check on key-changing edits
+
+When `tx_type_key`, `major_category_label`, or `minor_category_label` changes such that the composite key `(tx_type_key, major_category_key, minor_category_key)` changes, the backend scans the transactions sheet and subscriptions sheet for rows that reference the old key (matching on `tx_type`, `major_category`, `minor_category`).
+
+- If any dependent rows exist and `body.force !== true`, the update is rejected: `{ ok: false, error: 'category_key_change_has_dependents', count: N }` where `N` is the total number of matching rows across both sheets.
+- If `body.force: true` is passed, or no dependent rows are found, the rename proceeds normally. The caller accepts responsibility for updating dependent rows — the backend does not cascade the rename.
+- If the composite key is not changing (only non-key fields are edited), no scan is performed.
+
+### `update_category` — `record_status` validation
+
+If `record_status` is present in the request body, it is validated against the allowed set `['active', 'inactive', 'deleted', 'locked']`. An unrecognised value returns `{ ok: false, error: 'invalid_record_status' }`. If `record_status` is absent from the body, validation passes and the existing status is preserved.
+
+**Asymmetry with `create_category`:** `create_category` only accepts `'active'` — any other value returns `invalid_record_status`. `update_category` accepts the full set.
+
+## Error codes
+
+| Error code | Returned by | Condition |
+|---|---|---|
+| `invalid_transaction_type` | `create_category`, `update_category` | `tx_type_key` is not `money-in` or `money-out` |
+| `missing_major_category` | `create_category`, `update_category` | `major_category_label` is absent or empty |
+| `missing_minor_category` | `create_category`, `update_category` | `minor_category_label` is absent or empty |
+| `invalid_category_label` | `create_category`, `update_category` | `major_category_label` or `minor_category_label` slugifies to an empty string (e.g. a label consisting solely of `&` or `/`) |
+| `missing_row_num` | `update_category`, `delete_category` | `row_num` is absent |
+| `invalid_row` | `update_category`, `delete_category` | `row_num` is out of sheet bounds or not a finite number |
+| `invalid_record_status` | `create_category`, `update_category` | `record_status` is present but not in the allowed set. For `create_category` only `'active'` is accepted; for `update_category` the full set `['active', 'inactive', 'deleted', 'locked']` is accepted. |
+| `duplicate_category` | `create_category`, `update_category` | Composite key `(tx_type_key, major_category_key, minor_category_key)` already exists on a different row |
+| `record_locked` | `update_category`, `delete_category` | The target row has `record_status = locked` |
+| `category_key_change_has_dependents` | `update_category` | Composite key is changing and `count` dependent rows exist across transactions and subscriptions; `force` is not true. Response includes `count: N`. |
+| `missing_categories` | `create_categories_bulk` | `body.categories` is absent or empty |
 
 ## CSV import
 
@@ -74,26 +97,60 @@ The import panel (accessible via the **Import** button in the section header) ac
 
 | Column | Required | Notes |
 |---|---|---|
-| `tx_type_key` | Yes | `money-in` or `money-out` |
+| `tx_type_key` | Yes | Must be exactly `money-in` or `money-out`. Invalid values are rejected as parse errors before submission — the row is skipped and reported in the preview error list. |
 | `major_category_label` | Yes | |
 | `minor_category_label` | Yes | |
 | `description` | No | |
-| `tag_keywords` | No | Comma-separated; lowercased on save |
+| `tag_keywords` | No | Comma-and-space-separated; lowercased on save |
 | `counterparty_examples` | No | Comma-separated |
 | `source_account_types` | No | Comma-separated sub-types |
 | `target_account_types` | No | Comma-separated sub-types |
 | `source_account_mandatory` | No | `true` / `false` |
 | `target_account_mandatory` | No | `true` / `false` |
 | `is_subscription_eligible` | No | `true` / `false` |
-| `record_status` | No | `active` / `inactive` — defaults to `active` if omitted or unrecognised |
+| `record_status` | No | For rows that **already exist** (matched by composite key), the value is passed to `update_category` and applied — including `deleted` or `locked`. For rows that are **newly created**, `record_status` is always `active` regardless of the CSV value (`create_category` rejects any other value). Note: if the target row is currently `locked`, the update will fail with `record_locked` regardless of the `record_status` value in the CSV. |
 
 Audit columns (`sync_status`, `sync_date_time`, `sync_notes`, `created_at`, `updated_at`) are stamped by the backend on import and must not be present in the CSV.
 
 Preview is shown before submission. Results summary: `N imported · M updated · K failed`.
 
+## Column positions
+
+The sheet stores 20 columns in this order:
+
+| # | Field |
+|---|---|
+| 1 | `tx_type_key` |
+| 2 | `tx_type_label` |
+| 3 | `major_category_key` |
+| 4 | `major_category_label` |
+| 5 | `minor_category_key` |
+| 6 | `minor_category_label` |
+| 7 | `description` |
+| 8 | `tag_keywords` |
+| 9 | `counterparty_examples` |
+| 10 | `source_account_types` |
+| 11 | `target_account_types` |
+| 12 | `source_account_mandatory` |
+| 13 | `target_account_mandatory` |
+| 14 | `is_subscription_eligible` |
+| 15 | `record_status` |
+| 16 | `sync_status` |
+| 17 | `sync_date_time` |
+| 18 | `sync_notes` |
+| 19 | `created_at` |
+| 20 | `updated_at` |
+
+Column positions are append-only — never change an existing position.
+
+## Identity and row addressing
+
+Categories have **no surrogate `id` field**. Identity is the composite key `(tx_type_key, major_category_key, minor_category_key)`. All update and delete operations locate the target row by `row_num` (the row's position in the sheet), which the frontend receives from `list_categories` and must pass back on mutations.
+
 ## Form behaviour
 
 - Filter bar: Type / Major / Minor / Search / Source account mandatory / Target account mandatory / Subscription eligible / Record status — all custom dropdowns; deferred model ([Search] applies pending selections).
-- Add / Edit form has fields for: type, major, minor, description, tag keywords, counterparty examples, account-type hints, subscription eligible, record status.
+- Add form has fields for: type, major, minor, description, tag keywords, counterparty examples, account-type hints, subscription eligible, record status. The `record_status` dropdown in the add form offers only `active` — the backend always creates rows as `active` and rejects any other value on `create_category`.
+- Edit form has the same fields as the add form, with `record_status` offering all four options: `active`, `inactive`, `locked`, `deleted`.
 - Locked categories: View only — Edit and Delete suppressed in the context menu.
-- Deleted categories: View + Restore — Edit and Delete suppressed; restore runs a duplicate check.
+- Deleted categories: View + Restore — Edit and Delete suppressed; restore uses `update_category` to set `record_status: active`.

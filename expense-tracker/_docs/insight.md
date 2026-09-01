@@ -8,20 +8,20 @@ The default landing view. Summarises income, expenses, net flow, and savings rat
 - The accounts list (for name lookup on the per-account chart).
 - The rates table (for converting all amounts to the base currency).
 
-Malformed rows (missing `id`, `transaction_date_utc`, or invalid `transaction_type`) are excluded from every calculation.
+Malformed rows (missing `id`, `tx_date_time`, or invalid `tx_type`) are excluded from every calculation.
 
 ## Summary cards
 
-Four cards rendered at the top, always in the base currency. All sums apply `toBase(amount, currency, fx_rate)` per transaction.
+Four cards rendered at the top, always in the base currency. All sums apply `toBase(amount, currency)` per transaction.
 
 | Card | Calculation |
 |---|---|
-| **Income** | Sum of base-currency amounts for transactions where `transaction_type = money-in` |
-| **Expenses** | Sum of base-currency amounts for transactions where `transaction_type = money-out` |
+| **Income** | Sum of base-currency amounts for transactions where `tx_type = money-in` |
+| **Expenses** | Sum of base-currency amounts for transactions where `tx_type = money-out` |
 | **Net** | `Income − Expenses` |
 | **Savings rate** | `(Net / Income) × 100`, expressed as `N.N%`. Zero income → 0% |
 
-Money-transfers are excluded from these four cards — transfers move funds between owned accounts and do not represent earnings or spending. If transfers exist in the range, a single counter row shows `Transfers: N rows · Volume: <base>`.
+Transfer rows (those with a non-empty `parent_tx_id`) are excluded from these four cards — transfers move funds between owned accounts and do not represent earnings or spending. If transfers exist in the range, a single counter row shows `Transfers: N rows · Volume: <base>`.
 
 Net and Savings rate are coloured green for positive, red for negative.
 
@@ -44,7 +44,7 @@ Net and Savings rate are coloured green for positive, red for negative.
 
 ### Spend by account
 
-- Horizontal bar chart of `money-out` totals by `source_account` name for the date range.
+- Horizontal bar chart of `money-out` totals by `account_id` (resolved to account name) for the date range.
 - All accounts with non-zero spend are shown, sorted descending. No cap, no `Other` bucket.
 - Empty state: if there is no spend, render `No spend data for this period.`
 
@@ -63,7 +63,7 @@ The date range applies to every insight calculation and to the transactions list
 | `all` | Year 2000 → today (effectively "all time") |
 | `custom` | Two date inputs: `from` and `to`. Either blank falls back to `all` on that side. |
 
-The filter is **inclusive on both ends** and operates on the local-time date portion of `transaction_date_utc`. Rows with no date are *included* (treated as no constraint) rather than dropped — they are still flagged as malformed elsewhere.
+The filter is **inclusive on both ends** and operates on the local-time date portion of `tx_date_time`. Rows with no date are *included* (treated as no constraint) rather than dropped — they are still flagged as malformed elsewhere.
 
 ## Rendering rules
 

@@ -30,9 +30,9 @@ Window chips (7d / 14d / 30d / 90d) adjust the trailing average smoothing period
 
 Uses **all** `state.transactions` (not the period-filtered slice), so the trailing window
 can reach before the selected period's `from` date. All amounts are converted to the
-quote currency via `toBase(amount, currency, fx_rate)`.
+quote currency via `toBase(amount, currency)`.
 
-Only `money-in` and `money-out` transaction types are counted. `money-transfer` is excluded.
+Only `money-in` and `money-out` transaction types are counted. Transfer rows (those with a non-empty `parent_tx_id`) are excluded.
 
 ---
 

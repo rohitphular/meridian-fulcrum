@@ -26,7 +26,7 @@ function sheetToObjects(sheet) {
   const headers = values[0];
   return values.slice(1).map(row => {
     const obj = {};
-    headers.forEach((h, i) => { obj[h] = row[i] ?? ''; });
+    headers.forEach((h, i) => { obj[h] = (row[i] !== null && row[i] !== undefined) ? row[i] : ''; });
     return obj;
   });
 }
@@ -37,17 +37,17 @@ function sheetToObjectsWithRow(sheet) {
   const headers = values[0];
   return values.slice(1).map((row, i) => {
     const obj = { _row: i + 2 }; // 1-based sheet row; +1 for header row
-    headers.forEach((h, j) => { obj[h] = row[j] ?? ''; });
+    headers.forEach((h, j) => { obj[h] = (row[j] !== null && row[j] !== undefined) ? row[j] : ''; });
     return obj;
   });
 }
 
 function extractMeta(source) {
   return {
-    ip:      source.ip      || 'unknown',
-    city:    source.city    || '',
-    country: source.country || '',
-    ua:      source.ua      || ''
+    ip:      (source.ip      !== undefined && source.ip      !== null && String(source.ip).trim()      !== '') ? String(source.ip)      : 'unknown',
+    city:    (source.city    !== undefined && source.city    !== null) ? String(source.city)    : '',
+    country: (source.country !== undefined && source.country !== null) ? String(source.country) : '',
+    ua:      (source.ua      !== undefined && source.ua      !== null) ? String(source.ua)      : '',
   };
 }
 
@@ -82,13 +82,13 @@ function json(obj) {
 
 // Splits a comma-separated string into a trimmed, non-empty array.
 function splitToList(str) {
-  if (!str) return [];
-  return String(str).split(',').map(function(s) { return s.trim(); }).filter(Boolean);
+  if (str === undefined || str === null || String(str).trim() === '') return [];
+  return String(str).split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s !== ''; });
 }
 
 function normaliseTags(tags) {
-  if (!tags) return '';
-  return String(tags).split(/[,;]+/).map(function(t) { return t.trim(); }).filter(Boolean).join(';');
+  if (tags === undefined || tags === null || String(tags).trim() === '') return '';
+  return String(tags).split(/[,;]+/).map(function(t) { return t.trim(); }).filter(function(s) { return s !== ''; }).join(';');
 }
 
 // Shared column-index helper used by every *ColIndex wrapper.
@@ -97,4 +97,10 @@ function getColIndex(schema, name) {
   const f = schema[name];
   if (!f) throw new Error('Unknown column: ' + name);
   return f.sheet_column_position - 1;
+}
+
+// Coerces a value that may be a native boolean or the string 'true'/'false'
+// (as Sheets returns for boolean columns) into a JS boolean.
+function toBool(v) {
+  return v === true || String(v).toLowerCase() === 'true';
 }

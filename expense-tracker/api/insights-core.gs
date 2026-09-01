@@ -8,10 +8,10 @@ const COMPUTED_INSIGHTS_COLUMNS = [
 ];
 
 function getComputedInsights(params) {
-  const insightId    = params.insight_id    || '';
-  const periodKey    = params.period_key    || '';
-  const derivedFrom  = params.derived_from  || 'default';
-  const chartVariant = params.chart_variant || '';
+  const insightId    = params.insight_id;
+  const periodKey    = params.period_key;
+  const derivedFrom  = params.derived_from;
+  const chartVariant = params.chart_variant;
 
   if (!insightId) return { ok: false, error: 'missing_insight_id' };
   if (!periodKey) return { ok: false, error: 'missing_period_key' };
@@ -20,10 +20,10 @@ function getComputedInsights(params) {
   const rows  = sheetToObjects(sheet);
 
   const matching = rows.filter(r =>
-    r.insight_id    === insightId    &&
-    r.period_key    === periodKey    &&
-    r.derived_from  === derivedFrom  &&
-    r.chart_variant === chartVariant
+    r.insight_id  === insightId &&
+    r.period_key  === periodKey &&
+    (derivedFrom  === undefined || r.derived_from  === derivedFrom)  &&
+    (chartVariant === undefined || r.chart_variant === chartVariant)
   );
 
   if (!matching.length) return { ok: false, error: 'not_computed' };
@@ -32,17 +32,19 @@ function getComputedInsights(params) {
   matching.sort((a, b) => String(b.computed_at).localeCompare(String(a.computed_at)));
   const row = matching[0];
 
-  let data;
+  let payload;
   try {
-    data = JSON.parse(row.insight_payload);
+    payload = JSON.parse(row.insight_payload);
   } catch (_) {
     return { ok: false, error: 'payload_parse_error' };
   }
 
   return {
-    ok:         true,
-    computed_at: row.computed_at,
-    commentary:  row.expert_commentary || '',
-    data,
+    ok: true,
+    data: {
+      computed_at: row.computed_at,
+      commentary:  row.expert_commentary,
+      payload:     payload,
+    },
   };
 }

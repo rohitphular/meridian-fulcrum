@@ -30,8 +30,8 @@ Monthly savings rate as a percentage line (primary focus), with income and expen
 
 | Dataset | Type | Y axis | Notes |
 |---|---|---|---|
-| Income | bar | `y` (left, GBP) | `hidden: true` on mobile |
-| Expenses | bar | `y` (left, GBP) | `hidden: true` on mobile |
+| Income | bar | `y` (left, base currency) | `hidden: true` on mobile |
+| Expenses | bar | `y` (left, base currency) | `hidden: true` on mobile |
 | Savings % | line | `y2` (right, %) | Primary; `spanGaps: false` |
 
 Colors:
@@ -108,4 +108,4 @@ All three month-specific cards show `"—"` when no non-null rates exist.
 | All months zero income | All rates null; stat cards show `"N/A"` / `"—"` |
 | Partial current month | `*` suffix on label; txs filtered to today |
 | Mobile | Bar datasets hidden by default; savings rate line only |
-| `money-transfer` txs | Excluded (neither `money-in` nor `money-out`) |
+| Transfer rows (`parent_tx_id` non-empty) | Excluded (neither `money-in` nor `money-out`) |

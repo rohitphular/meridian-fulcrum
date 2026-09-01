@@ -1,7 +1,7 @@
 /* global Chart */
 import { el, esc } from '../../core/utils.js';
 import { state } from '../../core/state.js';
-import { computeDailyTotalAssets, getCssColors, baseChartOptions } from './insight-utils.js';
+import { computeDailyTotalAssets, sumAmountBase, getCssColors, baseChartOptions } from './insight-utils.js';
 
 // Charts created inside expandable history panels — destroyed together on navigation.
 const _historyCharts = new Map(); // accId → Chart
@@ -26,12 +26,12 @@ function _payoffDateStr(months) {
 }
 
 // Repayment txs for this liability account — money-out with debt-repayment category
-// matched by source_account. Loan balance is tracked via opening_value + net transactions.
+// matched by account_id. Loan balance is tracked via opening_value + net transactions.
 function _repaymentTxs(acc) {
   return state.transactions.filter(t =>
     t.tx_type === 'money-out' &&
     t.major_category === 'debt-repayment' &&
-    t.source_account === acc.id
+    t.account_id === acc.id
   ).sort((a, b) => new Date(a.tx_date_time) - new Date(b.tx_date_time));
 }
 
@@ -41,7 +41,7 @@ function _loanStats(acc) {
   const today      = new Date();
   const todayLocal = new Date(today.getFullYear(), today.getMonth(), today.getDate());
   const daily      = computeDailyTotalAssets([acc], state.transactions, todayLocal, todayLocal);
-  const currentBal = Math.abs(daily[0] || 0);
+  const currentBal = Math.abs(daily[0] ?? 0);
 
   const openingRaw    = parseFloat(acc.opening_value);
   const originalBal   = isNaN(openingRaw) ? 0 : Math.abs(openingRaw);
@@ -49,7 +49,7 @@ function _loanStats(acc) {
   const hasOpening    = originalBal > 0;
 
   const repayTxs      = _repaymentTxs(acc);
-  const openingDate   = acc.opening_date || repayTxs[0]?.tx_date_time || null;
+  const openingDate   = acc.opening_date ?? repayTxs[0]?.tx_date_time ?? null;
   const months        = _monthsSince(openingDate);
   const avgMonthly    = totalRepaid > 0 ? totalRepaid / months : 0;
   const monthsToPayoff = (avgMonthly > 0 && currentBal > 0) ? Math.ceil(currentBal / avgMonthly) : null;
@@ -71,7 +71,7 @@ function _renderHistoryChart(canvasId, loan, sym, C) {
   const canvas = el(canvasId);
   if (!canvas || !loan.repayTxs.length) return null;
 
-  const amounts    = loan.repayTxs.map(t => Math.abs(Number(t.amount_base) || 0));
+  const amounts    = loan.repayTxs.map(t => Math.abs(sumAmountBase([t])));
   const cumulative = amounts.map((_, i) => amounts.slice(0, i + 1).reduce((s, v) => s + v, 0));
   const labels     = loan.repayTxs.map(t => {
     const d = new Date(t.tx_date_time);
@@ -119,7 +119,7 @@ function _renderHistoryChart(canvasId, loan, sym, C) {
 function _loanCardHtml(loan, sym) {
   const fmt    = v => sym + Math.abs(v).toLocaleString('en-GB', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
   const fmtAvg = v => sym + Math.abs(v).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  const accId  = _safeId(loan.acc.id || loan.acc.name);
+  const accId  = _safeId(loan.acc.id ?? loan.acc.name);
 
   let progressHtml = '';
   if (loan.paidOff) {
@@ -168,7 +168,7 @@ function _loanCardHtml(loan, sym) {
   const txRows = [...loan.repayTxs].reverse().slice(0, 24).map(t => {
     const d   = new Date(t.tx_date_time);
     const date = d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: '2-digit' });
-    const amt  = Math.abs(Number(t.amount_base) || 0);
+    const amt  = Math.abs(sumAmountBase([t]));
     return `<tr>
       <td style="padding:7px 8px;font-size:var(--text-sm);color:var(--muted)">${esc(date)}</td>
       <td style="padding:7px 8px;font-size:var(--text-sm);text-align:right;font-weight:600">${esc(sym + amt.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 }))}</td>
@@ -191,8 +191,8 @@ function _loanCardHtml(loan, sym) {
       </div>
     </div>` : `<p style="font-size:var(--text-xs);color:var(--muted);margin:12px 0 0">No repayment transactions found.</p>`;
 
-  const cat      = esc(loan.acc.sub_type || loan.acc.type || 'Liability');
-  const currency = esc(loan.acc.currency || '—');
+  const cat      = esc(loan.acc.sub_type ?? loan.acc.type ?? 'Liability');
+  const currency = esc(loan.acc.currency ?? '—');
 
   return `
     <details style="background:var(--panel);border:1px solid var(--hair);border-radius:8px;padding:16px;margin-bottom:16px" data-loan-id="${esc(String(accId))}">
@@ -222,7 +222,7 @@ export async function render(containerId, { accounts, sym }) {
     return { destroy() { _historyCharts.forEach(c => { try { c?.destroy(); } catch(_e){} }); _historyCharts.clear(); } };
   }
 
-  const liabAccounts = accounts.filter(a => a.is_active && a.type === 'liability');
+  const liabAccounts = accounts.filter(a => a.record_status === 'active' && a.type === 'liability');
 
   if (!liabAccounts.length) {
     container.innerHTML = `<div class="chart-wrap"><p class="chart-empty">No active liability accounts found.</p></div>`;
@@ -269,7 +269,7 @@ export async function render(containerId, { accounts, sym }) {
       if (!details.open) return;
       const accId = details.dataset.loanId;
       if (_historyCharts.has(accId)) return; // already created
-      const loan   = loans.find(l => _safeId(l.acc.id || l.acc.name) === accId);
+      const loan   = loans.find(l => _safeId(l.acc.id ?? l.acc.name) === accId);
       if (!loan) return;
       const chart = _renderHistoryChart(`history-canvas-${accId}`, loan, sym, C);
       if (chart) _historyCharts.set(accId, chart);

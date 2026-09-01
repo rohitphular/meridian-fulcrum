@@ -1,6 +1,14 @@
 // =============================================================================
 // FULCRUM FORGE — Rate schema: column definitions and helpers
 // GAS global scope — referenced by rate-core.gs and rate-validation.gs
+//
+// NOTE — intentional schema differences from other entities:
+//   • No `record_status` — rates are upserted/deleted, not soft-deleted.
+//   • No `sync_status`   — rates are not individually synced to an external
+//       system; the whole rates table is managed via the UI only.
+//   • No `created_at`    — row creation time is not tracked; updated_at covers
+//       the most recent change.
+// These omissions are by design and must not be added without a sheet migration.
 // =============================================================================
 
 const RATE_SCHEMA = {
@@ -20,7 +28,7 @@ const RATE_SCHEMA = {
   rate: {
     sheet_column_name:     'rate',
     sheet_column_position: 2,
-    ui_label:              'Rate (per £1)',
+    ui_label:              'Rate (per 1g XAU)',
     type:                  'number',
     enum_values:           null,
     group:                 'core',
@@ -65,16 +73,6 @@ function getRateSheetColumns() {
 function getRateSchemaField(key) { return RATE_SCHEMA[key] || null; }
 
 function rateColIndex(name) { return getColIndex(RATE_SCHEMA, name); }
-
-function getFieldsForRateType(type) {
-  return Object.keys(RATE_SCHEMA).map(function(key) {
-    const f = RATE_SCHEMA[key];
-    return { key: key, editable: f.editable, required: f.required_for === null };
-  }).filter(function(f) {
-    const schema = RATE_SCHEMA[f.key];
-    return schema.applies_to === null || schema.applies_to === type;
-  });
-}
 
 // Client payload — serialised subset returned by get_rate_schema
 function getRateSchemaForClient() {

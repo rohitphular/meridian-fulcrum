@@ -284,12 +284,14 @@ const CATEGORY_SCHEMA = {
 // Client payload — serialised subset returned by get_category_schema
 // ─────────────────────────────────────────────────────────────────────────────
 function getCategorySchemaForClient() {
-  const CATEGORY_TX_TYPES = ['money-in', 'money-out'];
   return {
-    types: CATEGORY_TX_TYPES.map(function(v) {
-      const labels = { 'money-in': 'Money In', 'money-out': 'Money Out' };
-      return { value: v, label: labels[v] || v };
+    types: CATEGORY_SCHEMA.tx_type_key.enum_values.map(function(v) {
+      return {
+        value: v,
+        label: v.split('-').map(function(w) { return w.charAt(0).toUpperCase() + w.slice(1); }).join(' '),
+      };
     }),
+    record_statuses: CATEGORY_SCHEMA.record_status.enum_values,
   };
 }
 
@@ -305,7 +307,7 @@ function getCategorySheetColumns() {
 }
 
 function getCategorySchemaField(key) {
-  return CATEGORY_SCHEMA[key] || null;
+  return CATEGORY_SCHEMA[key] !== undefined ? CATEGORY_SCHEMA[key] : null;
 }
 
 function catColIndex(name) { return getColIndex(CATEGORY_SCHEMA, name); }

@@ -66,7 +66,7 @@ The user controls which month to view via the coordinator's standard period pick
 
 Same as Insight 01 accounts tab, using `_computeDailyTotalAssets` with Period A and Period B derived above.
 
-Asset accounts: `accounts.filter(a => a.is_active && !liabilityTypes.has(a.type))`.
+Asset accounts: `accounts.filter(a => a.record_status === 'active' && !liabilityTypes.has(a.type))`.
 
 ### Stat cards
 

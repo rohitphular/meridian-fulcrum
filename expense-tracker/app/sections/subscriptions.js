@@ -1,5 +1,5 @@
 import { state } from '../core/state.js';
-import { el, esc, getSymbol, toBase, exportSubscriptions, openContextMenu, closeContextMenu, syncStatusIcon, recordStatusIcon } from '../core/utils.js';
+import { el, esc, getSymbol, toBase, exportSubscriptions, openContextMenu, closeContextMenu, syncStatusIcon, recordStatusIcon, parseCsvRow } from '../core/utils.js';
 import { showLoading, hideLoading, showMsg } from '../core/ui.js';
 import { ExpenseAPI } from '../core/api.js';
 
@@ -25,7 +25,8 @@ const DOW_LABELS = [
 // ── Category helpers ──────────────────────────────────────────────────────────
 
 function _txTypeOpts(selected = '') {
-  const types = state.transactionSchema?.types ?? ['money-in', 'money-out'];
+  const types = state.transactionSchema?.types;
+  if (types === undefined || types === null || types.length === 0) return `<option value="">— select —</option>`;
   return `<option value="">— select —</option>` +
     types.map(t => {
       const v = typeof t === 'string' ? t : t.value;
@@ -34,37 +35,37 @@ function _txTypeOpts(selected = '') {
 }
 
 function _majorOpts(txType, selectedVal = '') {
-  if (!txType) return `<option value="">— select type first —</option>`;
+  if (txType === undefined || txType === null || txType === '') return `<option value="">— select type first —</option>`;
   const cats = state.categories.filter(c =>
-    c.is_subscription_eligible === true && c.tx_type === txType
+    c.is_subscription_eligible === true && c.tx_type_key === txType
   );
   const seen = new Map();
   cats.forEach(c => {
-    if (!seen.has(c.major_category)) {
-      const active = cats.some(x => x.major_category === c.major_category && x.is_active === true);
-      seen.set(c.major_category, active);
+    if (!seen.has(c.major_category_key)) {
+      const active = cats.some(x => x.major_category_key === c.major_category_key && x.record_status === 'active');
+      seen.set(c.major_category_key, { active, label: c.major_category_label });
     }
   });
   return `<option value="">— select —</option>` +
-    [...seen.entries()].map(([label, active]) => {
-      const sel = selectedVal === label ? 'selected' : '';
+    [...seen.entries()].map(([key, { active, label }]) => {
+      const sel = selectedVal === key ? 'selected' : '';
       return active
-        ? `<option value="${esc(label)}" ${sel}>${esc(label)}</option>`
-        : `<option value="${esc(label)}" ${sel} disabled style="color:var(--muted)">${esc(label)} (archived)</option>`;
+        ? `<option value="${esc(key)}" ${sel}>${esc(label)}</option>`
+        : `<option value="${esc(key)}" ${sel} disabled style="color:var(--muted)">${esc(label)} (archived)</option>`;
     }).join('');
 }
 
 function _minorOpts(txType, major, selectedVal = '') {
-  if (!major) return `<option value="">— select major first —</option>`;
+  if (major === undefined || major === null || major === '') return `<option value="">— select major first —</option>`;
   const cats = state.categories.filter(c =>
-    c.is_subscription_eligible === true && c.tx_type === txType && c.major_category === major
+    c.is_subscription_eligible === true && c.tx_type_key === txType && c.major_category_key === major
   );
   return `<option value="">— select —</option>` +
     cats.map(c => {
-      const sel = selectedVal === c.minor_category ? 'selected' : '';
-      return c.is_active === true
-        ? `<option value="${esc(c.minor_category)}" ${sel}>${esc(c.minor_category)}</option>`
-        : `<option value="${esc(c.minor_category)}" ${sel} disabled style="color:var(--muted)">${esc(c.minor_category)} (archived)</option>`;
+      const sel = selectedVal === c.minor_category_key ? 'selected' : '';
+      return c.record_status === 'active'
+        ? `<option value="${esc(c.minor_category_key)}" ${sel}>${esc(c.minor_category_label)}</option>`
+        : `<option value="${esc(c.minor_category_key)}" ${sel} disabled style="color:var(--muted)">${esc(c.minor_category_label)} (archived)</option>`;
     }).join('');
 }
 
@@ -89,7 +90,7 @@ function _dayFieldHtml(frequency, dayVal = '') {
     return `<label for="subDayOfWeek">Day of week</label><select id="subDayOfWeek">${opts}</select>`;
   }
   return `<label for="subDayOfMonth">Day of month</label>
-    <input type="number" id="subDayOfMonth" min="1" max="31" step="1" value="${esc(String(dayVal || '1'))}">`;
+    <input type="number" id="subDayOfMonth" min="1" max="31" step="1"${dayVal !== '' && dayVal !== null && dayVal !== undefined ? ` value="${esc(String(dayVal))}"` : ''}>`;
 }
 
 // ── Form HTML ─────────────────────────────────────────────────────────────────
@@ -98,16 +99,16 @@ function _renderForm(sub = null) {
   const p      = state.subPrefill;   // null when opening a fresh form; non-null when subscribing from a tx
   const isEdit = sub !== null;
 
-  const nameVal        = isEdit ? sub.name             : (p ? (p.name              ?? 'FAILURE') : '');
-  const cpVal          = isEdit ? sub.counterparty_name : (p ? (p.counterparty_name ?? 'FAILURE') : '');
-  const amountVal      = isEdit ? sub.amount            : (p ? (p.amount            ?? 'FAILURE') : '');
-  const currencyVal    = isEdit ? sub.currency          : (p ? (p.currency          ?? 'FAILURE') : '');
-  const freqVal        = isEdit ? sub.frequency         : (p ? (p.frequency         ?? 'monthly') : 'monthly');
-  const srcAccVal      = isEdit ? sub.source_account    : (p ? (p.source_account    ?? 'FAILURE') : '');
-  const txTypeVal      = isEdit ? sub.tx_type           : (p ? (p.tx_type           ?? 'FAILURE') : '');
-  const majorVal       = isEdit ? sub.major_category    : (p ? (p.major_category    ?? 'FAILURE') : '');
-  const minorVal       = isEdit ? sub.minor_category    : (p ? (p.minor_category    ?? 'FAILURE') : '');
-  const tagsVal        = isEdit ? String(sub.tags).replace(/;/g, ', ') : (p ? String(p.tags ?? '').replace(/;/g, ', ') : '');
+  const nameVal        = isEdit ? sub.name             : (p !== null && p !== undefined && p.name !== undefined && p.name !== null ? p.name : '');
+  const cpVal          = isEdit ? sub.counterparty_name : (p !== null && p !== undefined && p.counterparty_name !== undefined && p.counterparty_name !== null ? p.counterparty_name : '');
+  const amountVal      = isEdit ? sub.amount            : (p !== null && p !== undefined && p.amount !== undefined && p.amount !== null ? p.amount : '');
+  const currencyVal    = isEdit ? sub.currency          : (p !== null && p !== undefined && p.currency !== undefined && p.currency !== null ? p.currency : '');
+  const freqVal        = isEdit ? sub.frequency         : (p !== null && p !== undefined && p.frequency !== undefined && p.frequency !== null && p.frequency !== '' ? p.frequency : 'monthly');
+  const srcAccVal      = isEdit ? sub.source_account    : (p !== null && p !== undefined && p.source_account !== undefined && p.source_account !== null ? p.source_account : '');
+  const txTypeVal      = isEdit ? sub.tx_type           : (p !== null && p !== undefined && p.tx_type !== undefined && p.tx_type !== null ? p.tx_type : '');
+  const majorVal       = isEdit ? sub.major_category    : (p !== null && p !== undefined && p.major_category !== undefined && p.major_category !== null ? p.major_category : '');
+  const minorVal       = isEdit ? sub.minor_category    : (p !== null && p !== undefined && p.minor_category !== undefined && p.minor_category !== null ? p.minor_category : '');
+  const tagsVal        = isEdit ? String(sub.tags).replace(/;/g, ', ') : (p !== null && p !== undefined && p.tx_tags !== undefined && p.tx_tags !== null ? String(p.tx_tags).replace(/;/g, ', ') : '');
   const descriptionVal = isEdit ? sub.description       : '';
   const dayVal         = isEdit ? (sub.frequency === 'weekly' ? sub.day_of_week : sub.day_of_month) : '';
   const startDateVal   = isEdit ? sub.subscription_start_date : '';
@@ -118,7 +119,7 @@ function _renderForm(sub = null) {
   ).join('');
 
   // Active accounts for source account dropdown
-  const activeAccounts = state.accounts.filter(a => a.is_active === true);
+  const activeAccounts = state.accounts.filter(a => a.record_status === 'active');
   const accOpts = `<option value="">— select —</option>` +
     activeAccounts.map(a =>
       `<option value="${esc(a.id)}" ${a.id === srcAccVal ? 'selected' : ''}>${esc(a.name)} (${esc(a.currency)})</option>`
@@ -169,7 +170,7 @@ function _renderForm(sub = null) {
         <input type="date" id="subEndDate" value="${esc(String(endDateVal))}">
       </div>
       <div class="field form-grid-span-2">
-        <label for="subSourceAccount">Source account</label>
+        <label for="subSourceAccount">Source account *</label>
         <select id="subSourceAccount">${accOpts}</select>
       </div>
       <div class="field form-grid-span-2">
@@ -203,12 +204,12 @@ function _renderForm(sub = null) {
 
 // ── Card list ─────────────────────────────────────────────────────────────────
 
-function _freqLabel(f) {
-  return FREQUENCIES.find(x => x.value === f)?.label || f || '—';
-}
-
 const _FREQ_SHORT = { weekly: 'wk', monthly: 'mo', quarterly: 'qtr', annual: 'yr' };
-function _freqShort(f) { return _FREQ_SHORT[f] || f || '—'; }
+function _freqShort(f) {
+  if (_FREQ_SHORT[f] !== undefined) return _FREQ_SHORT[f];
+  if (f !== undefined && f !== null && f !== '') return f;
+  return '—';
+}
 
 function _subFilterCount() {
   const f = state.subFilters;
@@ -216,7 +217,7 @@ function _subFilterCount() {
   if (f.recordStatuses.length < 4) n++;
   if (f.majorCategory !== 'all') n++;
   if (f.frequency !== 'all') n++;
-  if (f.search) n++;
+  if (f.search !== undefined && f.search !== null && f.search !== '') n++;
   return n;
 }
 
@@ -226,9 +227,9 @@ function _applySubFilters(subs) {
     if (f.recordStatuses.length < 4 && !f.recordStatuses.includes(s.record_status)) return false;
     if (f.majorCategory !== 'all' && s.major_category !== f.majorCategory) return false;
     if (f.frequency !== 'all' && s.frequency !== f.frequency) return false;
-    if (f.search) {
+    if (f.search !== undefined && f.search !== null && f.search !== '') {
       const q   = f.search.toLowerCase();
-      const hay = (s.name + ' ' + (s.counterparty_name || '') + ' ' + (s.description || '')).toLowerCase();
+      const hay = (s.name + ' ' + (s.counterparty_name !== undefined && s.counterparty_name !== null ? s.counterparty_name : '') + ' ' + (s.description !== undefined && s.description !== null ? s.description : '')).toLowerCase();
       if (!hay.includes(q)) return false;
     }
     return true;
@@ -243,12 +244,18 @@ function _sortSubs(subs) {
     if (col === 'amount_base') {
       va = toBase(_toMonthly(parseFloat(a.amount), a.frequency), a.currency, null);
       vb = toBase(_toMonthly(parseFloat(b.amount), b.frequency), b.currency, null);
+      const aIsNaN = !Number.isFinite(va);
+      const bIsNaN = !Number.isFinite(vb);
+      if (aIsNaN && bIsNaN) return 0;
+      if (aIsNaN) return 1;
+      if (bIsNaN) return -1;
+      return (va - vb) * sign;
     } else if (col === 'next_payment_date') {
-      va = a.next_payment_date || '9999-12-31';
-      vb = b.next_payment_date || '9999-12-31';
+      va = (a.next_payment_date !== undefined && a.next_payment_date !== null && a.next_payment_date !== '') ? a.next_payment_date : '9999-12-31';
+      vb = (b.next_payment_date !== undefined && b.next_payment_date !== null && b.next_payment_date !== '') ? b.next_payment_date : '9999-12-31';
     } else {
-      va = String(a[col] || '').toLowerCase();
-      vb = String(b[col] || '').toLowerCase();
+      va = (a[col] !== undefined && a[col] !== null ? String(a[col]) : '').toLowerCase();
+      vb = (b[col] !== undefined && b[col] !== null ? String(b[col]) : '').toLowerCase();
     }
     return va < vb ? -sign : va > vb ? sign : 0;
   });
@@ -258,7 +265,7 @@ function _renderSubFilterBar() {
   const activeCount = _subFilterCount();
   const f = state.subFilters;
 
-  const majors = [...new Set(state.subscriptions.map(s => s.major_category).filter(Boolean))].sort();
+  const majors = [...new Set(state.subscriptions.map(s => s.major_category).filter(m => m !== undefined && m !== null && m !== ''))].sort();
 
   const rs = new Set(f.recordStatuses);
   const optStyle = 'display:flex;align-items:center;gap:8px;font-size:var(--text-base);color:var(--ink);cursor:pointer';
@@ -320,14 +327,16 @@ function _renderSubRow(sub, sym) {
   const isActive    = sub.record_status === 'active';
   const dotCls      = isActive ? 'sub-status-active' : 'sub-status-paused';
   const amtFmt      = `${getSymbol(sub.currency)}${parseFloat(sub.amount).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}/${_freqShort(sub.frequency)}`;
-  const isForeign   = sub.currency && sub.currency !== state.quoteCurrency;
+  const isForeign   = sub.currency !== undefined && sub.currency !== null && sub.currency !== '' && sub.currency !== state.quoteCurrency;
+  const _baseVal    = isForeign ? toBase(_toMonthly(parseFloat(sub.amount), sub.frequency), sub.currency, null) : 0;
   const baseAmt     = isForeign
-    ? `<span class="td-base-amt">${sym}${toBase(_toMonthly(parseFloat(sub.amount), sub.frequency), sub.currency, null).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}/mo</span>`
+    ? `<span class="td-base-amt">${!Number.isFinite(_baseVal) ? '—' : `${sym}${_baseVal.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}/mo`}</span>`
     : '';
 
   let nextCell = '—';
-  if (isActive && sub.next_payment_date) {
-    const nextDate = new Date(sub.next_payment_date);
+  if (isActive && sub.next_payment_date !== undefined && sub.next_payment_date !== null && sub.next_payment_date !== '') {
+    const [ny, nm, nd] = sub.next_payment_date.split('-').map(Number);
+    const nextDate = new Date(ny, nm - 1, nd);
     const nextFmt  = nextDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
     const today    = new Date(); today.setHours(0, 0, 0, 0);
     const diffDays = Math.round((nextDate - today) / 86400000);
@@ -338,7 +347,8 @@ function _renderSubRow(sub, sym) {
     nextCell = `${esc(nextFmt)} <span class="sub-card-due">(${esc(duePart)})</span>`;
   }
 
-  const accName  = state.accountMap[sub.source_account]?.name || '—';
+  const _accEntry = state.accountMap[sub.source_account];
+  const accName   = (_accEntry !== undefined && _accEntry !== null && _accEntry.name !== undefined && _accEntry.name !== null) ? _accEntry.name : '—';
 
   return `<tr${isActive ? '' : ' style="opacity:0.6"'}>
     <td><span class="sub-status-dot ${dotCls}">●</span> ${esc(sub.name)}</td>
@@ -362,7 +372,7 @@ function _renderTable(subs) {
     return `<th class="${cls}" data-sub-sort="${esc(col)}"${style ? ` style="${style}"` : ''}>${esc(label)}</th>`;
   };
 
-  if (!subs.length) {
+  if (subs.length === 0) {
     return `<p class="placeholder">No subscriptions match the current filters.</p>`;
   }
 
@@ -370,7 +380,7 @@ function _renderTable(subs) {
   const active  = state.subscriptions.filter(s => s.record_status === 'active').length;
   const estMonthly = state.subscriptions
     .filter(s => s.record_status === 'active')
-    .reduce((sum, s) => sum + toBase(_toMonthly(s.amount, s.frequency), s.currency, null), 0);
+    .reduce((sum, s) => { const v = toBase(_toMonthly(s.amount, s.frequency), s.currency, null); return sum + (Number.isFinite(v) ? v : 0); }, 0);
 
   return `
     <div class="summary-grid" style="margin-bottom:20px">
@@ -412,10 +422,10 @@ function _renderImportPanel() {
       <div class="field form-grid-span-2">
         <label for="subImportFile">CSV file</label>
         <input type="file" id="subImportFile" accept=".csv">
-        <div class="field-hint">Columns: name, counterparty_name, amount, currency, frequency, day_of_month, day_of_week, source_account, tx_type, major_category, minor_category, description, subscription_start_date, subscription_end_date</div>
+        <div class="field-hint">Columns: name, counterparty_name, amount, currency, frequency, day_of_month, day_of_week, source_account, tx_type, major_category, minor_category, tags, description, subscription_start_date, subscription_end_date</div>
       </div>
     </div>
-    <div id="subImportStatus">${_subImportResult || ''}</div>
+    <div id="subImportStatus">${_subImportResult !== null ? _subImportResult : ''}</div>
     <div class="form-actions" style="margin-top:16px">
       <button class="btn btn-primary" id="subImportConfirm" disabled>Import</button>
       <button class="btn btn-secondary" id="subImportCancel">Cancel</button>
@@ -424,40 +434,26 @@ function _renderImportPanel() {
   </div>`;
 }
 
-function _parseCsvRow(line) {
-  const result = [];
-  let cur = '';
-  let inQ = false;
-  for (let i = 0; i < line.length; i++) {
-    const c = line[i];
-    if (c === '"') { inQ = !inQ; }
-    else if (c === ',' && !inQ) { result.push(cur.trim()); cur = ''; }
-    else { cur += c; }
-  }
-  result.push(cur.trim());
-  return result;
-}
-
 function _parseSubscriptionsCsv(text) {
   const lines = text.split(/\r?\n/).filter(l => l.trim());
-  if (!lines.length) return { subscriptions: [], errors: ['File is empty.'] };
+  if (lines.length === 0) return { subscriptions: [], errors: ['File is empty.'] };
 
-  const headers = _parseCsvRow(lines[0]).map(h => h.toLowerCase().replace(/\s+/g, '_'));
+  const headers = parseCsvRow(lines[0]).map(h => h.toLowerCase().replace(/\s+/g, '_'));
   const subscriptions = [];
   const errors        = [];
 
   for (let i = 1; i < lines.length; i++) {
-    const vals = _parseCsvRow(lines[i]);
+    const vals = parseCsvRow(lines[i]);
     const row  = {};
     headers.forEach((h, idx) => { row[h] = (vals[idx] !== undefined ? vals[idx] : '').trim(); });
 
-    if (!row.name)      { errors.push(`Row ${i + 1}: missing name`);      continue; }
-    if (!row.amount)    { errors.push(`Row ${i + 1}: missing amount`);    continue; }
-    if (!row.currency)  { errors.push(`Row ${i + 1}: missing currency`);  continue; }
-    if (!row.frequency) { errors.push(`Row ${i + 1}: missing frequency`); continue; }
+    if (String(row.name).trim() === '')      { errors.push(`Row ${i + 1}: missing name`);      continue; }
+    if (String(row.amount).trim() === '')    { errors.push(`Row ${i + 1}: missing amount`);    continue; }
+    if (String(row.currency).trim() === '')  { errors.push(`Row ${i + 1}: missing currency`);  continue; }
+    if (String(row.frequency).trim() === '') { errors.push(`Row ${i + 1}: missing frequency`); continue; }
 
     const amount = parseFloat(row.amount);
-    if (isNaN(amount) || amount <= 0) {
+    if (!Number.isFinite(amount) || amount <= 0) {
       errors.push(`Row ${i + 1}: invalid amount "${row.amount}"`);
       continue;
     }
@@ -489,7 +485,7 @@ function _renderImportStatus(parsed) {
   const errHtml = errors.length
     ? `<div class="pin-error" style="margin-bottom:8px">${errors.map(e => esc(e)).join('<br>')}</div>`
     : '';
-  if (!subscriptions.length) return errHtml + '<p class="placeholder">No valid rows found.</p>';
+  if (subscriptions.length === 0) return errHtml + '<p class="placeholder">No valid rows found.</p>';
   return `${errHtml}<p style="font-size:13px;color:var(--muted);margin:0">${subscriptions.length} subscription${subscriptions.length !== 1 ? 's' : ''} ready to import</p>`;
 }
 
@@ -502,9 +498,9 @@ async function _submitImport(subscriptions) {
   try {
     const res = await ExpenseAPI.createSubscriptionsBulk({ subscriptions });
 
-    if (!res.ok && !res.results) {
+    if (!res.ok && (res.results === undefined || res.results === null)) {
       console.warn('[subscriptions] _submitImport failed:', res?.error);
-      if (errEl) errEl.textContent = 'Error: ' + (res.error || 'unknown');
+      if (errEl) errEl.textContent = 'Error: ' + (res.error !== undefined && res.error !== null ? res.error : '[no error code]');
       if (btn)   { btn.disabled = false; btn.textContent = 'Import'; }
       return;
     }
@@ -516,21 +512,21 @@ async function _submitImport(subscriptions) {
     if (failed === 0) {
       _importParsed = null;
       state.subImportOpen = false;
-      const msg = [
-        created ? `${created} subscription${created !== 1 ? 's' : ''} imported` : '',
-        skipped ? `${skipped} already existed` : '',
-      ].filter(Boolean).join(' · ');
-      showMsg(msg || 'Nothing to import.');
+      const parts = [];
+      if (created) parts.push(`${created} subscription${created !== 1 ? 's' : ''} imported`);
+      if (skipped) parts.push(`${skipped} already existed`);
+      const msg = parts.length > 0 ? parts.join(' · ') : 'Nothing to import.';
+      showMsg(msg);
       document.dispatchEvent(new CustomEvent('et:reload'));
     } else {
-      const resultRows = (res.results || []).map(r => `
+      const resultRows = (res.results !== undefined && res.results !== null ? res.results : []).map(r => `
         <tr>
           <td>${esc(r.name)}</td>
           <td>${r.ok
             ? `<span class="badge badge-et-in">created</span>`
             : r.error === 'duplicate_subscription'
               ? `<span class="badge" style="color:var(--muted)">already exists</span>`
-              : `<span class="badge badge-et-out">${esc(r.error || 'unknown')}</span>`}
+              : `<span class="badge badge-et-out">${esc(r.error !== undefined && r.error !== null ? r.error : '[no error code]')}</span>`}
           </td>
         </tr>`).join('');
       _subImportResult = `
@@ -578,7 +574,7 @@ export function renderSubscriptions() {
     </div>
     ${state.subImportOpen ? _renderImportPanel() : ''}
     ${anyFormOpen ? _renderForm(state.subEditRow !== null
-      ? (state.subscriptions.find(s => s._row === state.subEditRow) ?? null)
+      ? (state.subscriptions.find(s => s._row === state.subEditRow) !== undefined ? state.subscriptions.find(s => s._row === state.subEditRow) : null)
       : null) : ''}
     ${_renderSubFilterBar()}
     ${_renderTable(filtered)}
@@ -597,7 +593,7 @@ function _attachEvents() {
   const { signal } = _eventsAbort;
 
   const content = el('subscriptionsContent');
-  if (!content) return;
+  if (content === null) return;
 
   el('subImportBtn')?.addEventListener('click', () => {
     if (state.subImportOpen) {
@@ -615,7 +611,7 @@ function _attachEvents() {
 
   el('subImportFile')?.addEventListener('change', e => {
     const file = e.target.files[0];
-    if (!file) return;
+    if (file === undefined || file === null) return;
     _subImportResult = null;
     const reader = new FileReader();
     reader.onload = ev => {
@@ -678,7 +674,7 @@ function _attachEvents() {
 
   content.addEventListener('click', e => {
     const btn = e.target.closest('[data-action]');
-    if (!btn) return;
+    if (btn === null) return;
     const action = btn.dataset.action;
     const row    = btn.dataset.row !== undefined ? Number(btn.dataset.row) : null;
 
@@ -693,27 +689,54 @@ function _attachEvents() {
       else _saveAdd();
     }
     if (action === 'sub-menu') {
-      if (_subMenuKey === row) {
-        closeContextMenu();
-        _subMenuKey = null;
-        return;
-      }
       _subMenuKey = row;
-      const sub = state.subscriptions.find(s => s._row === row);
-      const pauseLabel = sub?.record_status === 'active' ? 'Pause' : 'Resume';
-      openContextMenu(btn, [
-        { key: 'edit',   label: 'Edit'              },
-        { key: 'toggle', label: pauseLabel           },
-        { key: 'txs',    label: 'Transactions'      },
-        { key: 'delete', label: 'Delete', cls: 'danger' },
-      ], key => {
+      const sub       = state.subscriptions.find(s => s._row === row);
+      const rstat     = sub ? sub.record_status : null;
+      const isLocked  = rstat === 'locked';
+      const isDeleted = rstat === 'deleted';
+      const pauseLabel = rstat === 'active' ? 'Pause' : 'Resume';
+      const menuItems = isLocked
+        ? [{ key: 'txs', label: 'Transactions' }]
+        : isDeleted
+          ? [{ key: 'restore', label: 'Restore' }, { key: 'txs', label: 'Transactions' }]
+          : [
+              { key: 'edit',   label: 'Edit'              },
+              { key: 'toggle', label: pauseLabel           },
+              { key: 'txs',    label: 'Transactions'      },
+              { key: 'delete', label: 'Delete', cls: 'danger' },
+            ];
+      openContextMenu(btn, menuItems, async key => {
         _subMenuKey = null;
         if (key === 'edit')   { state.subEditRow = row; state.subAddOpen = false; state.subPrefill = null; renderSubscriptions(); }
         if (key === 'toggle') { _toggle(row); }
         if (key === 'delete') { state.subDeleteRow = row; renderSubscriptions(); }
+        if (key === 'restore') {
+          showLoading();
+          try {
+            const res = await ExpenseAPI.restoreSubscription({ row_num: row });
+            if (!res.ok) {
+              console.warn('[subscriptions] restore failed:', res?.error);
+              showMsg('Restore failed: ' + (res.error !== undefined && res.error !== null ? res.error : '[no error code]'), 'warn');
+              return;
+            }
+            document.dispatchEvent(new CustomEvent('et:reload'));
+          } catch (err) {
+            console.error('[subscriptions] restore failed:', err);
+            showMsg('Connection error.', 'warn');
+          } finally {
+            hideLoading();
+          }
+          return;
+        }
         if (key === 'txs') {
-          const searchTerm = sub ? (sub.counterparty_name ? sub.counterparty_name : sub.name) : '';
-          state.filters = { types: [], accounts: [], major: [], minor: [], tx_location_country: '', tag: '', search: searchTerm };
+          const searchTerm = (sub !== null && sub !== undefined)
+            ? (sub.counterparty_name !== undefined && sub.counterparty_name !== null && String(sub.counterparty_name).trim() !== '' ? sub.counterparty_name : sub.name)
+            : '';
+          state.filters = {
+            types: [], accounts: [], major: [], minor: [],
+            user_location_country: '', user_location_city: '', user_location_area: '',
+            tag: '', search: searchTerm,
+          };
           document.dispatchEvent(new CustomEvent('et:show-section', { detail: 'transactions' }));
         }
       });
@@ -814,16 +837,20 @@ async function _saveAdd() {
 
   const body = _collectForm();
 
-  if (!body.name) {
+  if (body.name === undefined || body.name === null || String(body.name).trim() === '') {
     if (errEl) errEl.textContent = 'Name is required.';
     return;
   }
-  if (!body.amount || body.amount <= 0) {
+  if (!Number.isFinite(body.amount) || body.amount <= 0) {
     if (errEl) errEl.textContent = 'Enter a positive amount.';
     return;
   }
-  if (!body.currency) {
+  if (body.currency === undefined || body.currency === null || String(body.currency).trim() === '') {
     if (errEl) errEl.textContent = 'Currency is required.';
+    return;
+  }
+  if (body.source_account === undefined || body.source_account === null || String(body.source_account).trim() === '') {
+    if (errEl) errEl.textContent = 'Source account is required.';
     return;
   }
 
@@ -850,7 +877,7 @@ async function _saveAdd() {
       if (errEl) errEl.textContent = 'A subscription with this name already exists.';
     } else {
       console.warn('[subscriptions] _saveAdd failed:', res?.error);
-      if (errEl) errEl.textContent = 'Error: ' + (res.error || 'unknown');
+      if (errEl) errEl.textContent = 'Error: ' + (res.error !== undefined && res.error !== null ? res.error : '[no error code]');
     }
   } catch (err) {
     console.error('[subscriptions] _saveAdd failed:', err);
@@ -867,16 +894,20 @@ async function _saveEdit(row) {
 
   const body = _collectForm();
 
-  if (!body.name) {
+  if (body.name === undefined || body.name === null || String(body.name).trim() === '') {
     if (errEl) errEl.textContent = 'Name is required.';
     return;
   }
-  if (!body.amount || body.amount <= 0) {
+  if (!Number.isFinite(body.amount) || body.amount <= 0) {
     if (errEl) errEl.textContent = 'Enter a positive amount.';
     return;
   }
-  if (!body.currency) {
+  if (body.currency === undefined || body.currency === null || String(body.currency).trim() === '') {
     if (errEl) errEl.textContent = 'Currency is required.';
+    return;
+  }
+  if (body.source_account === undefined || body.source_account === null || String(body.source_account).trim() === '') {
+    if (errEl) errEl.textContent = 'Source account is required.';
     return;
   }
 
@@ -891,7 +922,7 @@ async function _saveEdit(row) {
       document.dispatchEvent(new CustomEvent('et:reload'));
     } else {
       console.warn('[subscriptions] _saveEdit failed:', res?.error);
-      if (errEl) errEl.textContent = 'Error: ' + (res.error || 'unknown');
+      if (errEl) errEl.textContent = 'Error: ' + (res.error !== undefined && res.error !== null ? res.error : '[no error code]');
     }
   } catch (err) {
     console.error('[subscriptions] _saveEdit failed:', err);
@@ -904,7 +935,7 @@ async function _saveEdit(row) {
 
 async function _toggle(row) {
   const sub = state.subscriptions.find(s => s._row === row);
-  if (!sub) return;
+  if (sub === undefined) return;
   const newStatus = sub.record_status === 'active' ? 'inactive' : 'active';
   showLoading();
   try {
@@ -932,7 +963,7 @@ async function _toggle(row) {
       document.dispatchEvent(new CustomEvent('et:reload'));
     } else {
       console.warn('[subscriptions] _toggle failed:', res?.error);
-      showMsg('Update failed: ' + (res.error || 'unknown'), 'warn');
+      showMsg('Update failed: ' + (res.error !== undefined && res.error !== null ? res.error : '[no error code]'), 'warn');
     }
   } catch (err) {
     console.error('[subscriptions] _toggle failed:', err);
@@ -952,7 +983,7 @@ async function _confirmDelete(row) {
       document.dispatchEvent(new CustomEvent('et:reload'));
     } else {
       console.warn('[subscriptions] _confirmDelete failed:', res?.error);
-      showMsg('Delete failed: ' + (res.error || 'unknown'), 'warn');
+      showMsg('Delete failed: ' + (res.error !== undefined && res.error !== null ? res.error : '[no error code]'), 'warn');
       state.subDeleteRow = null;
       renderSubscriptions();
     }

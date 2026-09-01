@@ -16,6 +16,20 @@
 
 ---
 
+## Bug status
+
+| ID | File | Status | Fixed in |
+|---|---|---|---|
+| B1 | `23-recurring-payments.js` | Open | — |
+| B2 | `10-top-categories.js` | Open | — |
+| B3 | `22-top-counterparties.js`, `26-loan-progress.js`, `28-forex-spend.js` | Open | — |
+| B4 | `15-account-balances.js` | Open | — |
+| B5 | `26-loan-progress.js` | Open | — |
+| B6 | `12-tag-pie.js` | **Fixed** | Round 7 |
+| B7 | `13-tag-trend.js` | **Fixed** | Round 7 |
+
+---
+
 ## Bugs
 
 ### B1 — Insight 23: Category column sorts by wrong key
@@ -40,18 +54,18 @@ Clicking the "Category" header sorts the table by frequency (weekly/monthly/quar
 
 ---
 
-### B3 — Insight 22 / 26 / 28: `amount_base` used raw without coercion
+### B3 — Insight 22 / 26 / 28: `tx_amount` used raw without coercion
 **Files:** `22-top-counterparties.js:85`, `26-loan-progress.js:71`, `28-forex-spend.js:36`
 
-Several insights access `t.amount_base || 0` or `t.amount || 0` directly for arithmetic, bypassing `sumAmountBase` / `toBase()`. If `amount_base` is stored as a string (which can happen with CSV import), the `||` operator won't coerce it — you get `"123.45" || 0` → `"123.45"` (a string), and numeric operations silently produce `NaN` or string concatenation.
+Several insights access `t.tx_amount || 0` directly for arithmetic, bypassing `sumAmountBase` / `toBase()`. If `tx_amount` is stored as a string (which can happen with CSV import), the `||` operator won't coerce it — you get `"123.45" || 0` → `"123.45"` (a string), and numeric operations silently produce `NaN` or string concatenation. Note: `amount_base` is not a stored field — it is a value computed at query time via `toBase(tx.tx_amount, account.currency)`; never read it directly from a row.
 
 Specific locations:
-- D22 `_showPanel`: `t.amount_base || 0` in the drill panel (displays as NaN)
-- D22 `_prevSpend`: `t.amount_base || 0` in the comparison calculation  
-- D26 `_renderHistoryChart`: `Math.abs(t.amount_base || 0)` for cumulative repaid amounts
-- D28 `_groupByCurrency`: `Math.abs(t.amount || 0)` for native currency totals
+- D22 `_showPanel`: `t.tx_amount || 0` in the drill panel (displays as NaN when string)
+- D22 `_prevSpend`: `t.tx_amount || 0` in the comparison calculation  
+- D26 `_renderHistoryChart`: `Math.abs(t.tx_amount || 0)` for cumulative repaid amounts
+- D28 `_groupByCurrency`: `Math.abs(t.tx_amount || 0)` for native currency totals
 
-**Fix:** Replace with `Number(t.amount_base) || 0` or use `sumAmountBase([t])` where `toBase()` already handles coercion.
+**Fix:** Replace with `Number(t.tx_amount) || 0` or use `sumAmountBase([t])` where `toBase()` already handles coercion.
 
 ---
 
@@ -81,12 +95,30 @@ If `accountSchema` hasn't loaded yet, `liability_types` is an empty array and **
 
 ---
 
+### B6 — Insight 12: Tag pie reading non-existent field `t.tags` [FIXED — Round 7]
+**File:** `12-tag-pie.js`
+
+The tag pie chart accessed `t.tags` on transaction rows. Transactions do not have a `tags` field — the correct field is `tx_tags`. Every tag was read as `undefined`, producing empty segments and an empty ranked table.
+
+**Fix applied (Round 7):** All `t.tags` references changed to `t.tx_tags`. Associated `|| ''` patterns changed to `?? ''`.
+
+---
+
+### B7 — Insight 13: Tag trend reading non-existent field `tx.tags` [FIXED — Round 7]
+**File:** `13-tag-trend.js`
+
+Same wrong-field bug as B6, with 3 occurrences: the main series aggregation, the drill panel, and the inline attribution row. All read `tx.tags` instead of `tx.tx_tags`, causing the trend chart to show empty data and the drill panel to show no tagged transactions.
+
+**Fix applied (Round 7):** All 3 `tx.tags` references changed to `tx.tx_tags`. Associated `|| []` and `|| 0` patterns changed to `?? []` and `?? 0`.
+
+---
+
 ## Improvements
 
 ### I1 — Insight 19: Waterfall "Closing" balance excludes transfers
 **File:** `19-cashflow-waterfall.js:82`
 
-The waterfall `closing = startBalance + income - expenses` includes only `money-in` and `money-out` transactions. Transfers between accounts (`money-transfer`) are excluded. This means the waterfall's closing balance will differ from the actual account balance shown in D14/D15/D16, which can confuse the user.
+The waterfall `closing = startBalance + income - expenses` includes only `money-in` and `money-out` transactions. Transfer rows (those with a non-empty `parent_tx_id`) are excluded. This means the waterfall's closing balance will differ from the actual account balance shown in D14/D15/D16, which can confuse the user.
 
 **Suggestion:** Add a "Transfers" bar to the waterfall for net transfer activity, or add a footnote explaining the exclusion.
 
@@ -210,7 +242,7 @@ function _renderLevel3(container, moneyOut, major, minor, sym) {
   const txs = moneyOut.filter(t =>
     (t.major_category || 'Uncategorised') === major &&
     (t.minor_category || 'Other') === minor
-  ).sort((a, b) => new Date(b.transaction_date_utc) - new Date(a.transaction_date_utc));
+  ).sort((a, b) => new Date(b.tx_date_time) - new Date(a.tx_date_time));
   // render back button + scrollable table
 }
 ```
@@ -232,8 +264,8 @@ options: {
     if (!elements.length) return;
     const tag = segments[elements[0].index].label;
     const tagTxs = moneyOut.filter(t =>
-      (t.tags || '').split(';').map(s => s.toLowerCase().trim()).includes(tag)
-    ).sort((a, b) => new Date(b.transaction_date_utc) - new Date(a.transaction_date_utc));
+      (t.tx_tags || '').split(';').map(s => s.toLowerCase().trim()).includes(tag)
+    ).sort((a, b) => new Date(b.tx_date_time) - new Date(a.tx_date_time));
     // render panel below chart
   }
 }
@@ -282,7 +314,7 @@ Using `state.transactions` filtered to the merchant, group by month, render a sm
 onClick: (_, elements) => {
   if (!elements.length) return;
   const mk = monthKeys[elements[0].index];
-  const monthTxs = txs.filter(t => t.transaction_date_utc.startsWith(mk));
+  const monthTxs = txs.filter(t => t.tx_date_time.startsWith(mk));
   // render two mini-tables: income by counterparty, expenses by major category
 }
 ```

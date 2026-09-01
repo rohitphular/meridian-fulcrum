@@ -50,7 +50,7 @@ Period B is always the full calendar month immediately before Period A regardles
 
 ### Computation
 
-1. Identify asset accounts: `accounts.filter(a => a.is_active && !liabilityTypes.has(a.type))` where `liabilityTypes` comes from `state.accountSchema.liability_types`.
+1. Identify asset accounts: `accounts.filter(a => a.record_status === 'active' && !liabilityTypes.has(a.type))` where `liabilityTypes` comes from `state.accountSchema.liability_types`.
 2. For each period, call `_computeDailyTotalAssets(assetAccounts, state.transactions, from, to)`:
    - Initialises each account's balance from `opening_value`.
    - Sorts ALL `state.transactions` chronologically.
@@ -99,7 +99,7 @@ Only `this_month`, `last_month`, and `custom` are meaningful for this day-by-day
 |---|---|
 | No money-out in Period A | Show `.chart-empty` "No spend data for this period." inside `.chart-wrap`; return `null` |
 | No money-out in Period B | Period B line absent from chart (all-zero array still renders as a flat zero line) |
-| No active asset accounts | Show `.chart-empty` "No active asset accounts found."; return `null` |
+| No active asset accounts | Show `.chart-empty` "No active asset accounts found."; return `null` — "active" means `record_status === 'active'` |
 | Currency with no rate | `toBase` returns 0 for that transaction; effectively excluded from sums (`.dash-warn` shown by coordinator) |
 | `opening_value` missing | Treated as 0 — `Number(a.opening_value) \|\| 0` |
 

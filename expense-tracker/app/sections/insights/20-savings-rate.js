@@ -31,8 +31,8 @@ function _buildMonthly(txs, monthKeys) {
         })
       : arr;
 
-    const inTxs  = filterPartial(inByMonth.get(mk)  || []);
-    const outTxs = filterPartial(outByMonth.get(mk) || []);
+    const inTxs  = filterPartial(inByMonth.get(mk)  ?? []);
+    const outTxs = filterPartial(outByMonth.get(mk) ?? []);
 
     const inc = sumAmountBase(inTxs);
     const exp = sumAmountBase(outTxs);

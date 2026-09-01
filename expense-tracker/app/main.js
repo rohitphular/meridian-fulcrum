@@ -16,7 +16,7 @@ function populateQuoteCurrencySelect() {
   sel.innerHTML = state.rates.map(r => {
     const rate = parseFloat(r.rate);
     const rateLabel = Number.isInteger(rate) ? rate.toFixed(2) : rate.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 4 });
-    return `<option value="${esc(r.currency)}" ${r.currency === saved ? 'selected' : ''}>${esc(r.symbol || '')} ${esc(r.currency)} · ${rateLabel}</option>`;
+    return `<option value="${esc(r.currency)}" ${r.currency === saved ? 'selected' : ''}>${esc(r.symbol ?? '')} ${esc(r.currency)} · ${rateLabel}</option>`;
   }).join('');
   state.quoteCurrency = sel.value || 'GBP';
 }
@@ -54,39 +54,34 @@ async function loadAll() {
       }
       showMsg('Failed to load transactions: ' + (txRes.error || 'unknown'), 'warn');
     } else {
-      state.transactions = txRes.data || [];
+      state.transactions = txRes.data ?? [];
       sessionStorage.setItem('et_transactions_cache', JSON.stringify(state.transactions));
     }
 
     if (catRes.ok) {
-      state.categories = catRes.data || [];
+      state.categories = catRes.data ?? [];
       state.categories.forEach(c => {
         const toBool = v => v === true || String(v).toLowerCase() === 'true';
-        c.is_active                  = toBool(c.is_active);
         c.source_account_mandatory   = toBool(c.source_account_mandatory);
         c.target_account_mandatory   = toBool(c.target_account_mandatory);
         c.is_subscription_eligible   = toBool(c.is_subscription_eligible);
       });
     }
     if (accRes.ok) {
-      state.accounts   = accRes.data || [];
-      state.accounts.forEach(a => { a.is_active = a.is_active === true || String(a.is_active).toLowerCase() === 'true'; });
+      state.accounts   = accRes.data ?? [];
       state.accountMap = Object.fromEntries(state.accounts.map(a => [a.id, a]));
     }
     if (ratesRes.ok) {
-      state.rates   = ratesRes.data || [];
+      state.rates   = ratesRes.data ?? [];
       state.rateMap = {};
-      state.rates.forEach(r => { state.rateMap[r.currency] = Number(r.rate) || 1; });
+      state.rates.forEach(r => { state.rateMap[r.currency] = Number(r.rate); });
     }
     if (schemaRes)    state.accountSchema    = schemaRes;
     if (txSchemaRes)  state.transactionSchema = txSchemaRes;
     if (catSchemaRes) state.categorySchema   = catSchemaRes;
 
     if (subRes?.ok) {
-      state.subscriptions = (subRes.data || []).map(s => ({
-        ...s,
-        is_active: s.is_active === true || String(s.is_active).toLowerCase() === 'true',
-      }));
+      state.subscriptions = subRes.data ?? [];
     } else {
       state.subscriptions = [];
     }

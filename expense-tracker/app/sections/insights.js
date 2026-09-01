@@ -248,7 +248,7 @@ async function _renderActiveInsight() {
     const [precomputed, renderer] = await Promise.all([
       ExpenseAPI.getComputedInsights({
         insight_id: state.insightId, period_key: periodKey,
-        derived_from: derivedFrom, chart_variant: dash.defaultVariant || '',
+        derived_from: derivedFrom, chart_variant: dash.defaultVariant,
       }).catch(() => null),
       _loadRenderer(state.insightId),
     ]);
@@ -322,16 +322,16 @@ async function _renderActiveInsight() {
 // Generic renderer for precomputed payloads. Handles 'line', 'bar', 'stacked', 'hbar'.
 // Returns a Chart.js instance, or null if the payload isn't compatible (falls through to local).
 function _renderFromPayload(container, payload, dash, sym) {
-  const { stat_cards, chart } = payload || {};
+  const { stat_cards, chart } = payload ?? {};
   if (!chart || !Array.isArray(chart.labels) || !Array.isArray(chart.datasets)) return null;
 
   const C    = getCssColors();
   const base = baseChartOptions(sym, C);
 
-  const cardsHtml = (stat_cards || []).map(c => `
+  const cardsHtml = (stat_cards ?? []).map(c => `
     <div class="stat-card">
       <p class="stat-card-label">${esc(c.label)}</p>
-      <p class="stat-card-value ${esc(c.class || '')}">${esc(c.value)}</p>
+      <p class="stat-card-value ${esc(c.class)}">${esc(c.value)}</p>
       ${c.sub ? `<p class="stat-card-sub">${esc(c.sub)}</p>` : ''}
     </div>`).join('');
 

@@ -69,7 +69,7 @@ function _buildMonthlyDTI(liabAccts, monthKeys, annualisedIncome) {
 
   return monthKeys.map(mk => {
     const dayIdx = Math.round((_monthEnd(mk) - from) / 86400000);
-    const liab   = Math.abs(daily[Math.min(dayIdx, daily.length - 1)] || 0);
+    const liab   = Math.abs(daily[Math.min(dayIdx, daily.length - 1)]);
     return (liab / annualisedIncome) * 100;
   });
 }
@@ -83,23 +83,23 @@ function _proxy(charts) {
 // ── Accounts tab ──────────────────────────────────────────────────────────────
 
 function _renderAccounts(container, { txs, accounts, from, to, sym }, C) {
-  const liabAccts      = accounts.filter(a => a.is_active && a.type === 'liability');
+  const liabAccts      = accounts.filter(a => a.record_status === 'active' && a.type === 'liability');
   const monthKeys      = monthRange(from, to);
 
   // Current total debt
   const today      = new Date();
   const todayLocal = new Date(today.getFullYear(), today.getMonth(), today.getDate());
   const totalDebt  = liabAccts.length
-    ? Math.abs(computeDailyTotalAssets(liabAccts, state.transactions, todayLocal, todayLocal)[0] || 0)
+    ? Math.abs(computeDailyTotalAssets(liabAccts, state.transactions, todayLocal, todayLocal)[0])
     : 0;
 
   // Monthly income — exclude current (partial) month from average
   const curYYYYMM    = `${todayLocal.getFullYear()}-${String(todayLocal.getMonth() + 1).padStart(2, '0')}`;
   const inByMonth    = groupByMonth(txs.filter(t => t.tx_type === 'money-in'));
   const completeMKs  = monthKeys.filter(mk => mk !== curYYYYMM);
-  const avgMonths    = completeMKs.length || monthKeys.length;
+  const avgMonths    = completeMKs.length > 0 ? completeMKs.length : monthKeys.length;
   const totalIncome  = (completeMKs.length ? completeMKs : monthKeys)
-    .reduce((s, mk) => s + sumAmountBase(inByMonth.get(mk) || []), 0);
+    .reduce((s, mk) => s + sumAmountBase(inByMonth.get(mk) ?? []), 0);
   const monthlyIncome    = avgMonths > 0 ? totalIncome / avgMonths : 0;
   const annualisedIncome = monthlyIncome * 12;
 
@@ -221,7 +221,7 @@ function _renderAccounts(container, { txs, accounts, from, to, sym }, C) {
 function _renderTransactions(container, { txs, from, to, sym }, C) {
   const monthKeys   = monthRange(from, to);
   const inByMonth   = groupByMonth(txs.filter(t => t.tx_type === 'money-in'));
-  const monthlyInc  = monthKeys.map(mk => sumAmountBase(inByMonth.get(mk) || []));
+  const monthlyInc  = monthKeys.map(mk => sumAmountBase(inByMonth.get(mk) ?? []));
   const totalIncome = monthlyInc.reduce((s, v) => s + v, 0);
   const avgMonthly  = monthKeys.length ? totalIncome / monthKeys.length : 0;
   let peakIdx = 0;

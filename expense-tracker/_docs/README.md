@@ -5,15 +5,16 @@ Reverse-engineered, language-agnostic specification for the Expense Tracker app.
 ## Read in this order
 
 1. **[overview.md](overview.md)** — What the app is, the domain model, the capabilities, what's out of scope
-2. **[data-model.md](data-model.md)** — Entity shapes (Account, Transaction, Category, Rate, AuditEntry) and their cross-entity invariants
+2. **[data-model.md](data-model.md)** — Entity shapes (Account, Transaction, Category, Rate, Subscription, AuditEntry) and their cross-entity invariants
 3. **[../../../documentation/APP-AUTH-PIN-TOTP.md](../../../documentation/APP-AUTH-PIN-TOTP.md)** — Single-user authentication with PIN + optional TOTP, IP rate limiting, session model (shared Forge doc)
 4. **[accounts.md](accounts.md)** — Account types, balance conventions, derived fields, net-worth and utilisation calculations
-5. **[transactions.md](transactions.md)** — The three transaction types, required fields, filters, sort, export, malformed-row handling
-6. **[balance-lifecycle.md](balance-lifecycle.md)** — How `current_balance` changes on every transaction create / update / delete (two-phase reversal)
+5. **[transactions.md](transactions.md)** — The two transaction types (money-in, money-out), single-leg model, required fields, filters, sort, export, malformed-row handling
+6. **[balance-lifecycle.md](balance-lifecycle.md)** — How `current_value` is derived at read time via `_buildAccountNetMap`, and the post-reversal formula used when validating edits
 7. **[financial-rules.md](financial-rules.md)** — The six hard-block validation rules (insufficient balance, credit limit, no-money-out-from-loan, FX required, …)
 8. **[categories.md](categories.md)** — Two-level taxonomy, archive semantics, account-type hints, auto-seed
 9. **[rates.md](rates.md)** — FX rates, upsert semantics, conversion function, row-level vs global rate priority
-10. **[insight.md](insight.md)** — Summary cards, monthly chart, category drilldown, per-account spend, date-range filter
+10. **[subscriptions.md](subscriptions.md)** — Recurring payment obligations, 22-column schema, frequency, amount, account and category linkage
+11. **[insight.md](insight.md)** — Summary cards, monthly chart, category drilldown, per-account spend, date-range filter
 
 ## Historical
 
@@ -38,4 +39,4 @@ Required regardless of platform:
 - Server-side enforcement of the six financial rules (the frontend's pre-checks are convenience only)
 - Sign-convention for liabilities (stored negative; displayed as positive "owed")
 - The two-phase reversal pattern for transaction updates
-- Row-level `fx_rate` storage so reversal stays exact across global-rate changes
+- Storing `tx_amount` on each transfer leg (not a single `fx_rate` column) so balance reversal stays exact even when the global rate is later changed

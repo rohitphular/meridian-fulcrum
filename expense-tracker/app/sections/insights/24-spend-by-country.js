@@ -1,13 +1,12 @@
 /* global Chart */
 import { el, esc } from '../../core/utils.js';
-import { state } from '../../core/state.js';
 import { sumAmountBase, getCssColors, baseChartOptions, normCountry } from './insight-utils.js';
 
 const MAX_COUNTRIES = 15;
 
 function _normalise(raw) {
   const n = normCountry(raw);
-  return n || 'Unknown';
+  return n ?? 'Unknown';
 }
 
 // ── Data grouping ─────────────────────────────────────────────────────────────
@@ -15,7 +14,7 @@ function _normalise(raw) {
 function _groupByCountry(outTxs) {
   const map = new Map();
   for (const tx of outTxs) {
-    const label = _normalise(tx.tx_location_country || '');
+    const label = _normalise(tx.tx_location_country ?? '');
     if (!map.has(label)) map.set(label, []);
     map.get(label).push(tx);
   }
@@ -26,8 +25,8 @@ function _groupByCountry(outTxs) {
 
     // Most common major category in this country
     const catFreq = {};
-    for (const t of txs) { const c = t.major_category || '—'; catFreq[c] = (catFreq[c] || 0) + 1; }
-    const topCat = Object.entries(catFreq).sort((a, b) => b[1] - a[1])[0]?.[0] || '—';
+    for (const t of txs) { const c = t.major_category ?? '—'; catFreq[c] = (catFreq[c] ?? 0) + 1; }
+    const topCat = Object.entries(catFreq).sort((a, b) => b[1] - a[1])[0]?.[0] ?? '—';
 
     return { label, total, count, avg: count ? total / count : 0, topCat };
   });
@@ -106,12 +105,13 @@ function _renderCityDrill(drillEl, outTxs, country, sym) {
 
   const countryTxs = country === 'Unknown'
     ? outTxs.filter(t => !t.tx_location_country || !t.tx_location_country.trim())
-    : outTxs.filter(t => _normalise(t.tx_location_country || '') === country);
+    : outTxs.filter(t => _normalise(t.tx_location_country ?? '') === country);
 
   // Group by city
   const cityMap = new Map();
   for (const t of countryTxs) {
-    const city = (t.tx_location_city || '').trim() || '(city unknown)';
+    const rawCity = t.tx_location_city?.trim();
+    const city = rawCity ? rawCity : '(city unknown)';
     if (!cityMap.has(city)) cityMap.set(city, []);
     cityMap.get(city).push(t);
   }
@@ -139,7 +139,7 @@ function _renderCityDrill(drillEl, outTxs, country, sym) {
             <th style="${thS};text-align:right">Txns</th>
           </tr>
         </thead>
-        <tbody>${tableRows || `<tr><td colspan="3" style="padding:12px;text-align:center;color:var(--muted)">No city data</td></tr>`}</tbody>
+        <tbody>${tableRows.length ? tableRows : `<tr><td colspan="3" style="padding:12px;text-align:center;color:var(--muted)">No city data</td></tr>`}</tbody>
       </table>
     </div>`;
 
@@ -192,7 +192,7 @@ export async function render(containerId, { txs, sym }) {
       </div>
       <div class="stat-card">
         <p class="stat-card-label">Top country</p>
-        <p class="stat-card-value" style="font-size:var(--text-base)">${esc(topCountry?.label || '—')}</p>
+        <p class="stat-card-value" style="font-size:var(--text-base)">${esc(topCountry?.label ?? '—')}</p>
         <p class="stat-card-sub">${esc(topCountry ? fmt(topCountry.total) : '')}</p>
       </div>
       <div class="stat-card">

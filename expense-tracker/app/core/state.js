@@ -4,7 +4,7 @@ export const state = {
   accounts:      [],
   accountMap:    {},   // { 'acc-001': account }  — keyed by account id
   rates:         [],
-  rateMap:       {},   // { GBP: 1, INR: 105, … }  units per 1 GBP
+  rateMap:       {},   // { XAU: 1, GBP: 85, … }  units per 1g XAU
   quoteCurrency: 'GBP',
 
   dateRange:  'last_30',
@@ -48,7 +48,7 @@ export const state = {
   rateDeleteCurrency: null,
   rateDeleteBlocked:  null,   // { error, referenced_count } when delete is refused — paired with rateDeleteCurrency
 
-  accountSchema:      null,  // { types, liability_types, loan_types, investment_sub_types, mortgage_sub_types }
+  accountSchema:      null,  // { types, asset_sub_types, investment_sub_types, liability_sub_types, loan_sub_types }
   transactionSchema:  null,  // { types, categorisation_fields, transfer_fields }
   categorySchema:     null,  // { types, account_types }
 

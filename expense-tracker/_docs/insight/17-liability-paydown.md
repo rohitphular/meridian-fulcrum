@@ -17,7 +17,7 @@ Month-end balance remaining for each active liability account (loans, credit car
 
 ```js
 const liabAccounts = accounts.filter(a =>
-  a.is_active && liabilityTypes.has(a.type)
+  a.record_status === 'active' && liabilityTypes.has(a.type)
 );
 ```
 

@@ -10,7 +10,7 @@
 ## What it shows
 
 All outgoing transactions broken down by the native transaction currency. Answers:
-- What fraction of spend is in foreign currencies vs domestic (GBP)?
+- What fraction of spend is in foreign currencies vs domestic (quote currency)?
 - What currencies are used and how much in each?
 - How have FX rates fluctuated over the period for each foreign currency?
 
@@ -27,7 +27,7 @@ The "FX Rates" pill is **only rendered** when at least one foreign-currency tran
 ## Data source
 
 ```js
-const outTxs = txs.filter(t => t.transaction_type === 'money-out');
+const outTxs = txs.filter(t => t.tx_type === 'money-out');
 ```
 
 Grouped by `tx.currency` (trimmed, uppercased). Falls back to `state.quoteCurrency` when `tx.currency` is blank.
@@ -40,8 +40,8 @@ For each currency group:
 
 | Field | Source |
 |---|---|
-| `nativeTotal` | `txs.reduce((s, t) => s + Math.abs(t.amount), 0)` — sum in native currency |
-| `gbpEquiv` | `sumAmountBase(txs)` — sum of `amount_base` (pre-converted to GBP) |
+| `nativeTotal` | `txs.reduce((s, t) => s + Math.abs(t.tx_amount), 0)` — sum in native currency |
+| `baseEquiv` | `sumAmountBase(txs)` — sum converted to base currency (XAU) via `toBase(tx.tx_amount, account.currency)` |
 | `count` | `txs.length` |
 | `avgRate` | Mean of `t.fx_rate` for txs that have it; falls back to `state.rateMap[ccy]` |
 | `hasEstimated` | `true` when any tx in the group is missing `fx_rate` (foreign only) |
@@ -56,9 +56,9 @@ Rows sorted descending by `gbpEquiv`. Domestic currency (`state.quoteCurrency`) 
 | Card | Value |
 |---|---|
 | Currencies used | Distinct currency count |
-| Domestic (`quoteCcy`) | GBP total + % of all spend |
-| Foreign spend | Non-domestic GBP equiv + % |
-| Largest foreign | Currency code + GBP equiv sub-line; `—` if none |
+| Domestic (`quoteCcy`) | Base-currency total + % of all spend |
+| Foreign spend | Non-domestic base-currency equiv + % |
+| Largest foreign | Currency code + base-currency equiv sub-line; `—` if none |
 
 The stat cards are always visible regardless of active sub-view.
 
@@ -72,7 +72,7 @@ The stat cards are always visible regardless of active sub-view.
 - One segment per currency, `buildPalette(C)` colours cycling at index 8+
 - Canvas height: `220px`
 - Legend: `position: 'bottom'`, `boxWidth: 12`
-- Tooltip: native amount + GBP equiv + percentage
+- Tooltip: native amount + base-currency equiv + percentage
 
 ### Currency table
 
@@ -80,7 +80,7 @@ The stat cards are always visible regardless of active sub-view.
 |---|---|
 | Currency | Colour swatch + bold code |
 | Native total | Sum in native currency with `_ccySym` prefix |
-| GBP equiv | `~` prefix when any rates were estimated from `rateMap`; `⚠` when rate unavailable |
+| Base equiv | `~` prefix when any rates were estimated from `rateMap`; `⚠` when rate unavailable |
 | Txns | Count |
 | Avg rate | 4 decimal places; `—` when unavailable |
 
@@ -94,7 +94,7 @@ Scatter chart — one dataset per foreign currency that has at least one `fx_rat
 
 | Axis | Value |
 |---|---|
-| X | `new Date(tx.transaction_date_utc).getTime()` (ms epoch), rendered as `"Jul '26"` via tick callback |
+| X | `new Date(tx.tx_date_time).getTime()` (ms epoch), rendered as `"Jul '26"` via tick callback |
 | Y | `tx.fx_rate` (4 decimal places) |
 
 No date adapter dependency — X scale is `type: 'linear'` with a `ticks.callback` that formats timestamps with `toLocaleDateString`.
@@ -145,6 +145,6 @@ Module-level constant covering common currencies: GBP £, USD $, EUR €, INR �
 | No `money-out` transactions | `chart-empty` "No spend transactions for this period." |
 | Only domestic spend | Foreign stat card = `£0 (0%)`; no "FX Rates" pill |
 | `tx.currency` blank | Treated as `state.quoteCurrency` |
-| `fx_rate` null for foreign tx | GBP equiv uses `amount_base`; avg rate falls back to `rateMap`; `~` prefix on table GBP equiv |
+| `fx_rate` null for foreign tx | Base-currency equiv computed via `toBase(tx.tx_amount, account.currency)`; avg rate falls back to `rateMap`; `~` prefix on table base equiv |
 | Currency not in `rateMap` | `⚠` warning badge in table; scatter point omitted (no `fx_rate`) |
 | > 8 currencies | `buildPalette` colours cycle (8-colour palette repeats) |

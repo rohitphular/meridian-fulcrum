@@ -4,6 +4,9 @@
 // applicability rules. No magic column numbers anywhere else in the codebase.
 // =============================================================================
 
+// Supported recurrence cadences. Exactly 4 values — 'daily' and 'fortnightly'
+// are NOT planned features and must never be added here without a full schema
+// review (validation, docs, next-payment computation, and frontend constants).
 const VALID_FREQUENCIES = ['weekly', 'monthly', 'quarterly', 'annual'];
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -180,21 +183,9 @@ const SUBSCRIPTION_SCHEMA = {
     editable: true,
     default_value: '',
   },
-  created_at: {
-    sheet_column_name: 'created_at',
-    sheet_column_position: 15,
-    ui_label: 'Created At',
-    type: 'string',
-    enum_values: null,
-    group: 'core',
-    applies_to: null,
-    required_for: [],
-    editable: false,
-    default_value: null,
-  },
   record_status: {
     sheet_column_name: 'record_status',
-    sheet_column_position: 16,
+    sheet_column_position: 15,
     ui_label: 'Record Status',
     type: 'enum',
     enum_values: ['active', 'inactive', 'deleted', 'locked'],
@@ -204,10 +195,10 @@ const SUBSCRIPTION_SCHEMA = {
     editable: false,
     default_value: 'active',
   },
-  sync_status: {
-    sheet_column_name: 'sync_status',
-    sheet_column_position: 17,
-    ui_label: 'Sync Status',
+  created_at: {
+    sheet_column_name: 'created_at',
+    sheet_column_position: 16,
+    ui_label: 'Created At',
     type: 'string',
     enum_values: null,
     group: 'core',
@@ -216,17 +207,29 @@ const SUBSCRIPTION_SCHEMA = {
     editable: false,
     default_value: null,
   },
-  sync_date_time: {
-    sheet_column_name: 'sync_date_time',
-    sheet_column_position: 18,
-    ui_label: 'Sync Date',
-    type: 'string',
-    enum_values: null,
-    group: 'core',
+  sync_status: {
+    sheet_column_name: 'sync_status',
+    sheet_column_position: 17,
+    ui_label: 'Sync Status',
+    type: 'enum',
+    enum_values: ['create-pending', 'update-pending', 'in-sync', 'create-failed', 'update-failed'],
+    group: 'system',
     applies_to: null,
     required_for: [],
     editable: false,
-    default_value: null,
+    default_value: 'create-pending',
+  },
+  sync_date_time: {
+    sheet_column_name: 'sync_date_time',
+    sheet_column_position: 18,
+    ui_label: 'Sync Date/Time',
+    type: 'string',
+    enum_values: null,
+    group: 'system',
+    applies_to: null,
+    required_for: [],
+    editable: false,
+    default_value: '',
   },
   sync_notes: {
     sheet_column_name: 'sync_notes',
@@ -234,11 +237,11 @@ const SUBSCRIPTION_SCHEMA = {
     ui_label: 'Sync Notes',
     type: 'string',
     enum_values: null,
-    group: 'core',
+    group: 'system',
     applies_to: null,
     required_for: [],
     editable: false,
-    default_value: null,
+    default_value: '',
   },
   updated_at: {
     sheet_column_name: 'updated_at',
@@ -246,7 +249,7 @@ const SUBSCRIPTION_SCHEMA = {
     ui_label: 'Updated At',
     type: 'string',
     enum_values: null,
-    group: 'core',
+    group: 'system',
     applies_to: null,
     required_for: [],
     editable: false,
@@ -299,7 +302,7 @@ function getSubscriptionSheetColumns() {
     .map(function(f) { return f.sheet_column_name; });
 }
 
-function getSubscriptionSchemaField(key) { return SUBSCRIPTION_SCHEMA[key] || null; }
+function getSubscriptionSchemaField(key) { return SUBSCRIPTION_SCHEMA[key] !== undefined ? SUBSCRIPTION_SCHEMA[key] : null; }
 
 function subColIndex(key) { return getColIndex(SUBSCRIPTION_SCHEMA, key); }
 

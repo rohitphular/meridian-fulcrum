@@ -18,7 +18,7 @@ Per-loan paydown detail: original balance, amount repaid, remaining balance, % p
 
 ```js
 const liabAccounts = accounts.filter(a =>
-  a.is_active && liabilityTypes.has(a.type)
+  a.record_status === 'active' && liabilityTypes.has(a.type)
 );
 ```
 
@@ -49,14 +49,10 @@ For each liability account:
 
 `_repaymentTxs(acc)` — filters `state.transactions` (all time, not period-filtered):
 ```js
-t.transaction_type === 'money-transfer' && (
-  t.target_account === acc.name ||
-  t.to_account     === acc.name ||
-  t.to_account_id  === acc.id
-)
+t.tx_type === 'money-in' && t.account_id === acc.id && t.parent_tx_id
 ```
 
-Sorted oldest-first. Used for the history chart and table.
+Selects the inbound leg of a transfer into the liability account (identified by `account_id === acc.id` and having a `parent_tx_id` linking to the outbound leg). Sorted oldest-first. Used for the history chart and table.
 
 ---
 
@@ -73,7 +69,7 @@ Each card is a `<details>` element:
 Clicking the summary expands a history panel containing:
 
 1. **Area chart** (`_renderHistoryChart`): cumulative repaid over time
-   - X: repayment dates (`transaction_date_utc` formatted as `"15 Jul '26"`)
+   - X: repayment dates (`tx_date_time` formatted as `"15 Jul '26"`)
    - Y: `min: 0`, `max: originalBal` (shows paydown progress against the ceiling)
    - `borderColor: '#34d399'`, `fill: true`, `tension: 0.3`
    - Canvas height: 200px

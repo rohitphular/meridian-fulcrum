@@ -37,8 +37,8 @@ function doGet(e) {
   // removed — getOrCreateSheet() handles new columns via column-append on every call.
   if (action === 'list_transactions')  { return json({ ok: true, data: listTransactions() }); }
   if (action === 'list_categories')    { return json({ ok: true, data: listCategories() }); }
-  if (action === 'list_accounts')      return json({ ok: true, data: listAccounts() });
-  if (action === 'list_rates')         return json({ ok: true, data: listRates() });
+  if (action === 'list_accounts')      { return json({ ok: true, data: listAccounts() }); }
+  if (action === 'list_rates')         { return json({ ok: true, data: listRates() }); }
   if (action === 'get_account_schema')      return json({ ok: true, data: getAccountSchemaForClient() });
   if (action === 'get_transaction_schema')  return json({ ok: true, data: getTransactionSchemaForClient() });
   if (action === 'get_category_schema')     return json({ ok: true, data: getCategorySchemaForClient() });
@@ -46,7 +46,7 @@ function doGet(e) {
   if (action === 'get_advisor_history')          return json({ ok: true, data: getAdvisorHistory() });
   if (action === 'list_subscriptions')           return json({ ok: true, data: listSubscriptions() });
   if (action === 'get_subscription_schema')      return json({ ok: true, data: getSubscriptionSchemaForClient() });
-  if (action === 'get_suggested_transactions')   return json({ ok: true, suggestions: getSuggestedTransactions() });
+  if (action === 'get_suggested_transactions')   return json({ ok: true, data: getSuggestedTransactions() });
   if (action === 'get_transaction_metadata')     return json(getTransactionMetadata());
   if (action === 'get_computed_insights')        return json(getComputedInsights(e.parameter));
 
@@ -84,12 +84,14 @@ function doPost(e) {
   if (body.action === 'create_accounts_bulk') return json(createAccountsBulk(body));
   if (body.action === 'update_account')     return json(updateAccount(body));
   if (body.action === 'delete_account')     return json(deleteAccount(body));
+  if (body.action === 'restore_account')    return json(restoreAccount(body));
   if (body.action === 'advisor_chat')              return json(advisorChat(body));
   if (body.action === 'clear_advisor_history')     return json(clearAdvisorHistory());
   if (body.action === 'create_subscription')       return json(createSubscription(body));
   if (body.action === 'create_subscriptions_bulk') return json(createSubscriptionsBulk(body));
   if (body.action === 'update_subscription')       return json(updateSubscription(body));
   if (body.action === 'delete_subscription')       return json(deleteSubscription(body));
+  if (body.action === 'restore_subscription')      return json(restoreSubscription(body));
 
   return json({ ok: false, error: 'unknown_action' });
 }

@@ -14,8 +14,8 @@ function _buildDatasets(moneyOut, monthKeys, C) {
   // Per-month category totals: monthCatMaps[i] = Map<category, total>
   const monthCatMaps = monthKeys.map(key => {
     const catMap = new Map();
-    (byMonth.get(key) || []).forEach(t => {
-      const cat = t.major_category || 'Uncategorised';
+    (byMonth.get(key) ?? []).forEach(t => {
+      const cat = t.major_category ?? 'Uncategorised';
       if (!catMap.has(cat)) catMap.set(cat, []);
       catMap.get(cat).push(t);
     });
@@ -29,12 +29,12 @@ function _buildDatasets(moneyOut, monthKeys, C) {
 
   // Sort by grand total descending (largest → bottom of stack)
   const sorted = allCats
-    .map(cat => ({ cat, total: monthCatMaps.reduce((s, m) => s + (m.get(cat) || 0), 0) }))
+    .map(cat => ({ cat, total: monthCatMaps.reduce((s, m) => s + (m.get(cat) ?? 0), 0) }))
     .sort((a, b) => b.total - a.total);
 
   return sorted.map(({ cat }, i) => ({
     label:           cat,
-    data:            monthCatMaps.map(m => m.get(cat) || 0),
+    data:            monthCatMaps.map(m => m.get(cat) ?? 0),
     backgroundColor: palette[i % palette.length] + 'cc',
     stack:           'spend',
     borderRadius:    2,
@@ -67,11 +67,11 @@ function _statCards(sym, datasets, monthKeys) {
 
   // Month with highest total spend
   const monthTotals = monthKeys.map((_, mi) =>
-    datasets.reduce((s, ds) => s + (ds.data[mi] || 0), 0)
+    datasets.reduce((s, ds) => s + (ds.data[mi] ?? 0), 0)
   );
   const peakIdx      = monthTotals.indexOf(Math.max(...monthTotals));
   const peakLabel    = monthKeys[peakIdx] ? fmtMonthKey(monthKeys[peakIdx]) : '—';
-  const peakValue    = monthTotals[peakIdx] || 0;
+  const peakValue    = monthTotals[peakIdx] ?? 0;
 
   return `
     <div class="stat-cards">
@@ -81,7 +81,7 @@ function _statCards(sym, datasets, monthKeys) {
       </div>
       <div class="stat-card">
         <p class="stat-card-label">Top category</p>
-        <p class="stat-card-value" style="font-size:var(--text-base)">${esc(topDs?.label || '—')}</p>
+        <p class="stat-card-value" style="font-size:var(--text-base)">${esc(topDs?.label ?? '—')}</p>
         <p class="stat-card-sub">${esc(fmt(topTotal))}</p>
       </div>
       <div class="stat-card">

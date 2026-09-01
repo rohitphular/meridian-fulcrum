@@ -40,7 +40,7 @@ function _buildWeeklyDaily(txs, weekFrom, cutoffDate) {
     const yr  = day.getFullYear();
     const mo  = String(day.getMonth() + 1).padStart(2, '0');
     const dd  = String(day.getDate()).padStart(2, '0');
-    return sumAmountBase(byDay.get(`${yr}-${mo}-${dd}`) || []);
+    return sumAmountBase(byDay.get(`${yr}-${mo}-${dd}`) ?? []);
   });
 }
 
@@ -107,8 +107,8 @@ function _renderTransactions(container, { from, sym }) {
   const dataA = _buildWeeklyDaily(moneyOutA, aFrom, cutoffDate);
   const dataB = _buildWeeklyDaily(moneyOutB, bFrom, null);
 
-  const totalA = moneyOutA.reduce((s, t) => s + (sumAmountBase([t]) || 0), 0);
-  const totalB = moneyOutB.reduce((s, t) => s + (sumAmountBase([t]) || 0), 0);
+  const totalA = moneyOutA.reduce((s, t) => s + (sumAmountBase([t]) ?? 0), 0);
+  const totalB = moneyOutB.reduce((s, t) => s + (sumAmountBase([t]) ?? 0), 0);
 
   const labelA    = _isoWeekLabel(aFrom) + (isCurrentWeek ? ' (current)' : '');
   const labelB    = _isoWeekLabel(bFrom) + ' (prev)';
@@ -161,7 +161,7 @@ function _renderTransactions(container, { from, sym }) {
 // ── Accounts tab ──────────────────────────────────────────────────────────────
 
 function _renderAccounts(container, { from, accounts, sym }) {
-  const assetAccounts  = accounts.filter(a => a.is_active && a.type !== 'liability');
+  const assetAccounts  = accounts.filter(a => a.record_status === 'active' && a.type !== 'liability');
 
   if (!assetAccounts.length) {
     container.innerHTML = `<div class="chart-wrap"><p class="chart-empty">No active asset accounts found.</p></div>`;
@@ -181,8 +181,8 @@ function _renderAccounts(container, { from, accounts, sym }) {
   const dataA = dailyA.map((v, i) => (cutoffDay !== null && i >= cutoffDay) ? null : v);
   const dataB = dailyB.slice(0, 7);
 
-  const latestA    = dataA.filter(v => v !== null).slice(-1)[0] || 0;
-  const latestB    = dataB.slice(-1)[0] || 0;
+  const latestA    = dataA.filter(v => v !== null).slice(-1)[0] ?? 0;
+  const latestB    = dataB.slice(-1)[0] ?? 0;
   const labelA     = _isoWeekLabel(aFrom) + (isCurrentWeek ? ' (current)' : '');
   const labelB     = _isoWeekLabel(bFrom) + ' (prev)';
   const weekLabel  = _isoWeekLabel(aFrom);

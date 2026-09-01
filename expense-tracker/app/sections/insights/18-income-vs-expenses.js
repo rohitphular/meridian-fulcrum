@@ -24,8 +24,8 @@ function _buildMonthly(txs, monthKeys) {
     const isPartial = mk === curYYYYMM;
     partial.push(isPartial);
 
-    const inTxs  = inByMonth.get(mk)  || [];
-    const outTxs = outByMonth.get(mk) || [];
+    const inTxs  = inByMonth.get(mk)  ?? [];
+    const outTxs = outByMonth.get(mk) ?? [];
 
     // Partial month: only count txs up to today
     const filterPartial = arr => isPartial
@@ -62,8 +62,8 @@ function _buildChartOptions(sym, C, isMobile) {
             const incomeItem = tooltipItems.find(t => t.datasetIndex === 0);
             const netItem    = tooltipItems.find(t => t.datasetIndex === 2);
             if (!incomeItem || !netItem) return [];
-            const inc  = incomeItem.parsed.y || 0;
-            const net  = netItem.parsed.y    || 0;
+            const inc  = incomeItem.parsed.y ?? 0;
+            const net  = netItem.parsed.y    ?? 0;
             if (inc <= 0) return [];
             const rate = Math.round(net / inc * 100);
             return [`  Savings rate: ${rate}%`];
@@ -193,8 +193,8 @@ export async function render(containerId, { txs, from, to, sym }) {
         const mk  = monthKeys[idx];
         if (!mk) return;
 
-        const monthIn  = inByMonth.get(mk)  || [];
-        const monthOut = outByMonth.get(mk) || [];
+        const monthIn  = inByMonth.get(mk)  ?? [];
+        const monthOut = outByMonth.get(mk) ?? [];
 
         const fmtV = v => sym + Math.abs(v).toLocaleString('en-GB', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
         const thS  = `padding:8px;font-size:var(--text-xs);color:var(--muted);font-weight:600;white-space:nowrap`;
@@ -203,8 +203,8 @@ export async function render(containerId, { txs, from, to, sym }) {
         // Top income by counterparty
         const incMap = new Map();
         for (const t of monthIn) {
-          const k = t.counterparty_name || '(unknown)';
-          incMap.set(k, (incMap.get(k) || 0) + sumAmountBase([t]));
+          const k = t.counterparty_name ?? '(unknown)';
+          incMap.set(k, (incMap.get(k) ?? 0) + sumAmountBase([t]));
         }
         const incRows = [...incMap.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8)
           .map(([cp, v]) => `<tr><td style="${tdS}">${esc(cp)}</td><td style="${tdS};text-align:right;white-space:nowrap" class="positive">${esc(fmtV(v))}</td></tr>`)
@@ -213,8 +213,8 @@ export async function render(containerId, { txs, from, to, sym }) {
         // Top expenses by major category
         const expMap = new Map();
         for (const t of monthOut) {
-          const k = t.major_category || 'Uncategorised';
-          expMap.set(k, (expMap.get(k) || 0) + sumAmountBase([t]));
+          const k = t.major_category ?? 'Uncategorised';
+          expMap.set(k, (expMap.get(k) ?? 0) + sumAmountBase([t]));
         }
         const expRows = [...expMap.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8)
           .map(([cat, v]) => `<tr><td style="${tdS}">${esc(cat)}</td><td style="${tdS};text-align:right;white-space:nowrap" class="negative">${esc(fmtV(v))}</td></tr>`)
@@ -232,7 +232,7 @@ export async function render(containerId, { txs, from, to, sym }) {
                 <thead><tr style="border-bottom:1px solid var(--hair)">
                   <th style="${thS};text-align:left">From</th><th style="${thS};text-align:right">Amount</th>
                 </tr></thead>
-                <tbody>${incRows || `<tr><td colspan="2" style="padding:8px;color:var(--muted)">No income</td></tr>`}</tbody>
+                <tbody>${incRows.length ? incRows : `<tr><td colspan="2" style="padding:8px;color:var(--muted)">No income</td></tr>`}</tbody>
               </table>
             </div>
             <div>
@@ -241,7 +241,7 @@ export async function render(containerId, { txs, from, to, sym }) {
                 <thead><tr style="border-bottom:1px solid var(--hair)">
                   <th style="${thS};text-align:left">Category</th><th style="${thS};text-align:right">Amount</th>
                 </tr></thead>
-                <tbody>${expRows || `<tr><td colspan="2" style="padding:8px;color:var(--muted)">No expenses</td></tr>`}</tbody>
+                <tbody>${expRows.length ? expRows : `<tr><td colspan="2" style="padding:8px;color:var(--muted)">No expenses</td></tr>`}</tbody>
               </table>
             </div>
           </div>`;

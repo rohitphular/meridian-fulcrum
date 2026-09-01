@@ -1,7 +1,12 @@
 import { state } from '../core/state.js';
-import { el, esc, openContextMenu, closeContextMenu, exportCategories, recordStatusIcon, syncStatusIcon } from '../core/utils.js';
+import { el, esc, openContextMenu, closeContextMenu, exportCategories, recordStatusIcon, syncStatusIcon, parseCsvRow } from '../core/utils.js';
 import { showLoading, hideLoading, showMsg } from '../core/ui.js';
 import { ExpenseAPI } from '../core/api.js';
+
+// Returns the error code string, or '[no error code]' if absent.
+function _errMsg(code) {
+  return (code !== undefined && code !== null) ? String(code) : '[no error code]';
+}
 
 let _catImportParsed = null;
 let _catMenuKey      = null;
@@ -34,8 +39,8 @@ export function renderCategories() {
   const filtered    = _applyFilters(state.categories);
   const activeCount = _activeFilterCount();
   const anyFormOpen = state.catAddOpen || state.catViewRow !== null || state.catEditRow !== null;
-  const viewCat     = state.catViewRow !== null ? state.categories.find(c => c._row === state.catViewRow) : null;
-  const editCat     = state.catEditRow !== null ? state.categories.find(c => c._row === state.catEditRow) : null;
+  const viewCat     = state.catViewRow !== null ? state.categories.find(c => c._row === state.catViewRow) : undefined;
+  const editCat     = state.catEditRow !== null ? state.categories.find(c => c._row === state.catEditRow) : undefined;
 
   content.innerHTML = `
     <div class="sec-head">
@@ -47,9 +52,9 @@ export function renderCategories() {
     </div>
     ${state.catImportOpen ? _renderCatImportPanel() : ''}
     ${state.catAddOpen ? _renderForm({}, 'add') : ''}
-    ${viewCat          ? _renderForm(viewCat, 'view') : ''}
-    ${editCat          ? _renderForm(editCat, 'edit') : ''}
-    ${_renderCatFilterBar()}
+    ${viewCat !== undefined ? _renderForm(viewCat, 'view') : ''}
+    ${editCat !== undefined ? _renderForm(editCat, 'edit') : ''}
+    ${_renderCatFilterBar(activeCount)}
     <div class="cat-count-bar">
       <span class="cat-count">${filtered.length} ${filtered.length === 1 ? 'category' : 'categories'}</span>
     </div>
@@ -63,11 +68,13 @@ export function renderCategories() {
 
 function _applyFilters(cats) {
   const f = state.catFilters;
+  // CAT-M-7: derive status count from schema rather than hardcoding 4
+  const ALL_STATUS_COUNT = state.categorySchema.record_statuses.length;
   return cats.filter(c => {
     if (f.type !== 'all' && c.tx_type_key !== f.type) return false;
     if (f.major !== 'all' && c.major_category_label !== f.major) return false;
     if (f.minor !== 'all' && c.minor_category_label !== f.minor) return false;
-    if (f.search) {
+    if (f.search !== '') {
       const q   = f.search.toLowerCase();
       const hay = [c.major_category_label, c.minor_category_label, c.description, c.tag_keywords, c.counterparty_examples]
         .join(' ').toLowerCase();
@@ -76,32 +83,34 @@ function _applyFilters(cats) {
     if (f.sourceMandatory !== 'all' && c.source_account_mandatory !== (f.sourceMandatory === 'yes')) return false;
     if (f.targetMandatory !== 'all' && c.target_account_mandatory !== (f.targetMandatory === 'yes')) return false;
     if (f.subscriptionEligible !== 'all' && c.is_subscription_eligible !== (f.subscriptionEligible === 'yes')) return false;
-    if (f.recordStatuses.length < 4 && !f.recordStatuses.includes(c.record_status)) return false;
+    if (f.recordStatuses.length < ALL_STATUS_COUNT && !f.recordStatuses.includes(c.record_status)) return false;
     return true;
   });
 }
 
 function _activeFilterCount() {
   const f = state.catFilters;
+  // CAT-M-7: derive status count from schema rather than hardcoding 4
+  const ALL_STATUS_COUNT = state.categorySchema.record_statuses.length;
   let n = 0;
-  if (f.type !== 'all')                 n++;
-  if (f.major !== 'all')                n++;
-  if (f.minor !== 'all')                n++;
-  if (f.search)                         n++;
-  if (f.sourceMandatory !== 'all')      n++;
-  if (f.targetMandatory !== 'all')      n++;
-  if (f.subscriptionEligible !== 'all') n++;
-  if (f.recordStatuses.length < 4)      n++;
+  if (f.type !== 'all')                              n++;
+  if (f.major !== 'all')                             n++;
+  if (f.minor !== 'all')                             n++;
+  if (f.search !== '')                               n++;
+  if (f.sourceMandatory !== 'all')                   n++;
+  if (f.targetMandatory !== 'all')                   n++;
+  if (f.subscriptionEligible !== 'all')              n++;
+  if (f.recordStatuses.length < ALL_STATUS_COUNT)    n++;
   return n;
 }
 
-function _renderCatFilterBar() {
-  const activeCount = _activeFilterCount();          // badge uses applied filter (state.catFilters)
-  const f           = _catDraft || state.catFilters; // panel UI uses draft when available
+function _renderCatFilterBar(activeCount) {
+  // CAT-L-5: activeCount is pre-computed by renderCategories() and passed in; no second call needed.
+  const f = _catDraft !== null ? _catDraft : state.catFilters; // panel UI uses draft when available
 
   const majors = [];
   const seenM  = {};
-  state.categories.forEach(c => {
+  state.categories.filter(c => c.record_status === 'active').forEach(c => {
     if (!seenM[c.major_category_label]) {
       seenM[c.major_category_label] = true;
       majors.push(c.major_category_label);
@@ -113,7 +122,7 @@ function _renderCatFilterBar() {
   if (f.major !== 'all') {
     const seenN = {};
     state.categories
-      .filter(c => c.major_category_label === f.major)
+      .filter(c => c.major_category_label === f.major && c.record_status === 'active')
       .forEach(c => {
         if (!seenN[c.minor_category_label]) {
           seenN[c.minor_category_label] = true;
@@ -126,12 +135,12 @@ function _renderCatFilterBar() {
   const rs = new Set(f.recordStatuses);
 
   const typeLabel   = f.type === 'money-in' ? 'Money In' : f.type === 'money-out' ? 'Money Out' : 'All types';
-  const majorLabel  = f.major === 'all' ? 'All major' : f.major;
-  const minorLabel  = f.major === 'all' ? '— select major first —' : (f.minor === 'all' ? 'All minor' : f.minor);
+  const majorLabel  = f.major === 'all' ? 'All major' : esc(f.major);
+  const minorLabel  = f.major === 'all' ? '— select major first —' : (f.minor === 'all' ? 'All minor' : esc(f.minor));
   const srcLabel    = f.sourceMandatory === 'yes' ? 'Required' : f.sourceMandatory === 'no' ? 'Optional' : 'All';
   const tgtLabel    = f.targetMandatory === 'yes' ? 'Required' : f.targetMandatory === 'no' ? 'Optional' : 'All';
   const subLabel    = f.subscriptionEligible === 'yes' ? 'Eligible' : f.subscriptionEligible === 'no' ? 'Not eligible' : 'All';
-  const statusLabel = rs.size === 4 ? 'All' : rs.size === 0 ? 'None'
+  const statusLabel = rs.size === state.categorySchema.record_statuses.length ? 'All' : rs.size === 0 ? 'None'
     : [...rs].map(s => s.charAt(0).toUpperCase() + s.slice(1)).join(', ');
 
   const trigStyle = 'width:100%;display:flex;justify-content:space-between;align-items:center;text-align:left;background:var(--panel);border:1px solid var(--hair-strong);border-radius:8px;padding:6px 10px;font-size:var(--text-base);color:var(--ink);cursor:pointer;outline:none';
@@ -153,7 +162,7 @@ function _renderCatFilterBar() {
   return `
   <div class="filter-bar">
     <button class="filter-toggle" id="catFilterToggle">
-      Filters${activeCount ? ` (${activeCount})` : ''} <span class="filter-arrow">${state.catFilterOpen ? '▲' : '▼'}</span>
+      Filters${activeCount > 0 ? ` (${activeCount})` : ''} <span class="filter-arrow">${state.catFilterOpen ? '▲' : '▼'}</span>
     </button>
     <div class="filter-body ${state.catFilterOpen ? '' : 'hidden'}" id="catFilterBody">
       <div class="filter-row">
@@ -194,7 +203,7 @@ function _renderCatFilterBar() {
       <div class="filter-row">
         <label>Status</label>
         ${dd('catFStatusTrigger','catFStatusLabel','catFStatusMenu', statusLabel,
-          ['active','inactive','deleted','locked'].map(s =>
+          state.categorySchema.record_statuses.map(s =>
             `<label style="${optStyle}"><input type="checkbox" data-cat-filter-rstat="${s}"${rs.has(s) ? ' checked' : ''}> ${s.charAt(0).toUpperCase() + s.slice(1)}</label>`
           ).join(''))}
       </div>
@@ -227,6 +236,20 @@ function _renderForm(cat, mode) {
       <strong>${esc(cat.major_category_label)}</strong> / ${esc(cat.minor_category_label)}
     </div>` : '';
 
+  // CAT-M-6: build record_status options dynamically from schema
+  const statuses = state.categorySchema.record_statuses;
+  // Add mode: only active is allowed on create (CAT-NEW-H-1: backend always writes 'active')
+  const allowedForAdd  = statuses.filter(s => s === 'active');
+  // Edit/view mode: all statuses are available
+  const allowedForEdit = statuses;
+  const statusOptions  = (isEdit || isView ? allowedForEdit : allowedForAdd).map(s => {
+    const isSelected = isEdit || isView
+      ? (cat.record_status === s ? 'selected' : '')
+      : (s === 'active' ? 'selected' : '');
+    const label = s.charAt(0).toUpperCase() + s.slice(1);
+    return `<option value="${esc(s)}" ${isSelected}>${esc(label)}</option>`;
+  }).join('');
+
   return `
   <div class="card" style="margin-bottom:20px">
     ${header}
@@ -238,27 +261,27 @@ function _renderForm(cat, mode) {
       </div>
       <div class="field">
         <label>Major *</label>
-        <input type="text" id="${pfx}Major" placeholder="e.g. Food" value="${esc(String(cat.major_category_label || ''))}"${dis}>
+        <input type="text" id="${pfx}Major" placeholder="e.g. Food" ${cat.major_category_label !== undefined && cat.major_category_label !== null && cat.major_category_label !== '' ? `value="${esc(String(cat.major_category_label))}"` : ''}${dis}>
         <div class="field-hint">Top-level category group.</div>
       </div>
       <div class="field form-grid-span-2">
         <label>Minor *</label>
-        <input type="text" id="${pfx}Minor" placeholder="e.g. Groceries" value="${esc(String(cat.minor_category_label || ''))}"${dis}>
+        <input type="text" id="${pfx}Minor" placeholder="e.g. Groceries" ${cat.minor_category_label !== undefined && cat.minor_category_label !== null && cat.minor_category_label !== '' ? `value="${esc(String(cat.minor_category_label))}"` : ''}${dis}>
         <div class="field-hint">Specific category name shown in dropdowns.</div>
       </div>
       <div class="field form-grid-span-2">
         <label>Description</label>
-        <input type="text" id="${pfx}Desc" placeholder="Short description" value="${esc(String(cat.description || ''))}"${dis}>
+        <input type="text" id="${pfx}Desc" placeholder="Short description" ${cat.description !== undefined && cat.description !== null && cat.description !== '' ? `value="${esc(String(cat.description))}"` : ''}${dis}>
         <div class="field-hint">Shown in tooltips and reports.</div>
       </div>
       <div class="field form-grid-span-2">
         <label>Tag keywords</label>
-        <input type="text" id="${pfx}Keywords" placeholder="tesco, sainsbury…" value="${esc(String(cat.tag_keywords || ''))}"${dis}>
-        <div class="field-hint">Comma-separated, for auto-classification.</div>
+        <input type="text" id="${pfx}Keywords" placeholder="tesco, sainsbury…" ${cat.tag_keywords !== undefined && cat.tag_keywords !== null && cat.tag_keywords !== '' ? `value="${esc(String(cat.tag_keywords))}"` : ''}${dis}>
+        <div class="field-hint">Comma-and-space-separated, for auto-classification.</div>
       </div>
       <div class="field form-grid-span-2">
         <label>Counterparty examples</label>
-        <input type="text" id="${pfx}Counterparty" placeholder="Tesco, Sainsbury's…" value="${esc(String(cat.counterparty_examples || ''))}"${dis}>
+        <input type="text" id="${pfx}Counterparty" placeholder="Tesco, Sainsbury's…" ${cat.counterparty_examples !== undefined && cat.counterparty_examples !== null && cat.counterparty_examples !== '' ? `value="${esc(String(cat.counterparty_examples))}"` : ''}${dis}>
         <div class="field-hint">Comma-separated merchant names.</div>
       </div>
     </div>
@@ -269,7 +292,7 @@ function _renderForm(cat, mode) {
           <input type="checkbox" id="${pfx}SrcMandatory" ${cat.source_account_mandatory === true ? 'checked' : ''}${dis}> Mandatory
         </label>
       </div>
-      ${_renderAcctTypeCheckboxes(srcId, cat.source_account_types || '', isView)}
+      ${_renderAcctTypeCheckboxes(srcId, (cat.source_account_types !== undefined && cat.source_account_types !== null) ? cat.source_account_types : undefined, isView)}
     </div>
     <div class="cat-acct-section">
       <div class="cat-acct-header">
@@ -278,23 +301,23 @@ function _renderForm(cat, mode) {
           <input type="checkbox" id="${pfx}TgtMandatory" ${cat.target_account_mandatory === true ? 'checked' : ''}${dis}> Mandatory
         </label>
       </div>
-      ${_renderAcctTypeCheckboxes(tgtId, cat.target_account_types || '', isView)}
+      ${_renderAcctTypeCheckboxes(tgtId, (cat.target_account_types !== undefined && cat.target_account_types !== null) ? cat.target_account_types : undefined, isView)}
     </div>
+    ${isEdit || isView ? `
     <div class="field" style="margin-top:14px">
       <label>Record status</label>
-      <select id="${pfx}RecordStatus"${dis}>
-        <option value="active"   ${(cat.record_status === 'active' || !cat.record_status) ? 'selected' : ''}>Active</option>
-        <option value="inactive" ${cat.record_status === 'inactive' ? 'selected' : ''}>Inactive</option>
-        <option value="locked"   ${cat.record_status === 'locked'   ? 'selected' : ''}>Locked</option>
-        <option value="deleted"  ${cat.record_status === 'deleted'  ? 'selected' : ''}>Deleted</option>
-      </select>
-    </div>
+      <select id="${pfx}RecordStatus"${dis}>${statusOptions}</select>
+    </div>` : `
+    <div class="field" style="margin-top:14px">
+      <label>Record status</label>
+      <select id="${pfx}RecordStatus">${statusOptions}</select>
+    </div>`}
     <label class="checkbox-label cat-mandatory-check" style="margin-top:8px">
       <input type="checkbox" id="${pfx}IsSubEligible" ${cat.is_subscription_eligible === true ? 'checked' : ''}${dis}> Subscription eligible
     </label>
     ${isView ? `
     <div style="margin-top:14px;font-size:12px;color:var(--muted)">
-      Sync: ${syncStatusIcon(cat.sync_status || '')} ${esc(cat.sync_status || '—')}${cat.sync_notes ? ' · ' + esc(cat.sync_notes) : ''}
+      Sync: ${syncStatusIcon((cat.sync_status !== undefined && cat.sync_status !== null) ? cat.sync_status : '')} ${esc((cat.sync_status !== undefined && cat.sync_status !== null) ? cat.sync_status : '—')}${(cat.sync_notes !== undefined && cat.sync_notes !== null && cat.sync_notes !== '') ? ' · ' + esc(cat.sync_notes) : ''}
     </div>` : ''}
     ${isView ? `
     <div class="form-actions" style="margin-top:16px">
@@ -315,7 +338,7 @@ function _renderForm(cat, mode) {
 // ── Table ─────────────────────────────────────────────────────────────────────
 
 function _renderCatTable(cats) {
-  if (!cats.length) {
+  if (cats.length === 0) {
     return `<p class="placeholder">No categories for this filter. Use &ldquo;+ Add&rdquo; to create one.</p>`;
   }
 
@@ -385,8 +408,9 @@ function _renderCatTable(cats) {
 // ── Account type multi-select ─────────────────────────────────────────────────
 
 function _renderAcctTypeCheckboxes(containerId, currentValue, disabled = false) {
+  const rawValue = (currentValue !== undefined && currentValue !== null) ? String(currentValue) : '';
   const selected = new Set(
-    String(currentValue || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean)
+    rawValue.split(',').map(s => s.trim().toLowerCase()).filter(s => s !== '')
   );
   const dis = disabled ? ' disabled' : '';
 
@@ -396,14 +420,14 @@ function _renderAcctTypeCheckboxes(containerId, currentValue, disabled = false) 
       <div class="acct-type-checks">
         ${types.map(t =>
           `<label class="acct-type-check">
-            <input type="checkbox" data-acct-type="${esc(t)}" ${selected.has(t) ? 'checked' : ''}${dis}> ${esc(ACCT_TYPE_LABELS[t] || t)}
+            <input type="checkbox" data-acct-type="${esc(t)}" ${selected.has(t) ? 'checked' : ''}${dis}> ${esc(ACCT_TYPE_LABELS[t] !== undefined ? ACCT_TYPE_LABELS[t] : t)}
           </label>`
         ).join('')}
       </div>
     </div>`;
 
   const { asset, credit, loan } = _acctTypeGroups();
-  const idAttr = containerId ? ` id="${esc(containerId)}"` : '';
+  const idAttr = containerId !== '' ? ` id="${esc(containerId)}"` : '';
   return `<div class="account-type-checkboxes"${idAttr}>
     ${renderGroup('Assets', asset)}
     ${renderGroup('Credit', credit)}
@@ -413,7 +437,7 @@ function _renderAcctTypeCheckboxes(containerId, currentValue, disabled = false) 
 
 function _getCheckedAccountTypes(containerId) {
   const container = el(containerId);
-  if (!container) return '';
+  if (container === null) return '';
   return Array.from(container.querySelectorAll('input[data-acct-type]:checked'))
     .map(cb => cb.dataset.acctType)
     .join(', ');
@@ -455,48 +479,39 @@ function _renderCatImportPanel() {
   </div>`;
 }
 
-function _parseCatCsvRow(line) {
-  const result = [];
-  let cur = '', inQ = false;
-  for (let i = 0; i < line.length; i++) {
-    const c = line[i];
-    if (c === '"') { inQ = !inQ; }
-    else if (c === ',' && !inQ) { result.push(cur.trim()); cur = ''; }
-    else { cur += c; }
-  }
-  result.push(cur.trim());
-  return result;
-}
-
 function _parseCatCsv(text) {
-  const lines = text.split(/\r?\n/).filter(l => l.trim());
-  if (!lines.length) return { categories: [], errors: ['File is empty.'] };
+  const lines = text.split(/\r?\n/).filter(l => l.trim() !== '');
+  if (lines.length === 0) return { categories: [], errors: ['File is empty.'] };
 
-  const headers = _parseCatCsvRow(lines[0]).map(h => h.toLowerCase().replace(/\s+/g, '_'));
+  const headers = parseCsvRow(lines[0]).map(h => h.toLowerCase().replace(/\s+/g, '_'));
   const categories = [], errors = [];
 
   for (let i = 1; i < lines.length; i++) {
-    const vals = _parseCatCsvRow(lines[i]);
+    const vals = parseCsvRow(lines[i]);
     const row  = {};
-    headers.forEach((h, idx) => { row[h] = (vals[idx] || '').trim(); });
+    headers.forEach((h, idx) => { row[h] = vals[idx] !== undefined ? vals[idx].trim() : undefined; });
 
-    if (!row.tx_type_key)          { errors.push(`Row ${i + 1}: missing tx_type_key`);          continue; }
-    if (!row.major_category_label) { errors.push(`Row ${i + 1}: missing major_category_label`); continue; }
-    if (!row.minor_category_label) { errors.push(`Row ${i + 1}: missing minor_category_label`); continue; }
+    if (row.tx_type_key === undefined || row.tx_type_key === null || row.tx_type_key === '') { errors.push(`Row ${i + 1}: missing tx_type_key`); continue; }
+    if (!['money-in', 'money-out'].includes(row.tx_type_key)) {
+      errors.push(`Row ${i + 1}: tx_type_key must be "money-in" or "money-out"`);
+      continue;
+    }
+    if (row.major_category_label === '') { errors.push(`Row ${i + 1}: missing major_category_label`); continue; }
+    if (row.minor_category_label === '') { errors.push(`Row ${i + 1}: missing minor_category_label`); continue; }
 
     categories.push({
       tx_type_key:               row.tx_type_key,
-      tx_type_label:             row.tx_type_label             || '',
-      major_category_key:        row.major_category_key        || '',
+      tx_type_label:             row.tx_type_label,
+      major_category_key:        row.major_category_key,
       major_category_label:      row.major_category_label,
-      minor_category_key:        row.minor_category_key        || '',
+      minor_category_key:        row.minor_category_key,
       minor_category_label:      row.minor_category_label,
-      description:               row.description               || '',
-      record_status:             ['active', 'inactive', 'deleted', 'locked'].includes(row.record_status) ? row.record_status : 'active',
-      tag_keywords:              row.tag_keywords              || '',
-      counterparty_examples:     row.counterparty_examples     || '',
-      source_account_types:      row.source_account_types      || '',
-      target_account_types:      row.target_account_types      || '',
+      description:               row.description,
+      record_status:             row.record_status,
+      tag_keywords:              row.tag_keywords,
+      counterparty_examples:     row.counterparty_examples,
+      source_account_types:      row.source_account_types,
+      target_account_types:      row.target_account_types,
       source_account_mandatory:  row.source_account_mandatory === 'TRUE' || row.source_account_mandatory === 'true',
       target_account_mandatory:  row.target_account_mandatory === 'TRUE' || row.target_account_mandatory === 'true',
       is_subscription_eligible:  row.is_subscription_eligible === 'TRUE' || row.is_subscription_eligible === 'true',
@@ -510,44 +525,45 @@ function _renderCatImportStatus(parsed) {
   const errHtml = errors.length
     ? `<div class="pin-error" style="margin-bottom:8px">${errors.map(e => esc(e)).join('<br>')}</div>`
     : '';
-  if (!categories.length) return errHtml + '<p class="pin-error" style="margin:0">No valid rows found — check the column headers match the expected format.</p>';
+  if (categories.length === 0) return errHtml + '<p class="pin-error" style="margin:0">No valid rows found — check the column headers match the expected format.</p>';
   return `${errHtml}<p style="font-size:13px;color:var(--muted);margin:0">${categories.length} categor${categories.length !== 1 ? 'ies' : 'y'} ready to import</p>`;
 }
 
 async function _submitCatImport(categories) {
-  if (!categories || !categories.length) {
+  if (!Array.isArray(categories) || categories.length === 0) {
     const errEl = el('catImportError');
     if (errEl) errEl.textContent = 'No valid rows to import.';
     return;
   }
   const btn   = el('catImportConfirm');
   const errEl = el('catImportError');
-  if (btn)   { btn.disabled = true; btn.textContent = 'Importing…'; }
-  if (errEl) errEl.textContent = '';
+  if (btn !== null)   { btn.disabled = true; btn.textContent = 'Importing…'; }
+  if (errEl !== null) errEl.textContent = '';
   showLoading();
   try {
     const res = await ExpenseAPI.createCategoriesBulk({ categories });
-    if (!res.ok && !res.results) {
+    if (!res.ok && (res.results === undefined || res.results === null)) {
       console.warn('[categories] _submitCatImport failed:', res.error);
-      if (errEl) errEl.textContent = 'Error: ' + (res.error || 'unknown');
-      if (btn)   { btn.disabled = false; btn.textContent = 'Import'; }
+      if (errEl !== null) errEl.textContent = 'Error: ' + _errMsg(res.error);
+      if (btn !== null)   { btn.disabled = false; btn.textContent = 'Import'; }
       return;
     }
-    const created = res.created || 0;
-    const updated = res.updated || 0;
-    const failed  = res.failed  || 0;
+    const created = res.created;
+    const updated = res.updated;
+    const failed  = res.failed;
     _catImportParsed = null;
     state.catImportOpen = false;
     const parts = [];
-    if (created) parts.push(`${created} imported`);
-    if (updated) parts.push(`${updated} updated`);
-    if (failed)  parts.push(`${failed} failed`);
-    showMsg(parts.join(' · ') || 'Nothing to import');
+    if (created > 0) parts.push(`${created} imported`);
+    if (updated > 0) parts.push(`${updated} updated`);
+    if (failed > 0)  parts.push(`${failed} failed`);
+    const importMsg = parts.join(' · ');
+    showMsg(importMsg !== '' ? importMsg : 'Nothing to import');
     document.dispatchEvent(new CustomEvent('et:reload'));
   } catch (err) {
     console.error('[categories] _submitCatImport failed:', err);
-    if (errEl) errEl.textContent = 'Connection error.';
-    if (btn)   { btn.disabled = false; btn.textContent = 'Import'; }
+    if (errEl !== null) errEl.textContent = 'Connection error.';
+    if (btn !== null)   { btn.disabled = false; btn.textContent = 'Import'; }
   } finally {
     hideLoading();
   }
@@ -556,10 +572,10 @@ async function _submitCatImport(categories) {
 // ── Events ────────────────────────────────────────────────────────────────────
 
 function _attachCatEvents() {
-  if (_catDDCleanup) { _catDDCleanup(); _catDDCleanup = null; }
+  if (_catDDCleanup !== null) { _catDDCleanup(); _catDDCleanup = null; }
   el('catExportBtn').addEventListener('click', () => {
     const rows = _applyFilters(state.categories);
-    if (!rows.length) { showMsg('No categories to export.', 'warn'); return; }
+    if (rows.length === 0) { showMsg('No categories to export.', 'warn'); return; }
     openContextMenu(el('catExportBtn'), [
       { key: 'csv',  label: '↓ CSV'  },
       { key: 'json', label: '↓ JSON' },
@@ -582,21 +598,21 @@ function _attachCatEvents() {
   if (state.catImportOpen) {
     el('catImportFile').addEventListener('change', e => {
       const file = e.target.files[0];
-      if (!file) return;
+      if (file === undefined || file === null) return;
       const reader = new FileReader();
       reader.onload = ev => {
         const parsed = _parseCatCsv(ev.target.result);
-        _catImportParsed = parsed.categories.length ? parsed.categories : null;
+        _catImportParsed = parsed.categories.length > 0 ? parsed.categories : null;
         const status = el('catImportStatus');
-        if (status) status.innerHTML = _renderCatImportStatus(parsed);
+        if (status !== null) status.innerHTML = _renderCatImportStatus(parsed);
         const btn = el('catImportConfirm');
-        if (btn) btn.disabled = !_catImportParsed;
+        if (btn !== null) btn.disabled = _catImportParsed === null;
       };
       reader.readAsText(file);
     });
 
     el('catImportConfirm').addEventListener('click', () => {
-      if (_catImportParsed) _submitCatImport(_catImportParsed);
+      if (_catImportParsed !== null) _submitCatImport(_catImportParsed);
     });
 
     el('catImportCancel').addEventListener('click', () => {
@@ -633,14 +649,14 @@ function _attachCatEvents() {
   if (state.catViewRow !== null) {
     el('catCancelView').addEventListener('click', () => { state.catViewRow = null; renderCategories(); });
     const viewToEditEl = el('catViewToEdit');
-    if (viewToEditEl) viewToEditEl.addEventListener('click', e => {
+    if (viewToEditEl !== null) viewToEditEl.addEventListener('click', e => {
       const row = Number(e.currentTarget.dataset.row);
       state.catViewRow = null;
       state.catEditRow = row;
       renderCategories();
     });
     const viewRestoreEl = el('catViewRestore');
-    if (viewRestoreEl) viewRestoreEl.addEventListener('click', e => {
+    if (viewRestoreEl !== null) viewRestoreEl.addEventListener('click', e => {
       const row = Number(e.currentTarget.dataset.row);
       state.catViewRow = null;
       _restoreCat(row);
@@ -649,14 +665,14 @@ function _attachCatEvents() {
 
   el('catFilterToggle').addEventListener('click', () => {
     state.catFilterOpen = !state.catFilterOpen;
-    if (state.catFilterOpen && !_catDraft) {
+    if (state.catFilterOpen && _catDraft === null) {
       _catDraft = { ...state.catFilters, recordStatuses: [...state.catFilters.recordStatuses] };
     }
     renderCategories();
   });
 
   if (state.catFilterOpen) {
-    if (!_catDraft) {
+    if (_catDraft === null) {
       _catDraft = { ...state.catFilters, recordStatuses: [...state.catFilters.recordStatuses] };
     }
 
@@ -667,14 +683,14 @@ function _attachCatEvents() {
 
     const _openDD = (triggerId, menuId) => {
       ALL_DD_MENUS.filter(id => id !== menuId).forEach(id => {
-        const m = el(id); if (m && m.style.display !== 'none') m.style.cssText = 'display:none';
+        const m = el(id); if (m !== null && m.style.display !== 'none') m.style.cssText = 'display:none';
       });
-      if (_catDDCleanup) { _catDDCleanup(); _catDDCleanup = null; }
+      if (_catDDCleanup !== null) { _catDDCleanup(); _catDDCleanup = null; }
       const menu = el(menuId);
-      if (!menu) return;
+      if (menu === null) return;
       if (menu.style.display === 'flex') { menu.style.cssText = 'display:none'; return; }
       const trig = el(triggerId);
-      if (!trig) return;
+      if (trig === null) return;
       const r = trig.getBoundingClientRect();
       menu.style.cssText = `${MENU_OPEN_STYLE};top:${r.bottom + 4}px;left:${r.left}px;width:${r.width}px`;
       const close = e => {
@@ -691,7 +707,7 @@ function _attachCatEvents() {
     el('catFMajorTrigger').addEventListener('click',  () => _openDD('catFMajorTrigger',  'catFMajorMenu'));
     el('catFMinorTrigger').addEventListener('click',  () => {
       const trig = el('catFMinorTrigger');
-      if (trig && trig.disabled) return;
+      if (trig !== null && trig.disabled) return;
       _openDD('catFMinorTrigger', 'catFMinorMenu');
     });
     el('catFSrcTrigger').addEventListener('click',    () => _openDD('catFSrcTrigger',    'catFSrcMenu'));
@@ -702,15 +718,15 @@ function _attachCatEvents() {
     // Single-select radio menus — event delegation on the container
     const _delegateRadio = (menuId, draftKey, labelId, labelMap) => {
       const menu = el(menuId);
-      if (!menu) return;
+      if (menu === null) return;
       menu.addEventListener('change', e => {
         const radio = e.target.closest('input[type="radio"]');
-        if (!radio) return;
+        if (radio === null) return;
         const val = radio.value;
-        if (_catDraft) _catDraft[draftKey] = val;
-        const lbl = el(labelId); if (lbl) lbl.textContent = labelMap[val] || val;
+        if (_catDraft !== null) _catDraft[draftKey] = val;
+        const lbl = el(labelId); if (lbl !== null) lbl.textContent = labelMap[val] !== undefined ? labelMap[val] : val;
         menu.style.cssText = 'display:none';
-        if (_catDDCleanup) { _catDDCleanup(); _catDDCleanup = null; }
+        if (_catDDCleanup !== null) { _catDDCleanup(); _catDDCleanup = null; }
       });
     };
     _delegateRadio('catFTypeMenu',  'type',                'catFTypeLabel',  { all: 'All types', 'money-in': 'Money In', 'money-out': 'Money Out' });
@@ -720,32 +736,32 @@ function _attachCatEvents() {
 
     // Major — delegation; also repopulates minor menu and updates minor trigger state
     const majorMenu = el('catFMajorMenu');
-    if (majorMenu) {
+    if (majorMenu !== null) {
       majorMenu.addEventListener('change', e => {
         const radio = e.target.closest('input[type="radio"]');
-        if (!radio) return;
+        if (radio === null) return;
         const val = radio.value;
-        if (_catDraft) { _catDraft.major = val; _catDraft.minor = 'all'; }
-        const lbl = el('catFMajorLabel'); if (lbl) lbl.textContent = val === 'all' ? 'All major' : val;
+        if (_catDraft !== null) { _catDraft.major = val; _catDraft.minor = 'all'; }
+        const lbl = el('catFMajorLabel'); if (lbl !== null) lbl.textContent = val === 'all' ? 'All major' : val;
         majorMenu.style.cssText = 'display:none';
-        if (_catDDCleanup) { _catDDCleanup(); _catDDCleanup = null; }
+        if (_catDDCleanup !== null) { _catDDCleanup(); _catDDCleanup = null; }
 
         const minTrig = el('catFMinorTrigger');
         const minMenu = el('catFMinorMenu');
         const minLbl  = el('catFMinorLabel');
         if (val === 'all') {
-          if (minTrig) { minTrig.disabled = true; minTrig.style.opacity = '0.5'; minTrig.style.cursor = 'not-allowed'; }
-          if (minLbl)  minLbl.textContent = '— select major first —';
-          if (minMenu) minMenu.innerHTML = '';
+          if (minTrig !== null) { minTrig.disabled = true; minTrig.style.opacity = '0.5'; minTrig.style.cursor = 'not-allowed'; }
+          if (minLbl !== null)  minLbl.textContent = '— select major first —';
+          if (minMenu !== null) minMenu.innerHTML = '';
         } else {
           const mins = [], seen = {};
-          state.categories.filter(c => c.major_category_label === val).forEach(c => {
+          state.categories.filter(c => c.major_category_label === val && c.record_status === 'active').forEach(c => {
             if (!seen[c.minor_category_label]) { seen[c.minor_category_label] = true; mins.push(c.minor_category_label); }
           });
           mins.sort();
-          if (minTrig) { minTrig.disabled = false; minTrig.style.opacity = ''; minTrig.style.cursor = ''; }
-          if (minLbl)  minLbl.textContent = 'All minor';
-          if (minMenu) minMenu.innerHTML = [['all','All minor'], ...mins.map(n => [n, n])].map(([v, l]) =>
+          if (minTrig !== null) { minTrig.disabled = false; minTrig.style.opacity = ''; minTrig.style.cursor = ''; }
+          if (minLbl !== null)  minLbl.textContent = 'All minor';
+          if (minMenu !== null) minMenu.innerHTML = [['all','All minor'], ...mins.map(n => [n, n])].map(([v, l]) =>
             `<label style="${OPT_STYLE}"><input type="radio" name="catFMinorR" value="${v}"${v === 'all' ? ' checked' : ''}> ${esc(l)}</label>`
           ).join('');
         }
@@ -754,35 +770,35 @@ function _attachCatEvents() {
 
     // Minor — delegation (handles dynamically repopulated innerHTML)
     const minorMenu = el('catFMinorMenu');
-    if (minorMenu) {
+    if (minorMenu !== null) {
       minorMenu.addEventListener('change', e => {
         const radio = e.target.closest('input[type="radio"]');
-        if (!radio) return;
+        if (radio === null) return;
         const val = radio.value;
-        if (_catDraft) _catDraft.minor = val;
-        const lbl = el('catFMinorLabel'); if (lbl) lbl.textContent = val === 'all' ? 'All minor' : val;
+        if (_catDraft !== null) _catDraft.minor = val;
+        const lbl = el('catFMinorLabel'); if (lbl !== null) lbl.textContent = val === 'all' ? 'All minor' : val;
         minorMenu.style.cssText = 'display:none';
-        if (_catDDCleanup) { _catDDCleanup(); _catDDCleanup = null; }
+        if (_catDDCleanup !== null) { _catDDCleanup(); _catDDCleanup = null; }
       });
     }
 
     // Status checkboxes — delegation; dropdown stays open while checking
     const statusMenu = el('catFStatusMenu');
-    if (statusMenu) {
+    if (statusMenu !== null) {
       statusMenu.addEventListener('change', () => {
-        if (!_catDraft) return;
+        if (_catDraft === null) return;
         const checked = Array.from(statusMenu.querySelectorAll('[data-cat-filter-rstat]:checked'))
           .map(c => c.dataset.catFilterRstat);
         _catDraft.recordStatuses = checked;
         const lbl = el('catFStatusLabel');
-        if (lbl) lbl.textContent = checked.length === 4 ? 'All' : checked.length === 0 ? 'None'
+        if (lbl) lbl.textContent = checked.length === state.categorySchema.record_statuses.length ? 'All' : checked.length === 0 ? 'None'
           : checked.map(s => s.charAt(0).toUpperCase() + s.slice(1)).join(', ');
       });
     }
 
     // Apply draft → state on Search / Enter
     const _applyDraft = () => {
-      if (_catDraft) {
+      if (_catDraft !== null) {
         _catDraft.search = el('catFSearch').value.trim();
         state.catFilters = { ..._catDraft, recordStatuses: [..._catDraft.recordStatuses] };
         _catDraft = null;
@@ -798,7 +814,7 @@ function _attachCatEvents() {
       state.catFilters = {
         type: 'all', major: 'all', minor: 'all', search: '',
         sourceMandatory: 'all', targetMandatory: 'all', subscriptionEligible: 'all',
-        recordStatuses: ['active', 'inactive', 'deleted', 'locked'],
+        recordStatuses: state.categorySchema.record_statuses.slice(),
       };
       renderCategories();
     });
@@ -806,16 +822,16 @@ function _attachCatEvents() {
 
   const handleCatAction = e => {
     const btn    = e.target.closest('[data-action]');
-    if (!btn) return;
+    if (btn === null) return;
     const action = btn.dataset.action;
-    const row    = btn.dataset.row ? Number(btn.dataset.row) : null;
+    const row    = btn.dataset.row !== undefined && btn.dataset.row !== '' ? Number(btn.dataset.row) : undefined;
 
     if (action === 'cat-menu') {
       if (_catMenuKey === row) { closeContextMenu(); _catMenuKey = null; return; }
       _catMenuKey = row;
       const menuCat   = state.categories.find(c => c._row === row);
-      const isLocked  = menuCat && menuCat.record_status === 'locked';
-      const isDeleted = menuCat && menuCat.record_status === 'deleted';
+      const isLocked  = menuCat !== undefined && menuCat !== null && menuCat.record_status === 'locked';
+      const isDeleted = menuCat !== undefined && menuCat !== null && menuCat.record_status === 'deleted';
       const menuItems = [
         { key: 'cat-view', label: 'View', cls: '' },
         ...(!isLocked && !isDeleted ? [{ key: 'cat-edit',    label: 'Edit',    cls: ''       }] : []),
@@ -831,8 +847,8 @@ function _attachCatEvents() {
         if (key === 'cat-restore') { _restoreCat(row); }
         if (key === 'cat-txs') {
           const cat = state.categories.find(c => c._row === row);
-          if (cat) {
-            state.filters = { types: [], accounts: [], major: [cat.major_category_label], minor: [cat.minor_category_label], tx_location_country: '', tag: '', search: '' };
+          if (cat !== undefined && cat !== null) {
+            state.filters = { types: [], accounts: [], major: [cat.major_category_key], minor: [cat.minor_category_key], user_location_country: '', tag: '', search: '' };
             document.dispatchEvent(new CustomEvent('et:show-section', { detail: 'transactions' }));
           }
         }
@@ -842,28 +858,28 @@ function _attachCatEvents() {
     if (action === 'cat-view')   { state.catViewRow = row; state.catEditRow = null; state.catDeleteRow = null; state.catAddOpen = false; renderCategories(); }
     if (action === 'cat-edit') {
       const editCat = state.categories.find(c => c._row === row);
-      if (editCat && (editCat.record_status === 'locked' || editCat.record_status === 'deleted')) return;
+      if (editCat !== undefined && editCat !== null && (editCat.record_status === 'locked' || editCat.record_status === 'deleted')) return;
       state.catEditRow = row; state.catViewRow = null; state.catDeleteRow = null; state.catAddOpen = false; renderCategories();
     }
     if (action === 'cat-delete') {
       const delCat = state.categories.find(c => c._row === row);
-      if (delCat && (delCat.record_status === 'locked' || delCat.record_status === 'deleted')) return;
+      if (delCat !== undefined && delCat !== null && (delCat.record_status === 'locked' || delCat.record_status === 'deleted')) return;
       state.catDeleteRow = row; state.catViewRow = null; state.catEditRow = null; renderCategories();
     }
     if (action === 'cat-cancel-delete')  { state.catDeleteRow = null; renderCategories(); }
     if (action === 'cat-confirm-delete') { _deleteCat(row); }
   };
   const tableWrap = el('categoriesContent').querySelector('.cat-table-wrap');
-  if (tableWrap) tableWrap.addEventListener('click', handleCatAction);
+  if (tableWrap !== null) tableWrap.addEventListener('click', handleCatAction);
   const catCards = el('categoriesContent').querySelector('.cat-cards');
-  if (catCards) catCards.addEventListener('click', handleCatAction);
+  if (catCards !== null) catCards.addEventListener('click', handleCatAction);
 }
 
 // ── Restore ───────────────────────────────────────────────────────────────────
 
 async function _restoreCat(rowNum) {
   const cat = state.categories.find(c => c._row === rowNum);
-  if (!cat) return;
+  if (cat === undefined || cat === null) return;
   showLoading();
   try {
     const res = await ExpenseAPI.updateCategory({
@@ -871,15 +887,15 @@ async function _restoreCat(rowNum) {
       tx_type_key:              cat.tx_type_key,
       major_category_label:     cat.major_category_label,
       minor_category_label:     cat.minor_category_label,
-      description:              cat.description || '',
+      description:              cat.description,
       record_status:            'active',
-      is_subscription_eligible: cat.is_subscription_eligible || false,
-      tag_keywords:             cat.tag_keywords || '',
-      counterparty_examples:    cat.counterparty_examples || '',
-      source_account_types:     cat.source_account_types || '',
-      target_account_types:     cat.target_account_types || '',
-      source_account_mandatory: cat.source_account_mandatory || false,
-      target_account_mandatory: cat.target_account_mandatory || false,
+      is_subscription_eligible: Boolean(cat.is_subscription_eligible),
+      tag_keywords:             cat.tag_keywords,
+      counterparty_examples:    cat.counterparty_examples,
+      source_account_types:     cat.source_account_types,
+      target_account_types:     cat.target_account_types,
+      source_account_mandatory: Boolean(cat.source_account_mandatory),
+      target_account_mandatory: Boolean(cat.target_account_mandatory),
     });
     if (res.ok) {
       showMsg('Category restored.');
@@ -890,7 +906,7 @@ async function _restoreCat(rowNum) {
         ? 'Cannot restore: this category already exists.'
         : res.error === 'record_locked'
           ? 'This category is locked.'
-          : 'Restore failed: ' + (res.error || 'unknown');
+          : 'Restore failed: ' + _errMsg(res.error);
       showMsg(msg, 'warn');
       renderCategories();
     }
@@ -916,21 +932,21 @@ async function _saveNewCategory() {
   const target_account_types  = _getCheckedAccountTypes('catNewTgt');
   const source_account_mandatory = el('catNewSrcMandatory').checked === true;
   const target_account_mandatory = el('catNewTgtMandatory').checked === true;
-  const record_status            = el('catNewRecordStatus').value;
+  // CAT-M-8: record_status is NOT sent on create — backend always writes 'active' regardless.
   const is_subscription_eligible = el('catNewIsSubEligible').checked === true;
   const errEl                    = el('catAddError');
 
-  if (!major_category_label) { if (errEl) errEl.textContent = 'Major category is required.'; return; }
-  if (!minor_category_label) { if (errEl) errEl.textContent = 'Minor category is required.'; return; }
-  if (errEl) errEl.textContent = '';
+  if (major_category_label === '') { if (errEl !== null) errEl.textContent = 'Major category is required.'; return; }
+  if (minor_category_label === '') { if (errEl !== null) errEl.textContent = 'Minor category is required.'; return; }
+  if (errEl !== null) errEl.textContent = '';
 
   const btn = el('catSaveNew');
-  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+  if (btn !== null) { btn.disabled = true; btn.textContent = 'Saving…'; }
   showLoading();
   try {
     const res = await ExpenseAPI.createCategory({
       tx_type_key, major_category_label, minor_category_label, description,
-      record_status, is_subscription_eligible, tag_keywords, counterparty_examples,
+      is_subscription_eligible, tag_keywords, counterparty_examples,
       source_account_types, target_account_types,
       source_account_mandatory, target_account_mandatory,
     });
@@ -942,14 +958,14 @@ async function _saveNewCategory() {
       console.warn('[categories] _saveNewCategory failed:', res.error);
       const msg = res.error === 'duplicate_category'
         ? 'This category already exists.'
-        : 'Error: ' + (res.error || 'unknown');
-      if (errEl) errEl.textContent = msg;
-      if (btn) { btn.disabled = false; btn.textContent = 'Save'; }
+        : 'Error: ' + _errMsg(res.error);
+      if (errEl !== null) errEl.textContent = msg;
+      if (btn !== null) { btn.disabled = false; btn.textContent = 'Save'; }
     }
   } catch (err) {
     console.error('[categories] _saveNewCategory failed:', err);
-    if (errEl) errEl.textContent = 'Connection error.';
-    if (btn) { btn.disabled = false; btn.textContent = 'Save'; }
+    if (errEl !== null) errEl.textContent = 'Connection error.';
+    if (btn !== null) { btn.disabled = false; btn.textContent = 'Save'; }
   } finally {
     hideLoading();
   }
@@ -959,7 +975,7 @@ async function _saveNewCategory() {
 
 async function _saveCatEdit() {
   const rowNum = state.catEditRow;
-  if (!rowNum) return;
+  if (rowNum === null || rowNum === undefined || rowNum < 2) return;
 
   const tx_type_key           = el('catEditType').value;
   const major_category_label  = el('catEditMajor').value.trim();
@@ -975,14 +991,14 @@ async function _saveCatEdit() {
   const is_subscription_eligible = el('catEditIsSubEligible').checked === true;
   const errEl                    = el('catEditError');
 
-  if (!major_category_label || !minor_category_label) {
-    if (errEl) errEl.textContent = 'Major and minor category are required.';
+  if (major_category_label === '' || minor_category_label === '') {
+    if (errEl !== null) errEl.textContent = 'Major and minor category are required.';
     return;
   }
-  if (errEl) errEl.textContent = '';
+  if (errEl !== null) errEl.textContent = '';
 
   const btn = el('catSaveEdit');
-  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+  if (btn !== null) { btn.disabled = true; btn.textContent = 'Saving…'; }
   showLoading();
   try {
     const res = await ExpenseAPI.updateCategory({
@@ -1001,14 +1017,14 @@ async function _saveCatEdit() {
         ? 'This category already exists.'
         : res.error === 'record_locked'
           ? 'This category is locked and cannot be edited.'
-          : 'Update failed: ' + (res.error || 'unknown');
-      if (errEl) errEl.textContent = msg;
-      if (btn) { btn.disabled = false; btn.textContent = 'Save'; }
+          : 'Update failed: ' + _errMsg(res.error);
+      if (errEl !== null) errEl.textContent = msg;
+      if (btn !== null) { btn.disabled = false; btn.textContent = 'Save'; }
     }
   } catch (err) {
     console.error('[categories] _saveCatEdit failed:', err);
-    if (errEl) errEl.textContent = 'Connection error.';
-    if (btn) { btn.disabled = false; btn.textContent = 'Save'; }
+    if (errEl !== null) errEl.textContent = 'Connection error.';
+    if (btn !== null) { btn.disabled = false; btn.textContent = 'Save'; }
   } finally {
     hideLoading();
   }
@@ -1028,7 +1044,7 @@ async function _deleteCat(rowNum) {
       console.warn('[categories] _deleteCat failed:', res.error);
       const msg = res.error === 'record_locked'
         ? 'This category is locked and cannot be deleted.'
-        : 'Delete failed: ' + (res.error || 'unknown');
+        : 'Delete failed: ' + _errMsg(res.error);
       showMsg(msg, 'warn');
       state.catDeleteRow = null;
       renderCategories();

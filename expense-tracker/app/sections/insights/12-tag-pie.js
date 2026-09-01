@@ -102,7 +102,7 @@ function _renderDrillPanel(drillEl, moneyOut, tag, sym) {
   }
 
   const tagTxs = moneyOut
-    .filter(t => String(t.tags || '').split(';').map(s => s.toLowerCase().trim()).includes(tag))
+    .filter(t => String(t.tx_tags ?? '').split(';').map(s => s.toLowerCase().trim()).includes(tag))
     .sort((a, b) => new Date(b.tx_date_time) - new Date(a.tx_date_time));
 
   const total = sumAmountBase(tagTxs);
@@ -115,7 +115,7 @@ function _renderDrillPanel(drillEl, moneyOut, tag, sym) {
     const desc = t.description && t.description !== t.counterparty_name ? t.description : '';
     return `<tr>
       <td style="${tdS};color:var(--muted);white-space:nowrap">${esc(date)}</td>
-      <td style="${tdS}">${esc(t.counterparty_name || '—')}</td>
+      <td style="${tdS}">${esc(t.counterparty_name ?? '—')}</td>
       <td style="${tdS};color:var(--muted)">${esc(desc)}</td>
       <td style="${tdS};text-align:right;white-space:nowrap">${esc(fmt(sumAmountBase([t])))}</td>
     </tr>`;
@@ -139,7 +139,7 @@ function _renderDrillPanel(drillEl, moneyOut, tag, sym) {
             <th style="${thS};text-align:right">Amount</th>
           </tr>
         </thead>
-        <tbody>${bodyRows || `<tr><td colspan="4" style="padding:12px;text-align:center;color:var(--muted)">No transactions</td></tr>`}</tbody>
+        <tbody>${bodyRows.length ? bodyRows : `<tr><td colspan="4" style="padding:12px;text-align:center;color:var(--muted)">No transactions</td></tr>`}</tbody>
       </table>
     </div>`;
 

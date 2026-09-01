@@ -4,41 +4,67 @@
 // =============================================================================
 
 function validateSubscriptionCreate(body) {
-  if (!body.name)           return { ok: false, error: 'missing_name' };
-  if (!body.currency)       return { ok: false, error: 'missing_currency' };
+  if (body.name === undefined || body.name === null || String(body.name).trim() === '')
+    return { ok: false, error: 'missing_name' };
+  if (body.currency === undefined || body.currency === null || String(body.currency).trim() === '')
+    return { ok: false, error: 'missing_currency' };
 
+  if (body.amount === undefined || body.amount === null) return { ok: false, error: 'missing_amount' };
   const amount = Number(body.amount);
   if (isNaN(amount) || amount <= 0) return { ok: false, error: 'invalid_amount' };
 
-  if (!body.source_account) return { ok: false, error: 'missing_source_account' };
+  if (body.source_account === undefined || body.source_account === null || String(body.source_account).trim() === '')
+    return { ok: false, error: 'missing_source_account' };
 
   const schedErr = _validateSchedule(body);
   if (!schedErr.ok) return schedErr;
+
+  if (body.tx_type !== undefined && body.tx_type !== null && String(body.tx_type).trim() !== '') {
+    if (['money-in', 'money-out'].indexOf(String(body.tx_type).trim()) === -1) {
+      return { ok: false, error: 'invalid_tx_type' };
+    }
+  }
 
   return { ok: true };
 }
 
 function validateSubscriptionUpdate(body) {
-  if (!body.row_num)        return { ok: false, error: 'missing_row_num' };
-  if (!body.name)           return { ok: false, error: 'missing_name' };
-  if (!body.source_account) return { ok: false, error: 'missing_source_account' };
+  if (body.row_num === undefined || body.row_num === null)
+    return { ok: false, error: 'missing_row_num' };
+  if (!Number.isInteger(Number(body.row_num)) || Number(body.row_num) < 2)
+    return { ok: false, error: 'invalid_row' };
+  if (body.name === undefined || body.name === null || String(body.name).trim() === '')
+    return { ok: false, error: 'missing_name' };
+  if (body.source_account === undefined || body.source_account === null || String(body.source_account).trim() === '')
+    return { ok: false, error: 'missing_source_account' };
 
-  if (body.amount !== undefined && body.amount !== '') {
+  if (body.currency === undefined || body.currency === null || String(body.currency).trim() === '') {
+    return { ok: false, error: 'missing_currency' };
+  }
+  if (body.frequency === undefined || body.frequency === null || String(body.frequency).trim() === '') {
+    return { ok: false, error: 'missing_frequency' };
+  }
+
+  if (body.amount !== undefined && body.amount !== null) {
     const amount = Number(body.amount);
     if (isNaN(amount) || amount <= 0) return { ok: false, error: 'invalid_amount' };
   }
 
-  if (body.frequency !== undefined && body.frequency !== '') {
-    const schedErr = _validateSchedule(body);
-    if (!schedErr.ok) return schedErr;
+  const schedErr = _validateSchedule(body);
+  if (!schedErr.ok) return schedErr;
+
+  if (body.tx_type !== undefined && body.tx_type !== null && String(body.tx_type).trim() !== '') {
+    if (['money-in', 'money-out'].indexOf(String(body.tx_type).trim()) === -1) {
+      return { ok: false, error: 'invalid_tx_type' };
+    }
   }
 
   // Reject attempts to send immutable fields
   const fields = getFieldsForSubscriptionType(null);
   for (let i = 0; i < fields.length; i++) {
     const field = fields[i];
-    if (!field.editable && field.key !== 'row_num' && body[field.key] !== undefined) {
-      return { ok: false, error: 'field_not_editable:' + field.key };
+    if (!field.editable && field.key !== 'record_status' && body[field.key] !== undefined) {
+      return { ok: false, error: 'field_not_editable', field: field.key };
     }
   }
 
@@ -46,17 +72,18 @@ function validateSubscriptionUpdate(body) {
 }
 
 function _validateSchedule(body) {
-  if (!body.frequency) return { ok: false, error: 'invalid_frequency' };
+  if (body.frequency === undefined || body.frequency === null || String(body.frequency).trim() === '')
+    return { ok: false, error: 'missing_frequency' };
   const frequency = String(body.frequency).trim();
   if (VALID_FREQUENCIES.indexOf(frequency) === -1) return { ok: false, error: 'invalid_frequency' };
 
   if (frequency === 'weekly') {
-    if (!body.day_of_week && body.day_of_week !== 0) return { ok: false, error: 'missing_day_of_week' };
+    if (body.day_of_week === undefined || body.day_of_week === null) return { ok: false, error: 'missing_day_of_week' };
     const dow = Number(body.day_of_week);
     if (!Number.isInteger(dow) || dow < 1 || dow > 7)  return { ok: false, error: 'invalid_day_of_week' };
   } else {
     // monthly / quarterly / annual — day_of_month required
-    if (!body.day_of_month && body.day_of_month !== 0) return { ok: false, error: 'missing_day_of_month' };
+    if (body.day_of_month === undefined || body.day_of_month === null) return { ok: false, error: 'missing_day_of_month' };
     const dom = Number(body.day_of_month);
     if (!Number.isInteger(dom) || dom < 1 || dom > 31)  return { ok: false, error: 'invalid_day_of_month' };
   }

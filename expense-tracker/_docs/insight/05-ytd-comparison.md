@@ -45,7 +45,7 @@ Both periods fetch from `state.transactions` directly (not `options.txs`).
 2. `_buildYtdCumulative(txs, yearStart, numMonths, partialMonthTo)`:
    - Groups by month via `groupByMonth`.
    - For months 0..N-2: full month sum.
-   - For month N-1 (last, potentially partial): filters by `transaction_date_utc <= aEnd`.
+   - For month N-1 (last, potentially partial): filters by `tx_date_time <= aEnd`.
    - Returns cumulative running total per month.
 3. Period B: `partialMonthTo = null` (all months are complete in the previous year window).
 

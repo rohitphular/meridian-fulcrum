@@ -39,7 +39,7 @@ function _buildMonthly(months12, todayLocal) {
     const yr  = monthStart.getFullYear();
     const mo  = String(monthStart.getMonth() + 1).padStart(2, '0');
     const key = `${yr}-${mo}`;
-    const all = byMonth.get(key) || [];
+    const all = byMonth.get(key) ?? [];
 
     // Partial month: filter to today for the last bucket
     const txs = (i === 11)
@@ -162,7 +162,7 @@ function _renderTransactions(container, { sym }) {
 // ── Accounts tab ──────────────────────────────────────────────────────────────
 
 function _renderAccounts(container, { accounts, sym }) {
-  const assetAccounts  = accounts.filter(a => a.is_active && a.type !== 'liability');
+  const assetAccounts  = accounts.filter(a => a.record_status === 'active' && a.type !== 'liability');
 
   if (!assetAccounts.length) {
     container.innerHTML = `<div class="chart-wrap"><p class="chart-empty">No active asset accounts found.</p></div>`;
@@ -175,7 +175,7 @@ function _renderAccounts(container, { accounts, sym }) {
   // Group asset accounts by sub_type (fall back to type)
   const groupMap = new Map();
   assetAccounts.forEach(a => {
-    const key = a.sub_type || a.type || 'other';
+    const key = a.sub_type ?? a.type ?? 'other';
     if (!groupMap.has(key)) groupMap.set(key, []);
     groupMap.get(key).push(a);
   });
@@ -193,14 +193,14 @@ function _renderAccounts(container, { accounts, sym }) {
         ? todayLocal
         : new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 0);
       const dayIdx = Math.round((sampleDate - rangeStart) / 86400000);
-      return daily[Math.min(dayIdx, daily.length - 1)] || 0;
+      return daily[Math.min(dayIdx, daily.length - 1)] ?? 0;
     });
     const label = groupKey.charAt(0).toUpperCase() + groupKey.slice(1).replace(/_/g, ' ');
     return { label, data, backgroundColor: palette[i % palette.length] + 'cc', stack: 'assets', borderRadius: 3, order: 2 };
   });
 
   // Total for stat card = sum of all groups on last month
-  const totalAssets = groupEntries.reduce((s, _, i) => s + (datasets[i].data[11] || 0), 0);
+  const totalAssets = groupEntries.reduce((s, _, i) => s + (datasets[i].data[11] ?? 0), 0);
   const fmt = v => sym + Math.abs(v).toLocaleString('en-GB', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
 
   container.innerHTML = `

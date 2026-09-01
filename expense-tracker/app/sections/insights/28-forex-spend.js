@@ -25,23 +25,25 @@ function _destroyChart() { _setChart(null); }
 // ── Data grouping ─────────────────────────────────────────────────────────────
 
 function _groupByCurrency(outTxs, quoteCcy) {
+  const accountMap = new Map((state.accounts ?? []).map(a => [a.id, a]));
   const map = new Map();
   for (const tx of outTxs) {
-    const ccy = (tx.currency || quoteCcy || 'GBP').trim().toUpperCase();
+    const acc = accountMap.get(tx.account_id);
+    const ccy = (acc ? acc.currency : quoteCcy ?? 'GBP').trim().toUpperCase();
     if (!map.has(ccy)) map.set(ccy, []);
-    map.get(ccy).push(tx);
+    map.get(ccy).push({ tx, acc });
   }
 
-  const rows = [...map.entries()].map(([ccy, txs]) => {
-    const nativeTotal  = txs.reduce((s, t) => s + Math.abs(Number(t.amount) || 0), 0);
-    const gbpEquiv     = sumAmountBase(txs);
-    const count        = txs.length;
-    const ratedTxs     = txs.filter(t => t.fx_rate);
-    const avgRate      = ratedTxs.length
-      ? ratedTxs.reduce((s, t) => s + t.fx_rate, 0) / ratedTxs.length
-      : (state.rateMap?.[ccy] || null);
-    const hasEstimated = txs.some(t => !t.fx_rate) && ccy !== quoteCcy;
-    const rateUnavail  = ccy !== quoteCcy && !avgRate;
+  const rows = [...map.entries()].map(([ccy, entries]) => {
+    const txs         = entries.map(e => e.tx);
+    const nativeTotal = txs.reduce((s, t) => s + Math.abs(Number(t.tx_amount)), 0);
+    const gbpEquiv    = sumAmountBase(txs);
+    const count       = txs.length;
+    // fx_rate is not stored on transactions — use rateMap for display purposes only
+    const rateFromMap = state.rateMap?.[ccy] || null;
+    const avgRate     = rateFromMap;
+    const hasEstimated = false;
+    const rateUnavail = ccy !== quoteCcy && !avgRate;
     return { ccy, nativeTotal, gbpEquiv, count, avgRate, hasEstimated, rateUnavail, txs };
   });
 
@@ -121,92 +123,6 @@ function _renderByCurrency(viewEl, rows, sym, C) {
   }));
 }
 
-// ── FX Rate scatter sub-view ──────────────────────────────────────────────────
-
-function _renderFxScatter(viewEl, rows, C) {
-  const palette      = buildPalette(C);
-  const quoteCcy     = (state.quoteCurrency || 'GBP').toUpperCase();
-  const foreignRows  = rows.filter(r => r.ccy !== quoteCcy && r.txs.some(t => t.fx_rate));
-
-  if (!foreignRows.length) {
-    viewEl.innerHTML = `<p class="chart-empty" style="padding:24px 0">No foreign-currency transactions with FX rate data in this period.</p>`;
-    _setChart(null);
-    return;
-  }
-
-  const datasets = foreignRows.map((r, i) => ({
-    label: r.ccy,
-    data: r.txs
-      .filter(t => t.fx_rate)
-      .map(t => ({ x: new Date(t.tx_date_time).getTime(), y: t.fx_rate })),
-    backgroundColor: palette[i % palette.length],
-    pointRadius:     6,
-    pointHoverRadius: 8,
-  }));
-
-  viewEl.innerHTML = `<div class="chart-container" style="height:260px"><canvas id="dash28-canvas"></canvas></div>`;
-
-  const canvas = viewEl.querySelector('#dash28-canvas');
-  if (!canvas) { _setChart(null); return; }
-
-  _setChart(new Chart(canvas, {
-    type: 'scatter',
-    data: { datasets },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      interaction: { mode: 'nearest', intersect: false },
-      plugins: {
-        legend: { display: true, position: 'bottom', labels: { color: C.ink, boxWidth: 12, padding: 10 } },
-        tooltip: {
-          backgroundColor: C.panel, borderColor: C.hair, borderWidth: 1, bodyColor: C.ink,
-          callbacks: {
-            label: ctx => {
-              const d = new Date(ctx.parsed.x).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: '2-digit' });
-              return `  ${ctx.dataset.label}: ${ctx.parsed.y.toFixed(4)} on ${d}`;
-            },
-          },
-        },
-      },
-      scales: {
-        x: {
-          type: 'linear',
-          ticks: {
-            color: C.muted, maxRotation: 0, maxTicksLimit: 6,
-            callback: v => new Date(v).toLocaleDateString('en-GB', { month: 'short', year: '2-digit' }),
-          },
-          grid: { color: C.hair },
-        },
-        y: {
-          ticks: { color: C.muted, callback: v => v.toFixed(4) },
-          grid: { color: C.hair },
-        },
-      },
-    },
-  }));
-}
-
-// ── Tab bar ───────────────────────────────────────────────────────────────────
-
-function _attachTabs(containerId, rows, sym, C) {
-  const container = el(containerId);
-  if (!container) return;
-
-  container.querySelectorAll('[data-d28-view]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      container.querySelectorAll('[data-d28-view]').forEach(b => {
-        b.style.background = 'transparent'; b.style.color = 'var(--muted)';
-      });
-      btn.style.background = 'var(--teal)'; btn.style.color = 'var(--ink)';
-
-      const viewEl = el('dash28-view');
-      if (!viewEl) return;
-      if (btn.dataset.d28View === 'currency') _renderByCurrency(viewEl, rows, sym, C);
-      else _renderFxScatter(viewEl, rows, C);
-    });
-  });
-}
-
 // ── Public API ────────────────────────────────────────────────────────────────
 
 export async function render(containerId, { txs, sym }) {
@@ -225,23 +141,18 @@ export async function render(containerId, { txs, sym }) {
     return { destroy() { _destroyChart(); } };
   }
 
-  const quoteCcy = (state.quoteCurrency || 'GBP').toUpperCase();
+  const quoteCcy = (state.quoteCurrency ?? 'GBP').toUpperCase();
   const C        = getCssColors();
   const rows     = _groupByCurrency(outTxs, quoteCcy);
 
   const totalGbp     = rows.reduce((s, r) => s + r.gbpEquiv, 0);
   const domRow       = rows.find(r => r.ccy === quoteCcy);
-  const domGbp       = domRow?.gbpEquiv || 0;
+  const domGbp       = domRow ? domRow.gbpEquiv : 0;
   const foreignGbp   = totalGbp - domGbp;
   const foreignRows  = rows.filter(r => r.ccy !== quoteCcy);
-  const topForeign   = foreignRows[0] || null;
-  const hasScatter   = foreignRows.some(r => r.txs.some(t => t.fx_rate));
-
+  const topForeign   = foreignRows.length ? foreignRows[0] : null;
   const fmt    = v => sym + Math.abs(v).toLocaleString('en-GB', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
   const fmtPct = (v, tot) => tot > 0 ? ` (${Math.round((v / tot) * 100)}%)` : '';
-
-  const tabBtn = (view, label, active) =>
-    `<button data-d28-view="${view}" style="padding:6px 14px;border:none;border-radius:20px;font-size:var(--text-sm);cursor:pointer;background:${active ? 'var(--teal)' : 'transparent'};color:${active ? 'var(--ink)' : 'var(--muted)'}">${label}</button>`;
 
   container.innerHTML = `
     <div class="stat-cards">
@@ -265,17 +176,12 @@ export async function render(containerId, { txs, sym }) {
         <p class="stat-card-sub">${esc(topForeign ? fmt(topForeign.gbpEquiv) : '')}</p>
       </div>
     </div>
-    <div style="display:flex;gap:6px;margin-bottom:16px;flex-wrap:wrap">
-      ${tabBtn('currency', 'By Currency', true)}
-      ${hasScatter ? tabBtn('fx-rates', 'FX Rates', false) : ''}
-    </div>
     <div id="dash28-view"></div>`;
 
   const viewEl = el('dash28-view');
   _renderByCurrency(viewEl, rows, sym, C);
-  _attachTabs(containerId, rows, sym, C);
 
-  console.log(`[insight-28] currencies=${rows.length}, foreign_gbp=${foreignGbp.toFixed(0)}, has_scatter=${hasScatter}`);
+  console.log(`[insight-28] currencies=${rows.length}, foreign_gbp=${foreignGbp.toFixed(0)}`);
 
   return { destroy() { _destroyChart(); } };
 }

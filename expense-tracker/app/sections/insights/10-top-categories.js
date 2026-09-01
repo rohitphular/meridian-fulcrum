@@ -13,7 +13,7 @@ const TOP_N = 10;
 function _groupByMinor(txs) {
   const buckets = new Map();
   txs.forEach(t => {
-    const cat = t.minor_category || 'Uncategorised';
+    const cat = t.minor_category ?? 'Uncategorised';
     if (!buckets.has(cat)) buckets.set(cat, []);
     buckets.get(cat).push(t);
   });
@@ -69,7 +69,7 @@ function _deltaListHtml(rows, labelB, sym) {
     const deltaClass = delta <= 0 ? 'positive' : 'negative';
     const sign       = delta >= 0 ? '+' : '−';
     return `<li style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--hair);font-size:var(--text-sm)">
-      <span>${esc(cat || '—')}</span>
+      <span>${esc(cat ?? '—')}</span>
       <span class="${deltaClass}" style="white-space:nowrap">${arrow} ${sign}${esc(fmt(Math.abs(delta)))} vs ${esc(labelB)}</span>
     </li>`;
   }).join('');
@@ -102,7 +102,7 @@ export async function render(containerId, { txs, sym, from, to }) {
   // Union of categories, sorted by Period A desc, top N
   const allCats = [...new Set([...groupA.keys(), ...groupB.keys()])];
   const rows    = allCats
-    .map(cat => ({ cat, amtA: groupA.get(cat) || 0, amtB: groupB.get(cat) || 0 }))
+    .map(cat => ({ cat, amtA: groupA.get(cat) ?? 0, amtB: groupB.get(cat) ?? 0 }))
     .sort((a, b) => b.amtA - a.amtA)
     .slice(0, TOP_N);
 
@@ -141,7 +141,7 @@ export async function render(containerId, { txs, sym, from, to }) {
   return new Chart(canvas, {
     type: 'bar',
     data: {
-      labels: rows.map(r => r.cat || '—'),
+      labels: rows.map(r => r.cat ?? '—'),
       datasets: [
         { label: labelA, data: rows.map(r => r.amtA), backgroundColor: C.teal, borderRadius: 4 },
         { label: labelB, data: rows.map(r => r.amtB), backgroundColor: PREV_PERIOD_COLOR, borderRadius: 4 },

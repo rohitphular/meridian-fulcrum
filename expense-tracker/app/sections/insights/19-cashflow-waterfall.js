@@ -12,13 +12,13 @@ const MAX_CATS = 10;
 // Sum of all active accounts at end of the day before the first of the month.
 
 function _startBalance(accounts, from) {
-  const active = accounts.filter(a => a.is_active);
+  const active = accounts.filter(a => a.record_status === 'active');
   if (!active.length) return 0;
   // Last day of previous month = day before the first of `from`'s month
   const prevEnd = new Date(from.getFullYear(), from.getMonth(), 0);
   if (prevEnd < new Date(2000, 0, 1)) return 0; // guard against very early dates
   const daily = computeDailyTotalAssets(active, state.transactions, prevEnd, prevEnd);
-  return daily[0] || 0;
+  return daily[0] ?? 0;
 }
 
 // ── Expense grouping ──────────────────────────────────────────────────────────
@@ -26,7 +26,7 @@ function _startBalance(accounts, from) {
 function _groupExpenses(outTxs) {
   const catMap = new Map();
   for (const tx of outTxs) {
-    const cat = tx.major_category || 'Uncategorised';
+    const cat = tx.major_category ?? 'Uncategorised';
     if (!catMap.has(cat)) catMap.set(cat, []);
     catMap.get(cat).push(tx);
   }
@@ -100,7 +100,7 @@ function _buildChartOptions(sym, C) {
       tooltip: {
         ...base.plugins.tooltip,
         callbacks: {
-          title: ctx => ctx[0]?.label || '',
+          title: ctx => ctx[0]?.label ?? '',
           label: ctx => {
             // Only show tooltip for the visible dataset (index 1), not the invisible base
             if (ctx.datasetIndex === 0) return null;

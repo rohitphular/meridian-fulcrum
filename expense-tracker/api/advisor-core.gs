@@ -7,7 +7,8 @@ function advisorChat(body) {
   const apiKey = PropertiesService.getScriptProperties().getProperty('OPENAI_API_KEY');
   if (!apiKey) return { ok: false, error: 'no_api_key' };
 
-  const userMessage = String(body.message || '').trim();
+  if (!body.message) return { ok: false, error: 'empty_message' };
+  const userMessage = String(body.message).trim();
   if (!userMessage) return { ok: false, error: 'empty_message' };
 
   const history    = _getRecentHistory(5);
@@ -81,21 +82,21 @@ function _buildSnapshot() {
 
   const rateMap = {};
   ratesData.forEach(function(r) {
-    if (r.currency) rateMap[String(r.currency).toUpperCase()] = Number(r.rate) || 1;
+    if (r.currency) rateMap[String(r.currency).toUpperCase()] = Number(r.rate);
   });
 
   let assets = 0, liabilities = 0;
   const acctList = [];
 
-  accounts.filter(function(a) { return a.is_active; }).forEach(function(a) {
-    const bal = Number(a.current_value) || 0;
-    const rate   = rateMap[String(a.currency || 'GBP').toUpperCase()] || 1;
-    const balGbp = bal / rate;
+  accounts.filter(function(a) { return String(a.record_status) === 'active'; }).forEach(function(a) {
+    const bal    = Number(a.current_value);
+    const rate   = rateMap[String(a.currency).toUpperCase()];
+    const balXau = bal / rate;
 
-    if (isLiabilityType(a.type)) liabilities += Math.abs(balGbp);
-    else                          assets      += balGbp;
+    if (isLiabilityType(a.type)) liabilities += Math.abs(balXau);
+    else                          assets      += balXau;
 
-    acctList.push({ name: a.name, type: a.type, sub_type: a.sub_type || '', currency: a.currency, balance: Math.round(bal * 100) / 100 });
+    acctList.push({ name: a.name, type: a.type, sub_type: a.sub_type, currency: a.currency, balance: Math.round(bal * 100) / 100 });
   });
 
   const txSheet = getOrCreateSheet(TRANSACTIONS_SHEET, getTransactionSheetColumns());
@@ -112,13 +113,17 @@ function _buildSnapshot() {
   const catSpend = {}, cpSpend = {};
   let totalIn = 0, totalOut = 0;
   recentTx.forEach(function(tx) {
-    const amt = Number(tx.tx_amount) || 0;
+    const amt = Number(tx.tx_amount);
     if (tx.tx_type === 'money-out') {
       totalOut += amt;
-      const key = (tx.major_category || 'Uncategorised') + ' / ' + (tx.minor_category || 'Other');
-      catSpend[key] = (catSpend[key] || 0) + amt;
-      const cp = String(tx.counterparty_name || '').trim();
-      if (cp) cpSpend[cp] = (cpSpend[cp] || 0) + amt;
+      const key = tx.major_category + ' / ' + tx.minor_category;
+      if (!catSpend[key]) catSpend[key] = 0;
+      catSpend[key] += amt;
+      const cp = String(tx.counterparty_name).trim();
+      if (cp) {
+        if (!cpSpend[cp]) cpSpend[cp] = 0;
+        cpSpend[cp] += amt;
+      }
     } else if (tx.tx_type === 'money-in') {
       totalIn += amt;
     }
@@ -135,10 +140,10 @@ function _buildSnapshot() {
     .map(function(k) { return { name: k, amount: Math.round(cpSpend[k] * 100) / 100 }; });
 
   return {
-    net_worth_gbp:        Math.round((assets - liabilities) * 100) / 100,
-    total_assets_gbp:     Math.round(assets * 100) / 100,
-    total_liabilities_gbp: Math.round(liabilities * 100) / 100,
-    note: 'Net worth is converted to GBP using stored exchange rates. Account balances shown in native currency.',
+    net_worth_xau:        Math.round((assets - liabilities) * 100) / 100,
+    total_assets_xau:     Math.round(assets * 100) / 100,
+    total_liabilities_xau: Math.round(liabilities * 100) / 100,
+    note: 'Net worth is converted to XAU (grams of gold) using stored exchange rates. Account balances shown in native currency.',
     accounts: acctList,
     last_3_months: {
       total_income:           Math.round(totalIn  * 100) / 100,
@@ -213,8 +218,10 @@ function _parseDataRequest(content) {
 function _fetchRequestedData(request) {
   const txSheet = getOrCreateSheet(TRANSACTIONS_SHEET, getTransactionSheetColumns());
 
-  const monthsBack = Math.min(Number(request.months_back) || 3, 12);
-  const limit      = Math.min(Number(request.limit) || 50, 100);
+  const monthsBackRaw = Number(request.months_back);
+  const monthsBack    = Math.min(Number.isFinite(monthsBackRaw) && monthsBackRaw > 0 ? monthsBackRaw : 3, 12);
+  const limitRaw      = Number(request.limit);
+  const limit         = Math.min(Number.isFinite(limitRaw) && limitRaw > 0 ? limitRaw : 50, 100);
 
   const cutoff = new Date();
   cutoff.setMonth(cutoff.getMonth() - monthsBack);
@@ -235,12 +242,13 @@ function _fetchRequestedData(request) {
   filtered.sort(function(a, b) { return new Date(b.tx_date_time) - new Date(a.tx_date_time); });
 
   return filtered.slice(0, limit).map(function(tx) {
-    const acc = accountMap[String(tx.account_id || '')] || {};
+    const accId = String(tx.account_id).trim();
+    const acc   = accountMap[accId];
     return {
       date:             tx.tx_date_time,
       type:             tx.tx_type,
-      amount:           Number(tx.tx_amount) || 0,
-      currency:         acc.currency || '',
+      amount:           Number(tx.tx_amount),
+      currency:         (acc !== undefined && acc !== null) ? acc.currency : null,
       major:            tx.major_category,
       minor:            tx.minor_category,
       counterparty:     tx.counterparty_name,

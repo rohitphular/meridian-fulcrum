@@ -11,8 +11,8 @@ function _normCountry(raw) { return normCountry(raw); }
 // Composite "City, Country" to disambiguate same city in different countries.
 
 function _cityKey(tx) {
-  const city    = (tx.tx_location_city    || '').trim();
-  const country = _normCountry(tx.tx_location_country || '');
+  const city    = (tx.tx_location_city    ?? '').trim();
+  const country = _normCountry(tx.tx_location_country ?? '');
 
   if (city && country)   return `${city}, ${country}`;
   if (city)              return city;
@@ -26,7 +26,7 @@ function _groupByCity(outTxs) {
   const map = new Map();
   for (const tx of outTxs) {
     const key = _cityKey(tx);
-    if (!map.has(key)) map.set(key, { txs: [], country: _normCountry(tx.tx_location_country || '') });
+    if (!map.has(key)) map.set(key, { txs: [], country: _normCountry(tx.tx_location_country ?? '') });
     map.get(key).txs.push(tx);
   }
 
@@ -34,8 +34,8 @@ function _groupByCity(outTxs) {
     const total = sumAmountBase(txs);
     const count = txs.length;
     const catFreq = {};
-    for (const t of txs) { const c = t.major_category || '—'; catFreq[c] = (catFreq[c] || 0) + 1; }
-    const topCat   = Object.entries(catFreq).sort((a, b) => b[1] - a[1])[0]?.[0] || '—';
+    for (const t of txs) { const c = t.major_category ?? '—'; catFreq[c] = (catFreq[c] ?? 0) + 1; }
+    const topCat   = Object.entries(catFreq).sort((a, b) => b[1] - a[1])[0]?.[0] ?? '—';
     const home = domesticCountry();
     const isDomestic = home !== null && country === home;
     const isUnknown  = label === 'Unknown' || label.endsWith('(city unknown)');
@@ -217,7 +217,7 @@ export async function render(containerId, { txs, sym }) {
         tooltip: {
           ...base.plugins.tooltip,
           callbacks: {
-            title: ctx => rows[ctx[0]?.dataIndex]?.label || ctx[0]?.label || '',
+            title: ctx => rows[ctx[0]?.dataIndex]?.label ?? ctx[0]?.label ?? '',
             label: ctx => `  ${sym}${Math.abs(ctx.raw).toLocaleString('en-GB', { maximumFractionDigits: 0 })} · ${counts[ctx.dataIndex]} txn${counts[ctx.dataIndex] === 1 ? '' : 's'} · ${topCats[ctx.dataIndex]}`,
           },
         },

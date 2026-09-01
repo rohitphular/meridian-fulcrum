@@ -22,10 +22,10 @@ Where income comes from, in three switchable sub-views:
 ## Data source
 
 ```js
-const inTxs = txs.filter(t => t.transaction_type === 'money-in');
+const inTxs = txs.filter(t => t.tx_type === 'money-in');
 ```
 
-`money-transfer` and `money-out` excluded.
+`money-out` and transfer rows (non-empty `parent_tx_id`) are excluded.
 
 ---
 

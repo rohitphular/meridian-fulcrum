@@ -14,7 +14,7 @@ export function renderRates() {
   const hasActiveRate = !!state.rateDeleteCurrency;
 
   const cardRows = state.rates.map(r => {
-    const base = r.currency === 'GBP';
+    const base = r.currency === 'XAU';
     if (state.rateDeleteCurrency === r.currency) return '';
     return `<div class="rate-card">
       <div class="rate-card-body">
@@ -32,7 +32,7 @@ export function renderRates() {
     <div class="sec-head">
       <button class="btn btn-primary btn-sm" id="rateAddBtn" style="margin-left:auto">${addOrEditOpen ? '× Close' : '+ Add'}</button>
     </div>
-    <p class="sec-sub" style="margin:-8px 0 16px">Units of currency per 1 GBP. GBP is the base (read-only).</p>
+    <p class="sec-sub" style="margin:-8px 0 16px">Units of currency per 1g XAU. XAU is the base (read-only).</p>
     ${state.rateAddOpen    ? _renderAddForm()                                          : ''}
     ${state.rateEditCurrency ? _renderEditForm(state.rates.find(r => r.currency === state.rateEditCurrency)) : ''}
     <div class="table-wrap rate-table-wrap${hasActiveRate ? ' rate-has-active' : ''}">
@@ -40,7 +40,7 @@ export function renderRates() {
         <thead><tr>
           <th style="width:100px">Currency</th>
           <th style="width:80px">Symbol</th>
-          <th style="width:140px">Rate (per £1)</th>
+          <th style="width:140px">Rate (per 1g XAU)</th>
           <th>Updated</th>
           <th style="width:40px"></th>
         </tr></thead>
@@ -71,9 +71,9 @@ function _renderAddForm() {
         <div class="field-hint">Display prefix (optional).</div>
       </div>
       <div class="field">
-        <label for="rateNewRate">Rate per £1 *</label>
+        <label for="rateNewRate">Rate per 1g XAU *</label>
         <input type="number" id="rateNewRate" placeholder="e.g. 195.5" min="0.0001" step="any">
-        <div class="field-hint">Units of this currency per 1 GBP.</div>
+        <div class="field-hint">Units of this currency per 1g XAU.</div>
       </div>
     </div>
     <div class="form-actions">
@@ -98,13 +98,13 @@ function _renderEditForm(r) {
       </div>
       <div class="field">
         <label for="rateEditSymbol">Symbol</label>
-        <input type="text" id="rateEditSymbol" value="${esc(r.symbol || '')}" maxlength="8" placeholder="e.g. ¥">
+        <input type="text" id="rateEditSymbol" value="${esc(r.symbol ?? '')}" maxlength="8" placeholder="e.g. ¥">
         <div class="field-hint">Display prefix (optional).</div>
       </div>
       <div class="field">
-        <label for="rateEditRate">Rate per £1 *</label>
+        <label for="rateEditRate">Rate per 1g XAU *</label>
         <input type="number" id="rateEditRate" value="${parseFloat(r.rate)}" min="0.0001" step="any">
-        <div class="field-hint">Units of this currency per 1 GBP.</div>
+        <div class="field-hint">Units of this currency per 1g XAU.</div>
       </div>
     </div>
     <div class="form-actions">
@@ -118,7 +118,7 @@ function _renderEditForm(r) {
 // ── Table rows ────────────────────────────────────────────────────────────────
 
 function _rateRowHtml(r) {
-  const base = r.currency === 'GBP';
+  const base = r.currency === 'XAU';
 
   if (state.rateDeleteCurrency === r.currency) {
     // Blocked state — backend refused because accounts or transactions still
@@ -126,7 +126,7 @@ function _rateRowHtml(r) {
     // path is to delete those accounts/transactions first.
     if (state.rateDeleteBlocked) {
       const blocked = state.rateDeleteBlocked;
-      const n       = blocked.referenced_count || 0;
+      const n       = blocked.referenced_count;
       let body, hint;
       if (blocked.error === 'currency_in_use_by_accounts') {
         const names = state.accounts
@@ -164,7 +164,7 @@ function _rateRowHtml(r) {
 
   return `<tr>
     <td class="td-mono"><strong>${esc(r.currency)}</strong></td>
-    <td>${esc(r.symbol || '—')}</td>
+    <td>${esc(r.symbol ?? '—')}</td>
     <td class="td-mono">${parseFloat(r.rate).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 4 })}</td>
     <td class="td-muted td-mono">${r.updated_at ? esc(fmtDateTime(r.updated_at)) : '—'}</td>
     <td>${base ? '' : `<button class="tx-menu-trigger" data-action="rate-menu" data-currency="${esc(r.currency)}">⋮</button>`}</td>
@@ -257,9 +257,9 @@ function _attachRateEvents() {
 // ── Save new ──────────────────────────────────────────────────────────────────
 
 async function _saveNewRate() {
-  const currency = (el('rateNewCurrency')?.value || '').trim().toUpperCase();
-  const symbol   = (el('rateNewSymbol')?.value   || '').trim();
-  const rate     = parseFloat(el('rateNewRate')?.value || '');
+  const currency = (el('rateNewCurrency')?.value ?? '').trim().toUpperCase();
+  const symbol   = (el('rateNewSymbol')?.value   ?? '').trim();
+  const rate     = parseFloat(el('rateNewRate')?.value ?? '');
   const errEl    = el('rateAddError');
 
   if (!currency) { errEl.textContent = 'Currency code is required.'; return; }
@@ -294,8 +294,8 @@ async function _saveNewRate() {
 // ── Save edit ─────────────────────────────────────────────────────────────────
 
 async function _saveEdit(currency) {
-  const rateVal   = parseFloat(el('rateEditRate')?.value || '');
-  const symbolVal = (el('rateEditSymbol')?.value || '').trim();
+  const rateVal   = parseFloat(el('rateEditRate')?.value ?? '');
+  const symbolVal = (el('rateEditSymbol')?.value ?? '').trim();
   const errEl     = el('rateEditError');
 
   if (!rateVal || rateVal <= 0) {
@@ -341,7 +341,7 @@ async function _confirmDelete(currency) {
       // T-05: keep the row in delete-confirm state, switch to blocked variant.
       state.rateDeleteBlocked = {
         error: res.error,
-        referenced_count: res.referenced_count || 0,
+        referenced_count: res.referenced_count,
       };
       renderRates();
     } else {

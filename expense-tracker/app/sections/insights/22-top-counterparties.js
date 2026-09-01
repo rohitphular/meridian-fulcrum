@@ -1,7 +1,7 @@
 /* global Chart */
 import { el, esc } from '../../core/utils.js';
 import { state } from '../../core/state.js';
-import { sumAmountBase, getCssColors, baseChartOptions, fmtMonthKey } from './insight-utils.js';
+import { sumAmountBase, filterTxByRange, getCssColors, baseChartOptions, fmtMonthKey } from './insight-utils.js';
 
 const TOP_OPTIONS = [10, 15, 20];
 const DEFAULT_TOP = 15;
@@ -32,8 +32,8 @@ function _destroyChart() {
 function _groupCounterparties(outTxs) {
   const map = new Map();
   for (const tx of outTxs) {
-    const key = ((tx.counterparty_name || '').trim() || 'Unknown merchant').toLowerCase();
-    const display = ((tx.counterparty_name || '').trim() || 'Unknown merchant');
+    const key = ((tx.counterparty_name ?? '').trim() || 'Unknown merchant').toLowerCase();
+    const display = ((tx.counterparty_name ?? '').trim() || 'Unknown merchant');
     if (!map.has(key)) map.set(key, { label: display, txs: [] });
     map.get(key).txs.push(tx);
   }
@@ -50,16 +50,15 @@ function _prevSpend(labelLower) {
   const prevFrom = new Date(_from.getTime() - duration - 86400000);
   const prevTo   = new Date(_from.getTime() - 1);
 
-  return state.transactions
+  return sumAmountBase(state.transactions
     .filter(t => {
       if (t.tx_type !== 'money-out') return false;
-      const cp = ((t.counterparty_name || '').trim() || 'unknown merchant').toLowerCase();
+      const cp = ((t.counterparty_name ?? '').trim() || 'unknown merchant').toLowerCase();
       if (cp !== labelLower) return false;
       const d  = new Date(t.tx_date_time);
       const dl = new Date(d.getFullYear(), d.getMonth(), d.getDate());
       return dl >= prevFrom && dl <= prevTo;
-    })
-    .reduce((s, t) => s + (Number(t.amount_base) || 0), 0);
+    }));
 }
 
 // ── Drill-down panel ──────────────────────────────────────────────────────────
@@ -85,11 +84,11 @@ function _showPanel(idx) {
   const txRows = sorted.map(t => {
     const d    = new Date(t.tx_date_time);
     const date = d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
-    const cat  = esc(t.minor_category || t.major_category || '—');
+    const cat  = esc(t.minor_category ?? t.major_category ?? '—');
     return `<li style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--hair);font-size:var(--text-sm)">
       <span style="color:var(--muted);width:60px;flex-shrink:0">${esc(date)}</span>
       <span style="flex:1;padding:0 8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${cat}</span>
-      <span style="font-weight:600">${esc(fmt(Number(t.amount_base) || 0))}</span>
+      <span style="font-weight:600">${esc(fmt(sumAmountBase([t])))}</span>
     </li>`;
   }).join('');
 
@@ -103,11 +102,10 @@ function _showPanel(idx) {
   const labelLower   = row.label.toLowerCase();
   const allMerchant  = state.transactions.filter(t =>
     t.tx_type === 'money-out' &&
-    ((t.counterparty_name || '').trim() || 'unknown merchant').toLowerCase() === labelLower
+    ((t.counterparty_name ?? '').trim() || 'unknown merchant').toLowerCase() === labelLower
   );
   const monthlySpend = sparkMonths.map(mk =>
-    allMerchant.filter(t => t.tx_date_time.startsWith(mk))
-               .reduce((s, t) => s + (Number(t.amount_base) || 0), 0)
+    sumAmountBase(allMerchant.filter(t => t.tx_date_time.startsWith(mk)))
   );
   const hasSparkData = monthlySpend.some(v => v > 0);
 

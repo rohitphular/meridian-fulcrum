@@ -36,7 +36,7 @@ For each segment, the visible bar spans from `baseVals[i]` to `baseVals[i] + vis
 ### Starting balance
 
 `_startBalance(accounts, from)`:
-1. Filters `accounts` to `is_active`.
+1. Filters `accounts` to `record_status === 'active'`.
 2. Derives `prevEnd = new Date(from.getFullYear(), from.getMonth(), 0)` — last day of the previous month.
 3. Calls `computeDailyTotalAssets(active, state.transactions, prevEnd, prevEnd)` — single-day replay.
 4. Returns `daily[0] || 0`.
@@ -140,4 +140,4 @@ label: ctx => ctx.datasetIndex === 0 ? null : `${sym}${Math.abs(ctx.raw).toLocal
 | Closing balance < 0 (overdraft) | Closing bar drops below zero; colored `C.ember` |
 | More than 10 expense categories | Smallest categories grouped as `"Other expenses"` |
 | No expense transactions | Only Opening + Income + Closing shown |
-| `money-transfer` txs | Excluded (only `money-in` and `money-out` counted) |
+| Transfer rows (`parent_tx_id` non-empty) | Excluded (only `money-in` and `money-out` counted) |

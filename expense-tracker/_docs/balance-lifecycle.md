@@ -1,119 +1,117 @@
 # Balance Lifecycle
 
-How `account.current_value` changes when a transaction is created, edited, or deleted. This is the only mechanism by which balances move — the account API never writes `current_value` directly.
+How `account.current_value` is derived and how it changes when a transaction is created, edited, or deleted.
+
+## Computation model
+
+Account balances are **computed at read time**, not maintained incrementally. The sheet stores only `opening_value` for each account. When `listAccounts` is called, `_buildAccountNetMap` scans the transactions sheet and returns a `{ accountId → net }` map; the response value `current_value` is then assembled as:
+
+```
+current_value = opening_value + net
+```
+
+`current_value` is never written back to the sheet after initial account creation. No transaction create/update/delete touches the accounts sheet.
+
+There is no `adjustAccountBalance` function — it was removed in Round 5. The `workflow-engine.gs` file that previously hosted it is now an empty comment stub.
 
 ## Sign convention
 
-| Type | Stored | UI display |
+| Type | Stored `opening_value` | UI display of `current_value` |
 |---|---|---|
 | `asset`, `investment` | Positive | As-is |
 | `liability` | **Negative** (double-entry convention) | `abs(current_value)` labelled "owed" |
 
-The user always inputs and sees positive numbers for liabilities. The store negates on write; the UI applies `abs()` on read. The user never encounters a negative number.
+The user always inputs and sees positive numbers for liabilities. The store negates on write; `current_value` naturally stays negative as liabilities are debited (money-out).
 
-## Adjustment primitive
+## How net is computed
 
-Define a single operation:
+`_buildAccountNetMap` iterates all non-deleted transaction rows and accumulates:
 
 ```
-adjust(account_id, delta) → account.current_value += delta
+for each non-deleted transaction row:
+    if tx_type === 'money-in':  net[account_id] += tx_amount
+    if tx_type === 'money-out': net[account_id] -= tx_amount
 ```
 
-All lifecycle logic is expressed as a sequence of `adjust(...)` calls. Delta is signed: positive = credit (balance up), negative = debit (balance down).
+The resulting `net[id]` value is the total effect of all transactions on the account since `opening_value` was recorded.
 
-## Create
+Each transaction row touches exactly **one** account via `account_id`. A transfer between two accounts is two rows, each accumulating into its own account's net independently.
 
-| Transaction type | Adjustment(s) |
-|---|---|
-| `money-in` | `adjust(target_account, +amount)` |
-| `money-out` (no target) | `adjust(source_account, −amount)` |
-| `money-out` (with target — repayment) | `adjust(source_account, −amount)`, then `adjust(target_account, +credited)` |
-| `money-transfer` | `adjust(source_account, −amount)`, then `adjust(target_account, +credited)` |
+## Effect of transaction operations on computed balance
 
-Where `credited = amount × fx_rate` when the source and target currencies differ and `fx_rate > 0`; otherwise `credited = amount`.
+Because `current_value` is derived, any change to the transactions sheet is automatically reflected the next time `listAccounts` is called. The logical effects are:
 
-Example — `money-out` paying off a credit card (liability/credit_card) from a current account (asset/current):
-- `adjust(current_account, −150)` — funds leave current
-- `adjust(credit_card, +150)` — owed amount reduces (the stored value moves from `−400` to `−250`)
+### Create
 
-## Update — two-phase reversal
+**money-in:**
+`net[account_id] += tx_amount` → `current_value` rises by `tx_amount`.
 
-An update is **not** a delta-from-old-to-new. The store reapplies the old transaction *in reverse*, then applies the new one fresh.
+**money-out:**
+`net[account_id] -= tx_amount` → `current_value` falls by `tx_amount`.
 
-### Phase 1 — reverse the OLD row
+**Transfer (two rows, same parent_tx_id):**
+Row A (money-out on source): `net[source_id] -= Row A.tx_amount`
+Row B (money-in on target): `net[target_id] += Row B.tx_amount`
 
-Use the row's stored values to apply the opposite of what create did:
+If source and target accounts differ in currency, `Row B.tx_amount ≠ Row A.tx_amount`. The implicit exchange rate is `Row B.tx_amount / Row A.tx_amount`.
 
-| Stored type | Reversal |
-|---|---|
-| `money-in` | `adjust(target_account, −amount)` |
-| `money-out` (no target) | `adjust(source_account, +amount)` |
-| `money-out` (with target) | `adjust(source_account, +amount)`, `adjust(target_account, −credited)` |
-| `money-transfer` | `adjust(source_account, +amount)`, `adjust(target_account, −credited)` |
+### Update — logical two-phase reversal
 
-`credited` uses the **old** `fx_rate`.
+An edit is logically equivalent to removing the old row's contribution and adding the new row's contribution. Because the net map is computed fresh from the sheet on every read, this happens automatically — editing the row's `tx_amount` or `tx_type` or `account_id` changes the data that `_buildAccountNetMap` will aggregate on the next call.
 
-### Phase 2 — apply the NEW row
+For financial rule validation at edit time, the frontend and backend must compute the **post-reversal balance** before checking insufficient-balance rules:
 
-Identical to [Create](#create), using the new values.
+```
+post_reversal_balance = current_value
 
-### Why two phases instead of a single delta
+if old.account_id == new.account_id:
+    if old.tx_type == 'money-in':  post_reversal_balance -= old.tx_amount
+    if old.tx_type == 'money-out': post_reversal_balance += old.tx_amount
+```
 
-The old and new rows may differ in `transaction_type`, `source_account`, `target_account`, `amount`, `fx_rate`, or any combination. Computing a delta would require a quadratic case table; reverse + reapply is `O(2)` regardless of what changed.
+Pass `post_reversal_balance` to Rules 1–2 in [financial-rules.md](financial-rules.md). This adjustment is needed because `current_value` already includes the old row's contribution, so checking the raw balance against the new amount would incorrectly double-count it.
 
-### Frontend implication
+For transfers, apply the same reversal logic independently to both legs before checking either.
 
-Pre-save hard-block validation must compute the **post-reversal** balance of the source account (and target, for cross-currency credit-card transfers) before checking insufficient-balance or credit-limit rules. Otherwise an edit that only increases the amount slightly would be rejected when it should succeed. See [financial-rules.md](financial-rules.md) for the formula.
+### Delete (soft)
 
-## Delete
-
-Identical to [Phase 1 — reverse the OLD row](#phase-1--reverse-the-old-row), then delete the row.
+Setting `record_status = deleted` causes `_buildAccountNetMap` to skip the row (the map excludes deleted rows). The row's contribution is removed from all future `current_value` computations without any write to the accounts sheet.
 
 ## Idempotency
 
-The store is not idempotent. Calling create twice produces two rows and two sets of balance adjustments. Clients must avoid double-submitting.
+The computed model is naturally idempotent for reads — `listAccounts` always derives the correct balance from the current state of the transactions sheet. Mutations to transactions must still avoid double-submission; writing the same transaction row twice would cause its amount to be counted twice in `net`.
 
 ## Concurrency
 
-Single-user model. No locking is required — every request is sequential. If you implement this on a concurrent backend, wrap each transaction's lifecycle (write + adjustments) in a database transaction so partial application is impossible.
+Single-user model. No locking is required — requests are sequential. If ported to a concurrent backend, wrap each transaction write in a database transaction to prevent partial reads while `_buildAccountNetMap` is scanning.
 
-## Worked example — currency conversion on transfer
+## Worked example — cross-currency transfer (GBP to INR)
 
 State before:
-- `gbp_current.current_balance = 1000` (currency = GBP)
-- `inr_savings.current_balance = 50000` (currency = INR)
-- Rate: 1 GBP = 105 INR
+- `lloyds_current.opening_value = 1000` (GBP); no transactions yet → `current_value = 1000`
+- `icici_savings.opening_value = 50000` (INR); no transactions yet → `current_value = 50000`
 
-Create `money-transfer`: source = `gbp_current`, target = `inr_savings`, amount = 100 GBP, `fx_rate` = 105.
+Create transfer: Row A = money-out on `lloyds_current`, `tx_amount = 500`. Row B = money-in on `icici_savings`, `tx_amount = 52500`.
 
-Adjustments:
-- `adjust(gbp_current, −100)` → 900
-- `adjust(inr_savings, +100 × 105 = +10500)` → 60500
+After next `listAccounts`:
+```
+_buildAccountNetMap returns:
+  lloyds_current → −500
+  icici_savings  → +52500
 
-State after:
-- `gbp_current.current_balance = 900`
-- `inr_savings.current_balance = 60500`
+current_value:
+  lloyds_current = 1000 + (−500) = 500
+  icici_savings  = 50000 + 52500 = 102500
+```
 
-The `fx_rate` is stored on the row so the same arithmetic can be reversed exactly on edit or delete — even if the global rates table has changed in the meantime.
+Effective exchange rate: `52500 / 500 = 105 INR per GBP`. Recoverable at any time from the two stored `tx_amount` values.
 
-## Worked example — credit-card payment with two-phase edit
+## Worked example — edit of a money-out row
 
-State:
-- `gbp_current.current_balance = 1000`
-- `gbp_cc.current_balance = −400` (£400 owed)
+Before edit, transactions sheet has: `tx_type = 'money-out'`, `account_id = gbp_current`, `tx_amount = 150`.
 
-Create `money-out` for £150, source = `gbp_current`, target = `gbp_cc`:
-- `adjust(gbp_current, −150)` → 850
-- `adjust(gbp_cc, +150)` → −250
+`listAccounts` returns: `gbp_current.current_value = opening − 150`.
 
-User now edits the amount to £200:
+User edits `tx_amount` to 200. After the sheet write, next `listAccounts` returns: `gbp_current.current_value = opening − 200`. The old 150 contribution is no longer in the sheet; the new 200 is.
 
-Phase 1 (reverse):
-- `adjust(gbp_current, +150)` → 1000
-- `adjust(gbp_cc, −150)` → −400
-
-Phase 2 (apply new):
-- `adjust(gbp_current, −200)` → 800
-- `adjust(gbp_cc, +200)` → −200
-
-Final: current = 800, cc = −200 (£200 owed). Correct.
+For validation at edit time, the frontend uses the post-reversal formula above to confirm the account's net position after the old row is "removed" before checking whether the new amount fits.

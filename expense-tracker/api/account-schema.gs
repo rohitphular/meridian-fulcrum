@@ -24,6 +24,14 @@ const LOAN_SUB_TYPES = [
   'student_loan', 'medical_loan', 'debt_consolidation',
 ];
 
+// Maps each account type key to its valid sub-type array.
+// Used by validation — avoids repeated ternary chains across validate functions.
+var ACCOUNT_TYPE_SUB_TYPES = {
+  'asset':      ASSET_SUB_TYPES,
+  'investment': INVESTMENT_SUB_TYPES,
+  'liability':  LIABILITY_SUB_TYPES,
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Schema — 14 columns in column-position order
 // Audit block sequence: record_status → sync_status → sync_date_time →
@@ -103,6 +111,9 @@ const ACCOUNT_SCHEMA = {
     editable: false,
     default_value: 0,
   },
+  // Virtual computed column — header created by schema for column ordering only;
+  // never written via createAccount or updateAccount;
+  // listAccounts injects the computed value at read time.
   current_value: {
     sheet_column_name: 'current_value',
     sheet_column_position: 7,
@@ -219,7 +230,9 @@ function getAccountSchemaForClient() {
   };
   return {
     types: VALID_ACCOUNT_TYPES.map(function(v) {
-      return { value: v, label: TYPE_LABELS[v] || v, group: TYPE_GROUPS[v] || 'other' };
+      if (TYPE_LABELS[v] === undefined) throw new Error('[account-schema] TYPE_LABELS missing entry for type: ' + v);
+      if (TYPE_GROUPS[v] === undefined) throw new Error('[account-schema] TYPE_GROUPS missing entry for type: ' + v);
+      return { value: v, label: TYPE_LABELS[v], group: TYPE_GROUPS[v] };
     }),
     asset_sub_types:       ASSET_SUB_TYPES,
     investment_sub_types:  INVESTMENT_SUB_TYPES,
@@ -249,7 +262,7 @@ function getFieldsForAccountType(type) {
     .map(function(key) { return Object.assign({ key: key }, ACCOUNT_SCHEMA[key]); });
 }
 
-function getAccountSchemaField(key) { return ACCOUNT_SCHEMA[key] || null; }
+function getAccountSchemaField(key) { return ACCOUNT_SCHEMA[key] !== undefined ? ACCOUNT_SCHEMA[key] : null; }
 
 function acctColIndex(name) { return getColIndex(ACCOUNT_SCHEMA, name); }
 
@@ -258,7 +271,3 @@ function isLiabilityType(type) {
   return type === 'liability';
 }
 
-// True if sub_type is a loan sub-type
-function isLoanSubType(sub_type) {
-  return LOAN_SUB_TYPES.indexOf(sub_type) !== -1;
-}

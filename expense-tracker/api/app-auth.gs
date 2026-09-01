@@ -69,16 +69,16 @@ function recordAccess(meta, success) {
   for (let i = 1; i < values.length; i++) {
     if (values[i][0] !== ip) continue;
     const rowNum        = i + 1;
-    const totalAttempts = (Number(values[i][6]) || 0) + 1;
-    const successCount  = (Number(values[i][7]) || 0) + (success ? 1 : 0);
-    const failureCount  = (Number(values[i][8]) || 0) + (success ? 0 : 1);
+    const totalAttempts = Number(values[i][6]) + 1;
+    const successCount  = Number(values[i][7]) + (success ? 1 : 0);
+    const failureCount  = Number(values[i][8]) + (success ? 0 : 1);
     const lastFailedAt  = success ? values[i][9] : now;
     const shouldLock    = !success && failureCount >= MAX_FAILURES;
     const isLocked      = values[i][10] === true || shouldLock;
-    const lockedAt      = shouldLock ? now : (values[i][11] || '');
+    const lockedAt      = shouldLock ? now : String(values[i][11]);
 
     if (shouldLock) console.log('recordAccess: locked ip=' + ip + ' failures=' + failureCount);
-    if (success && (Number(values[i][8]) || 0) > 0) console.log('recordAccess: success ip=' + ip);
+    if (success && Number(values[i][8]) > 0) console.log('recordAccess: success ip=' + ip);
 
     sheet.getRange(rowNum, 4).setValue(meta.ua);
     sheet.getRange(rowNum, 6).setValue(now);

@@ -36,7 +36,7 @@ function _buildMonthly(assetAccts, liabAccts, monthKeys) {
 
   const sample = (daily, mk) => {
     const dayIdx = Math.round((_monthEnd(mk) - from) / 86400000);
-    return daily[Math.min(dayIdx, daily.length - 1)] || 0;
+    return daily[Math.min(dayIdx, daily.length - 1)] ?? 0;
   };
 
   return {
@@ -65,7 +65,7 @@ export async function render(containerId, { accounts, from, to, sym }) {
     return null;
   }
 
-  const allActive      = accounts.filter(a => a.is_active);
+  const allActive      = accounts.filter(a => a.record_status === 'active');
 
   if (!allActive.length) {
     container.innerHTML = `<div class="chart-wrap"><p class="chart-empty">No active accounts found.</p></div>`;
@@ -78,10 +78,10 @@ export async function render(containerId, { accounts, from, to, sym }) {
   const monthKeys         = monthRange(from, to);
   const { assets, liabs } = _buildMonthly(assetAccts, liabAccts, monthKeys);
 
-  const currentAssets = assets[assets.length - 1] || 0;
-  const currentLiabs  = liabs[liabs.length  - 1] || 0;
+  const currentAssets = assets[assets.length - 1] ?? 0;
+  const currentLiabs  = liabs[liabs.length  - 1] ?? 0;
   const currentNet    = currentAssets - currentLiabs;
-  const firstNet      = (assets[0] || 0) - (liabs[0] || 0);
+  const firstNet      = (assets[0] ?? 0) - (liabs[0] ?? 0);
   const netChange     = currentNet - firstNet;
 
   const fmt      = v => sym + Math.abs(v).toLocaleString('en-GB', { minimumFractionDigits: 0, maximumFractionDigits: 0 });

@@ -30,7 +30,7 @@ function _buildMonthlyBalances(liabAccounts, monthKeys) {
     const daily = computeDailyTotalAssets([acc], state.transactions, from, to);
     result[acc.id] = monthKeys.map(mk => {
       const dayIdx = Math.round((_monthEnd(mk) - from) / 86400000);
-      const raw    = daily[Math.min(dayIdx, daily.length - 1)] || 0;
+      const raw    = daily[Math.min(dayIdx, daily.length - 1)] ?? 0;
       return Math.abs(raw);
     });
   }
@@ -142,7 +142,7 @@ export async function render(containerId, { accounts, from, to, sym }) {
     return null;
   }
 
-  const liabAccounts   = accounts.filter(a => a.is_active && a.type === 'liability');
+  const liabAccounts   = accounts.filter(a => a.record_status === 'active' && a.type === 'liability');
 
   if (!liabAccounts.length) {
     container.innerHTML = `<div class="chart-wrap"><p class="chart-empty">No active liability accounts found.</p></div>`;
@@ -157,7 +157,7 @@ export async function render(containerId, { accounts, from, to, sym }) {
 
   const totalCurrent = liabAccounts.reduce((s, a) => {
     const b = allBalances[a.id];
-    return s + (b ? (b[b.length - 1] || 0) : 0);
+    return s + (b ? (b[b.length - 1] ?? 0) : 0);
   }, 0);
   const totalOpening = liabAccounts.reduce((s, a) => {
     const v = parseFloat(a.opening_value);
@@ -196,7 +196,7 @@ export async function render(containerId, { accounts, from, to, sym }) {
     </div>
     <div style="margin-top:24px;padding-top:16px;border-top:1px solid var(--hair)">
       <p style="font-size:var(--text-sm);font-weight:600;margin:0 0 16px">Paydown Progress</p>
-      ${liabAccounts.map(a => _progressHtml(a, allBalances[a.id] || [], sym)).join('')}
+      ${liabAccounts.map(a => _progressHtml(a, allBalances[a.id] ?? [], sym)).join('')}
     </div>`;
 
   const canvas = container.querySelector('canvas');
@@ -210,7 +210,7 @@ export async function render(containerId, { accounts, from, to, sym }) {
       labels,
       datasets: liabAccounts.map((acc, i) => ({
         label:            acc.name.length > 16 ? acc.name.slice(0, 15) + '…' : acc.name,
-        data:             allBalances[acc.id] || Array(labels.length).fill(0),
+        data:             allBalances[acc.id] ?? Array(labels.length).fill(0),
         borderColor:      palette[i % palette.length],
         backgroundColor:  palette[i % palette.length] + '22',
         tension:          0.3,

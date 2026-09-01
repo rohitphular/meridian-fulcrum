@@ -23,7 +23,7 @@ function listRates() {
       const row = new Array(cols.length).fill('');
       row[rateColIndex('currency')]   = r.currency;
       row[rateColIndex('rate')]       = r.rate;
-      row[rateColIndex('symbol')]     = r.symbol || '';
+      row[rateColIndex('symbol')]     = r.symbol !== undefined ? r.symbol : '';
       row[rateColIndex('updated_at')] = now;
       sheet.appendRow(row);
     });
@@ -55,7 +55,7 @@ function upsertRate(body) {
   const row = new Array(cols.length).fill('');
   row[rateColIndex('currency')]   = body.currency;
   row[rateColIndex('rate')]       = Number(body.rate);
-  row[rateColIndex('symbol')]     = body.symbol || '';
+  row[rateColIndex('symbol')]     = body.symbol;
   row[rateColIndex('updated_at')] = now;
   sheet.appendRow(row);
   return { ok: true };
@@ -104,7 +104,7 @@ function _countAccountsWithCurrency(currency) {
   const ci     = acctColIndex('currency');
   let count = 0;
   for (let i = 1; i < values.length; i++) {
-    if (String(values[i][ci] || '') === String(currency)) count++;
+    if (String(values[i][ci]) === String(currency)) count++;
   }
   return count;
 }

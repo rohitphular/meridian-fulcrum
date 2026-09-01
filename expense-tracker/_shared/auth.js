@@ -53,7 +53,7 @@ export function createAuthModule({ sessionKey, legacyKeys = [], verifyFn, reload
   async function fetchGeo() {
     try {
       const d = await fetch('https://ipapi.co/json/').then(r => r.json());
-      return { ip: d.ip || 'unknown', city: d.city || '', country: d.country_name || '', ua: navigator.userAgent };
+      return { ip: d.ip ?? 'unknown', city: d.city ?? '', country: d.country_name ?? '', ua: navigator.userAgent };
     } catch (_) {
       return { ip: 'unknown', city: '', country: '', ua: navigator.userAgent };
     }

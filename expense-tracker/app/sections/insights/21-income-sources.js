@@ -25,7 +25,7 @@ function _destroyChart() { _setChart(null); }
 function _groupBy(inTxs, field, fallback) {
   const map = new Map();
   for (const tx of inTxs) {
-    const key = (tx[field] || '').trim() || fallback;
+    const key = (tx[field] ?? '').trim() || fallback;
     if (!map.has(key)) map.set(key, []);
     map.get(key).push(tx);
   }
@@ -40,7 +40,7 @@ function _groupBy(inTxs, field, fallback) {
 
 function _monthlyTotals(inTxs, monthKeys) {
   const byMonth = groupByMonth(inTxs);
-  return monthKeys.map(mk => sumAmountBase(byMonth.get(mk) || []));
+  return monthKeys.map(mk => sumAmountBase(byMonth.get(mk) ?? []));
 }
 
 // ── Donut sub-view ────────────────────────────────────────────────────────────
@@ -94,7 +94,7 @@ function _renderDonut(viewEl, segments, sym, C, field, fallback, inTxs) {
         const label = labels[elements[0].index];
         if (label === 'Other') return;
         const segTxs = inTxs
-          .filter(t => ((t[field] || '').trim() || fallback) === label)
+          .filter(t => ((t[field] ?? '').trim() || fallback) === label)
           .sort((a, b) => new Date(b.tx_date_time) - new Date(a.tx_date_time));
         const segTotal = sumAmountBase(segTxs);
 

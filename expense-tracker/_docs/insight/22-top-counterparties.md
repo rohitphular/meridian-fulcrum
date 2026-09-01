@@ -146,4 +146,4 @@ Pill click: destroys old chart, recreates `<canvas>` (Chart.js requires a fresh 
 | All spend from one counterparty | Single bar; no special treatment |
 | Fewer rows than selected top-N | Slice returns all available rows; canvas height still `max(300, rows.length × 44)` |
 | No previous-period data for counterparty | Period comparison row hidden |
-| `money-transfer` txs | Excluded (only `money-out` counted) |
+| Transfer rows (`parent_tx_id` non-empty) | Excluded (only `money-out` counted) |

@@ -3,23 +3,30 @@
 // No sheet I/O. All functions are pure computations.
 // =============================================================================
 
-function generateSubscriptionId(sheet) {
+function generateSubscriptionId(sheet, preloadedValues) {
+  const values = (preloadedValues !== undefined && preloadedValues !== null) ? preloadedValues : sheet.getDataRange().getValues();
+  const base   = _subscriptionIdBase(values);
+  return base.prefix + String(base.max + 1).padStart(3, '0');
+}
+
+// Returns the today prefix and max suffix from preloaded sheet data.
+// Used by createSubscriptionsBulk to generate a sequence of IDs in one pass.
+function _subscriptionIdBase(preloadedValues) {
   const now     = new Date();
   const year    = now.getUTCFullYear();
   const month   = String(now.getUTCMonth() + 1).padStart(2, '0');
   const day     = String(now.getUTCDate()).padStart(2, '0');
   const dateStr = year + '' + month + '' + day;
   const prefix  = 'SUB-' + dateStr + '-';
-  const values  = sheet.getDataRange().getValues();
-  let max     = 0;
-  for (let i = 1; i < values.length; i++) {
-    const id = String(values[i][0]);
+  let max = 0;
+  for (let i = 1; i < preloadedValues.length; i++) {
+    const id = String(preloadedValues[i][0]);
     if (id.indexOf(prefix) === 0) {
       const n = parseInt(id.slice(prefix.length), 10);
       if (!isNaN(n) && n > max) max = n;
     }
   }
-  return prefix + String(max + 1).padStart(3, '0');
+  return { prefix: prefix, max: max };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -47,7 +54,7 @@ function computeNextPaymentDate(frequency, dayOfMonth, dayOfWeek) {
     return _nextWeeklyDate(todayYear, todayMonth, todayDay, Number(dayOfWeek));
   }
 
-  if (!dom || dom < 1 || dom > 31) return '';
+  if (!Number.isInteger(dom) || dom < 1 || dom > 31) return '';
 
   if (frequency === 'monthly') {
     return _nextCycleDate(todayYear, todayMonth, todayDay, dom, 1);

@@ -212,10 +212,11 @@ const TRANSACTION_SCHEMA = {
     sheet_column_name: 'sync_status',
     sheet_column_position: 20,
     ui_label: 'Sync Status',
-    type: 'string',
+    type: 'enum',
+    enum_values: ['create-pending', 'update-pending', 'in-sync', 'create-failed', 'update-failed'],
     group: 'system',
     editable: false,
-    default_value: '',
+    default_value: 'create-pending',
   },
   sync_date_time: {
     sheet_column_name: 'sync_date_time',
@@ -265,7 +266,7 @@ function getTransactionSchemaForClient() {
   };
   return {
     types: VALID_TRANSACTION_TYPES.map(function(v) {
-      return { value: v, label: TYPE_LABELS[v] || v };
+      return { value: v, label: TYPE_LABELS[v] !== undefined ? TYPE_LABELS[v] : v };
     }),
     categorisation_fields: Object.keys(TRANSACTION_SCHEMA).filter(function(key) {
       return TRANSACTION_SCHEMA[key].group === 'categorisation';
@@ -293,7 +294,7 @@ function getFieldsForTransactionType(type) {
 }
 
 function getTransactionSchemaField(key) {
-  return TRANSACTION_SCHEMA[key] || null;
+  return TRANSACTION_SCHEMA[key] !== undefined ? TRANSACTION_SCHEMA[key] : null;
 }
 
 function txColIndex(name) { return getColIndex(TRANSACTION_SCHEMA, name); }

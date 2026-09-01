@@ -72,7 +72,7 @@ async function _loadHistory() {
   try {
     const res = await ExpenseAPI.getAdvisorHistory();
     if (res.ok) {
-      state.advisorMessages = res.data || [];
+      state.advisorMessages = res.data ?? [];
       _renderMessages();
     } else {
       console.warn('[advisor] _loadHistory failed:', res.error);

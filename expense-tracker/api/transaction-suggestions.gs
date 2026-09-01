@@ -20,14 +20,15 @@ function getSuggestedTransactions() {
 
   const accountMap = _loadAccountMap();
 
-  // Filter to money-out only; augment each tx with derived currency and normalised amount
+  // Filter to money-out only; skip orphaned transactions (no matching account).
+  // Augment each tx with derived currency and normalised amount.
   const outTx = allTx.filter(function(tx) {
-    return String(tx.tx_type) === 'money-out';
+    return String(tx.tx_type) === 'money-out' && accountMap[String(tx.account_id)];
   }).map(function(tx) {
-    const acc = accountMap[String(tx.account_id || '')] || {};
+    const acc = accountMap[String(tx.account_id)];
     return Object.assign({}, tx, {
-      currency: acc.currency || '',
-      amount:   Number(tx.tx_amount) || 0,
+      currency: acc.currency,
+      amount:   Number(tx.tx_amount),
     });
   });
   console.log(fnName + ': money_out_count=' + outTx.length);
@@ -71,7 +72,7 @@ function _applyRecurringMonthly(outTx, today, map) {
   outTx.forEach(function(tx) {
     const d = new Date(tx.tx_date_time);
     if (isNaN(d.getTime()) || d < cutoff) return;
-    const key = String(tx.counterparty_name || '') + '|' + String(tx.minor_category || '');
+    const key = (tx.counterparty_name ? String(tx.counterparty_name) : '') + '|' + (tx.minor_category ? String(tx.minor_category) : '');
     if (!groups[key]) groups[key] = { tx: tx, occurrences: [] };
     groups[key].occurrences.push({ tx: tx, date: d });
   });
@@ -87,7 +88,7 @@ function _applyRecurringMonthly(outTx, today, map) {
       monthSet[mk] = true;
     });
     const distinctMonths = Object.keys(monthSet).length;
-    if (distinctMonths < 2) return;
+    if (distinctMonths < 4) return;
 
     // Check if already transacted this calendar month
     const hasThisMonth = occs.some(function(o) {
@@ -105,17 +106,17 @@ function _applyRecurringMonthly(outTx, today, map) {
 
     map[key] = {
       signal:              'recurring_monthly',
-      counterparty_name:   String(occs[0].tx.counterparty_name || ''),
-      major_category:      _mostFrequent(occs.map(function(o) { return String(o.tx.major_category     || ''); })),
-      minor_category:      String(occs[0].tx.minor_category || ''),
-      account_id:          _mostFrequent(occs.map(function(o) { return String(o.tx.account_id         || ''); })),
-      typical_amount:      _median(occs.map(function(o) { return Number(o.tx.amount) || 0; })),
-      currency:            _mostFrequent(occs.map(function(o) { return String(o.tx.currency           || ''); })),
-      user_location_area:    _mostFrequent(occs.map(function(o) { return String(o.tx.user_location_area   || ''); })),
-      user_location_city:    _mostFrequent(occs.map(function(o) { return String(o.tx.user_location_city   || ''); })),
-      user_location_country: _mostFrequent(occs.map(function(o) { return String(o.tx.user_location_country|| ''); })),
-      tx_tags:             _mostFrequent(occs.map(function(o) { return String(o.tx.tx_tags           || ''); })),
-      beneficiaries:       _mostFrequent(occs.map(function(o) { return String(o.tx.beneficiaries    || ''); })),
+      counterparty_name:   occs[0].tx.counterparty_name ? String(occs[0].tx.counterparty_name) : '',
+      major_category:      _mostFrequent(occs.map(function(o) { return o.tx.major_category      ? String(o.tx.major_category)      : ''; })),
+      minor_category:      occs[0].tx.minor_category    ? String(occs[0].tx.minor_category)    : '',
+      account_id:          _mostFrequent(occs.map(function(o) { return o.tx.account_id          ? String(o.tx.account_id)          : ''; })),
+      typical_amount:      _median(occs.map(function(o) { return Number(o.tx.amount); })),
+      currency:            _mostFrequent(occs.map(function(o) { return o.tx.currency            ? String(o.tx.currency)            : ''; })),
+      user_location_area:    _mostFrequent(occs.map(function(o) { return o.tx.user_location_area    ? String(o.tx.user_location_area)    : ''; })),
+      user_location_city:    _mostFrequent(occs.map(function(o) { return o.tx.user_location_city    ? String(o.tx.user_location_city)    : ''; })),
+      user_location_country: _mostFrequent(occs.map(function(o) { return o.tx.user_location_country ? String(o.tx.user_location_country) : ''; })),
+      tx_tags:             _mostFrequent(occs.map(function(o) { return o.tx.tx_tags             ? String(o.tx.tx_tags)             : ''; })),
+      beneficiaries:       _mostFrequent(occs.map(function(o) { return o.tx.beneficiaries       ? String(o.tx.beneficiaries)       : ''; })),
       confidence:          confidence,
       reason:              'monthly \xb7 usually around the ' + _ordinal(medianDay),
     };
@@ -144,7 +145,7 @@ function _applyRecurringWeekly(outTx, today, map) {
   outTx.forEach(function(tx) {
     const d = new Date(tx.tx_date_time);
     if (isNaN(d.getTime()) || d < cutoff) return;
-    const key = String(tx.counterparty_name || '') + '|' + String(tx.minor_category || '');
+    const key = (tx.counterparty_name ? String(tx.counterparty_name) : '') + '|' + (tx.minor_category ? String(tx.minor_category) : '');
     if (!groups[key]) groups[key] = { tx: tx, occurrences: [] };
     groups[key].occurrences.push({ tx: tx, date: d });
   });
@@ -159,10 +160,11 @@ function _applyRecurringWeekly(outTx, today, map) {
       weekSet[_isoWeekKey(o.date)] = true;
     });
     const distinctWeeks = Object.keys(weekSet).length;
-    if (distinctWeeks < 2) return;
+    if (distinctWeeks < 5) return;
 
-    // Mode day-of-week
+    // Mode day-of-week — only surface if today matches the usual day
     const modeDow = _modeDayOfWeek(occs.map(function(o) { return o.date.getDay(); }));
+    if (modeDow !== todayDow) return;
 
     // Check no matching transaction today
     const hasToday = occs.some(function(o) {
@@ -176,17 +178,17 @@ function _applyRecurringWeekly(outTx, today, map) {
 
     map[key] = {
       signal:              'recurring_weekly',
-      counterparty_name:   String(occs[0].tx.counterparty_name || ''),
-      major_category:      _mostFrequent(occs.map(function(o) { return String(o.tx.major_category     || ''); })),
-      minor_category:      String(occs[0].tx.minor_category || ''),
-      account_id:          _mostFrequent(occs.map(function(o) { return String(o.tx.account_id         || ''); })),
-      typical_amount:      _median(occs.map(function(o) { return Number(o.tx.amount) || 0; })),
-      currency:            _mostFrequent(occs.map(function(o) { return String(o.tx.currency           || ''); })),
-      user_location_area:    _mostFrequent(occs.map(function(o) { return String(o.tx.user_location_area   || ''); })),
-      user_location_city:    _mostFrequent(occs.map(function(o) { return String(o.tx.user_location_city   || ''); })),
-      user_location_country: _mostFrequent(occs.map(function(o) { return String(o.tx.user_location_country|| ''); })),
-      tx_tags:             _mostFrequent(occs.map(function(o) { return String(o.tx.tx_tags           || ''); })),
-      beneficiaries:       _mostFrequent(occs.map(function(o) { return String(o.tx.beneficiaries    || ''); })),
+      counterparty_name:   occs[0].tx.counterparty_name ? String(occs[0].tx.counterparty_name) : '',
+      major_category:      _mostFrequent(occs.map(function(o) { return o.tx.major_category      ? String(o.tx.major_category)      : ''; })),
+      minor_category:      occs[0].tx.minor_category    ? String(occs[0].tx.minor_category)    : '',
+      account_id:          _mostFrequent(occs.map(function(o) { return o.tx.account_id          ? String(o.tx.account_id)          : ''; })),
+      typical_amount:      _median(occs.map(function(o) { return Number(o.tx.amount); })),
+      currency:            _mostFrequent(occs.map(function(o) { return o.tx.currency            ? String(o.tx.currency)            : ''; })),
+      user_location_area:    _mostFrequent(occs.map(function(o) { return o.tx.user_location_area    ? String(o.tx.user_location_area)    : ''; })),
+      user_location_city:    _mostFrequent(occs.map(function(o) { return o.tx.user_location_city    ? String(o.tx.user_location_city)    : ''; })),
+      user_location_country: _mostFrequent(occs.map(function(o) { return o.tx.user_location_country ? String(o.tx.user_location_country) : ''; })),
+      tx_tags:             _mostFrequent(occs.map(function(o) { return o.tx.tx_tags             ? String(o.tx.tx_tags)             : ''; })),
+      beneficiaries:       _mostFrequent(occs.map(function(o) { return o.tx.beneficiaries       ? String(o.tx.beneficiaries)       : ''; })),
       confidence:          confidence,
       reason:              'weekly \xb7 usually on ' + _SUGGESTION_DAY_NAMES[modeDow],
     };
@@ -217,7 +219,7 @@ function _applyTimeOfDay(outTx, today, map) {
   outTx.forEach(function(tx) {
     const d = new Date(tx.tx_date_time);
     if (!isNaN(d.getTime()) && _calendarDateStr(d) === todayDateString) {
-      transactedTodayCounterparties[String(tx.counterparty_name || '')] = true;
+      transactedTodayCounterparties[tx.counterparty_name ? String(tx.counterparty_name) : ''] = true;
     }
   });
 
@@ -228,8 +230,10 @@ function _applyTimeOfDay(outTx, today, map) {
     if (isNaN(d.getTime()) || d < cutoff) return;
     const dow        = d.getDay();
     const hourBucket = Math.floor(d.getHours() / 2);
-    const extKey = String(tx.counterparty_name || '') + '|' + String(tx.minor_category || '') + '|' + dow + '|' + hourBucket;
-    if (!groups[extKey]) groups[extKey] = { tx: tx, dateSet: {}, counterparty_name: String(tx.counterparty_name || ''), minor_category: String(tx.minor_category || ''), dow: dow, occurrences: [] };
+    const cpName     = tx.counterparty_name ? String(tx.counterparty_name) : '';
+    const minCat     = tx.minor_category    ? String(tx.minor_category)    : '';
+    const extKey = cpName + '|' + minCat + '|' + dow + '|' + hourBucket;
+    if (!groups[extKey]) groups[extKey] = { tx: tx, dateSet: {}, counterparty_name: cpName, minor_category: minCat, dow: dow, occurrences: [] };
     const dateStr = _calendarDateStr(d);
     groups[extKey].dateSet[dateStr] = true;
     groups[extKey].occurrences.push({ tx: tx, date: d });
@@ -262,16 +266,16 @@ function _applyTimeOfDay(outTx, today, map) {
       dedupeKey:           dedupeKey,
       signal:              'time_of_day',
       counterparty_name:   group.counterparty_name,
-      major_category:      _mostFrequent(occs.map(function(o) { return String(o.tx.major_category     || ''); })),
+      major_category:      _mostFrequent(occs.map(function(o) { return o.tx.major_category      ? String(o.tx.major_category)      : ''; })),
       minor_category:      group.minor_category,
-      account_id:          _mostFrequent(occs.map(function(o) { return String(o.tx.account_id         || ''); })),
-      typical_amount:      _median(occs.map(function(o) { return Number(o.tx.amount) || 0; })),
-      currency:            _mostFrequent(occs.map(function(o) { return String(o.tx.currency           || ''); })),
-      user_location_area:    _mostFrequent(occs.map(function(o) { return String(o.tx.user_location_area   || ''); })),
-      user_location_city:    _mostFrequent(occs.map(function(o) { return String(o.tx.user_location_city   || ''); })),
-      user_location_country: _mostFrequent(occs.map(function(o) { return String(o.tx.user_location_country|| ''); })),
-      tx_tags:             _mostFrequent(occs.map(function(o) { return String(o.tx.tx_tags           || ''); })),
-      beneficiaries:       _mostFrequent(occs.map(function(o) { return String(o.tx.beneficiaries    || ''); })),
+      account_id:          _mostFrequent(occs.map(function(o) { return o.tx.account_id          ? String(o.tx.account_id)          : ''; })),
+      typical_amount:      _median(occs.map(function(o) { return Number(o.tx.amount); })),
+      currency:            _mostFrequent(occs.map(function(o) { return o.tx.currency            ? String(o.tx.currency)            : ''; })),
+      user_location_area:    _mostFrequent(occs.map(function(o) { return o.tx.user_location_area    ? String(o.tx.user_location_area)    : ''; })),
+      user_location_city:    _mostFrequent(occs.map(function(o) { return o.tx.user_location_city    ? String(o.tx.user_location_city)    : ''; })),
+      user_location_country: _mostFrequent(occs.map(function(o) { return o.tx.user_location_country ? String(o.tx.user_location_country) : ''; })),
+      tx_tags:             _mostFrequent(occs.map(function(o) { return o.tx.tx_tags             ? String(o.tx.tx_tags)             : ''; })),
+      beneficiaries:       _mostFrequent(occs.map(function(o) { return o.tx.beneficiaries       ? String(o.tx.beneficiaries)       : ''; })),
       confidence:          confidence,
       reason:              'often at this time on ' + _SUGGESTION_DAY_NAMES[dow],
     });
@@ -321,7 +325,7 @@ function _applyRecentFrequent(outTx, today, map) {
   outTx.forEach(function(tx) {
     const d = new Date(tx.tx_date_time);
     if (!isNaN(d.getTime()) && _calendarDateStr(d) === todayDateString) {
-      transactedToday[String(tx.counterparty_name || '')] = true;
+      transactedToday[tx.counterparty_name ? String(tx.counterparty_name) : ''] = true;
     }
   });
 
@@ -330,7 +334,7 @@ function _applyRecentFrequent(outTx, today, map) {
   outTx.forEach(function(tx) {
     const d = new Date(tx.tx_date_time);
     if (isNaN(d.getTime()) || d < cutoff) return;
-    const key = String(tx.counterparty_name || '') + '|' + String(tx.minor_category || '');
+    const key = (tx.counterparty_name ? String(tx.counterparty_name) : '') + '|' + (tx.minor_category ? String(tx.minor_category) : '');
     if (!groups[key]) groups[key] = { tx: tx, occurrences: [] };
     groups[key].occurrences.push({ tx: tx, date: d });
   });
@@ -344,23 +348,23 @@ function _applyRecentFrequent(outTx, today, map) {
     if (occs.length < 2) return;
 
     // Skip if transacted today
-    const cpName = String(occs[0].tx.counterparty_name || '');
+    const cpName = occs[0].tx.counterparty_name ? String(occs[0].tx.counterparty_name) : '';
     if (transactedToday[cpName]) return;
 
     const confidence = Math.min(occs.length / 15, 0.35);
     map[key] = {
       signal:              'recent_frequent',
       counterparty_name:   cpName,
-      major_category:      _mostFrequent(occs.map(function(o) { return String(o.tx.major_category     || ''); })),
-      minor_category:      String(occs[0].tx.minor_category || ''),
-      account_id:          _mostFrequent(occs.map(function(o) { return String(o.tx.account_id         || ''); })),
-      typical_amount:      _median(occs.map(function(o) { return Number(o.tx.amount) || 0; })),
-      currency:            _mostFrequent(occs.map(function(o) { return String(o.tx.currency           || ''); })),
-      user_location_area:    _mostFrequent(occs.map(function(o) { return String(o.tx.user_location_area   || ''); })),
-      user_location_city:    _mostFrequent(occs.map(function(o) { return String(o.tx.user_location_city   || ''); })),
-      user_location_country: _mostFrequent(occs.map(function(o) { return String(o.tx.user_location_country|| ''); })),
-      tx_tags:             _mostFrequent(occs.map(function(o) { return String(o.tx.tx_tags           || ''); })),
-      beneficiaries:       _mostFrequent(occs.map(function(o) { return String(o.tx.beneficiaries    || ''); })),
+      major_category:      _mostFrequent(occs.map(function(o) { return o.tx.major_category      ? String(o.tx.major_category)      : ''; })),
+      minor_category:      occs[0].tx.minor_category    ? String(occs[0].tx.minor_category)    : '',
+      account_id:          _mostFrequent(occs.map(function(o) { return o.tx.account_id          ? String(o.tx.account_id)          : ''; })),
+      typical_amount:      _median(occs.map(function(o) { return Number(o.tx.amount); })),
+      currency:            _mostFrequent(occs.map(function(o) { return o.tx.currency            ? String(o.tx.currency)            : ''; })),
+      user_location_area:    _mostFrequent(occs.map(function(o) { return o.tx.user_location_area    ? String(o.tx.user_location_area)    : ''; })),
+      user_location_city:    _mostFrequent(occs.map(function(o) { return o.tx.user_location_city    ? String(o.tx.user_location_city)    : ''; })),
+      user_location_country: _mostFrequent(occs.map(function(o) { return o.tx.user_location_country ? String(o.tx.user_location_country) : ''; })),
+      tx_tags:             _mostFrequent(occs.map(function(o) { return o.tx.tx_tags             ? String(o.tx.tx_tags)             : ''; })),
+      beneficiaries:       _mostFrequent(occs.map(function(o) { return o.tx.beneficiaries       ? String(o.tx.beneficiaries)       : ''; })),
       confidence:          confidence,
       reason:              occs.length + ' times in the last 2 months',
     };
@@ -388,7 +392,7 @@ function _median(arr) {
 function _mostFrequent(arr) {
   if (!arr.length) return '';
   const counts = {};
-  arr.forEach(function(v) { counts[v] = (counts[v] || 0) + 1; });
+  arr.forEach(function(v) { counts[v] = (counts[v] !== undefined ? counts[v] : 0) + 1; });
   let best = '';
   let max  = 0;
   Object.keys(counts).forEach(function(k) {

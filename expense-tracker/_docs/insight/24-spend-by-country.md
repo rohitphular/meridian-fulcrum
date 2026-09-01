@@ -100,7 +100,7 @@ No sort — static display, ordered by chart rank.
 | Single country | One bar rendered; no special treatment |
 | Name variations (`UK` vs `United Kingdom`) | Normalised via lookup map before grouping |
 | More than 15 countries | Remainder collapsed into `'Other'` row at bottom |
-| `money-transfer` txs | Excluded — only `money-out` counted |
+| Transfer rows (`parent_tx_id` non-empty) | Excluded — only `money-out` counted |
 | No spend transactions | `chart-empty` "No spend transactions for this period."; returns `null` |
 
 ---

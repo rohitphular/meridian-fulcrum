@@ -17,9 +17,9 @@ export function getRangeBounds() {
     case 'ytd':         return { from: new Date(y, 0, 1),    to: today };
     case 'all':         return { from: new Date(2000, 0, 1), to: today };
     case 'custom': {
-      const from = state.customFrom ? parseLocalDate(state.customFrom) : new Date(2000, 0, 1);
-      const to   = state.customTo   ? parseLocalDate(state.customTo)   : today;
-      return { from: isNaN(from) ? new Date(2000, 0, 1) : from, to: isNaN(to) ? today : to };
+      const from = (state.customFrom !== undefined && state.customFrom !== null && state.customFrom !== '') ? parseLocalDate(state.customFrom) : new Date(2000, 0, 1);
+      const to   = (state.customTo   !== undefined && state.customTo   !== null && state.customTo   !== '') ? parseLocalDate(state.customTo)   : today;
+      return { from: Number.isFinite(from.getTime()) ? from : new Date(2000, 0, 1), to: Number.isFinite(to.getTime()) ? to : today };
     }
     default: return { from: new Date(y, m, now.getDate() - 29), to: today };
   }
@@ -28,9 +28,9 @@ export function getRangeBounds() {
 export function txInRange(tx) {
   const { from, to } = getRangeBounds();
   const raw = tx.tx_date_time;
-  if (!raw) return true;
+  if (raw === undefined || raw === null || String(raw).trim() === '') return true;
   const d = new Date(raw);
-  if (isNaN(d)) return true;
+  if (!Number.isFinite(d.getTime())) return true;
   const localDate = new Date(d.getFullYear(), d.getMonth(), d.getDate());
   return localDate >= from && localDate <= to;
 }
@@ -43,17 +43,18 @@ export function filteredTx() {
     if (f.accounts.length && !f.accounts.includes(tx.account_id))                          return false;
     if (f.major.length    && !f.major.includes(tx.major_category))                        return false;
     if (f.minor.length    && !f.minor.includes(tx.minor_category))                        return false;
-    if (f.user_location_country && !String(tx.user_location_country || '').toLowerCase().includes(f.user_location_country.toLowerCase())) return false;
-    if (f.user_location_city    && !String(tx.user_location_city    || '').toLowerCase().includes(f.user_location_city.toLowerCase()))    return false;
-    if (f.user_location_area    && !String(tx.user_location_area    || '').toLowerCase().includes(f.user_location_area.toLowerCase()))    return false;
-    if (f.tag) {
-      const tags = String(tx.tx_tags || '').split(';').map(t => t.trim().toLowerCase()).filter(Boolean);
+    if (f.user_location_country && !String(tx.user_location_country !== undefined && tx.user_location_country !== null ? tx.user_location_country : '').toLowerCase().includes(f.user_location_country.toLowerCase())) return false;
+    if (f.user_location_city    && !String(tx.user_location_city    !== undefined && tx.user_location_city    !== null ? tx.user_location_city    : '').toLowerCase().includes(f.user_location_city.toLowerCase()))    return false;
+    if (f.user_location_area    && !String(tx.user_location_area    !== undefined && tx.user_location_area    !== null ? tx.user_location_area    : '').toLowerCase().includes(f.user_location_area.toLowerCase()))    return false;
+    if (f.tag !== undefined && f.tag !== null && f.tag !== '') {
+      const tags = String((tx.tx_tags !== undefined && tx.tx_tags !== null) ? tx.tx_tags : '').split(';').map(t => t.trim().toLowerCase()).filter(v => v !== '');
       if (!tags.some(t => t.includes(f.tag.toLowerCase()))) return false;
     }
-    if (f.search) {
+    if (f.search !== undefined && f.search !== null && f.search !== '') {
       const q           = f.search.toLowerCase();
-      const acctEntry   = state.accountMap[tx.account_id] || {};
-      const hay         = [tx.counterparty_name, tx.description, acctEntry.name || ''].join(' ').toLowerCase();
+      const acctEntry   = (state.accountMap[tx.account_id] !== undefined && state.accountMap[tx.account_id] !== null) ? state.accountMap[tx.account_id] : {};
+      const _acctName   = (acctEntry.name !== undefined && acctEntry.name !== null) ? acctEntry.name : '';
+      const hay         = [tx.counterparty_name, tx.description, _acctName].join(' ').toLowerCase();
       if (!hay.includes(q)) return false;
     }
     return true;

@@ -76,40 +76,46 @@ export function fmtDateTime(v) {
 
 export function getSymbol(currency, rates) {
   const r = rates.find(r => r.currency === currency);
-  return r ? String(r.symbol || '') : (currency ? currency + ' ' : '');
+  return r ? String(r.symbol ?? '') : (currency ? currency + ' ' : '');
 }
 
 export function toBase(amount, fromCurrency, rowFxRate, rateMap, quoteCurrency) {
-  const amt = parseFloat(amount) || 0;
+  const raw = parseFloat(amount);
+  const amt = Number.isFinite(raw) ? raw : 0;
   const to  = rateMap[quoteCurrency];
-  if (!to) return amt;
+  if (!to) return NaN;
   if (rowFxRate && parseFloat(rowFxRate) > 0) return (amt / parseFloat(rowFxRate)) * to;
   const from = rateMap[fromCurrency];
-  if (!from) return amt;
+  if (!from) return NaN;
   return (amt / from) * to;
 }
 
 export function toQuote(amount, fromCurrency, rateMap, quoteCurrency) {
   const from = rateMap[fromCurrency];
   const to   = rateMap[quoteCurrency];
-  if (!from || !to) return parseFloat(amount) || 0;
-  return ((parseFloat(amount) || 0) / from) * to;
+  const raw  = parseFloat(amount);
+  const amt  = Number.isFinite(raw) ? raw : 0;
+  if (!from || !to) return NaN;
+  return (amt / from) * to;
 }
 
 export function fmtBase(amount, fromCurrency, rowFxRate, rateMap, quoteCurrency, rates) {
   const val = toBase(amount, fromCurrency, rowFxRate, rateMap, quoteCurrency);
+  if (isNaN(val)) return '—';
   const sym = getSymbol(quoteCurrency, rates);
   return sym + val.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 export function fmtNative(amount, currency, rates) {
   const sym = getSymbol(currency, rates);
-  const val = parseFloat(amount) || 0;
+  const raw = parseFloat(amount);
+  const val = Number.isFinite(raw) ? raw : 0;
   return sym + val.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 export function fmtAmount(amount, currency, symbolMap) {
-  const num = parseFloat(amount) || 0;
+  const raw = parseFloat(amount);
+  const num = Number.isFinite(raw) ? raw : 0;
   const sym = symbolMap[currency] ?? (currency + ' ');
   return sym + num.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }

@@ -16,7 +16,7 @@ const VALID_RECORD_STATUSES = ['active', 'inactive', 'deleted', 'locked'];
 // on a non-existent row.  All other states (update-pending, update-failed, in-sync)
 // become update-pending.  sync_notes must be cleared by the caller.
 function computeSyncStatus(currentStatus) {
-  const createStates = new Set([SYNC_STATUS_CREATE_PENDING, SYNC_STATUS_CREATE_FAILED]);
+  const createStates = new Set([SYNC_STATUS_CREATE_PENDING, SYNC_STATUS_CREATE_FAILED, '']);
   return createStates.has(currentStatus)
     ? SYNC_STATUS_CREATE_PENDING
     : SYNC_STATUS_UPDATE_PENDING;

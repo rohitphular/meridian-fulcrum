@@ -1,7 +1,7 @@
 import { state } from '../core/state.js';
 import {
   el, esc, getSymbol, toBase, fmtBase, exportAccounts,
-  openContextMenu, closeContextMenu, recordStatusIcon, syncStatusIcon,
+  openContextMenu, closeContextMenu, recordStatusIcon, syncStatusIcon, parseCsvRow,
 } from '../core/utils.js';
 import { showLoading, hideLoading, showMsg } from '../core/ui.js';
 import { ExpenseAPI } from '../core/api.js';
@@ -14,20 +14,30 @@ let _accDDCleanup  = null;   // cleanup fn for the currently open filter dropdow
 
 // ── Schema accessors ──────────────────────────────────────────────────────────
 // Schema is loaded at boot into state.accountSchema — no hardcoded constants here.
-function _sch()              { return state.accountSchema || {}; }
-function _accountTypes()     { return _sch().types || []; }
-function _assetSubTypes()    { return _sch().asset_sub_types        || []; }
-function _invSubTypes()      { return _sch().investment_sub_types   || []; }
-function _liabSubTypes()     { return _sch().liability_sub_types    || []; }
-function _loanSubSet()       { return new Set(_sch().loan_sub_types || []); }
+// All accessors assume schema is present; renderAccounts guards against absent schema.
+function _accountTypes()     { return state.accountSchema.types; }
+function _assetSubTypes()    { return state.accountSchema.asset_sub_types; }
+function _invSubTypes()      { return state.accountSchema.investment_sub_types; }
+function _liabSubTypes()     { return state.accountSchema.liability_sub_types; }
+function _loanSubSet()       { return new Set(state.accountSchema.loan_sub_types); }
 function _validTypes()       { return new Set(_accountTypes().map(t => t.value)); }
+
+function _subTypesForType(type) {
+  if (type === 'asset')      return _assetSubTypes();
+  if (type === 'investment') return _invSubTypes();
+  if (type === 'liability')  return _liabSubTypes();
+  return [];
+}
 
 function _isLiability(a)     { return a.type === 'liability'; }
 function _isLoan(a)          { return a.type === 'liability' && _loanSubSet().has(a.sub_type); }
 
+// All record statuses — includes 'deleted' so the filter bar can show deleted accounts.
+const ALL_RECORD_STATUSES = ['active', 'inactive', 'deleted', 'locked'];
+
 // Convert snake_case sub_type value to a readable label.
 function _subTypeLabel(v) {
-  if (!v) return '—';
+  if (v === undefined || v === null || v === '') return '—';
   if (v === 'stocks_shares') return 'Stocks & Shares';
   if (v === 'p2p_lending')   return 'P2P Lending';
   if (v === 'pension_sipp')  return 'Pension / SIPP';
@@ -37,11 +47,14 @@ function _subTypeLabel(v) {
 }
 
 function _fmtBal(n) {
-  return Math.abs(parseFloat(n)).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const v = Math.abs(parseFloat(n));
+  if (Number.isFinite(v) === false) return '—';
+  return v.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 function _balanceCell(a) {
-  const val     = parseFloat(a.current_value);
+  const val = parseFloat(a.current_value);
+  if (Number.isFinite(val) === false) return '<span class="muted">—</span>';
   const sym     = getSymbol(a.currency);
   const foreign = a.currency !== state.quoteCurrency;
   const baseTag = foreign
@@ -58,7 +71,11 @@ function _balanceCell(a) {
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 export function renderAccounts() {
-  if (_accDDCleanup) { _accDDCleanup(); _accDDCleanup = null; }
+  if (state.accountSchema === undefined || state.accountSchema === null) {
+    el('accountsContent').innerHTML = '<p class="placeholder">Account schema not loaded. Please refresh.</p>';
+    return;
+  }
+  if (_accDDCleanup !== null) { _accDDCleanup(); _accDDCleanup = null; }
   _accMenuKey = null;
   const viewAcc    = state.accViewRow !== null ? state.accounts.find(a => a._row === state.accViewRow) : null;
   const editAcc    = state.accEditRow !== null ? state.accounts.find(a => a._row === state.accEditRow) : null;
@@ -87,7 +104,7 @@ export function renderAccounts() {
 // ── Net worth summary ─────────────────────────────────────────────────────────
 
 function _renderNetWorth() {
-  if (!state.accounts.length) return '';
+  if (state.accounts.length === 0) return '';
   const sym = getSymbol(state.quoteCurrency);
   const fmt = v => sym + Math.abs(v).toLocaleString('en-GB', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
 
@@ -95,15 +112,15 @@ function _renderNetWorth() {
 
   const totalAssets = state.accounts
     .filter(a => a.record_status !== 'deleted' && (a.type === 'asset' || a.type === 'investment'))
-    .reduce((s, a) => s + toBase(parseFloat(a.current_value), a.currency, null), 0);
+    .reduce((s, a) => { const v = toBase(parseFloat(a.current_value), a.currency, null); return Number.isFinite(v) ? s + v : s; }, 0);
 
   const totalLiab = state.accounts
     .filter(a => a.record_status !== 'deleted' && a.type === 'liability')
-    .reduce((s, a) => s + Math.abs(toBase(parseFloat(a.current_value), a.currency, null)), 0);
+    .reduce((s, a) => { const v = toBase(parseFloat(a.current_value), a.currency, null); return Number.isFinite(v) ? s + Math.abs(v) : s; }, 0);
 
   const liquidCash = state.accounts
     .filter(a => a.record_status !== 'deleted' && a.type === 'asset' && LIQUID_SUB_TYPES.has(a.sub_type))
-    .reduce((s, a) => s + toBase(parseFloat(a.current_value), a.currency, null), 0);
+    .reduce((s, a) => { const v = toBase(parseFloat(a.current_value), a.currency, null); return Number.isFinite(v) ? s + v : s; }, 0);
 
   const netWorth = totalAssets - totalLiab;
 
@@ -136,8 +153,8 @@ function _accFilterCount() {
   if (f.type !== 'all') n++;
   if (f.subType !== 'all') n++;
   if (f.currency !== 'all') n++;
-  if (f.search) n++;
-  if (f.recordStatuses.length < 4) n++;
+  if (f.search !== '') n++;
+  if (f.recordStatuses.length < ALL_RECORD_STATUSES.length) n++;
   return n;
 }
 
@@ -147,38 +164,35 @@ function _applyAccFilters(accounts) {
     if (f.type !== 'all' && a.type !== f.type) return false;
     if (f.subType !== 'all' && a.sub_type !== f.subType) return false;
     if (f.currency !== 'all' && a.currency !== f.currency) return false;
-    if (f.search) {
+    if (f.search !== '') {
       const q   = f.search.toLowerCase();
       const hay = (a.name + ' ' + a.description).toLowerCase();
-      if (!hay.includes(q)) return false;
+      if (hay.includes(q) === false) return false;
     }
-    if (f.recordStatuses.length < 4 && !f.recordStatuses.includes(a.record_status)) return false;
+    if (f.recordStatuses.length < ALL_RECORD_STATUSES.length && f.recordStatuses.includes(a.record_status) === false) return false;
     return true;
   });
 }
 
 function _renderAccFilterBar() {
   const activeCount = _accFilterCount();
-  const f           = _accDraft || state.accFilters;
+  const f           = _accDraft !== null ? _accDraft : state.accFilters;
 
   const currencies = [];
   const seenC = {};
   state.accounts.forEach(a => {
-    if (!seenC[a.currency]) { seenC[a.currency] = true; currencies.push(a.currency); }
+    if (seenC[a.currency] === undefined) { seenC[a.currency] = true; currencies.push(a.currency); }
   });
   currencies.sort();
 
-  const subTypes = f.type === 'asset'      ? _assetSubTypes()
-                 : f.type === 'investment' ? _invSubTypes()
-                 : f.type === 'liability'  ? _liabSubTypes()
-                 : [];
+  const subTypes = _subTypesForType(f.type);
 
   const rs = new Set(f.recordStatuses);
 
   const typeLabel    = f.type === 'all' ? 'All types' : f.type.charAt(0).toUpperCase() + f.type.slice(1);
   const subTypeLabel = f.type === 'all' ? '— select type first —' : (f.subType === 'all' ? 'All sub-types' : _subTypeLabel(f.subType));
   const currLabel    = f.currency === 'all' ? 'All' : f.currency;
-  const statusLabel  = rs.size === 4 ? 'All' : rs.size === 0 ? 'None'
+  const statusLabel  = rs.size === ALL_RECORD_STATUSES.length ? 'All' : rs.size === 0 ? 'None'
     : [...rs].map(s => s.charAt(0).toUpperCase() + s.slice(1)).join(', ');
 
   const trigStyle = 'width:100%;display:flex;justify-content:space-between;align-items:center;text-align:left;background:var(--panel);border:1px solid var(--hair-strong);border-radius:8px;padding:6px 10px;font-size:var(--text-base);color:var(--ink);cursor:pointer;outline:none';
@@ -226,7 +240,7 @@ function _renderAccFilterBar() {
       <div class="filter-row">
         <label>Status</label>
         ${dd('accFStatusTrigger','accFStatusLabel','accFStatusMenu', statusLabel,
-          ['active','inactive','deleted','locked'].map(s =>
+          ALL_RECORD_STATUSES.map(s =>
             `<label style="${optStyle}"><input type="checkbox" data-acc-filter-rstat="${s}"${rs.has(s) ? ' checked' : ''}> ${s.charAt(0).toUpperCase() + s.slice(1)}</label>`
           ).join(''))}
       </div>
@@ -241,10 +255,7 @@ function _renderAccFilterBar() {
 // ── Sub-type dropdown options ─────────────────────────────────────────────────
 
 function _subTypeOptsHtml(type, selected) {
-  const opts = type === 'asset'      ? _assetSubTypes()
-             : type === 'investment' ? _invSubTypes()
-             : type === 'liability'  ? _liabSubTypes()
-             : [];
+  const opts = _subTypesForType(type);
   return `<option value="">— select —</option>` +
     opts.map(v =>
       `<option value="${esc(v)}" ${selected === v ? 'selected' : ''}>${esc(_subTypeLabel(v))}</option>`
@@ -269,7 +280,7 @@ function _renderImportPanel() {
       <div class="field form-grid-span-2">
         <label for="accImportFile">CSV file</label>
         <input type="file" id="accImportFile" accept=".csv">
-        <div class="field-hint">Required: name, type, sub_type, currency. Optional: opening_value, current_value, record_status, description</div>
+        <div class="field-hint">Required: name, type, sub_type, currency, opening_value. Optional: record_status, description</div>
       </div>
     </div>
     <div id="accImportStatus"></div>
@@ -281,52 +292,46 @@ function _renderImportPanel() {
   </div>`;
 }
 
-function _parseCsvRow(line) {
-  const result = [];
-  let cur = '';
-  let inQ = false;
-  for (let i = 0; i < line.length; i++) {
-    const c = line[i];
-    if (c === '"') { inQ = !inQ; }
-    else if (c === ',' && !inQ) { result.push(cur.trim()); cur = ''; }
-    else { cur += c; }
-  }
-  result.push(cur.trim());
-  return result;
-}
-
 function _parseAccountsCsv(text) {
   const lines = text.split(/\r?\n/).filter(l => l.trim());
-  if (!lines.length) return { accounts: [], errors: ['File is empty.'] };
+  if (lines.length === 0) return { accounts: [], errors: ['File is empty.'] };
 
-  const headers  = _parseCsvRow(lines[0]).map(h => h.toLowerCase().replace(/\s+/g, '_'));
+  const headers  = parseCsvRow(lines[0]).map(h => h.toLowerCase().replace(/\s+/g, '_'));
   const accounts = [];
   const errors   = [];
 
   for (let i = 1; i < lines.length; i++) {
-    const vals = _parseCsvRow(lines[i]);
+    const vals = parseCsvRow(lines[i]);
     const row  = {};
-    headers.forEach((h, idx) => { row[h] = vals[idx].trim(); });
+    headers.forEach((h, idx) => { row[h] = (vals[idx] !== undefined && vals[idx] !== null ? String(vals[idx]).trim() : ''); });
 
-    if (!row.name)     { errors.push(`Row ${i + 1}: missing name`);     continue; }
-    if (!row.type)     { errors.push(`Row ${i + 1}: missing type`);     continue; }
-    if (!row.sub_type) { errors.push(`Row ${i + 1}: missing sub_type`); continue; }
-    if (!row.currency) { errors.push(`Row ${i + 1}: missing currency`); continue; }
+    if (row.name === '')     { errors.push(`Row ${i + 1}: missing name`);     continue; }
+    if (row.type === '')     { errors.push(`Row ${i + 1}: missing type`);     continue; }
+    if (row.sub_type === '') { errors.push(`Row ${i + 1}: missing sub_type`); continue; }
+    if (row.currency === '') { errors.push(`Row ${i + 1}: missing currency`); continue; }
 
+    if (row.opening_value === '') { errors.push(`Row ${i + 1}: missing opening_value`); continue; }
     const openingVal = parseFloat(row.opening_value);
-    const currentVal = row.current_value ? parseFloat(row.current_value) : undefined;
+    if (Number.isFinite(openingVal) === false) {
+      errors.push(`Row ${i + 1}: invalid opening_value "${row.opening_value}"`); continue;
+    }
+
+    const rsRaw = (row.record_status !== undefined && row.record_status !== null ? String(row.record_status).trim() : '');
+    if (rsRaw !== '' && ['active', 'inactive', 'deleted', 'locked'].indexOf(rsRaw) === -1) {
+      errors.push(`Row ${i + 1}: invalid record_status "${rsRaw}"`); continue;
+    }
+    const resolvedStatus = rsRaw !== '' ? rsRaw : 'active';
+
+    const descRaw = (row.description !== undefined && row.description !== null ? String(row.description).trim() : '');
 
     accounts.push({
       name:          row.name,
       type:          row.type,
       sub_type:      row.sub_type,
       currency:      row.currency.toUpperCase(),
-      opening_value: row.type === 'liability' ? -(Math.abs(openingVal)) : openingVal,
-      current_value: currentVal !== undefined
-        ? (row.type === 'liability' ? -(Math.abs(currentVal)) : currentVal)
-        : undefined,
-      record_status: ['active', 'inactive', 'deleted', 'locked'].includes(row.record_status) ? row.record_status : 'active',
-      description:   row.description,
+      opening_value: openingVal,
+      record_status: resolvedStatus,
+      description:   descRaw,
     });
   }
 
@@ -338,7 +343,7 @@ function _renderImportStatus(parsed) {
   const errHtml = errors.length
     ? `<div class="pin-error" style="margin-bottom:8px">${errors.map(e => esc(e)).join('<br>')}</div>`
     : '';
-  if (!accounts.length) return errHtml + '<p class="placeholder">No valid rows found.</p>';
+  if (accounts.length === 0) return errHtml + '<p class="placeholder">No valid rows found.</p>';
   return `${errHtml}<p style="font-size:13px;color:var(--muted);margin:0">${accounts.length} account${accounts.length !== 1 ? 's' : ''} ready to import</p>`;
 }
 
@@ -369,24 +374,27 @@ function _renderAccountForm(a, mode) {
 
   const subTypeField = isAdd
     ? `<select id="accNewSubType"><option value="">— select —</option></select>`
-    : `<input type="text" id="accEditSubType" value="${esc(_subTypeLabel(a.sub_type))}" disabled>`;
+    : isView
+      ? `<input type="text" id="accEditSubType" value="${esc(_subTypeLabel(a.sub_type))}" disabled>`
+      : `<select id="accEditSubType">${_subTypeOptsHtml(a.type, a.sub_type)}</select>`;
 
   const sym = isAdd ? '' : getSymbol(a.currency);
 
+  // 'deleted' is excluded from the edit form — deletion goes through delete_account, not update_account.
+  const EDIT_RECORD_STATUSES = ['active', 'inactive', 'locked'];
   const recordStatusField = !isAdd ? `
       <div class="field">
         <label for="accEditRecordStatus">Record status</label>
         <select id="accEditRecordStatus"${dis}>
-          <option value="active"   ${a.record_status === 'active'   ? 'selected' : ''}>Active</option>
-          <option value="inactive" ${a.record_status === 'inactive' ? 'selected' : ''}>Inactive</option>
-          <option value="locked"   ${a.record_status === 'locked'   ? 'selected' : ''}>Locked</option>
-          <option value="deleted"  ${a.record_status === 'deleted'  ? 'selected' : ''}>Deleted</option>
+          ${EDIT_RECORD_STATUSES.map(s =>
+            `<option value="${esc(s)}"${a.record_status === s ? ' selected' : ''}>${esc(s.charAt(0).toUpperCase() + s.slice(1))}</option>`
+          ).join('')}
         </select>
       </div>` : '';
 
   const syncStatusLine = isView ? `
     <div class="field-hint" style="margin-top:8px">
-      Sync: ${syncStatusIcon(a.sync_status)} ${esc(a.sync_notes)}
+      Sync: ${syncStatusIcon(a.sync_status)} ${esc((a.sync_notes !== undefined && a.sync_notes !== null) ? a.sync_notes : '')}
     </div>` : '';
 
   return `
@@ -420,8 +428,8 @@ function _renderAccountForm(a, mode) {
     <div class="form-grid" style="margin-bottom:16px;align-items:start">
       ${isAdd ? `
       <div class="field">
-        <label for="accNewOpeningValue">Opening value</label>
-        <input type="number" id="accNewOpeningValue" step="0.01" placeholder="0.00">
+        <label for="accNewOpeningValue">Opening value *</label>
+        <input type="number" id="accNewOpeningValue" step="0.01" placeholder="e.g. 1000.00">
       </div>` : `
       <div class="field">
         <label>Opening value</label>
@@ -458,9 +466,8 @@ function _renderAccountForm(a, mode) {
 // ── Table ─────────────────────────────────────────────────────────────────────
 
 function _renderAccountRow(a) {
-  const rowStyle = a.record_status === 'deleted'  ? ' style="opacity:0.5"'
-                 : a.record_status === 'inactive' ? ' style="opacity:0.5"'
-                 : a.record_status === 'locked'   ? ' style="opacity:0.7"'
+  const rowStyle = (a.record_status === 'deleted' || a.record_status === 'inactive') ? ' style="opacity:0.5"'
+                 : a.record_status === 'locked' ? ' style="opacity:0.7"'
                  : '';
 
   if (state.accDeleteRow === a._row) {
@@ -491,7 +498,7 @@ function _renderAccountRow(a) {
 
   return `<tr${rowStyle}>
     <td class="td-mono" style="color:var(--muted);font-size:11px">${esc(a.id)}</td>
-    <td>${esc(a.name)}${a.description ? `<span class="info-icon-wrap"><span style="cursor:help;color:var(--teal);font-size:13px">ⓘ</span><span class="info-tooltip">${esc(a.description)}</span></span>` : ''}</td>
+    <td>${esc(a.name)}${(a.description !== undefined && a.description !== null && a.description !== '') ? `<span class="info-icon-wrap"><span style="cursor:help;color:var(--teal);font-size:13px">ⓘ</span><span class="info-tooltip">${esc(a.description)}</span></span>` : ''}</td>
     <td style="color:var(--muted);font-size:12px">${esc(_subTypeLabel(a.sub_type))}</td>
     <td>${esc(a.currency)}</td>
     <td>${_balanceCell(a)}</td>
@@ -519,24 +526,25 @@ const TABLE_GROUPS = [
 ];
 
 function _renderTable(accounts) {
-  if (!accounts.length) {
-    if (!state.accounts.length) return `<p class="placeholder">No accounts yet. Use &ldquo;+ Add&rdquo; to create one.</p>`;
+  if (accounts.length === 0) {
+    if (state.accounts.length === 0) return `<p class="placeholder">No accounts yet. Use &ldquo;+ Add&rdquo; to create one.</p>`;
     return `<p class="placeholder">No accounts match the current filters.</p>`;
   }
 
   const sym    = getSymbol(state.quoteCurrency);
   const byGroup = {};
   accounts.forEach(a => {
-    (byGroup[a.type] = byGroup[a.type] || []).push(a);
+    if (byGroup[a.type] === undefined) byGroup[a.type] = [];
+    byGroup[a.type].push(a);
   });
 
   const bodyRows = TABLE_GROUPS.flatMap(g => {
     const accs = byGroup[g.key];
-    if (!accs || !accs.length) return [];
+    if (accs === undefined || accs === null || accs.length === 0) return [];
     const countable = accs.filter(a => a.record_status !== 'deleted');
     const total = g.isLiab
-      ? countable.reduce((s, a) => s + Math.abs(toBase(parseFloat(a.current_value), a.currency, null)), 0)
-      : countable.reduce((s, a) => s + toBase(parseFloat(a.current_value), a.currency, null), 0);
+      ? countable.reduce((s, a) => { const v = toBase(parseFloat(a.current_value), a.currency, null); return Number.isFinite(v) ? s + Math.abs(v) : s; }, 0)
+      : countable.reduce((s, a) => { const v = toBase(parseFloat(a.current_value), a.currency, null); return Number.isFinite(v) ? s + v : s; }, 0);
     return [_groupHeader(g.label, total, sym, g.isLiab), ...accs.map(_renderAccountRow)];
   }).join('');
 
@@ -544,14 +552,13 @@ function _renderTable(accounts) {
 
   const cardSections = TABLE_GROUPS.flatMap(g => {
     const accs = byGroup[g.key];
-    if (!accs || !accs.length) return [];
+    if (accs === undefined || accs === null || accs.length === 0) return [];
     return [
       `<div class="acc-card-group">${g.label}</div>`,
       ...accs.map(a => {
         if (state.accDeleteRow === a._row) return '';
-        const cardStyle = a.record_status === 'deleted'  ? ' style="opacity:0.5"'
-                        : a.record_status === 'inactive' ? ' style="opacity:0.5"'
-                        : a.record_status === 'locked'   ? ' style="opacity:0.7"'
+        const cardStyle = (a.record_status === 'deleted' || a.record_status === 'inactive') ? ' style="opacity:0.5"'
+                        : a.record_status === 'locked' ? ' style="opacity:0.7"'
                         : '';
         return `<div class="acc-card"${cardStyle}>
           <div class="acc-card-body">
@@ -591,13 +598,13 @@ function _refreshAddTypeUI() {
   const typeEl = el('accNewType');
   const type   = typeEl ? typeEl.value : '';
   const subSel = el('accNewSubType');
-  if (subSel) subSel.innerHTML = _subTypeOptsHtml(type, '');
+  if (subSel !== null) subSel.innerHTML = _subTypeOptsHtml(type, '');
 }
 
 // ── Events ────────────────────────────────────────────────────────────────────
 
 function _attachEvents() {
-  if (_accDDCleanup) { _accDDCleanup(); _accDDCleanup = null; }
+  if (_accDDCleanup !== null) { _accDDCleanup(); _accDDCleanup = null; }
 
   el('accImportBtn').addEventListener('click', () => {
     if (state.accImportOpen) {
@@ -628,19 +635,19 @@ function _attachEvents() {
   if (state.accImportOpen) {
     el('accImportFile').addEventListener('change', e => {
       const file = e.target.files[0];
-      if (!file) return;
+      if (file === undefined || file === null) return;
       const reader = new FileReader();
       reader.onload = ev => {
         const parsed = _parseAccountsCsv(ev.target.result);
         _importParsed = parsed.accounts.length ? parsed.accounts : null;
         el('accImportStatus').innerHTML = _renderImportStatus(parsed);
-        el('accImportConfirm').disabled = !_importParsed;
+        el('accImportConfirm').disabled = (_importParsed === null);
       };
       reader.readAsText(file);
     });
 
     el('accImportConfirm').addEventListener('click', () => {
-      if (_importParsed) _submitImport(_importParsed);
+      if (_importParsed !== null) _submitImport(_importParsed);
     });
 
     el('accImportCancel').addEventListener('click', () => {
@@ -665,14 +672,14 @@ function _attachEvents() {
   if (state.accViewRow !== null) {
     el('accCancelView').addEventListener('click', () => { state.accViewRow = null; renderAccounts(); });
     const viewToEditEl = el('accViewToEdit');
-    if (viewToEditEl) viewToEditEl.addEventListener('click', e => {
+    if (viewToEditEl !== null) viewToEditEl.addEventListener('click', e => {
       const row = Number(e.currentTarget.dataset.row);
       state.accViewRow = null;
       state.accEditRow = row;
       renderAccounts();
     });
     const viewRestoreEl = el('accViewRestore');
-    if (viewRestoreEl) viewRestoreEl.addEventListener('click', e => {
+    if (viewRestoreEl !== null) viewRestoreEl.addEventListener('click', e => {
       const row = Number(e.currentTarget.dataset.row);
       state.accViewRow = null;
       _restoreAccount(row);
@@ -681,15 +688,15 @@ function _attachEvents() {
 
   const handleAccAction = e => {
     const btn    = e.target.closest('[data-action]');
-    if (!btn) return;
+    if (btn === null) return;
     const action = btn.dataset.action;
     const row    = btn.dataset.row ? Number(btn.dataset.row) : null;
     if (action === 'acc-menu') {
       if (_accMenuKey === row) { closeContextMenu(); _accMenuKey = null; return; }
       _accMenuKey = row;
       const menuAcc   = state.accounts.find(a => a._row === row);
-      const isLocked  = menuAcc && menuAcc.record_status === 'locked';
-      const isDeleted = menuAcc && menuAcc.record_status === 'deleted';
+      const isLocked  = menuAcc !== undefined && menuAcc.record_status === 'locked';
+      const isDeleted = menuAcc !== undefined && menuAcc.record_status === 'deleted';
       const menuItems = [
         { key: 'acc-view', label: 'View', cls: '' },
         ...(!isLocked && !isDeleted ? [{ key: 'acc-edit',    label: 'Edit',    cls: ''       }] : []),
@@ -705,7 +712,7 @@ function _attachEvents() {
         if (key === 'acc-restore') { _restoreAccount(row); }
         if (key === 'acc-txs') {
           const acc = state.accounts.find(a => a._row === row);
-          if (acc) {
+          if (acc !== undefined) {
             state.filters = { types: [], accounts: [acc.id], major: [], minor: [], user_location_country: '', tag: '', search: '' };
             document.dispatchEvent(new CustomEvent('et:show-section', { detail: 'transactions' }));
           }
@@ -716,12 +723,12 @@ function _attachEvents() {
     if (action === 'acc-view')   { state.accViewRow = row; state.accEditRow = null; state.accDeleteRow = null; state.accDeleteBlocked = null; state.accAddOpen = false; renderAccounts(); return; }
     if (action === 'acc-edit') {
       const editAcc = state.accounts.find(a => a._row === row);
-      if (editAcc && (editAcc.record_status === 'locked' || editAcc.record_status === 'deleted')) return;
+      if (editAcc !== undefined && (editAcc.record_status === 'locked' || editAcc.record_status === 'deleted')) return;
       state.accEditRow = row; state.accViewRow = null; state.accDeleteRow = null; state.accDeleteBlocked = null; state.accAddOpen = false; renderAccounts(); return;
     }
     if (action === 'acc-delete') {
       const delAcc = state.accounts.find(a => a._row === row);
-      if (delAcc && (delAcc.record_status === 'locked' || delAcc.record_status === 'deleted')) return;
+      if (delAcc !== undefined && (delAcc.record_status === 'locked' || delAcc.record_status === 'deleted')) return;
       state.accDeleteRow = row; state.accViewRow = null; state.accEditRow = null; state.accDeleteBlocked = null; renderAccounts();
     }
     if (action === 'acc-cancel-delete')  { state.accDeleteRow = null; state.accDeleteBlocked = null; renderAccounts(); }
@@ -730,12 +737,12 @@ function _attachEvents() {
   };
 
   const tableWrap = el('accountsContent').querySelector('.acc-table-wrap');
-  if (tableWrap) tableWrap.addEventListener('click', handleAccAction);
+  if (tableWrap !== null) tableWrap.addEventListener('click', handleAccAction);
   const cards = el('accountsContent').querySelector('.acc-cards');
-  if (cards) cards.addEventListener('click', handleAccAction);
+  if (cards !== null) cards.addEventListener('click', handleAccAction);
 
   el('accExportBtn').addEventListener('click', () => {
-    if (!state.accounts.length) { showMsg('No accounts to export.', 'warn'); return; }
+    if (state.accounts.length === 0) { showMsg('No accounts to export.', 'warn'); return; }
     openContextMenu(el('accExportBtn'), [
       { key: 'csv',  label: 'CSV'  },
       { key: 'json', label: 'JSON' },
@@ -745,14 +752,14 @@ function _attachEvents() {
   // Filter toggle
   el('accFilterToggle').addEventListener('click', () => {
     state.accFilterOpen = !state.accFilterOpen;
-    if (state.accFilterOpen && !_accDraft) {
+    if (state.accFilterOpen && _accDraft === null) {
       _accDraft = { ...state.accFilters, recordStatuses: [...state.accFilters.recordStatuses] };
     }
     renderAccounts();
   });
 
   if (state.accFilterOpen) {
-    if (!_accDraft) {
+    if (_accDraft === null) {
       _accDraft = { ...state.accFilters, recordStatuses: [...state.accFilters.recordStatuses] };
     }
 
@@ -763,14 +770,14 @@ function _attachEvents() {
 
     const _openDD = (triggerId, menuId) => {
       ALL_DD_MENUS.filter(id => id !== menuId).forEach(id => {
-        const m = el(id); if (m && m.style.display !== 'none') m.style.cssText = 'display:none';
+        const m = el(id); if (m !== null && m.style.display !== 'none') m.style.cssText = 'display:none';
       });
-      if (_accDDCleanup) { _accDDCleanup(); _accDDCleanup = null; }
+      if (_accDDCleanup !== null) { _accDDCleanup(); _accDDCleanup = null; }
       const menu = el(menuId);
-      if (!menu) return;
+      if (menu === null) return;
       if (menu.style.display === 'flex') { menu.style.cssText = 'display:none'; return; }
       const trig = el(triggerId);
-      if (!trig) return;
+      if (trig === null) return;
       const r = trig.getBoundingClientRect();
       menu.style.cssText = `${MENU_OPEN_STYLE};top:${r.bottom + 4}px;left:${r.left}px;width:${r.width}px`;
       const close = e => {
@@ -786,7 +793,7 @@ function _attachEvents() {
     el('accFTypeTrigger').addEventListener('click',   () => _openDD('accFTypeTrigger',   'accFTypeMenu'));
     el('accFSubTrigger').addEventListener('click',    () => {
       const trig = el('accFSubTrigger');
-      if (trig && trig.disabled) return;
+      if (trig !== null && trig.disabled === true) return;
       _openDD('accFSubTrigger', 'accFSubMenu');
     });
     el('accFCurrTrigger').addEventListener('click',   () => _openDD('accFCurrTrigger',   'accFCurrMenu'));
@@ -794,32 +801,29 @@ function _attachEvents() {
 
     // Type — delegation; also repopulates sub-type menu
     const typeMenu = el('accFTypeMenu');
-    if (typeMenu) {
+    if (typeMenu !== null) {
       typeMenu.addEventListener('change', e => {
         const radio = e.target.closest('input[type="radio"]');
-        if (!radio) return;
+        if (radio === null) return;
         const val = radio.value;
-        if (_accDraft) { _accDraft.type = val; _accDraft.subType = 'all'; }
+        if (_accDraft !== null) { _accDraft.type = val; _accDraft.subType = 'all'; }
         const lbl = el('accFTypeLabel');
-        if (lbl) lbl.textContent = val === 'all' ? 'All types' : val.charAt(0).toUpperCase() + val.slice(1);
+        if (lbl !== null) lbl.textContent = val === 'all' ? 'All types' : val.charAt(0).toUpperCase() + val.slice(1);
         typeMenu.style.cssText = 'display:none';
-        if (_accDDCleanup) { _accDDCleanup(); _accDDCleanup = null; }
+        if (_accDDCleanup !== null) { _accDDCleanup(); _accDDCleanup = null; }
 
         const subTrig = el('accFSubTrigger');
         const subMenu = el('accFSubMenu');
         const subLbl  = el('accFSubLabel');
         if (val === 'all') {
-          if (subTrig) { subTrig.disabled = true; subTrig.style.opacity = '0.5'; subTrig.style.cursor = 'not-allowed'; }
-          if (subLbl)  subLbl.textContent = '— select type first —';
-          if (subMenu) subMenu.innerHTML = '';
+          if (subTrig !== null) { subTrig.disabled = true; subTrig.style.opacity = '0.5'; subTrig.style.cursor = 'not-allowed'; }
+          if (subLbl !== null)  subLbl.textContent = '— select type first —';
+          if (subMenu !== null) subMenu.innerHTML = '';
         } else {
-          const subs = val === 'asset'      ? _assetSubTypes()
-                     : val === 'investment' ? _invSubTypes()
-                     : val === 'liability'  ? _liabSubTypes()
-                     : [];
-          if (subTrig) { subTrig.disabled = false; subTrig.style.opacity = ''; subTrig.style.cursor = ''; }
-          if (subLbl)  subLbl.textContent = 'All sub-types';
-          if (subMenu) subMenu.innerHTML = [['all','All sub-types'], ...subs.map(s => [s, _subTypeLabel(s)])].map(([v, l]) =>
+          const subs = _subTypesForType(val);
+          if (subTrig !== null) { subTrig.disabled = false; subTrig.style.opacity = ''; subTrig.style.cursor = ''; }
+          if (subLbl !== null)  subLbl.textContent = 'All sub-types';
+          if (subMenu !== null) subMenu.innerHTML = [['all','All sub-types'], ...subs.map(s => [s, _subTypeLabel(s)])].map(([v, l]) =>
             `<label style="${OPT_STYLE}"><input type="radio" name="accFSubR" value="${v}"${v === 'all' ? ' checked' : ''}> ${esc(l)}</label>`
           ).join('');
         }
@@ -828,50 +832,50 @@ function _attachEvents() {
 
     // Sub-type — delegation (handles dynamically repopulated innerHTML)
     const subMenu = el('accFSubMenu');
-    if (subMenu) {
+    if (subMenu !== null) {
       subMenu.addEventListener('change', e => {
         const radio = e.target.closest('input[type="radio"]');
-        if (!radio) return;
+        if (radio === null) return;
         const val = radio.value;
-        if (_accDraft) _accDraft.subType = val;
+        if (_accDraft !== null) _accDraft.subType = val;
         const lbl = el('accFSubLabel');
-        if (lbl) lbl.textContent = val === 'all' ? 'All sub-types' : _subTypeLabel(val);
+        if (lbl !== null) lbl.textContent = val === 'all' ? 'All sub-types' : _subTypeLabel(val);
         subMenu.style.cssText = 'display:none';
-        if (_accDDCleanup) { _accDDCleanup(); _accDDCleanup = null; }
+        if (_accDDCleanup !== null) { _accDDCleanup(); _accDDCleanup = null; }
       });
     }
 
     // Currency — delegation
     const currMenu = el('accFCurrMenu');
-    if (currMenu) {
+    if (currMenu !== null) {
       currMenu.addEventListener('change', e => {
         const radio = e.target.closest('input[type="radio"]');
-        if (!radio) return;
+        if (radio === null) return;
         const val = radio.value;
-        if (_accDraft) _accDraft.currency = val;
+        if (_accDraft !== null) _accDraft.currency = val;
         const lbl = el('accFCurrLabel');
-        if (lbl) lbl.textContent = val === 'all' ? 'All' : val;
+        if (lbl !== null) lbl.textContent = val === 'all' ? 'All' : val;
         currMenu.style.cssText = 'display:none';
-        if (_accDDCleanup) { _accDDCleanup(); _accDDCleanup = null; }
+        if (_accDDCleanup !== null) { _accDDCleanup(); _accDDCleanup = null; }
       });
     }
 
     // Status checkboxes — delegation; dropdown stays open while checking
     const statusMenu = el('accFStatusMenu');
-    if (statusMenu) {
+    if (statusMenu !== null) {
       statusMenu.addEventListener('change', () => {
-        if (!_accDraft) return;
+        if (_accDraft === null) return;
         const checked = Array.from(statusMenu.querySelectorAll('[data-acc-filter-rstat]:checked'))
           .map(c => c.dataset.accFilterRstat);
         _accDraft.recordStatuses = checked;
         const lbl = el('accFStatusLabel');
-        if (lbl) lbl.textContent = checked.length === 4 ? 'All' : checked.length === 0 ? 'None'
+        if (lbl !== null) lbl.textContent = checked.length === ALL_RECORD_STATUSES.length ? 'All' : checked.length === 0 ? 'None'
           : checked.map(s => s.charAt(0).toUpperCase() + s.slice(1)).join(', ');
       });
     }
 
     const _applyAccDraft = () => {
-      if (_accDraft) {
+      if (_accDraft !== null) {
         _accDraft.search = el('accFSearch').value.trim();
         state.accFilters = { ..._accDraft, recordStatuses: [..._accDraft.recordStatuses] };
         _accDraft = null;
@@ -885,7 +889,7 @@ function _attachEvents() {
       _accDraft = null;
       state.accFilters = {
         type: 'all', subType: 'all', currency: 'all', search: '',
-        recordStatuses: ['active', 'inactive', 'deleted', 'locked'],
+        recordStatuses: [...ALL_RECORD_STATUSES],
       };
       renderAccounts();
     });
@@ -894,8 +898,11 @@ function _attachEvents() {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function _v(id)  { return el(id).value; }
-function _n(id)  { const v = _v(id); return v === '' ? undefined : parseFloat(v); }
+function _v(id) {
+  const domEl = el(id);
+  if (domEl === null) throw new Error('[accounts] _v: element not found: ' + id);
+  return domEl.value;
+}
 
 // ── Save new ──────────────────────────────────────────────────────────────────
 
@@ -907,13 +914,17 @@ async function _saveNew() {
   const description = _v('accNewDescription').trim();
   const errEl       = el('accAddError');
 
-  if (!name)                              { errEl.textContent = 'Name is required.';     return; }
-  if (!type || !_validTypes().has(type))  { errEl.textContent = 'Type is required.';     return; }
-  if (!sub_type)                          { errEl.textContent = 'Sub-type is required.'; return; }
-  if (!currency || !(currency in state.rateMap)) { errEl.textContent = 'Currency is required.'; return; }
+  if (String(name).trim() === '')                                                                    { errEl.textContent = 'Name is required.';     return; }
+  if (type === undefined || type === null || !_validTypes().has(type))                               { errEl.textContent = 'Type is required.';     return; }
+  if (sub_type === undefined || sub_type === null || String(sub_type).trim() === '')                 { errEl.textContent = 'Sub-type is required.'; return; }
+  if (currency === undefined || currency === null || String(currency).trim() === '' || !(currency in state.rateMap)) { errEl.textContent = 'Currency is required.'; return; }
   errEl.textContent = '';
 
-  const openingVal = parseFloat(_v('accNewOpeningValue'));
+  const ovStr = _v('accNewOpeningValue').trim();
+  if (ovStr === '') { errEl.textContent = 'Opening value is required.'; return; }
+  const rawOV = parseFloat(ovStr);
+  if (Number.isFinite(rawOV) === false) { errEl.textContent = 'Opening value must be a finite number.'; return; }
+  const openingVal = rawOV;
 
   const payload = {
     name,
@@ -921,11 +932,11 @@ async function _saveNew() {
     type,
     sub_type,
     description,
-    opening_value: type === 'liability' ? -(Math.abs(openingVal)) : openingVal,
+    opening_value: openingVal,
   };
 
   const btn = el('accSaveNew');
-  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+  if (btn !== null) { btn.disabled = true; btn.textContent = 'Saving…'; }
   showLoading();
   try {
     const res = await ExpenseAPI.createAccount(payload);
@@ -935,16 +946,18 @@ async function _saveNew() {
       document.dispatchEvent(new CustomEvent('et:reload'));
     } else {
       console.warn('[accounts] _saveNew failed:', res.error);
-      const msg = res.error === 'duplicate_account'
-        ? 'An account with this name already exists.'
-        : 'Error: ' + (res.error || 'unknown');
+      const errCode = (res.error !== undefined && res.error !== null) ? res.error : 'unknown';
+      const msg = errCode === 'duplicate_account'      ? 'An account with this name already exists.'
+                : errCode === 'missing_opening_value'  ? 'Opening value is required.'
+                : errCode === 'invalid_opening_value'  ? 'Opening value must be a finite number.'
+                : 'Error: ' + errCode;
       errEl.textContent = msg;
-      if (btn) { btn.disabled = false; btn.textContent = 'Save'; }
+      if (btn !== null) { btn.disabled = false; btn.textContent = 'Save'; }
     }
   } catch (_) {
     console.error('[accounts] _saveNew failed:', _);
     errEl.textContent = 'Connection error.';
-    if (btn) { btn.disabled = false; btn.textContent = 'Save'; }
+    if (btn !== null) { btn.disabled = false; btn.textContent = 'Save'; }
   } finally {
     hideLoading();
   }
@@ -954,24 +967,27 @@ async function _saveNew() {
 
 async function _saveEdit() {
   const rowNum = state.accEditRow;
-  if (!rowNum) return;
+  if (rowNum === null || rowNum === undefined) return;
 
   const name  = el('accEditName').value.trim();
   const errEl = el('accEditError');
-  if (!name) { errEl.textContent = 'Name is required.'; return; }
+  if (String(name).trim() === '') { errEl.textContent = 'Name is required.'; return; }
 
   errEl.textContent = '';
 
-  const acc = state.accounts.find(a => a._row === rowNum);
+  const subTypeEl = el('accEditSubType');
   const payload = {
     row_num:       rowNum,
     name,
     record_status: el('accEditRecordStatus').value,
     description:   el('accEditDescription').value.trim(),
   };
+  if (subTypeEl !== null && subTypeEl.tagName === 'SELECT' && subTypeEl.value !== '') {
+    payload.sub_type = subTypeEl.value;
+  }
 
   const btn = el('accSaveEdit');
-  if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+  if (btn !== null) { btn.disabled = true; btn.textContent = 'Saving…'; }
   showLoading();
   try {
     const res = await ExpenseAPI.updateAccount(payload);
@@ -981,17 +997,18 @@ async function _saveEdit() {
       document.dispatchEvent(new CustomEvent('et:reload'));
     } else {
       console.warn('[accounts] _saveEdit failed:', res.error);
-      errEl.textContent = res.error === 'record_locked'
+      const editErrCode = (res.error !== undefined && res.error !== null) ? res.error : 'unknown';
+      errEl.textContent = editErrCode === 'record_locked'
         ? 'This account is locked and cannot be edited.'
-        : res.error === 'duplicate_account'
+        : editErrCode === 'duplicate_account'
           ? 'An account with this name already exists.'
-          : 'Update failed: ' + (res.error || 'unknown');
-      if (btn) { btn.disabled = false; btn.textContent = 'Save'; }
+          : 'Update failed: ' + editErrCode;
+      if (btn !== null) { btn.disabled = false; btn.textContent = 'Save'; }
     }
   } catch (_) {
     console.error('[accounts] _saveEdit failed:', _);
     errEl.textContent = 'Connection error.';
-    if (btn) { btn.disabled = false; btn.textContent = 'Save'; }
+    if (btn !== null) { btn.disabled = false; btn.textContent = 'Save'; }
   } finally {
     hideLoading();
   }
@@ -1021,7 +1038,7 @@ async function _confirmDelete(rowNum) {
       renderAccounts();
     } else {
       console.warn('[accounts] _confirmDelete failed:', res.error);
-      showMsg('Delete failed: ' + (res.error || 'unknown'), 'warn');
+      showMsg('Delete failed: ' + ((res.error !== undefined && res.error !== null) ? res.error : 'unknown'), 'warn');
       state.accDeleteRow = null;
       state.accDeleteBlocked = null;
       renderAccounts();
@@ -1040,7 +1057,7 @@ async function _confirmDelete(rowNum) {
 // Deactivate (record_status = inactive) — invoked from the blocked-deletion CTA.
 async function _deactivateAccount(rowNum) {
   const acc = state.accounts.find(a => a._row === rowNum);
-  if (!acc) return;
+  if (acc === undefined) return;
   showLoading();
   try {
     const res = await ExpenseAPI.updateAccount({
@@ -1056,7 +1073,7 @@ async function _deactivateAccount(rowNum) {
       document.dispatchEvent(new CustomEvent('et:reload'));
     } else {
       console.warn('[accounts] _deactivateAccount failed:', res.error);
-      showMsg('Deactivate failed: ' + (res.error || 'unknown'), 'warn');
+      showMsg('Deactivate failed: ' + ((res.error !== undefined && res.error !== null) ? res.error : 'unknown'), 'warn');
       state.accDeleteBlocked = null;
       state.accDeleteRow = null;
       renderAccounts();
@@ -1074,23 +1091,19 @@ async function _deactivateAccount(rowNum) {
 
 async function _restoreAccount(rowNum) {
   const acc = state.accounts.find(a => a._row === rowNum);
-  if (!acc) return;
+  if (acc === undefined) return;
   showLoading();
   try {
-    const res = await ExpenseAPI.updateAccount({
-      row_num:       rowNum,
-      name:          acc.name,
-      record_status: 'active',
-      description:   acc.description,
-    });
+    const res = await ExpenseAPI.restoreAccount({ row_num: rowNum });
     if (res.ok) {
       showMsg('Account restored.');
       document.dispatchEvent(new CustomEvent('et:reload'));
     } else {
       console.warn('[accounts] _restoreAccount failed:', res.error);
-      const msg = res.error === 'duplicate_account'
-        ? 'Cannot restore: an account with this name already exists.'
-        : 'Restore failed: ' + (res.error || 'unknown');
+      const msg = res.error === 'missing_row_num' ? 'Invalid restore request.'
+                : res.error === 'invalid_row'     ? 'Row not found.'
+                : res.error === 'not_deleted'     ? 'Account is not deleted — cannot restore.'
+                : 'Restore failed: ' + ((res.error !== undefined && res.error !== null) ? res.error : 'unknown');
       showMsg(msg, 'warn');
       renderAccounts();
     }
@@ -1104,22 +1117,22 @@ async function _restoreAccount(rowNum) {
 }
 
 async function _submitImport(accounts) {
-  if (!accounts || !accounts.length) {
+  if ((accounts === undefined || accounts === null) || accounts.length === 0) {
     showMsg('No accounts to import.', 'warn');
     return;
   }
   const btn   = el('accImportConfirm');
   const errEl = el('accImportError');
-  if (btn)   { btn.disabled = true; btn.textContent = 'Importing…'; }
-  if (errEl) errEl.textContent = '';
+  if (btn !== null)   { btn.disabled = true; btn.textContent = 'Importing…'; }
+  if (errEl !== null) errEl.textContent = '';
   showLoading();
   try {
     const res = await ExpenseAPI.createAccountsBulk({ accounts });
 
-    if (!res.ok && !res.results) {
+    if (res.ok === false && (res.results === undefined || res.results === null)) {
       console.warn('[accounts] _submitImport failed:', res.error);
-      if (errEl) errEl.textContent = 'Error: ' + (res.error || 'unknown');
-      if (btn)   { btn.disabled = false; btn.textContent = 'Import'; }
+      if (errEl !== null) errEl.textContent = 'Error: ' + ((res.error !== undefined && res.error !== null) ? res.error : 'unknown');
+      if (btn !== null)   { btn.disabled = false; btn.textContent = 'Import'; }
       return;
     }
 
@@ -1133,18 +1146,18 @@ async function _submitImport(accounts) {
       const msg = [
         created ? `${created} account${created !== 1 ? 's' : ''} imported` : '',
         skipped ? `${skipped} already existed` : '',
-      ].filter(Boolean).join(' · ');
-      showMsg(msg || 'Nothing to import.');
+      ].filter(s => s !== '').join(' · ');
+      showMsg(msg !== '' ? msg : 'Nothing to import.');
       document.dispatchEvent(new CustomEvent('et:reload'));
     } else {
-      const resultRows = (res.results || []).map(r => `
+      const resultRows = (res.results !== undefined && res.results !== null ? res.results : []).map(r => `
         <tr>
           <td>${esc(r.name)}</td>
           <td>${r.ok
             ? `<span class="badge badge-et-in">created</span>`
             : r.error === 'duplicate_account'
               ? `<span class="badge" style="color:var(--muted)">already exists</span>`
-              : `<span class="badge badge-et-out">${esc(r.error || 'unknown')}</span>`}
+              : `<span class="badge badge-et-out">${esc((r.error !== undefined && r.error !== null) ? r.error : 'unknown')}</span>`}
           </td>
         </tr>`).join('');
       el('accImportStatus').innerHTML = `
@@ -1156,14 +1169,14 @@ async function _submitImport(accounts) {
           </table>
         </div>`;
       _importParsed = null;
-      if (btn) { btn.disabled = true; btn.textContent = 'Import'; }
+      if (btn !== null) { btn.disabled = true; btn.textContent = 'Import'; }
       if (created > 0) { document.dispatchEvent(new CustomEvent('et:reload')); }
       showMsg(`${created} imported · ${skipped} skipped · ${failed} failed`, 'warn');
     }
   } catch (_) {
     console.error('[accounts] _submitImport failed:', _);
-    if (errEl) errEl.textContent = 'Connection error.';
-    if (btn)   { btn.disabled = false; btn.textContent = 'Import'; }
+    if (errEl !== null) errEl.textContent = 'Connection error.';
+    if (btn !== null)   { btn.disabled = false; btn.textContent = 'Import'; }
   } finally {
     hideLoading();
   }

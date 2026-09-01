@@ -15,7 +15,7 @@ export function fmtDateTimeCompact(v) {
   if (!v) return '—';
   try {
     const d = new Date(String(v));
-    if (isNaN(d)) return String(v).slice(0, 16) || '—';
+    if (isNaN(d)) return String(v).slice(0, 16) || '—'; // computed string, not model field
     const date = d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
     const time = d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
     return `${date} · ${time}`;
@@ -35,8 +35,13 @@ const ET_COLS  = [
   'description', 'counterparty_name', 'tx_tags', 'beneficiaries',
 ];
 const ACC_COLS = ['name', 'type', 'sub_type', 'currency', 'opening_value', 'current_value', 'description', 'record_status'];
+// SUB_COLS intentionally excludes sync fields (sync_status, sync_date_time, sync_notes).
+// Those fields are system-internal pipeline state that would be meaningless or misleading
+// on re-import — a re-imported row would always start as create-pending regardless of the
+// exported sync state, so exporting them serves no purpose and could confuse callers.
 const SUB_COLS = ['id', 'name', 'counterparty_name', 'amount', 'currency', 'frequency', 'day_of_month', 'day_of_week',
-  'source_account', 'tx_type', 'major_category', 'minor_category', 'tags', 'is_active', 'description', 'created_at'];
+  'source_account', 'tx_type', 'major_category', 'minor_category', 'tags', 'record_status', 'description',
+  'created_at', 'subscription_start_date', 'subscription_end_date', 'updated_at'];
 const CAT_COLS = [
   'tx_type_key', 'tx_type_label',
   'major_category_key', 'major_category_label',
@@ -68,35 +73,35 @@ export const exportData = (format, rows) => {
   const seen = {};
   rows.forEach(tx => {
     if (tx.parent_tx_id) return; // child leg: will be handled when parent is encountered
-    const acct   = state.accountMap[tx.account_id] || {};
+    const acct   = state.accountMap[tx.account_id] ?? {};
     const sib    = siblingMap[tx.id];
-    const sibAcc = sib ? state.accountMap[sib.account_id] || {} : null;
+    const sibAcc = sib ? state.accountMap[sib.account_id] ?? {} : null;
 
     let source_account, target_account, source_amount, target_amount;
     if (sibAcc) {
       // Transfer: parent leg determines direction
       if (tx.tx_type === 'money-out') {
-        source_account = acct.name || tx.account_id || '';
-        target_account = sibAcc.name || sib.account_id || '';
-        source_amount  = Number(tx.tx_amount)  || 0;
-        target_amount  = Number(sib.tx_amount) || source_amount;
+        source_account = acct.name ?? tx.account_id ?? '';
+        target_account = sibAcc.name ?? sib.account_id ?? '';
+        source_amount  = Number(tx.tx_amount);
+        target_amount  = Number(sib.tx_amount);
       } else {
-        source_account = sibAcc.name || sib.account_id || '';
-        target_account = acct.name   || tx.account_id  || '';
-        source_amount  = Number(sib.tx_amount) || 0;
-        target_amount  = Number(tx.tx_amount)  || source_amount;
+        source_account = sibAcc.name ?? sib.account_id ?? '';
+        target_account = acct.name   ?? tx.account_id  ?? '';
+        source_amount  = Number(sib.tx_amount);
+        target_amount  = Number(tx.tx_amount);
       }
     } else {
       // Non-transfer
       if (tx.tx_type === 'money-out') {
-        source_account = acct.name || tx.account_id || '';
+        source_account = acct.name ?? tx.account_id ?? '';
         target_account = '';
-        source_amount  = Number(tx.tx_amount) || 0;
+        source_amount  = Number(tx.tx_amount);
         target_amount  = '';
       } else {
         source_account = '';
-        target_account = acct.name || tx.account_id || '';
-        source_amount  = Number(tx.tx_amount) || 0;
+        target_account = acct.name ?? tx.account_id ?? '';
+        source_amount  = Number(tx.tx_amount);
         target_amount  = '';
       }
     }
@@ -183,13 +188,29 @@ export function openContextMenu(triggerBtn, items, onSelect) {
   document.addEventListener('click', _ctxHandler, true);
 }
 
+// ── CSV row parser (shared across import panels) ─────────────────────────────
+// Parses a single CSV line, respecting double-quoted fields.
+export function parseCsvRow(line) {
+  const result = [];
+  let cur = '';
+  let inQ = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (c === '"') { inQ = !inQ; }
+    else if (c === ',' && !inQ) { result.push(cur.trim()); cur = ''; }
+    else { cur += c; }
+  }
+  result.push(cur.trim());
+  return result;
+}
+
 export async function shareSnapshot(targetEl, filename = 'snapshot.png') {
   /* global html2canvas */
   if (typeof html2canvas === 'undefined') {
     console.warn('[shareSnapshot] html2canvas not loaded');
     return;
   }
-  const btn = document.getElementById('homeShareBtn') || document.getElementById('insightShareBtn');
+  const btn = el('homeShareBtn') ?? el('insightShareBtn');
   if (btn) { btn.disabled = true; btn.textContent = '…'; }
   try {
     const bgColor = getComputedStyle(document.documentElement).getPropertyValue('--bg').trim() || '#111';

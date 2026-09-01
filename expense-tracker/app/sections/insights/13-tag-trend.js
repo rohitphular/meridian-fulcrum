@@ -16,14 +16,14 @@ function _buildTagMonthly(moneyOut, monthKeys) {
   const tagMonthMap = new Map();  // tag → Map<monthKey, total>
 
   monthKeys.forEach(mk => {
-    (byMonth.get(mk) || []).forEach(tx => {
-      const tags = (tx.tags || '').split(';').map(t => t.toLowerCase().trim()).filter(Boolean);
+    (byMonth.get(mk) ?? []).forEach(tx => {
+      const tags = String(tx.tx_tags ?? '').split(';').map(t => t.toLowerCase().trim()).filter(Boolean);
       if (!tags.length) return;
       const share = sumAmountBase([tx]) / tags.length;
       tags.forEach(tag => {
         if (!tagMonthMap.has(tag)) tagMonthMap.set(tag, new Map());
         const monthMap = tagMonthMap.get(tag);
-        monthMap.set(mk, (monthMap.get(mk) || 0) + share);
+        monthMap.set(mk, (monthMap.get(mk) ?? 0) + share);
       });
     });
   });
@@ -73,7 +73,7 @@ export async function render(containerId, { txs, sym, from, to }) {
     const monthMap = tagMonthMap.get(tag);
     return {
       label:            tag,
-      data:             monthKeys.map(mk => monthMap.get(mk) || 0),
+      data:             monthKeys.map(mk => monthMap.get(mk) ?? 0),
       borderColor:      palette[i % palette.length],
       backgroundColor:  palette[i % palette.length] + '22',
       tension:          0.3,
@@ -126,11 +126,11 @@ export async function render(containerId, { txs, sym, from, to }) {
 
         const tagTxs = moneyOut.filter(t => {
           if (!t.tx_date_time.startsWith(mk)) return false;
-          return String(t.tags || '').split(';').map(s => s.toLowerCase().trim()).includes(tag);
+          return String(t.tx_tags ?? '').split(';').map(s => s.toLowerCase().trim()).includes(tag);
         }).sort((a, b) => new Date(b.tx_date_time) - new Date(a.tx_date_time));
 
         const shareTotal = tagTxs.reduce((s, t) => {
-          const tags = String(t.tags || '').split(';').filter(Boolean);
+          const tags = String(t.tx_tags ?? '').split(';').filter(Boolean);
           return s + sumAmountBase([t]) / Math.max(tags.length, 1);
         }, 0);
         const fmtV = v => sym + Math.abs(v).toLocaleString('en-GB', { minimumFractionDigits: 0, maximumFractionDigits: 0 });

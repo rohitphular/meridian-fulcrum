@@ -21,7 +21,7 @@ function _buildCumulative(txs, monthFrom, daysInMonth, cutoffDay) {
       const yr  = monthFrom.getFullYear();
       const mo  = String(monthFrom.getMonth() + 1).padStart(2, '0');
       const day = String(d).padStart(2, '0');
-      running += sumAmountBase(byDay.get(`${yr}-${mo}-${day}`) || []);
+      running += sumAmountBase(byDay.get(`${yr}-${mo}-${day}`) ?? []);
       result.push(running);
     }
   }
@@ -156,7 +156,7 @@ function _renderTransactions(container, { from, sym }) {
 // ── Accounts tab ──────────────────────────────────────────────────────────────
 
 function _renderAccounts(container, { from, accounts, sym }) {
-  const assetAccounts  = accounts.filter(a => a.is_active && a.type !== 'liability');
+  const assetAccounts  = accounts.filter(a => a.record_status === 'active' && a.type !== 'liability');
 
   if (!assetAccounts.length) {
     container.innerHTML = `<div class="chart-wrap"><p class="chart-empty">No active asset accounts found.</p></div>`;

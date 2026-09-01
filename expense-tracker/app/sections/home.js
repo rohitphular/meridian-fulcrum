@@ -73,26 +73,28 @@ function _compute() {
   const curYYYYMM  = `${todayLocal.getFullYear()}-${String(todayLocal.getMonth() + 1).padStart(2, '0')}`;
 
   const monthKeys     = monthRange(from, to);
+  // valid tx_type values per TRANSACTION_SCHEMA — 'money-in' | 'money-out'
   const inByMonth     = groupByMonth(txs.filter(t => t.tx_type === 'money-in'));
+  // valid tx_type values per TRANSACTION_SCHEMA — 'money-in' | 'money-out'
   const outByMonth    = groupByMonth(txs.filter(t => t.tx_type === 'money-out'));
   const completeMKs   = monthKeys.filter(mk => mk !== curYYYYMM);
   const avgMonths     = completeMKs.length || monthKeys.length;
   const totalIncome   = (completeMKs.length ? completeMKs : monthKeys)
-    .reduce((s, mk) => s + sumAmountBase(inByMonth.get(mk) || []), 0);
+    .reduce((s, mk) => s + sumAmountBase(inByMonth.get(mk) ?? []), 0);
   const monthlyIncome    = avgMonths > 0 ? totalIncome / avgMonths : 0;
   const annualisedIncome = monthlyIncome * 12;
 
-  const monthlyInc  = monthKeys.map(mk => sumAmountBase(inByMonth.get(mk)  || []));
-  const monthlyOut  = monthKeys.map(mk => sumAmountBase(outByMonth.get(mk) || []));
+  const monthlyInc  = monthKeys.map(mk => sumAmountBase(inByMonth.get(mk)  ?? []));
+  const monthlyOut  = monthKeys.map(mk => sumAmountBase(outByMonth.get(mk) ?? []));
 
   // Peak income month
   let peakIdx = 0;
   monthlyInc.forEach((v, i) => { if (v > monthlyInc[peakIdx]) peakIdx = i; });
 
   // Liability accounts + total debt
-  const liabAccts = accounts.filter(a => a.is_active && a.type === 'liability');
+  const liabAccts = accounts.filter(a => a.record_status === 'active' && a.type === 'liability');
   const totalDebt = liabAccts.length
-    ? Math.abs(computeDailyTotalAssets(liabAccts, txs, todayLocal, todayLocal)[0] || 0)
+    ? Math.abs(computeDailyTotalAssets(liabAccts, txs, todayLocal, todayLocal)[0])
     : 0;
 
   // DTI
@@ -115,7 +117,7 @@ function _compute() {
       _monthStart(monthKeys[0]),
       _monthStart(monthKeys[0]),
     );
-    const debtAtStart  = Math.abs(daily[0] || 0);
+    const debtAtStart  = Math.abs(daily[0]);
     const totalMonths  = monthKeys.length;
     monthlyDebtReduction = (debtAtStart - totalDebt) / totalMonths;
     if (monthlyDebtReduction > 0) {
@@ -124,8 +126,8 @@ function _compute() {
   }
 
   // Net worth
-  const assetAccts  = accounts.filter(a => a.is_active && (a.type === 'asset' || a.type === 'investment'));
-  const totalAssets = assetAccts.reduce((s, a) => s + toBase(parseFloat(a.current_value || 0), a.currency, null), 0);
+  const assetAccts  = accounts.filter(a => a.record_status === 'active' && (a.type === 'asset' || a.type === 'investment'));
+  const totalAssets = assetAccts.reduce((s, a) => { const v = toBase(parseFloat(a.current_value), a.currency, null); return s + (isNaN(v) ? 0 : v); }, 0);
   const netWorth    = totalAssets - totalDebt;
 
   return {

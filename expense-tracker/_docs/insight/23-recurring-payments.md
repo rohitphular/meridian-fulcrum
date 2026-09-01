@@ -19,8 +19,8 @@ Automatically detected recurring payments (subscriptions, loan repayments, rent)
 
 1. **Group** `money-out` transactions by `counterparty.trim().toLowerCase()`.
 2. **Skip groups with fewer than 2 transactions.**
-3. **Amount consistency check:** compute mean and stdDev of `amount_base` per group. Skip if `stdDev / mean > 0.05` (more than 5% variance → not a fixed recurring charge).
-4. **Gap analysis:** compute day-gaps between consecutive transactions (sorted by `transaction_date_utc`). Compute mean gap and stdDev of gaps.
+3. **Amount consistency check:** compute mean and stdDev of `toBase(tx.tx_amount, account.currency)` per group. Skip if `stdDev / mean > 0.05` (more than 5% variance → not a fixed recurring charge).
+4. **Gap analysis:** compute day-gaps between consecutive transactions (sorted by `tx_date_time`). Compute mean gap and stdDev of gaps.
 5. **Frequency detection:**
    | Band | Mean gap (days) | Max gap stdDev |
    |---|---|---|
@@ -114,4 +114,4 @@ All reset at the top of `render()`.
 | No income in period | `% of income` shows `"—"` |
 | Annual payments in short window | Not detected (gap ~365 days matches no frequency band); note in task doc |
 | Blank counterparty | Grouped as `'unknown'` during detection; display label from `tx.counterparty` falls back to `'Unknown'` |
-| `money-transfer` txs | Excluded before detection (only `money-out` passed) |
+| Transfer rows (`parent_tx_id` non-empty) | Excluded before detection (only `money-out` passed) |

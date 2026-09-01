@@ -105,13 +105,13 @@ Replays ALL transactions chronologically from each account's `opening_value`, re
 
 ```js
 const months   = monthRange(from, to);
-const assetAccounts = accounts.filter(a => a.is_active && !liabilityTypes.has(a.type));
+const assetAccounts = accounts.filter(a => a.record_status === 'active' && !liabilityTypes.has(a.type));
 const dailyA   = computeDailyTotalAssets(assetAccounts, state.transactions, aFrom, aTo);
 // → [12450.00, 12450.00, 12380.50, ...]   one value per day
 ```
 
 - Initialises each account from `opening_value` (via `toBase` to convert to quote currency).
-- Applies `money-out` (subtracts from source), `money-in` (adds to target), `money-transfer` (both sides) — only for accounts in `assetAccounts`.
+- Applies `money-out` (subtracts from account), `money-in` (adds to account); for transfer rows (non-empty `parent_tx_id`) applies both legs — only for accounts in `assetAccounts`.
 - Transactions before `from` are replayed first (on the first day iteration) to establish the correct opening balance for the period.
 - Exchange rates applied at current `state.rateMap` values — historical rate accuracy is not guaranteed.
 
@@ -230,7 +230,7 @@ export async function render(containerId, { txs, accounts, from, to, sym }) {
   const C       = getCssColors();          // read tokens after DOM exists
   const palette = buildPalette(C);
   const months  = monthRange(from, to);
-  const byMonth = groupByMonth(txs.filter(t => t.transaction_type === 'money-out'));
+  const byMonth = groupByMonth(txs.filter(t => t.tx_type === 'money-out'));
 
   const values = months.map(m => sumAmountBase(byMonth.get(m) || []));
   const labels = months.map(fmtMonthKey);
