@@ -16,14 +16,43 @@ None — all decisions confirmed.
 | # | Question | Decision |
 |---|----------|----------|
 | Q1 | Sheet tab name | `'categories'` |
-| Q2 | `workflow_type` values | `account-credit`, `account-debit`, `funds-transfer`, `forex-transfer`, `debt-repayment` — `VARCHAR(100) NOT NULL` with `CHECK` constraint |
-| Q3 | `source_account_types` / `target_account_types` storage | Separate `account_types` reference table + two join tables (see below) |
+| Q2 | `source_account_types` / `target_account_types` storage | Separate `account_types` reference table + two join tables (see below) |
+| Q3 | Soft-delete mechanism | `record_status` is the single status field. On insert/update it mirrors the sheet value verbatim. When the user deletes a category via the app, GAS sets `record_status = 'deleted'` and `sync_status = 'update-pending'` on that row — the extractor picks it up on the next run via the normal update path. There is no pass that detects rows missing from the sheet. No `is_deleted` flag, no `deleted_at` timestamp — `record_status` is the sole signal. Rows are never hard-deleted. |
+
+---
+
+## Sheet schema (20 columns)
+
+| # | Column | Notes |
+|---|--------|-------|
+| 1 | `tx_type_key` | Natural key part 1 — `money-in` or `money-out` |
+| 2 | `tx_type_label` | Display label for tx type |
+| 3 | `major_category_key` | Natural key part 2 — slug derived from label |
+| 4 | `major_category_label` | User-facing label |
+| 5 | `minor_category_key` | Natural key part 3 — slug derived from label |
+| 6 | `minor_category_label` | User-facing label |
+| 7 | `description` | Optional |
+| 8 | `tag_keywords` | Comma-and-space-separated; lowercased on save |
+| 9 | `counterparty_examples` | Optional |
+| 10 | `source_account_types` | Comma-separated sub-types |
+| 11 | `target_account_types` | Comma-separated sub-types |
+| 12 | `source_account_mandatory` | `TRUE` / `FALSE` |
+| 13 | `target_account_mandatory` | `TRUE` / `FALSE` |
+| 14 | `is_subscription_eligible` | `TRUE` / `FALSE` |
+| 15 | `record_status` | `active`, `inactive`, `deleted`, `locked` |
+| 16 | `sync_status` | Backend-stamped — extractor writes back cols 16–18 only |
+| 17 | `sync_date_time` | Backend-stamped |
+| 18 | `sync_notes` | Backend-stamped |
+| 19 | `created_at` | Backend-stamped — never written by extractor |
+| 20 | `updated_at` | Backend-stamped — never written by extractor |
+
+Columns 1–15 are source data read by the extractor. Columns 16–20 are stamped by the GAS backend; the extractor writes back only cols 16–18 via the designated write-back path and must never touch cols 19–20.
 
 ---
 
 ## Tables to create (3 migrations)
 
-### Migration 0001 — `account_types` (reference table, seeded)
+### Migration 1 — `account_types` (reference table, seeded)
 
 Seeded from the GAS account schema. Contains all valid type + sub-type combinations.
 
@@ -31,18 +60,21 @@ Seeded from the GAS account schema. Contains all valid type + sub-type combinati
 |--------|------|-------|
 | `id` | `UUID NOT NULL DEFAULT gen_random_uuid()` | PK |
 | `account_type` | `TEXT NOT NULL` | `asset`, `investment`, `liability` |
-| `sub_type` | `TEXT NOT NULL` | e.g. `current`, `crypto`, `mortgage` |
-| `is_deleted` | `BOOLEAN NOT NULL DEFAULT FALSE` | Consistent with all other tables |
-| `created_at` | `TIMESTAMPTZ NOT NULL` | When the seed row was inserted — provide `now()` explicitly in each seed INSERT (no `DEFAULT` on this column) |
-| `deleted_at` | `TIMESTAMPTZ` | Set if sub-type is retired |
+| `account_subtype` | `TEXT NOT NULL` | e.g. `current`, `crypto`, `mortgage` |
+| `description` | `TEXT` | Optional human-readable description of this sub-type |
+| `record_status` | `TEXT NOT NULL DEFAULT 'active'` | `active`, `inactive`, or `deleted` — rows are never hard-deleted |
+| `created_at` | `TIMESTAMPTZ NOT NULL` | Provide `now()` explicitly in each seed INSERT; no `DEFAULT` on this column |
+| `updated_at` | `TIMESTAMPTZ NOT NULL` | Updated whenever the row is modified; provide `now()` explicitly in seed INSERT |
 
-`UNIQUE (account_type, sub_type)`
+`UNIQUE (account_type, account_subtype)`
 
-`is_deleted` and `deleted_at` are for manual retirement only — the extract job never writes to this table after the initial seed. To retire a sub-type, update the row directly via a new migration or manual SQL. Retiring a sub-type does not immediately remove existing join rows pointing to it — those are cleaned up only when the referencing category is next modified in the sheet (triggering the changed-row path which deletes and re-inserts all join rows). No `updated_at` column — since the extract job never updates this table after the initial seed, there is nothing to track; any direct SQL retirement is a one-time manual act.
+`CHECK (record_status IN ('active', 'inactive', 'deleted'))`
 
-Seed data from GAS `account-schema.gs`:
+`record_status` is for manual retirement only — the extract job never writes to this table after the initial seed. To retire a sub-type, set `record_status = 'inactive'` or `'deleted'` via a new migration or manual SQL. Rows are never hard-deleted. Retiring a sub-type does not immediately remove existing join rows pointing to it — those are cleaned up only when the referencing category is next modified in the sheet (triggering the changed-row path which deletes and re-inserts all join rows).
 
-| account_type | sub_type |
+Seed data from GAS account schema:
+
+| account_type | account_subtype |
 |---|---|
 | `asset` | `current`, `savings`, `cash` |
 | `investment` | `stocks_shares`, `isa`, `pension_sipp`, `crypto`, `fixed_deposit`, `bonds`, `property`, `commodities`, `p2p_lending`, `other` |
@@ -50,58 +82,34 @@ Seed data from GAS `account-schema.gs`:
 
 ---
 
-### Migration 0002 — `category_master`
+### Migration 2 — `category_master`
 
-| Column | Sheet type | DB type | Notes |
+| Column | Sheet col | DB type | Notes |
 |--------|-----------|---------|-------|
 | `id` | — | `UUID NOT NULL DEFAULT gen_random_uuid()` | Surrogate PK |
-| `tx_type` | enum string | `TEXT NOT NULL` | Natural key part 1 — transform must raise a hard error if value is not one of `money-in`, `money-out`, `money-transfer` |
-| `major_category` | string | `TEXT NOT NULL` | Natural key part 2 |
-| `minor_category` | string | `TEXT NOT NULL` | Natural key part 3 |
-| `description` | string | `TEXT` | |
-| `is_active` | boolean string | `BOOLEAN NOT NULL` | Transform must always supply value — raise a hard error if the sheet cell is empty or `None` |
-| `tag_keywords` | string | `TEXT` | |
-| `counterparty_examples` | string | `TEXT` | |
-| `source_account_mandatory` | boolean string | `BOOLEAN NOT NULL` | Transform must always supply value — raise a hard error if the sheet cell is empty or `None` |
-| `target_account_mandatory` | boolean string | `BOOLEAN NOT NULL` | Transform must always supply value — raise a hard error if the sheet cell is empty or `None` |
-| `workflow_type` | enum string | `VARCHAR(100) NOT NULL` | CHECK constraint — see below. Transform must always supply value; raise a hard error if empty, not a recognised enum value, or not a valid combination with the row's `tx_type` (see composite CHECK table above) |
-| `is_subscription_eligible` | boolean string | `BOOLEAN NOT NULL DEFAULT FALSE` | If sheet cell is empty or None, transform defaults to `FALSE` |
-| `row_hash` | — | `TEXT NOT NULL` | SHA-256 of source row content |
-| `is_deleted` | — | `BOOLEAN NOT NULL DEFAULT FALSE` | Soft-delete flag |
-| `created_at` | — | `TIMESTAMPTZ NOT NULL` | When this row was first written by the extract job |
-| `updated_at` | — | `TIMESTAMPTZ NOT NULL` | When this row was last updated by the extract job |
-| `deleted_at` | — | `TIMESTAMPTZ` | Set when soft-deleted |
+| `tx_type_key` | 1 | `TEXT NOT NULL` | Natural key part 1 — transform hard errors if not `money-in` or `money-out` |
+| `tx_type_label` | 2 | `TEXT NOT NULL` | Transform hard errors if empty |
+| `major_category_key` | 3 | `TEXT NOT NULL` | Natural key part 2 — transform hard errors if empty or contains `|` |
+| `major_category_label` | 4 | `TEXT NOT NULL` | Transform hard errors if empty |
+| `minor_category_key` | 5 | `TEXT NOT NULL` | Natural key part 3 — transform hard errors if empty or contains `|` |
+| `minor_category_label` | 6 | `TEXT NOT NULL` | Transform hard errors if empty |
+| `description` | 7 | `TEXT` | |
+| `tag_keywords` | 8 | `TEXT` | |
+| `counterparty_examples` | 9 | `TEXT` | |
+| `source_account_mandatory` | 12 | `BOOLEAN NOT NULL` | Default `FALSE` if empty or None |
+| `target_account_mandatory` | 13 | `BOOLEAN NOT NULL` | Default `FALSE` if empty or None |
+| `is_subscription_eligible` | 14 | `BOOLEAN NOT NULL DEFAULT FALSE` | Default `FALSE` if empty or None |
+| `record_status` | 15 | `TEXT NOT NULL` | Transform hard errors if empty, None, or not in `{'active', 'inactive', 'deleted', 'locked'}`; mirrored verbatim from sheet |
+| `created_at` | — | `TIMESTAMPTZ NOT NULL` | When first written by the extract job |
+| `updated_at` | — | `TIMESTAMPTZ NOT NULL` | When last updated by the extract job |
 
 Constraints:
-- `UNIQUE (tx_type, major_category, minor_category)` — natural key
-- `CHECK (source_account_mandatory = TRUE OR target_account_mandatory = TRUE)` — at least one account side must be mandatory. Transform must validate this before inserting — raise a hard error if both are `False` (Python bool, after type conversion)
-- Composite CHECK enforcing valid `tx_type` × `workflow_type` combinations:
-
-```sql
-CHECK (
-    (tx_type = 'money-in'       AND workflow_type = 'account-credit') OR
-    (tx_type = 'money-out'      AND workflow_type IN ('account-debit', 'debt-repayment')) OR
-    (tx_type = 'money-transfer' AND workflow_type IN ('funds-transfer', 'forex-transfer'))
-)
-```
-
-Valid combinations:
-
-| `tx_type` | `workflow_type` |
-|-----------|----------------|
-| `money-in` | `account-credit` |
-| `money-out` | `account-debit` |
-| `money-out` | `debt-repayment` |
-| `money-transfer` | `funds-transfer` |
-| `money-transfer` | `forex-transfer` |
-
-This replaces two separate single-column CHECKs — the composite covers all invalid values implicitly.
-
-Note: `source_account_types` and `target_account_types` are **not** columns on this table — they are represented by the two join tables below.
+- `UNIQUE (tx_type_key, major_category_key, minor_category_key)` — natural key
+- `CHECK (tx_type_key IN ('money-in', 'money-out'))` — enforced at DB level; also enforced by the transform
 
 ---
 
-### Migration 0003 — `category_source_account_types` and `category_target_account_types` (join tables)
+### Migration 3 — `category_source_account_types` and `category_target_account_types` (join tables)
 
 Both tables have the same structure:
 
@@ -127,62 +135,65 @@ No cascade defined on the FK — join rows are managed explicitly by the extract
 
 **Sheet tab:** `'categories'`
 
-**Zero-row guard:** If the sheet tab returns 0 rows, abort the job run with an error — do not proceed to the soft-delete pass and do not continue with subsequent entities. An empty read (cleared tab, wrong tab name, permissions error) must never trigger a full wipe of all categories.
+**Zero-row guard:** If the sheet tab returns 0 rows, abort the job run with an error — do not continue with subsequent entities. An empty read (cleared tab, wrong tab name, permissions error) must never trigger a full wipe of all categories.
 
-**Hash input:** All 13 source columns in schema order (including `source_account_types` and `target_account_types` — token-normalised per section below before being included in `ordered_values`), using the canonical `|`-separated format defined in SETUP.md. Column order: `tx_type`, `major_category`, `minor_category`, `description`, `is_active`, `tag_keywords`, `counterparty_examples`, `source_account_mandatory`, `target_account_mandatory`, `workflow_type`, `is_subscription_eligible`, `source_account_types`, `target_account_types`.
+**sync_status routing:**
 
-**Token normalisation for `source_account_types` / `target_account_types`:** Before including these fields in `ordered_values` for the hash:
-- If `raw is None`, empty (`""`), or whitespace-only — pass `""` directly (skip normalisation)
-- Otherwise — `",".join(sorted(t.strip() for t in raw.split(",") if t.strip()))` (empty tokens from doubled/trailing commas are discarded)
+The extractor does not compute hashes. The sheet's `sync_status` column (col 16) drives all DB operations.
 
-This ensures `"asset,investment"` and `"investment,asset"` produce the same hash.
+| `sync_status` | Action |
+|---|---|
+| `in-sync` | Skip — no DB write, no sheet write-back |
+| `create-pending` | INSERT path |
+| `create-failed` | Retry — INSERT path |
+| `update-pending` | UPDATE path |
+| `update-failed` | Retry — UPDATE path |
 
-**Natural key encoding in `ledger_data_checksums`:** `{tx_type}|{major_category}|{minor_category}`
+**Sheet write-back:** After processing each non-`in-sync` row, the extractor writes three cells back to the Google Sheet via the Sheets API using the row's sheet position:
+- `sync_status` (col 16): `'in-sync'` on success; `'create-failed'` or `'update-failed'` (matching the path taken) on DB error or validation failure
+- `sync_date_time` (col 17): UTC ISO timestamp of the operation
+- `sync_notes` (col 18): `''` on success; error message on failure
 
-**Natural key constraint:** `|` is a prohibited character in `tx_type`, `major_category`, and `minor_category`. After stripping whitespace (for validation only — raw values are used for key construction and hash computation), each field must also be non-empty — raise a hard error if any is empty or whitespace-only. The extractor enforces both checks before constructing the natural key (see per-row pass step 1) — a silent corruption is worse than a failed run.
+Write-back is performed per-row immediately after the DB operation completes — not batched at end of run. This ensures the sheet reflects the latest state even if the job aborts mid-run.
 
-**source/target account type mapping:** The sheet stores comma-separated type strings (e.g. `"asset,investment"`). Expansion algorithm:
+**Natural key:** `{tx_type_key}|{major_category_key}|{minor_category_key}`. `|` is a prohibited character in each of the three key fields; each must also be non-empty after stripping whitespace. Violations are row-level validation failures — write `create-failed`/`update-failed` + error message to the sheet and continue.
+
+**source/target account type mapping:** The sheet stores comma-separated sub-type strings (e.g. `"current, savings"`). Expansion algorithm:
 0. If the raw field value is `None`, empty, or whitespace-only, skip the expansion — produce zero join rows without any WARNING
-1. Split on `,`, strip whitespace from each token; discard empty strings (these arise from trailing or doubled commas — silently ignored, not warned)
-2. For each token: `SELECT id FROM account_types WHERE type = $1 AND is_deleted = FALSE`
+1. Split on `,`, strip whitespace from each token; discard tokens where `t.strip() == ''` (empty tokens from trailing or doubled commas — silently ignored, not warned)
+2. For each token: `SELECT id FROM account_types WHERE account_subtype = $1 AND record_status = 'active'` — only `active` rows match; `inactive` and `deleted` rows are excluded
 3. Collect all matching IDs — these become the join table rows
 4. If a token matches 0 rows in `account_types`: log a `WARNING` (include entity, natural key, and the unmatched token) and skip that token — do not fail the row
 
-The expansion algorithm is invoked separately for each field — results for `source_account_types` insert into `category_source_account_types`; results for `target_account_types` insert into `category_target_account_types`. Insert `(category_id, account_type_id)` into the appropriate join table for each collected ID using `ON CONFLICT DO NOTHING` — duplicate tokens within the same cell (e.g. `"asset,asset"`) produce the same set of join rows as the deduplicated form; the hash is computed from the raw cell value so a later correction would be detected as a changed row. When the source data becomes more granular (type+sub_type), the query tightens to `WHERE type = $1 AND sub_type = $2` — no schema change required.
+The expansion algorithm is invoked separately for each field — results for `source_account_types` insert into `category_source_account_types`; results for `target_account_types` insert into `category_target_account_types`. Insert `(category_id, account_type_id)` into the appropriate join table for each collected ID using `ON CONFLICT DO NOTHING`.
 
-**Upsert logic:**
-
-**Error handling policy:** "Hard error" throughout means raise an exception and abort the job run — do not silently skip the row. The sheet must be fixed before re-running. The only exception is the known DB inconsistency case (RETURNING id returns 0 rows), which explicitly rolls back and skips to the next row (documented per path). Any unexpected psycopg2 exception from a DB write should propagate — do not catch it — it will abort the job run. (The expansion algorithm's token-not-found case in step 4 above is a WARNING, not a hard error, and is governed by its own documented behaviour — not this policy.)
-
-**Duplicate natural key guard:** If two rows in the sheet share the same natural key `(tx_type, major_category, minor_category)`, the first occurrence is processed normally. Every subsequent duplicate is skipped with a `WARNING` (entity, natural_key logged) — do not raise a hard error. The first occurrence's data is preserved; the user must fix the sheet. Because the duplicate is skipped (not added to `seen_keys` a second time), the soft-delete pass will not soft-delete the row.
+**Error handling policy:** Row-level DB errors write `create-failed`/`update-failed` + error message to the sheet and continue to the next row — the job does not abort. Job-level failures (zero rows in sheet, Sheets API write-back failure, DB connection failure) abort the run. The expansion algorithm's token-not-found case (step 4 above) is a WARNING and does not trigger a write-back.
 
 Per-row pass (for each row read from sheet):
-0. Call the transform on the raw sheet row: validate all column-level fields (`tx_type` enum membership; `is_active`, `source_account_mandatory`, `target_account_mandatory` — raise a hard error if empty or `None`; `is_subscription_eligible` — default to `FALSE` if empty or `None`; `workflow_type` value and `tx_type` combination; source/target mandatory combination) and produce the typed dict plus the SHA-256 hash of the 13 source columns (the transform assembles `ordered_values` from raw sheet strings — see Hash format in SETUP.md). If any validation fails, raise an exception and abort the job run. This step must complete before adding anything to `seen_keys`.
-1. Validate `tx_type`, `major_category`, `minor_category`: after stripping whitespace, each must be non-empty and must not contain `|` — raise a hard error if any check fails (see Natural key constraint above). For `major_category` and `minor_category` (free text): strip whitespace for validation only — use raw values for hash computation, natural key construction, and DB insert. For `tx_type` (enum): the natural key and DB insert use the stripped (post-validation) value — equivalent to raw, since any leading/trailing whitespace would have already caused an enum validation failure in step 0. Compute natural key: `{tx_type}|{major_category}|{minor_category}` — immediately add to `seen_keys` **before** any DB write for this row
-2. Look up `(entity='categories', natural_key)` in `ledger_data_checksums`
-   - If found and hash matches — update `last_seen_at = now()` in `ledger_data_checksums` and commit before moving to the next row (a rollback by a subsequent row must not undo this update); skip (natural key already in `seen_keys` from step 1 — do not defer this add or unchanged rows will be soft-deleted)
-   - If not found (new row, or resurrected after prior soft-delete) — **within a single transaction**: `INSERT INTO category_master (tx_type, major_category, minor_category, description, is_active, tag_keywords, counterparty_examples, source_account_mandatory, target_account_mandatory, workflow_type, is_subscription_eligible, row_hash, is_deleted, created_at, updated_at) VALUES (...all typed transform fields..., $hash, FALSE, now(), now()) ON CONFLICT (tx_type, major_category, minor_category) DO UPDATE SET is_deleted = FALSE, deleted_at = NULL, description = EXCLUDED.description, is_active = EXCLUDED.is_active, tag_keywords = EXCLUDED.tag_keywords, counterparty_examples = EXCLUDED.counterparty_examples, source_account_mandatory = EXCLUDED.source_account_mandatory, target_account_mandatory = EXCLUDED.target_account_mandatory, workflow_type = EXCLUDED.workflow_type, is_subscription_eligible = EXCLUDED.is_subscription_eligible, row_hash = EXCLUDED.row_hash, updated_at = now() RETURNING id`; `DELETE FROM category_source_account_types WHERE category_id = <returned id>`; `DELETE FROM category_target_account_types WHERE category_id = <returned id>`; run the expansion algorithm above for both `source_account_types` and `target_account_types` within the same transaction (expansion SELECTs run inside the transaction) and insert the resulting `(category_id, account_type_id)` pairs into the respective join tables; `INSERT INTO ledger_data_checksums (entity, natural_key, row_hash, last_seen_at) VALUES ('categories', $natural_key, $hash, now())`
-   - If found and hash differs (changed row) — **within a single transaction**: run `UPDATE category_master SET description = $description, is_active = $is_active, tag_keywords = $tag_keywords, counterparty_examples = $counterparty_examples, source_account_mandatory = $source_account_mandatory, target_account_mandatory = $target_account_mandatory, workflow_type = $workflow_type, is_subscription_eligible = $is_subscription_eligible, row_hash = $hash, updated_at = now() WHERE tx_type = $1 AND major_category = $2 AND minor_category = $3 RETURNING id`; if no row returned (DB inconsistency), log error, rollback the transaction, and continue to the next row; `DELETE FROM category_source_account_types WHERE category_id = <returned id>`; `DELETE FROM category_target_account_types WHERE category_id = <returned id>`; run the expansion algorithm within the same transaction and re-insert the resulting `(category_id, account_type_id)` pairs into the respective join tables; `UPDATE ledger_data_checksums SET row_hash = $hash, last_seen_at = now() WHERE entity = 'categories' AND natural_key = $natural_key`
-
-Soft-delete pass (after all sheet rows processed):
-3. Query `SELECT natural_key FROM ledger_data_checksums WHERE entity = 'categories'` — diff against `seen_keys`, an in-memory `set[str]` accumulated during the per-row pass (one entry added per sheet row: `{tx_type}|{major_category}|{minor_category}`)
-4. For each key present in DB but absent from sheet — **within a single transaction**:
-   - Parse the natural key back into parts: split `{tx_type}|{major_category}|{minor_category}` on `|`
-   - Resolve to `category_id`: `UPDATE category_master SET is_deleted = TRUE, deleted_at = now(), updated_at = now() WHERE tx_type = $1 AND major_category = $2 AND minor_category = $3 RETURNING id`; if no row returned (DB inconsistency), log error, rollback the transaction, and skip — leave the `ledger_data_checksums` row intact. This is a permanently stuck state: every subsequent run will hit the same missing `category_master` row and skip again. Manual intervention is required: investigate the root cause, then `DELETE FROM ledger_data_checksums WHERE entity = 'categories' AND natural_key = '<key>'`
-   - `DELETE FROM category_source_account_types WHERE category_id = <returned id>`
-   - `DELETE FROM category_target_account_types WHERE category_id = <returned id>`
-   - `DELETE FROM ledger_data_checksums WHERE entity = 'categories' AND natural_key = $natural_key`
+0. Read `sync_status` (col 16): if `'in-sync'`, skip immediately — no further processing, no sheet write-back
+1. Call the transform on the raw sheet row: validate all column-level fields. Any validation failure writes `create-failed`/`update-failed` (matching `sync_status` path) + error message to the sheet for this row; continue to the next row. Rules:
+   - `tx_type_key`: must be `'money-in'` or `'money-out'`
+   - `tx_type_label`: must be non-empty
+   - `major_category_key`, `minor_category_key`: must be non-empty and must not contain `|`
+   - `major_category_label`, `minor_category_label`: must be non-empty
+   - `record_status`: must be in `{'active', 'inactive', 'deleted', 'locked'}`
+   - `source_account_mandatory`, `target_account_mandatory`: default to `FALSE` if empty or None
+   - `is_subscription_eligible`: default to `FALSE` if empty or None
+2. Compute natural key: `{tx_type_key}|{major_category_key}|{minor_category_key}`. Any key field violation (empty or contains `|`) is a validation failure — write back and continue.
+3. Route by `sync_status`:
+   - `create-pending` or `create-failed` — **within a single transaction**: `INSERT INTO category_master (tx_type_key, tx_type_label, major_category_key, major_category_label, minor_category_key, minor_category_label, description, tag_keywords, counterparty_examples, source_account_mandatory, target_account_mandatory, is_subscription_eligible, record_status, created_at, updated_at) VALUES (...all typed transform fields..., now(), now()) ON CONFLICT (tx_type_key, major_category_key, minor_category_key) DO UPDATE SET tx_type_label = EXCLUDED.tx_type_label, major_category_label = EXCLUDED.major_category_label, minor_category_label = EXCLUDED.minor_category_label, description = EXCLUDED.description, tag_keywords = EXCLUDED.tag_keywords, counterparty_examples = EXCLUDED.counterparty_examples, source_account_mandatory = EXCLUDED.source_account_mandatory, target_account_mandatory = EXCLUDED.target_account_mandatory, is_subscription_eligible = EXCLUDED.is_subscription_eligible, record_status = EXCLUDED.record_status, updated_at = now() RETURNING id`; `DELETE FROM category_source_account_types WHERE category_id = <returned id>`; `DELETE FROM category_target_account_types WHERE category_id = <returned id>`; run the expansion algorithm within the same transaction and insert resulting `(category_id, account_type_id)` pairs; commit. On DB error: rollback, write `create-failed` + error message to sheet, continue.
+   - `update-pending` or `update-failed` — **within a single transaction**: `UPDATE category_master SET tx_type_label = $tx_type_label, major_category_label = $major_category_label, minor_category_label = $minor_category_label, description = $description, tag_keywords = $tag_keywords, counterparty_examples = $counterparty_examples, source_account_mandatory = $source_account_mandatory, target_account_mandatory = $target_account_mandatory, is_subscription_eligible = $is_subscription_eligible, record_status = $record_status, updated_at = now() WHERE tx_type_key = $1 AND major_category_key = $2 AND minor_category_key = $3 RETURNING id`; if no row returned, fall back to the INSERT path (same SQL as `create-pending` — the row may have been lost from the DB); `DELETE FROM category_source_account_types WHERE category_id = <returned id>`; `DELETE FROM category_target_account_types WHERE category_id = <returned id>`; run the expansion algorithm and re-insert; commit. On DB error: rollback, write `update-failed` + error message to sheet, continue.
+4. On success: write `sync_status = 'in-sync'`, `sync_date_time = <UTC ISO timestamp>`, `sync_notes = ''` to the sheet for this row.
 
 ---
 
 ## What to build
 
-- [x] `migrations/0001_create_account_types.py` — table + seed data
-- [x] `migrations/0001_create_shared_infrastructure.py` — ledger_data_checksums + job_execution_details
-- [x] `migrations/0002_create_account_types.py` — account_types reference table
-- [x] `migrations/0003_create_categories.py` — category_master + join tables
-- [x] `transforms/categories.py` — row dict → typed dict + SHA-256 hash
-- [x] `database/categories.py` — category_master upsert + explicit join table deletes/inserts
-- [x] `database/ledger_data_checksums.py` — read/write ledger_data_checksums for categories
-- [x] `database/job_execution_details.py` — Phase 1 bootstrap/read and Phase 3 UPSERT
-- [x] Wire into `core/extractor.py`
+- [ ] `migrations/0001_create_shared_infrastructure.py` — `job_execution_details`
+- [ ] `migrations/0002_create_account_types.py` — `account_types` reference table + seed data
+- [ ] `migrations/0003_create_categories.py` — `category_master` + join tables
+- [ ] `transforms/categories.py` — row dict → typed dict
+- [ ] `database/categories.py` — `category_master` upsert + explicit join table deletes/inserts
+- [ ] `database/job_execution_details.py` — Phase 1 bootstrap/read and Phase 3 UPSERT
+- [ ] `sheets/categories.py` — write-back `sync_status`, `sync_date_time`, `sync_notes` to sheet via Sheets API
+- [ ] Wire into `core/extractor.py`

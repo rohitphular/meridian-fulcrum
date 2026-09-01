@@ -2,7 +2,7 @@ import { ExpenseAPI } from './api.js';
 
 const ACCT_CACHE_KEY = 'et_account_schema_v2';
 const TX_CACHE_KEY   = 'et_transaction_schema_v1';
-const CAT_CACHE_KEY  = 'et_category_schema_v1';
+const CAT_CACHE_KEY  = 'et_category_schema_v2';
 
 export async function loadAccountSchema() {
   const cached = localStorage.getItem(ACCT_CACHE_KEY);

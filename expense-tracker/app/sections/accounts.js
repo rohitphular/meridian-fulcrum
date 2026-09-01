@@ -280,7 +280,7 @@ function _renderImportPanel() {
       <div class="field form-grid-span-2">
         <label for="accImportFile">CSV file</label>
         <input type="file" id="accImportFile" accept=".csv">
-        <div class="field-hint">Required: name, type, sub_type, currency, opening_value. Optional: record_status, description</div>
+        <div class="field-hint">Required: name, type, sub_type, currency. Optional: opening_value (defaults to 0), record_status, description</div>
       </div>
     </div>
     <div id="accImportStatus"></div>
@@ -310,8 +310,7 @@ function _parseAccountsCsv(text) {
     if (row.sub_type === '') { errors.push(`Row ${i + 1}: missing sub_type`); continue; }
     if (row.currency === '') { errors.push(`Row ${i + 1}: missing currency`); continue; }
 
-    if (row.opening_value === '') { errors.push(`Row ${i + 1}: missing opening_value`); continue; }
-    const openingVal = parseFloat(row.opening_value);
+    const openingVal = row.opening_value === '' ? 0 : parseFloat(row.opening_value);
     if (Number.isFinite(openingVal) === false) {
       errors.push(`Row ${i + 1}: invalid opening_value "${row.opening_value}"`); continue;
     }

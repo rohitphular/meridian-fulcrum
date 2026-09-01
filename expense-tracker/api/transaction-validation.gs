@@ -63,8 +63,8 @@ function validateTransactionRecord(body, catMap, accountMap) {
 
   // TX-NEW-C-2: unconditional amount validation — must run before category-conditional checks.
   // At least one of source_amount or target_amount must be a finite positive number.
-  const srcAmtNum = body.source_amount !== undefined && body.source_amount !== null ? Number(body.source_amount) : NaN;
-  const tgtAmtNum = body.target_amount !== undefined && body.target_amount !== null ? Number(body.target_amount) : NaN;
+  const srcAmtNum = (body.source_amount !== undefined && body.source_amount !== null && String(body.source_amount).trim() !== '') ? Number(body.source_amount) : NaN;
+  const tgtAmtNum = (body.target_amount !== undefined && body.target_amount !== null && String(body.target_amount).trim() !== '') ? Number(body.target_amount) : NaN;
   if (!Number.isFinite(srcAmtNum) && !Number.isFinite(tgtAmtNum))
     return { ok: false, error: 'missing_source_amount' };
   if (Number.isFinite(srcAmtNum) && srcAmtNum <= 0)

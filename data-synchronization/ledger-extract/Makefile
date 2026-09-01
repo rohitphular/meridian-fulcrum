@@ -10,11 +10,15 @@ help:
 ##@ Run
 
 .PHONY: run
-run: ## Run the extract job — ENV=dev|prod required  (e.g. make run ENV=dev)
+run: upgrade-libs ## Run the extract job — ENV=dev|prod required  (e.g. make run ENV=dev)
 	@[ -n "$(ENV)" ] || (echo "Usage: make run ENV=dev|prod"; exit 1)
 	bash cicd/start-up.sh $(ENV)
 
 ##@ Dev
+
+.PHONY: upgrade-libs
+upgrade-libs: ## Re-resolve all meridian-common-libs packages to their latest commits on main
+	uv lock --upgrade-package py-logging --upgrade-package py-db-migrate --upgrade-package py-google-workspace --upgrade-package py-db-schema
 
 .PHONY: generate-models
 generate-models: ## Regenerate typed model files (spins up a fresh Docker PostgreSQL container — requires Docker running)

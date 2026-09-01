@@ -89,6 +89,7 @@ If `record_status` is present in the request body, it is validated against the a
 | `duplicate_category` | `create_category`, `update_category` | Composite key `(tx_type_key, major_category_key, minor_category_key)` already exists on a different row |
 | `record_locked` | `update_category`, `delete_category` | The target row has `record_status = locked` |
 | `category_key_change_has_dependents` | `update_category` | Composite key is changing and `count` dependent rows exist across transactions and subscriptions; `force` is not true. Response includes `count: N`. |
+| `fk_scan_error` | `update_category` | An unexpected exception occurred while scanning the transactions/subscriptions sheets for dependent rows during a composite-key-changing edit |
 | `missing_categories` | `create_categories_bulk` | `body.categories` is absent or empty |
 
 ## CSV import

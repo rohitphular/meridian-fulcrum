@@ -57,18 +57,23 @@ ledger-extract/
 │   └── runner.py
 ├── transforms/
 │   ├── categories.py
-│   └── accounts.py
+│   ├── accounts.py
+│   └── transactions.py
+├── sheets/
+│   └── categories.py
 ├── database/
 │   ├── models/
 │   ├── ledger_data_checksums.py
 │   ├── job_execution_details.py
 │   ├── categories.py
-│   └── accounts.py
+│   ├── accounts.py
+│   └── transactions.py
 └── migrations/
     ├── 0001_create_shared_infrastructure.py
     ├── 0002_create_account_types.py
     ├── 0003_create_categories.py
-    └── 0004_create_accounts.py
+    ├── 0004_create_accounts.py
+    └── 0005_create_transactions.py
 ```
 
 Exclude from this check: `.venv/`, `uv.lock`, `__pycache__/`, `.ruff_cache/`, `database/models/`
@@ -153,9 +158,9 @@ Note: `major_category` and `minor_category` are stored and hashed as raw sheet s
 
 ### Error handling
 
-- [ ] Transform `ValueError` propagates uncaught from `upsert_categories` — it must abort the job (hard error policy)
-- [ ] When `UPDATE ... RETURNING id` returns 0 rows (DB inconsistency), the path rolls back, logs at error level, and continues to the next row — it must not raise; the `ledger_data_checksums` row is left intact as a diagnostic signal
-- [ ] The `except Exception: conn.rollback(); raise` block re-raises every unexpected psycopg2 exception — it must not swallow it
+- [ ] Transform `ValueError` caught in `upsert_categories` is written back to the sheet as `create-failed` / `update-failed` with a human-readable message in `sync_notes` — the job continues to the next row (per-row error policy)
+- [ ] When `UPDATE ... RETURNING id` returns 0 rows (entity missing from DB), the path falls back to `_insert_category` and continues — it must not skip the row or raise
+- [ ] Both DB operation `except` blocks in `upsert_categories` catch only known psycopg2 integrity errors (`UniqueViolation`, `ForeignKeyViolation`, `CheckViolation`, `NotNullViolation`) — any other exception (connection loss, programming error) propagates uncaught and aborts the job via `runner.py`
 - [ ] `core/runner.py` catches all exceptions at the top level, logs at error level, and calls `sys.exit(1)` — the process must not exit with code 0 on failure
 
 ---

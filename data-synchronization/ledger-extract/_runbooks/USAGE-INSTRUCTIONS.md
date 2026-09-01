@@ -79,12 +79,14 @@ Edit `config.yaml` to enable or disable individual entities:
 ```yaml
 entities:
   categories:
-    enabled: true   # set false to skip
+    enabled: true
   accounts:
-    enabled: false  # not yet implemented
+    enabled: false
+  transactions:
+    enabled: false
 ```
 
-When an entity is disabled, both its extraction and soft-delete pass are skipped.
+When an entity is disabled, both its extraction and write-back pass are skipped.
 
 ---
 
@@ -111,17 +113,14 @@ This spins up a temporary `postgres:17` container, applies all migrations into i
 
 ---
 
-## Recovering from a stuck soft-delete
+## Recovering from a failed sync row (categories)
 
-If a `category_master` row is missing but its key is still in `ledger_data_checksums`, every run will log:
+Categories use the sync_status model. If a row is stuck with `create-failed` or `update-failed`, check the `sync_notes` column in the sheet for the human-readable reason. Common causes:
 
-```
-upsert_categories: soft_delete_returned_no_rows entity=categories natural_key=<key>
-```
+- **Duplicate key** — a category with the same `tx_type / major / minor` combination already exists in the DB. Either remove the duplicate from the sheet or change one of the key fields.
+- **Invalid account subtype** — one or more tokens in `source_account_types` or `target_account_types` do not match any `account_subtype` in the `account_types` table. Correct the value in the sheet.
+- **Check constraint** — a field value does not satisfy a DB constraint (e.g. `record_status` not in allowed values). Correct the value.
 
-Manual fix:
-```sql
-DELETE FROM ledger_data_checksums WHERE entity = 'categories' AND natural_key = '<key>';
-```
+After fixing the sheet data, change `sync_status` back to `create-pending` or `update-pending` and re-run the job. The job retries all rows with `create-failed` or `update-failed` status on every run.
 
-Investigate the root cause before deleting.
+If the job fails mid-batch before writing sync columns back (e.g. a Sheets API error), rows processed in that batch will retain their previous `sync_status`. Re-running the job will retry them safely — all DB writes are per-row transactions and idempotent via `ON CONFLICT DO UPDATE`.

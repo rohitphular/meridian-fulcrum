@@ -11,7 +11,7 @@ def upgrade(client: Any) -> None:
                 account_name        TEXT        NOT NULL,
                 institution_name    TEXT,
                 account_type        TEXT        NOT NULL,
-                sub_type            TEXT        NOT NULL,
+                account_subtype     TEXT        NOT NULL,
                 currency_code       TEXT        NOT NULL,
                 account_status      TEXT        NOT NULL DEFAULT 'active',
                 account_opening_date DATE,
@@ -23,9 +23,9 @@ def upgrade(client: Any) -> None:
 
                 CONSTRAINT pk_account_master                PRIMARY KEY (id),
                 CONSTRAINT uq_account_master_account_id     UNIQUE (account_id),
-                CONSTRAINT fk_account_master_account_types  FOREIGN KEY (account_type, sub_type) REFERENCES account_types(account_type, sub_type),
+                CONSTRAINT fk_account_master_account_types  FOREIGN KEY (account_type, account_subtype) REFERENCES account_types(account_type, account_subtype),
                 CONSTRAINT chk_account_master_currency      CHECK (char_length(currency_code) = 3 AND currency_code = upper(currency_code)),
-                CONSTRAINT chk_account_master_status        CHECK (account_status IN ('active', 'in_active', 'closed', 'deleted')),
+                CONSTRAINT chk_account_master_status        CHECK (account_status IN ('active', 'inactive', 'closed', 'deleted')),
                 CONSTRAINT chk_account_master_deleted_at    CHECK (account_status = 'deleted' OR deleted_at IS NULL)
             );
         """)

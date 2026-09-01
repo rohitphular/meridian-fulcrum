@@ -121,3 +121,46 @@ Four cards above the table, always in base currency and always unfiltered (filte
 - `record_status` edit dropdown offers only `active`, `inactive`, `locked`. `deleted` is not a selectable option; deletion is handled via the Delete action and restoration via Restore.
 - Locked accounts: View only — Edit and Delete suppressed in the context menu.
 - Deleted accounts: View + Restore in the context menu — Edit and Delete suppressed.
+
+## Column positions
+
+The sheet stores 14 columns in this order:
+
+| # | Field | Notes |
+|---|-------|-------|
+| 1 | `id` | System-assigned; never written on update |
+| 2 | `name` | |
+| 3 | `type` | Immutable after create |
+| 4 | `sub_type` | |
+| 5 | `currency` | Immutable after create |
+| 6 | `opening_value` | Immutable after create; stored negative for liabilities |
+| 7 | `current_value` | Virtual — header created by schema for column ordering only; always blank in sheet; injected at read time by `_buildAccountNetMap` |
+| 8 | `description` | |
+| 9 | `record_status` | |
+| 10 | `sync_status` | Backend-stamped |
+| 11 | `sync_date_time` | Backend-stamped |
+| 12 | `sync_notes` | Backend-stamped |
+| 13 | `created_at` | Backend-stamped |
+| 14 | `updated_at` | Backend-stamped |
+
+Column positions are append-only — never change an existing position.
+
+## CSV import
+
+The import panel (accessible via the **Import** button in the section header) accepts a CSV with these columns:
+
+| Column | Required | Notes |
+|--------|----------|-------|
+| `name` | Yes | |
+| `type` | Yes | Must be `asset`, `investment`, or `liability` — validated by backend |
+| `sub_type` | Yes | Must be valid for the given type — validated by backend |
+| `currency` | Yes | Uppercased on parse; must exist in `rates` — validated by backend |
+| `opening_value` | No | Defaults to `0` if empty. If present and not a finite number, the row is rejected as a parse error before submission. For liabilities, enter the positive amount owed — the backend negates it on write. |
+| `record_status` | No | If present, must be one of `active`, `inactive`, `deleted`, `locked` — invalid values are rejected as parse errors. The backend always creates accounts with `record_status = active` regardless of this value; the field has no effect on import. |
+| `description` | No | |
+
+Audit columns (`sync_status`, `sync_date_time`, `sync_notes`, `created_at`, `updated_at`), `id`, and `current_value` must not be present in the CSV.
+
+Duplicates (rows whose `name` matches an existing non-deleted account) are **not** updated — they go in `skipped`. To update an existing account, use the edit form.
+
+Results summary: `N created · M skipped · K failed`. Each element of `results[]` has shape `{ name, ok, error?, id? }` — `error` is present only on failed rows; `id` is present only on successful rows.

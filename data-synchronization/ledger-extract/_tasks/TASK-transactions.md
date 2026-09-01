@@ -298,12 +298,9 @@ Amounts are stored as integers in currency minor units. Minor unit factor for an
 
 Step 1 — convert raw sheet amount to local minor units:
 ```python
-local_dp   = currency_decimal_places[tx_currency_local]   # e.g. 2 for GBP
-local_factor = Decimal(10 ** local_dp)                    # e.g. 100
-tx_amount_local = int(
-    (Decimal(raw_amount.strip()) * local_factor)
-    .quantize(Decimal('1'), rounding=ROUND_HALF_UP)
-)
+local_dp = currency_decimal_places[tx_currency_local]  # e.g. 2 for GBP
+local_factor = Decimal(10**local_dp)  # e.g. 100
+tx_amount_local = int((Decimal(raw_amount.strip()) * local_factor).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 # e.g. "10.50" GBP → 1050 pence
 ```
 
@@ -322,13 +319,9 @@ Bind values: `(tx_currency_local, tx_date_time_base.date())`. `rate_value` = how
 
 Step 3 — compute XAU nanograms:
 ```python
-xau_dp     = currency_decimal_places['XAU']               # always 9
-xau_factor = Decimal(10 ** xau_dp)                        # 1_000_000_000
-tx_amount_base = int(
-    (Decimal(tx_amount_local) * xau_factor /
-     (Decimal(str(cr_local.rate_value)) * local_factor))
-    .quantize(Decimal('1'), rounding=ROUND_HALF_UP)
-)
+xau_dp = currency_decimal_places["XAU"]  # always 9
+xau_factor = Decimal(10**xau_dp)  # 1_000_000_000
+tx_amount_base = int((Decimal(tx_amount_local) * xau_factor / (Decimal(str(cr_local.rate_value)) * local_factor)).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 # e.g. 1050 pence at 76 GBP/XAU → 138_157_895 nanograms
 ```
 

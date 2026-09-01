@@ -35,6 +35,11 @@ const ACCT_TYPE_LABELS = {
 export function renderCategories() {
   closeContextMenu(); _catMenuKey = null;
   const content = el('categoriesContent');
+  if (state.categorySchema === null || state.categorySchema === undefined ||
+      !Array.isArray(state.categorySchema.record_statuses)) {
+    content.innerHTML = '<p class="placeholder">Category schema unavailable — please reload.</p>';
+    return;
+  }
 
   const filtered    = _applyFilters(state.categories);
   const activeCount = _activeFilterCount();
