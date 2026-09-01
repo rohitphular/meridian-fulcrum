@@ -60,7 +60,8 @@ ledger-extract/
 │   ├── accounts.py
 │   └── transactions.py
 ├── sheets/
-│   └── categories.py
+│   ├── categories.py
+│   └── accounts.py
 ├── database/
 │   ├── models/
 │   ├── ledger_data_checksums.py

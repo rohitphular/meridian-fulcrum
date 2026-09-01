@@ -130,8 +130,8 @@ def upsert_categories(conn: Any, sheets_client: SheetsClient, rows: list[dict[st
     row_start is the 1-indexed data row number of the first row in this batch
     (1 = first row after header). Sheet row = row_start + row_index + 1.
     """
-    in_sync_count = sum(1 for row in rows if str(row.get("sync_status", "")).strip() == "in-sync")
-    actionable_count = sum(1 for row in rows if str(row.get("sync_status", "")).strip() in _ACTIONABLE)
+    in_sync_count = sum(1 for row in rows if row.get("sync_status") == "in-sync")
+    actionable_count = sum(1 for row in rows if row.get("sync_status") in _ACTIONABLE)
     logger.info(f"upsert_categories: batch_start entity=categories row_start={row_start} total={len(rows)} in_sync={in_sync_count} actionable={actionable_count}")
 
     write_backs: list[sheets_categories.WriteBack] = []

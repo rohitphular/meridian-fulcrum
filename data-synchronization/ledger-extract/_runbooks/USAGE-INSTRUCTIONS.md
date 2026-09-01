@@ -81,7 +81,7 @@ entities:
   categories:
     enabled: true
   accounts:
-    enabled: false
+    enabled: true
   transactions:
     enabled: false
 ```

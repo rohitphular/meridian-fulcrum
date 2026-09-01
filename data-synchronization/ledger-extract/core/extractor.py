@@ -89,17 +89,19 @@ class LedgerExtractJob:
 
     def _extract_accounts(self, sheets_client: SheetsClient) -> None:
         row_start = 1
-        all_rows: list[dict[str, Any]] = []
+        first_batch = True
         while True:
             rows = sheets_client.read_sheet("accounts", row_start, row_start + _BATCH_SIZE - 1)
-            if row_start == 1 and len(rows) == 0:
-                raise RuntimeError("accounts: zero rows returned from sheet — aborting to prevent full wipe")
-            all_rows.extend(rows)
+            if first_batch:
+                if len(rows) == 0:
+                    raise RuntimeError("accounts: zero rows returned from sheet — aborting to prevent full wipe")
+                first_batch = False
+            if not rows:
+                break
+            accounts_db.upsert_accounts(self._conn, sheets_client, rows, row_start)
             if len(rows) < _BATCH_SIZE:
                 break
             row_start += _BATCH_SIZE
-        structure_type_map = accounts_db.load_structure_type_map(self._conn)
-        accounts_db.upsert_accounts(self._conn, all_rows, structure_type_map)
 
     def _extract_transactions(self, sheets_client: SheetsClient) -> None:
         row_start = 1
