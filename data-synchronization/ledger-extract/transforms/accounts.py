@@ -32,20 +32,20 @@ def transform(row: dict[str, Any]) -> dict[str, Any]:
 
     raw_currency = row.get("currency")
     if raw_currency is None or str(raw_currency).strip() == "":
-        raise ValueError(f"accounts: account_id={account_id!r} field=currency_code is required but got empty/None")
-    currency_code = str(raw_currency).strip().upper()
-    if len(currency_code) != 3:
-        raise ValueError(f"accounts: account_id={account_id!r} field=currency_code value={currency_code!r} must be exactly 3 characters")
+        raise ValueError(f"accounts: account_id={account_id!r} field=local_currency is required but got empty/None")
+    local_currency = str(raw_currency).strip().upper()
+    if len(local_currency) != 3:
+        raise ValueError(f"accounts: account_id={account_id!r} field=local_currency value={local_currency!r} must be exactly 3 characters")
 
     raw_opening_value = row.get("opening_value")
     if raw_opening_value is None or str(raw_opening_value).strip() == "":
-        raise ValueError(f"accounts: account_id={account_id!r} field=opening_value is required but got empty/None")
+        raise ValueError(f"accounts: account_id={account_id!r} field=opening_amount_local_value is required but got empty/None")
     try:
-        opening_value = decimal.Decimal(str(raw_opening_value).strip())
+        opening_amount_local_value = decimal.Decimal(str(raw_opening_value).strip())
     except decimal.InvalidOperation:
-        raise ValueError(f"accounts: account_id={account_id!r} field=opening_value value={raw_opening_value!r} is not a valid decimal number")
-    if not opening_value.is_finite():
-        raise ValueError(f"accounts: account_id={account_id!r} field=opening_value value={raw_opening_value!r} is not finite")
+        raise ValueError(f"accounts: account_id={account_id!r} field=opening_amount_local_value value={raw_opening_value!r} is not a valid decimal number")
+    if not opening_amount_local_value.is_finite():
+        raise ValueError(f"accounts: account_id={account_id!r} field=opening_amount_local_value value={raw_opening_value!r} is not finite")
 
     raw_description = row.get("description")
     if raw_description is not None and str(raw_description).strip() != "":
@@ -65,8 +65,8 @@ def transform(row: dict[str, Any]) -> dict[str, Any]:
         "account_name": account_name,
         "account_type": account_type,
         "account_subtype": account_subtype,
-        "currency_code": currency_code,
-        "opening_value": opening_value,
+        "local_currency": local_currency,
+        "opening_amount_local_value": opening_amount_local_value,
         "account_description": account_description,
         "record_status": record_status,
     }
