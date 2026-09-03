@@ -131,11 +131,18 @@ If the job fails mid-batch before writing sync columns back (e.g. a Sheets API e
 
 Accounts use the same sync_status model as categories. If a row is stuck with `create-failed` or `update-failed`, check the `sync_notes` column in the sheet for the human-readable reason. Common causes:
 
+- **Duplicate key** — an account with the same `id` (`ACC-YYYYMMDD-NNN`) already exists in the DB. Either remove the duplicate row from the sheet or correct the `id` value.
 - **Unknown account type/subtype combination** — the `type` / `sub_type` combination does not exist in the `account_types` reference table. Correct the sheet values to match a valid combination.
+- **Invalid currency rate reference** — the rate row used at write time no longer exists in `currency_rates`. Re-run the currency-rates job to repopulate rates, then retry.
 - **Opening value sign mismatch** — a liability account has a positive `opening_value`, or an asset/investment account has a negative one. The GAS backend should prevent this, but correct it in the sheet if it occurs.
 - **Invalid record_status** — `record_status` is not one of `active`, `inactive`, `deleted`, `locked`. Correct the value in the sheet.
 - **Invalid local_currency** — `currency` is not a 3-character uppercase ISO code (e.g. `GBP`, `USD`, `XAU`). Correct the value.
+- **Currency not in currency_master** — `currency` value has no row in `currency_master`. Add the currency to the master table, then retry.
 - **No currency rate found** — `local_currency` has no row in `currency_rates`. Run the currency-rates job first, then retry.
+- **Opening base value sign mismatch** — indicates a code bug in the extract job where the computed XAU base value has the wrong sign. File a bug report; do not attempt to fix manually in the sheet.
+- **base_currency constraint** — indicates a code bug where `base_currency` was set incorrectly by the extract job. File a bug report.
+- **currency_rate_ref_required constraint** — indicates a code bug where `currency_rate_ref` was set to NULL for a non-XAU account. File a bug report.
+- **Required field is null** — a required DB column received a NULL value. The `sync_notes` will name the column. Indicates a transform bug or schema drift; file a bug report.
 - **Check constraint (other)** — a field value violates a DB constraint. The `sync_notes` will include the constraint name — cross-reference against the `account_master` schema.
 
 After fixing the sheet data, change `sync_status` back to `create-pending` or `update-pending` and re-run the job. The job retries all rows with `create-failed` or `update-failed` status on every run.

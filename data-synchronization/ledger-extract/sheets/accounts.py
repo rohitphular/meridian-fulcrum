@@ -4,7 +4,7 @@ from py_google_workspace.gsheets import SheetsClient
 
 _SYNC_STATUS_COL = 10
 
-WriteBack = tuple[int, int, list]
+WriteBack = tuple[int, int, list[str]]
 
 
 def write_back(sheet_row_num: int, sync_status: str, sync_date_time: str, sync_notes: str) -> WriteBack:

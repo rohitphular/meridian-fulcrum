@@ -51,7 +51,7 @@ class LedgerExtractJob:
 
             if current_sheet_modified_at == last_sheet_modified_at:
                 update_ran_at(self._conn)
-                logger.info(f"run: no_changes sheet_modified_at={current_sheet_modified_at.isoformat()}")
+                logger.info(f"run: no_changes last_known={last_sheet_modified_at.isoformat()} current={current_sheet_modified_at.isoformat()} — sheet unchanged since last run, skipping entity extraction")
                 return
 
             # --- Phase 2: Entity extraction ---
