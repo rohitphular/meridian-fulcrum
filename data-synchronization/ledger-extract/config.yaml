@@ -4,4 +4,4 @@ entities:
   accounts:
     enabled: true
   transactions:
-    enabled: false
+    enabled: true

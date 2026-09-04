@@ -61,7 +61,8 @@ ledger-extract/
 │   └── transactions.py
 ├── sheets/
 │   ├── categories.py
-│   └── accounts.py
+│   ├── accounts.py
+│   └── transactions.py
 ├── database/
 │   ├── models/
 │   ├── ledger_data_checksums.py
@@ -74,7 +75,10 @@ ledger-extract/
     ├── 0002_create_account_types.py
     ├── 0003_create_categories.py
     ├── 0004_create_accounts.py
-    └── 0005_create_transactions.py
+    ├── 0005_create_transactions.py
+    ├── 0006_create_counterparty_master.py
+    ├── 0007_create_beneficiaries_master.py
+    └── 0008_create_transaction_beneficiaries.py
 ```
 
 Exclude from this check: `.venv/`, `uv.lock`, `__pycache__/`, `.ruff_cache/`, `database/models/`

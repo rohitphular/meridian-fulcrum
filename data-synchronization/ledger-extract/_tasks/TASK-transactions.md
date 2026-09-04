@@ -21,18 +21,18 @@ None — all design decisions confirmed.
 | Q3 | `tx_date_time` format | `YYYY-MM-DDTHH:MM` (ISO 8601, no seconds, no timezone suffix). Sheet stores UTC. Parsed with `datetime.fromisoformat()` and stored directly as `tx_date_time_base TIMESTAMPTZ`. `tx_date_time_local` is derived at extract time by converting `tx_date_time_base` to `tx_timezone_local`. |
 | Q4 | `day_of_week` derived column | YES — PostgreSQL ENUM `day_of_week_enum` (MONDAY … SUNDAY), computed at extract time from `tx_date_time_base` (UTC) and `tx_date_time_local` (local) using `_DAY_NAMES[weekday()]`. |
 | Q5 | FK on `account_id` | `account_id UUID NOT NULL FK → account_master(id)`. Extract resolves the sheet `account_id` (natural key, e.g. `ACC-20240101-001`) to the account's surrogate UUID via a preloaded `account_map`. If the natural key is blank or not found in the map → `sync-failure: account_not_found`; does not proceed. Replaces the old `source_account` / `target_account` two-column model. A transfer is two rows: `money-out` row on the source account + `money-in` row on the target account, linked by `parent_tx_id`. |
-| Q6 | Currency / FX columns | `local_currency` (DB column) is **derived from the resolved account's `local_currency`** — there is no `currency` sheet column. `tx_amount_local` (from `tx_amount`), `tx_amount_base` / `base_currency` / `currency_rate_ref` — XAU equivalent computed at extract time from `currency_rates` using the account's currency. No `fx_rate` sheet column. When `local_currency = 'XAU'` (XAU account): `tx_amount_base = tx_amount_local` (nanograms), no rate lookup, `currency_rate_ref = NULL`. For all other currencies: rate lookup on `rate_date = tx_date_time_base.date()`; if no rate found → `sync-failure`. |
+| Q6 | Currency / FX columns | `local_currency` (DB column) is **derived from the resolved account's `local_currency`** — there is no `currency` sheet column. `tx_amount_local` (from `tx_amount`), `tx_amount_base` / `base_currency` / `currency_rate_ref` — XAU equivalent computed at extract time from `currency_rates` using the account's currency. No `fx_rate` sheet column. When `local_currency = 'XAU'` (XAU account): `tx_amount_base = tx_amount_local` (nanograms), no rate lookup, `currency_rate_ref = NULL`. For all other currencies: rate lookup on `rate_date = tx_date_time_base.date()`; if no rate found → `create-failed`/`update-failed`. |
 | Q7 | `tx_description` naming | `description` renamed to `tx_description` to make scope explicit. |
 | Q8 | `tx_amount` sign convention | `tx_amount_local > 0` enforced by CHECK — direction (money-in vs money-out) is encoded in `category_master.tx_type` via the mandatory `category_id`; no separate `tx_type` column on `transaction_master`. |
 | Q9 | Soft-delete pattern | All primary entity tables — `transaction_master`, `counterparty_master`, `beneficiaries_master` — use `record_status TEXT NOT NULL DEFAULT 'active'` for lifecycle management, consistent with `account_master`. No `is_deleted` / `deleted_at` columns on any of them. The post-row soft-delete passes set `record_status = 'deleted'` on orphaned counterparties and beneficiaries. `transaction_beneficiaries` (junction) remains hard-delete only — rows are deleted and re-inserted on `update-pending`. |
 | Q10 | Location columns | `user_location_area/city/country` (where user physically is) stays on `transaction_master`. `user_location_latitude` and `user_location_longitude` are **sheet columns** — the extract writes them when non-blank in the sheet row, and stores NULL when blank (user manually enriches in the sheet). Counterparty location moves to `counterparty_master` — see Q14. |
 | Q11 | Timezone handling | User travels, so local timezone changes per transaction. Sheet column `tx_timezone` holds an IANA timezone name (e.g. `Asia/Kolkata`, `America/New_York`); optional, defaults to `Europe/London` when blank. `tx_timezone_local TEXT NOT NULL` stores the resolved IANA name. `tx_date_time_local TIMESTAMP` is derived by converting `tx_date_time_base` (UTC) to `tx_timezone_local` — it is not a sheet column. `tx_timezone_base TEXT NOT NULL` is always `'UTC'`. |
-| Q12 | Currency rate sourcing | `tx_amount_base` / `base_currency` / `currency_rate_ref` resolved via `_resolve_currency_rate`: looks up the local currency row in `currency_rates` on `rate_date = tx_date_time_base.date()`. `tx_amount_base` is computed as integer nanograms — `tx_amount_local` (local minor units) × `10^9` (XAU factor) ÷ (`rate_value` × local minor unit factor), rounded `ROUND_HALF_UP` to the nearest integer. `base_currency = 'XAU'` always. For XAU accounts: `tx_amount_base = tx_amount_local`, `currency_rate_ref = NULL` (no rate needed). For all other currencies: `currency_rate_ref = cr_local.id` (NOT NULL); if no rate found → `sync-failure`. All currencies except XAU go through the rate lookup — no other shortcuts. |
+| Q12 | Currency rate sourcing | `tx_amount_base` / `base_currency` / `currency_rate_ref` resolved via `_resolve_currency_rate`: looks up the local currency row in `currency_rates` on `rate_date = tx_date_time_base.date()` (exact date match — not a range scan). Exact date is required for historical accuracy: a transaction recorded on a past date must be valued using the rate prevailing on that date, not today's rate. This differs from the accounts module, which uses `rate_date <= CURRENT_DATE ORDER BY rate_date DESC LIMIT 1` (most-recent-available) because opening values are locked at first sync and there is no meaningful historical-rate concept for them. `tx_amount_base` is computed as integer nanograms — `tx_amount_local` (local minor units) × `10^9` (XAU factor) ÷ (`rate_value` × local minor unit factor), rounded `ROUND_HALF_UP` to the nearest integer. `base_currency = 'XAU'` always. For XAU accounts: `tx_amount_base = tx_amount_local`, `currency_rate_ref = NULL` (no rate needed). For all other currencies: `currency_rate_ref = cr_local.id` (NOT NULL); if no rate found → `create-failed`/`update-failed`. All currencies except XAU go through the rate lookup — no other shortcuts. |
 | Q13 | Beneficiaries | Tracked via two new tables: `beneficiaries_master` (person registry, soft-deleteable) and `transaction_beneficiaries` (junction, hard-deleted and re-inserted on `update-pending`). Sheet column `beneficiaries` supports optional percentages: `"Alice:60;Bob:40"` or equal-split shorthand `"Alice;Bob"`. `split_percentage NUMERIC(7,4)` stored per junction row — extract computes equal shares when not specified. Split amount = `tx_amount_base * (split_percentage / 100)` at query time. Percentages must sum to 100 — validated in extract, not SQL. |
 | Q14 | Counterparty normalisation | Counterparties extracted to `counterparty_master`. `counterparty_key` is derived from `counterparty_name` only (no location fields — those are manually enriched in the DB and never written by the extract). Key derivation: strip non-alphanumeric characters (except spaces), trim, uppercase, replace spaces with underscores, collapse consecutive underscores. If `counterparty_name` is blank → `counterparty_id = NULL`. If provided, a `counterparty_master` record is always created or reactivated via upsert — never left unresolved. `counterparty_label` updated to latest value on every upsert. `transaction_master` stores `counterparty_id UUID FK → counterparty_master(id)`. |
-| Q15 | Change detection and sync | Sheet carries `sync_status` column with values `create-pending`, `update-pending`, `in-sync`, `sync-failure`. Extract processes only `create-pending` and `update-pending`; skips all other values. On success: writes `in-sync` to `sync_status`, sets `sync_date_time`, clears `sync_notes`, and writes `created_at` / `updated_at`. On failure: writes `sync-failure` to `sync_status`, sets `sync_date_time`, writes failure reason to `sync_notes`; does not write `created_at` / `updated_at`. Row index tracking is required during the sheet read. No row hashing; no checksums table. |
+| Q15 | Change detection and sync | Sheet carries `sync_status` column with values `create-pending`, `update-pending`, `in-sync`, `sync-failure`, `create-failed`, `update-failed`. Extract processes `create-pending`, `create-failed`, `update-pending`, and `update-failed`; silently skips `in-sync` and `sync-failure`; logs a warning and skips unrecognised values. On success: writes `in-sync` to `sync_status`, sets `sync_date_time`, clears `sync_notes`, and writes `created_at` / `updated_at`. On failure: writes `sync-failure` to `sync_status`, sets `sync_date_time`, writes failure reason to `sync_notes`; does not write `created_at` / `updated_at`. `sync-failure` rows are skipped on subsequent runs without warning — GAS must reset the status to `create-pending` or `update-pending` to retry. Row index tracking is required during the sheet read. No row hashing; no checksums table. |
 | Q16 | Transaction lifecycle status | `transaction_master` carries `record_status TEXT NOT NULL DEFAULT 'active'` with values `active`, `inactive`, `deleted`, `locked` — same pattern as `account_master`. The extract writes the sheet `record_status` value directly to the DB on every sync. The extract refuses to modify `locked` or `deleted` records — any `update-pending` row whose DB record is `locked` or `deleted` is written as `sync-failure`. `deleted` marks a record for removal; `locked` marks it as finalised by a separate archival process. Use `record_status` and `updated_at` for lifecycle queries; there is no `is_deleted` / `deleted_at` on this table. |
-| Q17 | `parent_tx_id` | Optional field linking related transaction rows (e.g. two legs of a money-transfer, one row per account). If non-blank, the referenced `transaction_id` must already exist in `transaction_master` — the extract validates this via a DB lookup before inserting; if not found → `sync-failure: parent_tx_not_found`. Blank is valid — no constraint on when it must be set. Stored as `parent_tx_id TEXT` (nullable FK → `transaction_master(transaction_id)`, self-referential). |
+| Q17 | `parent_tx_id` | Optional field linking related transaction rows (e.g. two legs of a money-transfer, one row per account). If non-blank, the referenced `transaction_id` must already exist in `transaction_master` — the extract validates this via a DB lookup before inserting; if not found → `create-failed`/`update-failed`: `parent_tx_not_found`. Blank is valid — no constraint on when it must be set. Stored as `parent_tx_id TEXT` (nullable FK → `transaction_master(transaction_id)`, self-referential). |
 
 ---
 
@@ -46,7 +46,7 @@ Columns shown in actual sheet order.
 | 2 | `tx_date_time` | `YYYY-MM-DDTHH:MM` string | No | Required — stored in UTC; maps to `tx_date_time_base` |
 | 3 | `tx_timezone` | string | No | Optional — IANA timezone name (e.g. `Asia/Kolkata`); defaults to `Europe/London` when blank; maps to `tx_timezone_local` |
 | 4 | `parent_tx_id` | string | No | Optional — references another transaction's `id`; if non-blank must exist in `transaction_master.transaction_id`; blank is always valid; maps to `parent_tx_id TEXT` nullable FK → `transaction_master(transaction_id)` |
-| 5 | `tx_type` | enum string | No | `money-in` or `money-out` only — a transfer is two rows linked by `parent_tx_id` |
+| 5 | `tx_type` | enum string | No | `money-in` or `money-out` only — used with `major_category` and `minor_category` for `category_id` lookup; not stored on `transaction_master`; direction is encoded in the resolved category's own `tx_type` field |
 | 6 | `account_id` | string | No | Required — account natural key (e.g. `ACC-20240101-001`); resolved to `account_master.id` via the preloaded account map; replaces the old `source_account` + `target_account` columns; currency is derived from the resolved account's `local_currency` — there is no separate `currency` column in the sheet |
 | 7 | `tx_amount` | number string | No | Required — amount in the account's local currency major units; maps to `tx_amount_local`; previously named `amount` |
 | 8 | `major_category` | string | No | Not stored on `transaction_master` — used for `category_id` lookup |
@@ -54,7 +54,7 @@ Columns shown in actual sheet order.
 | 10 | `description` | string | No | Optional; maps to `tx_description` |
 | 11 | `counterparty_name` | string | No | Optional — normalised to `counterparty_key`; resolved to `counterparty_id` FK via `counterparty_master` |
 | 12 | `tx_tags` | string | No | Semicolon-separated; stored as-is on `transaction_master.tx_tags` |
-| 13 | `beneficiaries` | string | No | Required — semicolon-separated names with optional percentages (e.g. `Alice:60;Bob:40`); drives `beneficiaries_master` + `transaction_beneficiaries`; blank is `sync-failure: beneficiary_required` |
+| 13 | `beneficiaries` | string | No | Required — semicolon-separated names with optional percentages (e.g. `Alice:60;Bob:40`); drives `beneficiaries_master` + `transaction_beneficiaries`; blank is `create-failed`/`update-failed`: `beneficiary_required` |
 | 14 | `user_location_area` | string | No | Optional — neighbourhood/district where user physically is; maps to `transaction_master.user_location_area` |
 | 15 | `user_location_city` | string | No | Optional; maps to `transaction_master.user_location_city` |
 | 16 | `user_location_country` | string | No | Optional; maps to `transaction_master.user_location_country` |
@@ -215,12 +215,11 @@ JOIN beneficiaries_master bm ON bm.id = tb.beneficiary_id
   WHERE record_status NOT IN ('deleted', 'locked')
   ```
   `account_map: dict[str, tuple[UUID, str]]` — maps natural key → (surrogate id, local_currency). Used to resolve `account_id` and derive `local_currency` in one lookup.
-- `currency_decimal_places` and `currency_minor_unit_names` — loaded from a **single query**:
+- `currency_decimal_places` — loaded from:
   ```sql
-  SELECT currency_code, decimal_places, minor_unit_name FROM currency_master
+  SELECT currency_code, decimal_places FROM currency_master
   ```
   `currency_decimal_places = {row[0]: row[1] for row in rows}` — used to convert raw decimal amounts to integer minor units for both local currency and XAU.
-  `currency_minor_unit_names = {row[0]: row[2] for row in rows}` — available for log messages and error reporting.
 
 **Write-back on success:** `sync_status = 'in-sync'`, `sync_date_time = <now ISO>`, `sync_notes = ''`, `created_at = <original or now ISO>`, `updated_at = <now ISO>` (5 columns starting at `sync_status` col position)
 
@@ -258,14 +257,14 @@ Iterate rows in sheet order. For each row:
 
 1. Validate and transform the row (datetime, timezone, tx_amount, tx_type, record_status)
 2. Resolve `account_id` from preloaded `account_map` — if blank or not found → `sync-failure: account_not_found`; `local_currency` is taken from the matched account's `local_currency`
-3. If `parent_tx_id` is non-blank, verify it exists in `transaction_master.transaction_id` via a DB lookup — if not found → `sync-failure: parent_tx_not_found`; do not proceed
-4. Resolve `tx_amount_base` / `base_currency` / `currency_rate_ref` using `local_currency` from step 2 — on failure write `sync-failure` and skip; do not write to DB
+3. If `parent_tx_id` is non-blank, verify it exists in `transaction_master.transaction_id` via a DB lookup — if not found → `create-failed: parent_tx_not_found`; do not proceed
+4. Resolve `tx_amount_base` / `base_currency` / `currency_rate_ref` using `local_currency` from step 2 — on failure write `create-failed` and skip; do not write to DB
 5. Resolve `counterparty_id` (see counterparty resolution below)
-6. Resolve `category_id`: look up `(tx_type, major_category, minor_category)` in `category_master`; if no match → `sync-failure: category_not_found`; do not proceed
+6. Resolve `category_id`: look up `(tx_type, major_category, minor_category)` in `category_master`; if no match → `create-failed: category_not_found`; do not proceed
 
 ```sql
 SELECT id FROM category_master
-WHERE tx_type = %s AND major_category = %s AND minor_category = %s
+WHERE tx_type_key = %s AND major_category_key = %s AND minor_category_key = %s
   AND record_status = 'active'
 ```
 7. `INSERT INTO transaction_master (transaction_id, record_status, ...) RETURNING id` — `transaction_id` = sheet `id` value; `record_status` = sheet value; write `user_location_latitude` and `user_location_longitude` if non-blank in the sheet row, NULL otherwise; the returned surrogate `id` is required as `transaction_ref` in step 8
@@ -273,7 +272,7 @@ WHERE tx_type = %s AND major_category = %s AND minor_category = %s
 9. Commit
 10. Write `in-sync` to `sync_status`, set `sync_date_time`, clear `sync_notes`, write `created_at` / `updated_at`
 
-On any failure — whether a raised exception or a controlled failure (e.g. `account_not_found` at step 2, `parent_tx_not_found` at step 3, or a beneficiary validation failure at step 8) — call `conn.rollback()` before writing `sync-failure` to the sheet and moving to the next row. Steps 5 onwards write to the open transaction; without an explicit rollback those writes bleed into the next row's commit. **Exception — UNIQUE violation on `transaction_id`:** if the INSERT fails with a unique constraint violation, do not write `sync-failure`; instead fall through to the `update-pending` path (fetch original `created_at`, delete + re-insert). This handles the case where a previous run committed successfully but the sheet write-back failed, leaving the row stuck on `create-pending`. Implementation note: in psycopg2, after any constraint violation the transaction is in an aborted state — no further SQL can run until a rollback or savepoint rollback. The INSERT must be wrapped in a `SAVEPOINT`; on `UniqueViolation` rollback to the savepoint (not the full transaction) before executing the update-pending SELECT + delete + re-insert.
+On any failure — whether a raised exception or a controlled failure (e.g. `account_not_found` at step 2, `parent_tx_not_found` at step 3, or a beneficiary validation failure at step 8) — call `conn.rollback()` before writing a failure status to the sheet and moving to the next row. `account_not_found` (step 2) writes `sync-failure` (terminal — GAS must manually reset to retry). All resolution failures inside `_run_insert_steps` (steps 3–8) write `create-failed` so they are auto-retried on the next run once the missing data is added. Steps 5 onwards write to the open transaction; without an explicit rollback those writes bleed into the next row's commit. **Exception — UNIQUE violation on `transaction_id`:** if the INSERT fails with a unique constraint violation, do not write `sync-failure`; instead fall through to the `update-pending` path (fetch original `created_at`, delete + re-insert). This handles the case where a previous run committed successfully but the sheet write-back failed, leaving the row stuck on `create-pending`. Implementation note: in psycopg2, after any constraint violation the transaction is in an aborted state — no further SQL can run until a rollback or savepoint rollback. The INSERT must be wrapped in a `SAVEPOINT`; on `UniqueViolation` rollback to the savepoint (not the full transaction) before executing the update-pending SELECT + delete + re-insert.
 
 ---
 
@@ -315,13 +314,11 @@ All location fields on `counterparty_master` (`location_area`, `location_city`, 
 Step 1 — convert raw sheet amount to local minor units:
 ```python
 local_dp = currency_decimal_places[local_currency]  # e.g. 2 for GBP, 9 for XAU
-tx_amount_local = int(
-    (Decimal(raw_amount.strip()) * Decimal(10) ** local_dp).to_integral_value(ROUND_HALF_UP)
-)
+tx_amount_local = int((Decimal(raw_amount.strip()) * Decimal(10) ** local_dp).to_integral_value(ROUND_HALF_UP))
 # e.g. "10.50" GBP → 1050 pence; "0.000001" XAU → 1000 nanograms
 ```
 
-If `tx_amount_local == 0` → `sync-failure: amount_rounds_to_zero_in_minor_units`; do not proceed. This catches valid positive decimals that round to zero minor units (e.g. `0.001 GBP` → 0 pence, `0.4 JPY` → 0 yen).
+If `tx_amount_local == 0` → `create-failed`/`update-failed`: `amount_rounds_to_zero_in_minor_units`; do not proceed. This catches valid positive decimals that round to zero minor units (e.g. `0.001 GBP` → 0 pence, `0.4 JPY` → 0 yen).
 
 Step 2 — fetch the rate row:
 
@@ -332,7 +329,7 @@ WHERE quote_currency_code = %s
   AND base_currency_code = 'XAU'
 ```
 
-Bind values: `(local_currency, tx_date_time_base.date())`. `rate_value` = how many local major units equal 1 XAU (e.g. 76.0 GBP per XAU gram). Returns `(rate_id, rate_value)` tuple. If no row returned → `sync-failure: currency_rate_not_found: {currency} on {date}`; do not proceed. `rate_value` is psycopg2's native `Decimal` — do not wrap in `Decimal(str(...))`.
+Bind values: `(local_currency, tx_date_time_base.date())`. `rate_value` = how many local major units equal 1 XAU (e.g. 76.0 GBP per XAU gram). Returns `(rate_id, rate_value)` tuple. If no row returned → `create-failed`/`update-failed`: `currency_rate_not_found: {currency} on {date}`; do not proceed. `rate_value` is psycopg2's native `Decimal` — do not wrap in `Decimal(str(...))`.
 
 Step 3 — compute XAU nanograms:
 
@@ -345,10 +342,7 @@ if xau_dp != 9:
     raise ValueError(f"currency_master.decimal_places for XAU is {xau_dp}, expected 9")
 if not isinstance(rate_value, Decimal):
     raise TypeError(f"_resolve_currency_rate: expected Decimal from psycopg2, got {type(rate_value).__name__}")
-tx_amount_base = int(
-    (Decimal(tx_amount_local) * Decimal(10) ** xau_dp / (rate_value * Decimal(10) ** local_dp))
-    .to_integral_value(ROUND_HALF_UP)
-)
+tx_amount_base = int((Decimal(tx_amount_local) * Decimal(10) ** xau_dp / (rate_value * Decimal(10) ** local_dp)).to_integral_value(ROUND_HALF_UP))
 # e.g. 1050 pence at 76 GBP/XAU → 138_157_895 nanograms
 ```
 
@@ -356,12 +350,12 @@ tx_amount_base = int(
 
 **Beneficiary resolution:**
 Parse `raw_beneficiaries` by splitting on `';'` and stripping whitespace. Names are stored as-is (strip only, no case normalisation) — `"Alice"` and `"alice"` are distinct records. Each entry is either `"Name"` or `"Name:percentage"`. All entries must follow the same form — mixing is not allowed:
-- If any entry is empty after stripping (e.g. `"Alice;;Bob"` produces `''`) → `sync-failure: beneficiary_empty_name`
-- If entries are inconsistent (some have a percentage, some do not, e.g. `"Alice:60;Bob"`) → `sync-failure: beneficiary_inconsistent_percentage_format`
-- If any percentage is present but non-numeric → `sync-failure: beneficiary_invalid_percentage`
-- If any explicit percentage is ≤ 0 or > 100 → `sync-failure: beneficiary_invalid_percentage`
+- If any entry is empty after stripping (e.g. `"Alice;;Bob"` produces `''`) → `create-failed`/`update-failed`: `beneficiary_empty_name`
+- If entries are inconsistent (some have a percentage, some do not, e.g. `"Alice:60;Bob"`) → `create-failed`/`update-failed`: `beneficiary_inconsistent_percentage_format`
+- If any percentage is present but non-numeric → `create-failed`/`update-failed`: `beneficiary_invalid_percentage`
+- If any explicit percentage is ≤ 0 or > 100 → `create-failed`/`update-failed`: `beneficiary_invalid_percentage`
 - If no percentages given, compute equal shares: `100 / COUNT` rounded to 4 dp, with remainder assigned to the last entry so they sum exactly to `100.0000` (e.g. 3 people → `33.3333, 33.3333, 33.3334`)
-- If explicit percentages given, validate they sum to `100` (±0.01 tolerance) — if not → `sync-failure: beneficiary_percentages_do_not_sum_to_100`
+- If explicit percentages given, validate they sum to `100` (±0.01 tolerance) — if not → `create-failed`/`update-failed`: `beneficiary_percentages_do_not_sum_to_100`
 
 For each non-empty name, upsert into `beneficiaries_master`:
 
@@ -431,7 +425,7 @@ if pk_row is None:
     raise RuntimeError(f"INSERT returned no id for transaction_id={natural_key}")
 conn.commit()
 ```
-Apply to: `transaction_master` INSERT, `beneficiaries_master` INSERT, `transaction_beneficiaries` INSERT.
+Apply to: `transaction_master` INSERT, `counterparty_master` upsert, `beneficiaries_master` upsert.
 
 **Every except chain must end with a bare `except Exception` rollback guard:**
 ```python
@@ -460,10 +454,11 @@ WriteBack = tuple[int, int, list[str]]
 
 **`_to_sync_notes(e)` — DB constraint → human-readable `sync_notes` message mapping:**
 
-`_to_sync_notes` receives psycopg2 integrity errors only — never `ValueError` (transform/validation errors are written directly as `sync-failure`, not via this function).
+`_to_sync_notes` receives both `ValueError` (from the transform layer) and psycopg2 integrity errors. `ValueError` messages are stripped of the `"transactions: "` prefix and returned directly; psycopg2 errors are mapped to human-readable strings. Unknown types raise `TypeError` — this is a bug sentinel, not a user-facing message.
 
 | Constraint / exception | `sync_notes` message |
 |---|---|
+| `ValueError` | `str(e).removeprefix("transactions: ")` |
 | `UniqueViolation` on `uq_tm_transaction_id` | `"Duplicate transaction_id — already exists in DB"` |
 | `ForeignKeyViolation` on `fk_tm_parent_tx` | `"parent_tx_id references a transaction that does not exist in DB — sync the parent row first"` |
 | `ForeignKeyViolation` on `fk_tm_account` | `"account_id references an account that no longer exists"` |

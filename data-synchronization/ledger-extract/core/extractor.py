@@ -51,7 +51,7 @@ class LedgerExtractJob:
 
             if current_sheet_modified_at == last_sheet_modified_at:
                 update_ran_at(self._conn)
-                logger.info(f"run: no_changes last_known={last_sheet_modified_at.isoformat()} current={current_sheet_modified_at.isoformat()} — sheet unchanged since last run, skipping entity extraction")
+                logger.info(f"run: no_changes last_known={last_sheet_modified_at.isoformat()} current={current_sheet_modified_at.isoformat()} — skipping entity extraction")
                 return
 
             # --- Phase 2: Entity extraction ---
@@ -114,5 +114,7 @@ class LedgerExtractJob:
             if len(rows) < _BATCH_SIZE:
                 break
             row_start += _BATCH_SIZE
-        account_name_map = transactions_db.load_account_name_map(self._conn)
-        transactions_db.upsert_transactions(self._conn, all_rows, account_name_map)
+        logger.info(f"_extract_transactions: sheet_read entity=transactions total_rows={len(all_rows)}")
+        account_map = transactions_db.load_account_map(self._conn)
+        logger.info(f"_extract_transactions: account_map_loaded entity=transactions account_count={len(account_map)}")
+        transactions_db.upsert_transactions(self._conn, sheets_client, all_rows, account_map)
