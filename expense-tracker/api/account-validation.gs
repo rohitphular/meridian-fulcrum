@@ -8,8 +8,8 @@ function validateAccountCreate(body) {
   if (VALID_ACCOUNT_TYPES.indexOf(type) === -1) {
     return { ok: false, error: 'invalid_account_type' };
   }
-  if (body.name === undefined || body.name === null || String(body.name).trim() === '')         return { ok: false, error: 'missing_name' };
-  if (body.currency === undefined || body.currency === null || String(body.currency).trim() === '') return { ok: false, error: 'missing_currency' };
+  if (body.account_name === undefined || body.account_name === null || String(body.account_name).trim() === '')         return { ok: false, error: 'missing_account_name' };
+  if (body.local_currency === undefined || body.local_currency === null || String(body.local_currency).trim() === '') return { ok: false, error: 'missing_local_currency' };
 
   // sub_type is required for all account types
   const subType = (body.sub_type !== undefined && body.sub_type !== null) ? String(body.sub_type).trim() : '';
@@ -25,9 +25,9 @@ function validateAccountCreate(body) {
     return { ok: false, error: 'invalid_sub_type' };
   }
 
-  // Cross-entity: currency must exist in the rates sheet.
+  // Cross-entity: local_currency must exist in the rates sheet.
   // listRates() auto-seeds defaults (GBP, INR, USD, EUR, AED) on an empty sheet.
-  const normCurrency    = String(body.currency).trim().toUpperCase();
+  const normCurrency    = String(body.local_currency).trim().toUpperCase();
   const ratesData       = listRates();
   const knownCurrencies = {};
   ratesData.forEach(function(r) {
@@ -37,11 +37,15 @@ function validateAccountCreate(body) {
     return { ok: false, error: 'unknown_currency' };
   }
 
-  if (body.opening_value === undefined || body.opening_value === null) {
-    return { ok: false, error: 'missing_opening_value' };
+  if (body.opening_value_local === undefined || body.opening_value_local === null) {
+    return { ok: false, error: 'missing_opening_value_local' };
   }
-  if (Number.isFinite(Number(body.opening_value)) === false) {
-    return { ok: false, error: 'invalid_opening_value' };
+  if (Number.isFinite(Number(body.opening_value_local)) === false) {
+    return { ok: false, error: 'invalid_opening_value_local' };
+  }
+
+  if (body.opening_date_local === undefined || body.opening_date_local === null || String(body.opening_date_local).trim() === '') {
+    return { ok: false, error: 'missing_opening_date_local' };
   }
 
   return { ok: true };
@@ -49,7 +53,7 @@ function validateAccountCreate(body) {
 
 function validateAccountUpdate(body, currentType) {
   if (body.row_num === undefined || body.row_num === null) return { ok: false, error: 'missing_row_num' };
-  if (body.name === undefined || body.name === null || String(body.name).trim() === '') return { ok: false, error: 'missing_name' };
+  if (body.account_name === undefined || body.account_name === null || String(body.account_name).trim() === '') return { ok: false, error: 'missing_account_name' };
 
   // Reject attempts to send immutable fields
   const fields = getFieldsForAccountType(currentType);

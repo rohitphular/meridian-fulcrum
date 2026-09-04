@@ -1,5 +1,5 @@
 import { state } from '../core/state.js';
-import { el, esc, fmtDateTime, fmtDateTimeCompact, fmtNative, fmtBase, nowLocalISO, toDateInputVal, exportData, getSymbol, localToUtcISO, utcToLocalInput, openContextMenu, closeContextMenu, syncStatusIcon, recordStatusIcon, parseCsvRow } from '../core/utils.js';
+import { el, esc, fmtDateTime, fmtDateTimeCompact, fmtNative, fmtBase, nowLocalISO, toDateInputVal, exportData, getSymbol, openContextMenu, closeContextMenu, syncStatusIcon, recordStatusIcon, parseCsvRow } from '../core/utils.js';
 import { showLoading, hideLoading, showMsg } from '../core/ui.js';
 import { filteredTx, getRangeBounds } from '../core/daterange.js';
 import { ExpenseAPI } from '../core/api.js';
@@ -93,7 +93,6 @@ function _dispatchTxAction(action, row) {
       name:              (tx.counterparty_name !== undefined && tx.counterparty_name !== null) ? tx.counterparty_name : '',
       counterparty_name: (tx.counterparty_name !== undefined && tx.counterparty_name !== null) ? tx.counterparty_name : '',
       amount:            Number(tx.tx_amount),
-      currency:          (_subAcct.currency !== undefined && _subAcct.currency !== null) ? _subAcct.currency : '',
       source_account:    (tx.account_id !== undefined && tx.account_id !== null) ? tx.account_id : '',
       tx_type:           (tx.tx_type !== undefined && tx.tx_type !== null) ? tx.tx_type : '',
       major_category:    (tx.major_category !== undefined && tx.major_category !== null) ? tx.major_category : '',
@@ -281,7 +280,7 @@ function _acctOptsWithHints(accounts, allowedTypesStr, selectedId = '') {
     ? accounts.filter(a => allowed.has((a.type !== undefined && a.type !== null ? a.type : '').toLowerCase()) || allowed.has((a.sub_type !== undefined && a.sub_type !== null ? a.sub_type : '').toLowerCase()))
     : accounts;
   return filtered.map(a =>
-    `<option value="${esc(a.id)}" ${a.id === selectedId ? 'selected' : ''}>${esc(a.name)} (${esc(a.currency)})</option>`
+    `<option value="${esc(a.id)}" ${a.id === selectedId ? 'selected' : ''}>${esc(a.account_name)} (${esc(a.local_currency)})</option>`
   ).join('');
 }
 
@@ -379,8 +378,8 @@ export function renderTransactions() {
   const _validTypes = new Set(_rawTypes.length
     ? _rawTypes.map(t => (typeof t === 'string' ? t : t.value))
     : ['money-in', 'money-out']);
-  const validRows = rows.filter(tx =>  tx.id && tx.tx_date_time && _validTypes.has(tx.tx_type));
-  const warnRows  = rows.filter(tx => !tx.id || !tx.tx_date_time || !_validTypes.has(tx.tx_type));
+  const validRows = rows.filter(tx =>  tx.id && tx.tx_date_local && _validTypes.has(tx.tx_type));
+  const warnRows  = rows.filter(tx => !tx.id || !tx.tx_date_local || !_validTypes.has(tx.tx_type));
 
   const viewTx     = state.txViewRow !== null ? validRows.find(tx => tx._row === state.txViewRow) : null;
   const editTx     = state.txEditRow !== null ? validRows.find(tx => tx._row === state.txEditRow) : null;
@@ -500,13 +499,13 @@ function _renderTxTable(validRows, warnRows) {
     const badgeCls    = tx.tx_type === 'money-in' ? 'badge-et-in' : tx.tx_type === 'money-out' ? 'badge-et-out' : 'badge-et-transfer';
     const typeLabel   = (_txTypeMap()[tx.tx_type] !== undefined && _txTypeMap()[tx.tx_type] !== null) ? _txTypeMap()[tx.tx_type] : tx.tx_type;
     const _txAccTbl   = (state.accountMap[tx.account_id] !== undefined && state.accountMap[tx.account_id] !== null) ? state.accountMap[tx.account_id] : {};
-    const txCur       = (_txAccTbl.currency !== undefined && _txAccTbl.currency !== null) ? _txAccTbl.currency : '';
+    const txCur       = (_txAccTbl.local_currency !== undefined && _txAccTbl.local_currency !== null) ? _txAccTbl.local_currency : '';
     const missingRate = state.rateMap[txCur] === undefined || state.rateMap[txCur] === null;
     const displayAmt  = Number(tx.tx_amount);
-    const acctName    = (_txAccTbl.name !== undefined && _txAccTbl.name !== null) ? _txAccTbl.name : '—';
+    const acctName    = (_txAccTbl.account_name !== undefined && _txAccTbl.account_name !== null) ? _txAccTbl.account_name : '—';
     const _sibling    = (_siblingMap[tx.id] !== undefined && _siblingMap[tx.id] !== null) ? _siblingMap[tx.id] : null;
     const _sibAccTbl  = _sibling !== null ? ((state.accountMap[_sibling.account_id] !== undefined && state.accountMap[_sibling.account_id] !== null) ? state.accountMap[_sibling.account_id] : {}) : null;
-    const _sibAccTblName = (_sibAccTbl !== null && _sibAccTbl !== undefined && _sibAccTbl.name !== undefined && _sibAccTbl.name !== null) ? _sibAccTbl.name : '—';
+    const _sibAccTblName = (_sibAccTbl !== null && _sibAccTbl !== undefined && _sibAccTbl.account_name !== undefined && _sibAccTbl.account_name !== null) ? _sibAccTbl.account_name : '—';
     const acctLabel   = _sibAccTbl !== null
       ? (tx.tx_type === 'money-out'
           ? acctName + ' → ' + _sibAccTblName
@@ -521,7 +520,7 @@ function _renderTxTable(validRows, warnRows) {
 
     return {
       tr: `<tr>
-        <td class="td-mono td-nowrap">${esc(fmtDateTimeCompact(tx.tx_date_time))}</td>
+        <td class="td-mono td-nowrap">${esc(fmtDateTimeCompact(tx.tx_date_local))}</td>
         <td><span class="badge ${badgeCls}">${typeLabel}</span></td>
         <td class="td-truncate" title="${esc(acctLabel)}">${esc(acctLabel)}</td>
         <td class="td-mono td-nowrap">${amtCell}${missingRate ? ' <span class="badge badge-warn" title="Currency not in rates tab">?</span>' : ''}</td>
@@ -536,7 +535,7 @@ function _renderTxTable(validRows, warnRows) {
         const dotCls = tx.tx_type === 'money-in' ? 'tx-dot-in' : tx.tx_type === 'money-out' ? 'tx-dot-out' : 'tx-dot-transfer';
         return `<div class="tx-card">
           <div class="tx-card-body">
-            <div class="tx-card-name"><span class="tx-type-dot ${dotCls}">●</span> ${esc(fmtDateTimeCompact(tx.tx_date_time))} · ${esc(acctLabel)}</div>
+            <div class="tx-card-name"><span class="tx-type-dot ${dotCls}">●</span> ${esc(fmtDateTimeCompact(tx.tx_date_local))} · ${esc(acctLabel)}</div>
             ${catLabel !== '—' ? `<div class="tx-card-cat">${esc(catLabel)}</div>` : ''}
           </div>
           <div class="tx-card-amt td-mono">${esc(fmtNative(displayAmt, txCur))}</div>
@@ -556,7 +555,7 @@ function _renderTxTable(validRows, warnRows) {
   const warnRowsHtml = warnRows.length ? `
     <tbody id="warnTable" class="hidden">
       ${warnRows.map(tx => `<tr>
-        <td colspan="6"><span class="badge badge-warn">⚠ malformed</span> id=${esc(String(tx.id !== undefined && tx.id !== null ? tx.id : '?'))} type=${esc(tx.tx_type !== undefined && tx.tx_type !== null ? tx.tx_type : '?')} date=${esc(String(tx.tx_date_time !== undefined && tx.tx_date_time !== null ? tx.tx_date_time : '?'))}</td>
+        <td colspan="6"><span class="badge badge-warn">⚠ malformed</span> id=${esc(String(tx.id !== undefined && tx.id !== null ? tx.id : '?'))} type=${esc(tx.tx_type !== undefined && tx.tx_type !== null ? tx.tx_type : '?')} date=${esc(String(tx.tx_date_local !== undefined && tx.tx_date_local !== null ? tx.tx_date_local : '?'))}</td>
       </tr>`).join('')}
     </tbody>` : '';
 
@@ -574,7 +573,7 @@ function _renderTxTable(validRows, warnRows) {
     <div class="table-wrap tx-table-wrap${hasDeleteRow ? ' tx-has-active' : ''}">
       <table>
         <thead><tr>
-          ${thSort('tx_date_time','Date')}
+          ${thSort('tx_date_local','Date')}
           ${thSort('tx_type','Type')}
           ${thSort('account_id','Account')}
           <th>Amount</th>
@@ -672,7 +671,7 @@ function _sortTx(rows) {
   const col = state.txSort.col;
   const dir = state.txSort.dir === 'asc' ? 1 : -1;
   return rows.sort((a, b) => {
-    if (col === 'tx_date_time') {
+    if (col === 'tx_date_local') {
       const ts = s => { const d = new Date(String(s)); return Number.isFinite(d.getTime()) ? d.getTime() : null; };
       const va = ts(a[col]); const vb = ts(b[col]);
       const aNil = va === null; const bNil = vb === null;
@@ -738,14 +737,10 @@ function _renderAddForm() {
           <option value="">External</option>
         </select>
       </div>
-      <!-- Row 3: Date & time | Timezone | Source amount | Target amount -->
+      <!-- Row 3: Date & time | Source amount | Target amount -->
       <div class="field form-grid-span-2" id="afDateField">
         <label for="afDate">Date &amp; time *</label>
         <input type="datetime-local" id="afDate" value="${nowLocalISO()}">
-      </div>
-      <div class="field form-grid-span-2" id="afTimezoneField">
-        <label for="afTimezone">Timezone <span class="optional">optional</span></label>
-        <input type="text" id="afTimezone" placeholder="e.g. Asia/Kolkata" autocomplete="off">
       </div>
       <div class="field form-grid-span-2" id="afSourceAmountField">
         <label for="afSourceAmount" id="afSourceAmountLabel">Amount *</label>
@@ -851,7 +846,6 @@ function _prefillAddForm(p) {
   const afCountry = el('afCountry');     if (afCountry !== null && afCountry !== undefined) afCountry.value = (p.user_location_country !== undefined && p.user_location_country !== null) ? p.user_location_country : '';
   const afTags    = el('afTags');        if (afTags    !== null && afTags    !== undefined) afTags.value    = (p.tx_tags !== undefined && p.tx_tags !== null) ? String(p.tx_tags).replace(/;/g, ', ') : '';
   const afDesc    = el('afDescription'); if (afDesc    !== null && afDesc    !== undefined) afDesc.value    = (p.description          !== undefined && p.description          !== null) ? p.description          : '';
-  const afTimezone = el('afTimezone'); if (afTimezone !== null && afTimezone !== undefined) afTimezone.value = (p.tx_timezone !== undefined && p.tx_timezone !== null) ? p.tx_timezone : '';
   const afLat = el('afLatitude');  if (afLat !== null && afLat !== undefined) afLat.value = (p.user_location_latitude  !== undefined && p.user_location_latitude  !== null) ? p.user_location_latitude  : '';
   const afLon = el('afLongitude'); if (afLon !== null && afLon !== undefined) afLon.value = (p.user_location_longitude !== undefined && p.user_location_longitude !== null) ? p.user_location_longitude : '';
   const afBen = el('afBeneficiaries'); if (afBen !== null && afBen !== undefined) afBen.value = (p.beneficiaries !== undefined && p.beneficiaries !== null) ? p.beneficiaries : '';
@@ -899,7 +893,7 @@ function _attachAddFormEvents() {
 
   el('afSubmit').addEventListener('click', _saveTransaction);
   el('afReset').addEventListener('click', () => {
-    ['afDate','afSourceAmount','afTargetAmount','afCounterparty','afArea','afCity','afCountry','afTags','afDescription','afTimezone','afLatitude','afLongitude','afBeneficiaries']
+    ['afDate','afSourceAmount','afTargetAmount','afCounterparty','afArea','afCity','afCountry','afTags','afDescription','afLatitude','afLongitude','afBeneficiaries']
       .forEach(id => { const _el = el(id); if (_el !== null && _el !== undefined) _el.value = id === 'afDate' ? nowLocalISO() : ''; });
     el('afType').value = '';
     const fromEl = el('afFromAccount');
@@ -1013,23 +1007,23 @@ function _afRefreshToAccountField() {
 // Rules 1 & 3 — insufficient balance (asset accounts).
 // Rules 2 & 4 — credit limit exceeded (credit-card accounts).
 // Rule 5     — money-out from a loan account (with exemption for interest/charges).
-// Rule 6     — FX transfer: source_amount and target_amount may differ for cross-currency transfers.
+// Rule 6     — FX transfer: source_amount_local and target_amount_local may differ for cross-currency transfers.
 
 function _checkBalanceRules(transaction_type, sourceAccount, isTransfer, amount) {
   if (sourceAccount === undefined || sourceAccount === null) return null;
   const isMoneyOut      = transaction_type === 'money-out';
   if (!isMoneyOut && !isTransfer) return null;
 
-  const sym = getSymbol(sourceAccount.currency);
+  const sym = getSymbol(sourceAccount.local_currency);
   const fmt = n => Number(n).toFixed(2);
 
   // Rules 1 & 3 — asset accounts
   if ((state.accountSchema !== undefined && state.accountSchema !== null && state.accountSchema.asset_types !== undefined && state.accountSchema.asset_types !== null ? state.accountSchema.asset_types : []).includes(sourceAccount.type)) {
-    const balance = Number(sourceAccount.current_value);
+    const balance = Number(sourceAccount.current_value_local);
     if (balance < amount) {
       return (
         `Insufficient balance.\n` +
-        `${sourceAccount.name} has ${sym}${fmt(balance)} — this transaction requires ${sym}${fmt(amount)}.\n` +
+        `${sourceAccount.account_name} has ${sym}${fmt(balance)} — this transaction requires ${sym}${fmt(amount)}.\n` +
         `Record an Adjustments / Balance correction first if your actual balance is higher.`
       );
     }
@@ -1041,7 +1035,7 @@ function _checkBalanceRules(transaction_type, sourceAccount, isTransfer, amount)
     const creditLimit = Number(sourceAccount.credit_card_limit);
     if ((sourceAccount.credit_card_limit === undefined || sourceAccount.credit_card_limit === null || sourceAccount.credit_card_limit === '') || creditLimit <= 0) return null; // no limit set — skip check
 
-    const balance         = Number(sourceAccount.current_value); // negative: amount owed stored as negative
+    const balance         = Number(sourceAccount.current_value_local); // negative: amount owed stored as negative
     const availableCredit = creditLimit + balance;                 // e.g. limit=1000, balance=−600 → available=400
 
     if (amount > availableCredit) {
@@ -1051,7 +1045,7 @@ function _checkBalanceRules(transaction_type, sourceAccount, isTransfer, amount)
         const alreadyOver = Math.abs(availableCredit);
         return (
           `Credit limit exceeded.\n` +
-          `${sourceAccount.name} — limit ${sym}${fmt(creditLimit)}, currently ${sym}${fmt(owed)} owed, already ${sym}${fmt(alreadyOver)} over the limit.\n` +
+          `${sourceAccount.account_name} — limit ${sym}${fmt(creditLimit)}, currently ${sym}${fmt(owed)} owed, already ${sym}${fmt(alreadyOver)} over the limit.\n` +
           `This transaction of ${sym}${fmt(amount)} cannot be applied.`
         );
       } else {
@@ -1059,7 +1053,7 @@ function _checkBalanceRules(transaction_type, sourceAccount, isTransfer, amount)
         const overage = amount - availableCredit;
         return (
           `Credit limit exceeded.\n` +
-          `${sourceAccount.name} — limit ${sym}${fmt(creditLimit)}, currently ${sym}${fmt(owed)} owed, available ${sym}${fmt(availableCredit)}.\n` +
+          `${sourceAccount.account_name} — limit ${sym}${fmt(creditLimit)}, currently ${sym}${fmt(owed)} owed, available ${sym}${fmt(availableCredit)}.\n` +
           `This transaction of ${sym}${fmt(amount)} would exceed the limit by ${sym}${fmt(overage)}.`
         );
       }
@@ -1105,7 +1099,7 @@ async function _saveTransaction() {
   const user_location_country  = el('afCountry').value.trim();
   const tx_tags              = el('afTags').value.trim();
   const description          = el('afDescription').value.trim();
-  const tx_timezone            = el('afTimezone').value.trim();
+  const tx_timezone             = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const user_location_latitude  = el('afLatitude').value  !== '' ? Number(el('afLatitude').value)  : '';
   const user_location_longitude = el('afLongitude').value !== '' ? Number(el('afLongitude').value) : '';
   const beneficiaries           = el('afBeneficiaries').value.trim();
@@ -1140,13 +1134,13 @@ async function _saveTransaction() {
   showLoading();
   try {
     const res = await ExpenseAPI.createTransaction({
-      tx_date_time: localToUtcISO(dateRaw),
+      tx_date_local: (dateRaw.replace('T', ' ') + ':00').substring(0, 19),
       tx_type, source_account, target_account,
-      source_amount, target_amount,
+      source_amount_local: source_amount, target_amount_local: target_amount,
       major_category, minor_category,
       counterparty_name, user_location_area, user_location_city, user_location_country,
       tx_tags, description,
-      tx_timezone, user_location_latitude, user_location_longitude, beneficiaries,
+      tx_timezone_local: tx_timezone, user_location_latitude, user_location_longitude, beneficiaries,
     });
     if (res.ok) {
       showMsg(res.ids ? '2 transactions saved (transfer split).' : 'Transaction saved.');
@@ -1174,12 +1168,12 @@ function _renderTxForm(tx, mode) {
   const _txAccForm   = (state.accountMap[tx.account_id] !== undefined && state.accountMap[tx.account_id] !== null) ? state.accountMap[tx.account_id] : {};
   const _siblingForm = (_siblingMap[tx.id] !== undefined && _siblingMap[tx.id] !== null) ? _siblingMap[tx.id] : null;
   const _sibAccForm  = _siblingForm !== null ? ((state.accountMap[_siblingForm.account_id] !== undefined && state.accountMap[_siblingForm.account_id] !== null) ? state.accountMap[_siblingForm.account_id] : {}) : null;
-  const acctFormName  = (_txAccForm.name !== undefined && _txAccForm.name !== null) ? _txAccForm.name : '—';
+  const acctFormName  = (_txAccForm.account_name !== undefined && _txAccForm.account_name !== null) ? _txAccForm.account_name : '—';
 
   if (mode === 'view') {
-    const txCurView = (_txAccForm.currency !== undefined && _txAccForm.currency !== null) ? _txAccForm.currency : '';
+    const txCurView = (_txAccForm.local_currency !== undefined && _txAccForm.local_currency !== null) ? _txAccForm.local_currency : '';
     const viewAmt   = Number(tx.tx_amount);
-    const _sibAccFormName = (_sibAccForm !== null && _sibAccForm !== undefined && _sibAccForm.name !== undefined && _sibAccForm.name !== null) ? _sibAccForm.name : '—';
+    const _sibAccFormName = (_sibAccForm !== null && _sibAccForm !== undefined && _sibAccForm.account_name !== undefined && _sibAccForm.account_name !== null) ? _sibAccForm.account_name : '—';
     const viewAcct  = _sibAccForm !== null
       ? (tx.tx_type === 'money-out'
           ? acctFormName + ' → ' + _sibAccFormName
@@ -1213,8 +1207,8 @@ function _renderTxForm(tx, mode) {
         <!-- Row 2: Account (full width) -->
         ${vf('Account', esc(viewAcct), 'form-grid-full')}
         <!-- Row 3: Date & time | Timezone | Amount -->
-        ${vf('Date &amp; time', esc(fmtDateTime(tx.tx_date_time)))}
-        ${vf('Timezone', esc((tx.tx_timezone !== undefined && tx.tx_timezone !== null && String(tx.tx_timezone).trim() !== '') ? tx.tx_timezone : '—'))}
+        ${vf('Date &amp; time', esc(fmtDateTime(tx.tx_date_local)))}
+        ${vf('Timezone', esc((tx.tx_timezone_local !== undefined && tx.tx_timezone_local !== null && String(tx.tx_timezone_local).trim() !== '') ? tx.tx_timezone_local : '—'))}
         <div class="field form-grid-span-2">
           <label>Amount</label>
           <div class="field-val">
@@ -1257,8 +1251,8 @@ function _renderTxForm(tx, mode) {
   const { majorKey: _editMajorKey, minorKey: _editMinorKey } = _normCatKeys(tx.tx_type, tx.major_category, tx.minor_category);
   const majorOpts = _catMajorOpts(tx.tx_type, _editMajorKey);
   const minorOpts = _catMinorOpts(tx.tx_type, _editMajorKey, _editMinorKey);
-  const dateVal   = utcToLocalInput(tx.tx_date_time);
-  const _sibAccFormName = (_sibAccForm !== null && _sibAccForm !== undefined && _sibAccForm.name !== undefined && _sibAccForm.name !== null && String(_sibAccForm.name).trim() !== '') ? _sibAccForm.name : '—';
+  const dateVal   = (tx.tx_date_local !== undefined && tx.tx_date_local !== null ? String(tx.tx_date_local) : '').replace(' ', 'T').substring(0, 16);
+  const _sibAccFormName = (_sibAccForm !== null && _sibAccForm !== undefined && _sibAccForm.account_name !== undefined && _sibAccForm.account_name !== null && String(_sibAccForm.account_name).trim() !== '') ? _sibAccForm.account_name : '—';
   const transferNote = _siblingForm !== null
     ? `<div style="font-size:var(--text-sm);color:var(--muted);margin-bottom:4px">Linked transfer — edit this leg only. The other leg (${esc(_sibAccFormName)}) is a separate row.</div>`
     : '';
@@ -1300,8 +1294,8 @@ function _renderTxForm(tx, mode) {
         <input type="datetime-local" id="txEditDate" value="${esc(dateVal)}">
       </div>
       <div class="field form-grid-span-2">
-        <label>Timezone <span class="optional">optional</span></label>
-        <input type="text" id="txEditTimezone" placeholder="e.g. Asia/Kolkata" autocomplete="off" value="${esc((tx.tx_timezone !== undefined && tx.tx_timezone !== null) ? tx.tx_timezone : '')}">
+        <label>Timezone</label>
+        <div class="field-val">${esc((tx.tx_timezone_local !== undefined && tx.tx_timezone_local !== null && String(tx.tx_timezone_local).trim() !== '') ? tx.tx_timezone_local : '—')}</div>
       </div>
       <div class="field form-grid-span-2">
         <label>Amount</label>
@@ -1366,18 +1360,18 @@ function _renderTxDeleteRow(tx) {
   const _txAccDel   = (state.accountMap[tx.account_id] !== undefined && state.accountMap[tx.account_id] !== null) ? state.accountMap[tx.account_id] : {};
   const _delSibling = (_siblingMap[tx.id] !== undefined && _siblingMap[tx.id] !== null) ? _siblingMap[tx.id] : null;
   const _delSibAcc  = _delSibling !== null ? ((state.accountMap[_delSibling.account_id] !== undefined && state.accountMap[_delSibling.account_id] !== null) ? state.accountMap[_delSibling.account_id] : {}) : null;
-  const acctName    = (_txAccDel.name !== undefined && _txAccDel.name !== null) ? _txAccDel.name : '—';
-  const _delSibAccName = (_delSibAcc !== null && _delSibAcc !== undefined && _delSibAcc.name !== undefined && _delSibAcc.name !== null) ? _delSibAcc.name : '—';
+  const acctName    = (_txAccDel.account_name !== undefined && _txAccDel.account_name !== null) ? _txAccDel.account_name : '—';
+  const _delSibAccName = (_delSibAcc !== null && _delSibAcc !== undefined && _delSibAcc.account_name !== undefined && _delSibAcc.account_name !== null) ? _delSibAcc.account_name : '—';
   const accLabel    = _delSibAcc !== null
     ? (tx.tx_type === 'money-out'
         ? acctName + ' → ' + _delSibAccName
         : _delSibAccName + ' → ' + acctName)
     : acctName;
   const delAmt = Number(tx.tx_amount);
-  const _delCur = (_txAccDel.currency !== undefined && _txAccDel.currency !== null) ? _txAccDel.currency : '';
+  const _delCur = (_txAccDel.local_currency !== undefined && _txAccDel.local_currency !== null) ? _txAccDel.local_currency : '';
   return `<tr>
     <td colspan="6">
-      <span class="confirm-text">Delete <strong>${esc(fmtDateTime(tx.tx_date_time))}</strong> — ${esc(accLabel)} — ${esc(fmtNative(delAmt, _delCur))}?</span>
+      <span class="confirm-text">Delete <strong>${esc(fmtDateTime(tx.tx_date_local))}</strong> — ${esc(accLabel)} — ${esc(fmtNative(delAmt, _delCur))}?</span>
       <span style="display:inline-flex;gap:8px;margin-left:16px">
         <button class="btn-link danger" data-action="tx-confirm-delete" data-row="${tx._row}">Yes, delete</button>
         <button class="btn-link" data-action="tx-cancel-delete">Cancel</button>
@@ -1454,7 +1448,6 @@ async function _saveEdit() {
   const user_location_country = el('txEditCountry').value.trim();
   const tx_tags             = el('txEditTags').value.trim();
   const description         = el('txEditDescription').value.trim();
-  const tx_timezone         = el('txEditTimezone').value.trim();
   const user_location_latitude  = el('txEditLatitude').value  !== '' ? Number(el('txEditLatitude').value)  : '';
   const user_location_longitude = el('txEditLongitude').value !== '' ? Number(el('txEditLongitude').value) : '';
   const beneficiaries       = el('txEditBeneficiaries').value.trim();
@@ -1472,14 +1465,14 @@ async function _saveEdit() {
 
   // Post-reversal balance: backend reverses the old row before writing the new values.
   // Undo the old movement only when the account hasn't changed.
-  if (acctEdit === undefined || acctEdit === null || !Number.isFinite(Number(acctEdit.current_value))) { errEl.textContent = 'Account not found or has no valid balance.'; return; }
-  let postRevBal = Number(acctEdit.current_value);
+  if (acctEdit === undefined || acctEdit === null || !Number.isFinite(Number(acctEdit.current_value_local))) { errEl.textContent = 'Account not found or has no valid balance.'; return; }
+  let postRevBal = Number(acctEdit.current_value_local);
   if (oldTx && String(oldTx.account_id) === String(account_id)) {
     const oldAmt = Number(oldTx.tx_amount);
     if (oldTx.tx_type === 'money-in')  postRevBal -= oldAmt;
     if (oldTx.tx_type === 'money-out') postRevBal += oldAmt;
   }
-  const acctPR = Object.assign({}, acctEdit, { current_value: postRevBal });
+  const acctPR = Object.assign({}, acctEdit, { current_value_local: postRevBal });
 
   const balanceErrorEdit = _checkBalanceRules(tx_type, acctPR, false, tx_amount);
   if (balanceErrorEdit) { errEl.textContent = balanceErrorEdit; return; }
@@ -1490,12 +1483,12 @@ async function _saveEdit() {
   showLoading();
   try {
     const res = await ExpenseAPI.updateTransaction({
-      row_num: rowNum, tx_date_time: localToUtcISO(dateRaw), tx_type,
+      row_num: rowNum, tx_date_local: (dateRaw.replace('T', ' ') + ':00').substring(0, 19), tx_type,
       account_id, tx_amount,
       major_category, minor_category, counterparty_name,
       user_location_area, user_location_city, user_location_country,
       tx_tags, description,
-      tx_timezone, user_location_latitude, user_location_longitude, beneficiaries,
+      user_location_latitude, user_location_longitude, beneficiaries,
     });
     if (res.ok) {
       showMsg('Transaction updated.');
@@ -1587,7 +1580,7 @@ function _renderSuggestionsPanel() {
   const cards = visible.map(s => {
     const key        = `${s.counterparty_name}|${s.minor_category}`;
     const _suggAcc   = (state.accountMap[s.account_id] !== undefined && state.accountMap[s.account_id] !== null) ? state.accountMap[s.account_id] : {};
-    const acctName   = (_suggAcc.name !== undefined && _suggAcc.name !== null) ? _suggAcc.name : esc((s.account_id !== undefined && s.account_id !== null) ? s.account_id : '');
+    const acctName   = (_suggAcc.account_name !== undefined && _suggAcc.account_name !== null) ? _suggAcc.account_name : esc((s.account_id !== undefined && s.account_id !== null) ? s.account_id : '');
     const sym        = getSymbol(s.currency);
     const amount     = sym + Number(s.typical_amount).toFixed(2);
     const _minorCat  = state.categories.find(c => c.minor_category_key === s.minor_category);
@@ -1643,13 +1636,13 @@ function _refreshFilterAccountDropdown() {
   else state.filters.accounts = state.filters.accounts.filter(id => validIds.has(id));
   dropdown.innerHTML = accts.length > 0
     ? accts.map(a => `<label style="display:flex;align-items:center;gap:8px;font-size:var(--text-base);color:var(--ink);cursor:pointer">
-        <input type="checkbox" data-filter-account="${esc(a.id)}" ${state.filters.accounts.includes(a.id) ? 'checked' : ''}> ${esc(a.name)}
+        <input type="checkbox" data-filter-account="${esc(a.id)}" ${state.filters.accounts.includes(a.id) ? 'checked' : ''}> ${esc(a.account_name)}
       </label>`).join('')
     : `<span style="font-size:var(--text-sm);color:var(--muted)">No accounts for selected type</span>`;
   _attachFilterAccountCheckboxes(dropdown);
   const lbl = el('filterAccountLabel');
   if (lbl !== null && lbl !== undefined) lbl.textContent = state.filters.accounts.length > 0
-    ? state.filters.accounts.map(id => { const a = state.accountMap[id]; return (a !== undefined && a !== null && a.name !== undefined && a.name !== null) ? a.name : id; }).join(', ')
+    ? state.filters.accounts.map(id => { const a = state.accountMap[id]; return (a !== undefined && a !== null && a.account_name !== undefined && a.account_name !== null) ? a.account_name : id; }).join(', ')
     : 'All accounts';
 }
 
@@ -1661,7 +1654,7 @@ function _attachFilterAccountCheckboxes(dropdown) {
       else { state.filters.accounts = state.filters.accounts.filter(x => x !== id); }
       const lbl = el('filterAccountLabel');
       if (lbl) lbl.textContent = state.filters.accounts.length
-        ? state.filters.accounts.map(id => { const a = state.accountMap[id]; return (a !== undefined && a !== null && a.name !== undefined && a.name !== null && a.name !== '') ? a.name : id; }).join(', ')
+        ? state.filters.accounts.map(id => { const a = state.accountMap[id]; return (a !== undefined && a !== null && a.account_name !== undefined && a.account_name !== null && a.account_name !== '') ? a.account_name : id; }).join(', ')
         : 'All accounts';
     });
   });
@@ -1768,7 +1761,7 @@ function _renderFilterBar() {
   const activeChips = [
     ...(state.dateRange !== 'last_30' ? [{ label: (_findRangeOpt !== undefined && _findRangeOpt !== null) ? _findRangeOpt.label : state.dateRange, key: 'dateRange', val: '' }] : []),
     ...f.types.map(t     => ({ label: (_txTypeMap()[t] !== undefined && _txTypeMap()[t] !== null) ? _txTypeMap()[t] : t, key: 'types', val: t })),
-    ...f.accounts.map(id => { const a = state.accountMap[id]; return { label: (a !== undefined && a !== null && a.name !== undefined && a.name !== null) ? a.name : id, key: 'accounts', val: id }; }),
+    ...f.accounts.map(id => { const a = state.accountMap[id]; return { label: (a !== undefined && a !== null && a.account_name !== undefined && a.account_name !== null) ? a.account_name : id, key: 'accounts', val: id }; }),
     ...f.major.map(v     => { const _ml = _majorMap.get(v); return { label: (_ml !== undefined && _ml !== null) ? _ml : v, key: 'major', val: v }; }),
     ...f.minor.map(v     => { const _ml = _minorMap.get(v); return { label: (_ml !== undefined && _ml !== null) ? _ml : v, key: 'minor', val: v }; }),
     ...(f.user_location_country !== '' ? [{ label: 'Country: ' + esc(f.user_location_country), key: 'user_location_country', val: '' }] : []),
@@ -1834,12 +1827,12 @@ function _renderFilterBar() {
           </div>
           <div id="filterAccountWrap" style="flex:1;min-width:130px;position:relative">
             <button id="filterAccountTrigger" type="button" style="width:100%;display:flex;justify-content:space-between;align-items:center;text-align:left;background:var(--panel);border:1px solid var(--hair-strong);border-radius:8px;padding:6px 10px;font-size:var(--text-base);color:var(--ink);cursor:pointer;outline:none">
-              <span id="filterAccountLabel">${f.accounts.length ? f.accounts.map(id => { const a = state.accountMap[id]; return (a !== undefined && a !== null && a.name !== undefined && a.name !== null && a.name !== '') ? a.name : id; }).join(', ') : 'All accounts'}</span>
+              <span id="filterAccountLabel">${f.accounts.length ? f.accounts.map(id => { const a = state.accountMap[id]; return (a !== undefined && a !== null && a.account_name !== undefined && a.account_name !== null && a.account_name !== '') ? a.account_name : id; }).join(', ') : 'All accounts'}</span>
               <span style="color:var(--muted);font-size:var(--text-2xs);margin-left:8px">▼</span>
             </button>
             <div id="filterAccountDropdown" class="hidden" style="position:fixed;z-index:1000;background:var(--panel);border:1px solid var(--hair-strong);border-radius:8px;padding:8px 10px;display:flex;flex-direction:column;gap:8px;box-shadow:0 4px 16px rgba(0,0,0,.15);max-height:200px;overflow-y:auto">
               ${_accountsForTypeSel().map(a => `<label style="display:flex;align-items:center;gap:8px;font-size:var(--text-base);color:var(--ink);cursor:pointer">
-                <input type="checkbox" data-filter-account="${esc(a.id)}" ${f.accounts.includes(a.id) ? 'checked' : ''}> ${esc(a.name)}
+                <input type="checkbox" data-filter-account="${esc(a.id)}" ${f.accounts.includes(a.id) ? 'checked' : ''}> ${esc(a.account_name)}
               </label>`).join('') || `<span style="font-size:var(--text-sm);color:var(--muted)">No accounts</span>`}
             </div>
           </div>
@@ -1912,7 +1905,7 @@ function _renderTxImportPanel() {
       <div class="field form-grid-span-2">
         <label for="txImportFile">CSV file</label>
         <input type="file" id="txImportFile" accept=".csv">
-        <div class="field-hint">Columns: tx_date_time, tx_timezone, tx_type, source_account, target_account, source_amount, target_amount, major_category, minor_category, description, counterparty_name, tx_tags, beneficiaries, user_location_area, user_location_city, user_location_country, user_location_latitude, user_location_longitude</div>
+        <div class="field-hint">Columns: id (optional), tx_date_local, tx_timezone_local, tx_type, source_account, target_account, source_amount_local, target_amount_local, major_category, minor_category, description, counterparty_name, tx_tags, beneficiaries, user_location_area, user_location_city, user_location_country, user_location_latitude, user_location_longitude</div>
       </div>
     </div>
     <div id="txImportStatus">${_txImportResult !== null ? _txImportResult : ''}</div>
@@ -1930,7 +1923,7 @@ function _parseTxCsv(text) {
 
   const headers  = parseCsvRow(lines[0]).map(h => h.toLowerCase().replace(/\s+/g, '_'));
   const nameToId = {};
-  ((state.accounts !== undefined && state.accounts !== null) ? state.accounts : []).forEach(a => { nameToId[a.name.trim().toLowerCase()] = a.id; });
+  ((state.accounts !== undefined && state.accounts !== null) ? state.accounts : []).forEach(a => { nameToId[a.account_name.trim().toLowerCase()] = a.id; });
 
   const transactions = [];
   const errors       = [];
@@ -1941,9 +1934,9 @@ function _parseTxCsv(text) {
     headers.forEach((h, idx) => { row[h] = (vals[idx] !== undefined && vals[idx] !== null ? vals[idx] : '').trim(); });
 
     const rowErrors = [];
-    if (row.tx_date_time === '')    rowErrors.push('missing tx_date_time');
+    if (row.tx_date_local === '')    rowErrors.push('missing tx_date_local');
     if (row.tx_type === '')         rowErrors.push('missing tx_type');
-    if (row.source_amount === '' && row.target_amount === '') rowErrors.push('missing amount (source_amount or target_amount)');
+    if (row.source_amount_local === '' && row.target_amount_local === '') rowErrors.push('missing amount (source_amount_local or target_amount_local)');
     if (row.major_category === '')  rowErrors.push('missing major_category');
     if (row.minor_category === '')  rowErrors.push('missing minor_category');
 
@@ -1962,11 +1955,9 @@ function _parseTxCsv(text) {
 
     if (rowErrors.length) { errors.push(`Row ${i + 1}: ${rowErrors.join('; ')}`); continue; }
 
-    const tx_date_time = localToUtcISO(row.tx_date_time);
-
     transactions.push({
-      tx_date_time,
-      tx_timezone:              (row.tx_timezone              !== undefined && row.tx_timezone              !== null && row.tx_timezone              !== '') ? row.tx_timezone              : '',
+      tx_date_local:            row.tx_date_local.replace('T', ' '),
+      tx_timezone_local:        (row.tx_timezone_local        !== undefined && row.tx_timezone_local        !== null && row.tx_timezone_local        !== '') ? row.tx_timezone_local        : '',
       tx_type:                  row.tx_type,
       source_account:           sourceId,
       target_account:           targetId,
@@ -1975,8 +1966,8 @@ function _parseTxCsv(text) {
       user_location_country:    (row.user_location_country    !== undefined && row.user_location_country    !== null && row.user_location_country    !== '') ? row.user_location_country    : '',
       user_location_latitude:   (row.user_location_latitude   !== undefined && row.user_location_latitude   !== null && row.user_location_latitude   !== '') ? parseFloat(row.user_location_latitude)  : '',
       user_location_longitude:  (row.user_location_longitude  !== undefined && row.user_location_longitude  !== null && row.user_location_longitude  !== '') ? parseFloat(row.user_location_longitude) : '',
-      source_amount:            (row.source_amount !== undefined && row.source_amount !== null && row.source_amount !== '') ? parseFloat(row.source_amount) : '',
-      target_amount:            (row.target_amount !== undefined && row.target_amount !== null && row.target_amount !== '') ? parseFloat(row.target_amount) : '',
+      source_amount_local:      (row.source_amount_local !== undefined && row.source_amount_local !== null && row.source_amount_local !== '') ? parseFloat(row.source_amount_local) : '',
+      target_amount_local:      (row.target_amount_local !== undefined && row.target_amount_local !== null && row.target_amount_local !== '') ? parseFloat(row.target_amount_local) : '',
       major_category:           row.major_category,
       minor_category:           row.minor_category,
       description:              (row.description       !== undefined && row.description       !== null && row.description       !== '') ? row.description       : '',
@@ -2118,7 +2109,7 @@ async function _submitTxImport(transactions) {
     const clean = Object.assign({}, tx);
     delete clean._src_name;
     delete clean._tgt_name;
-    const key = [clean.tx_date_time, clean.tx_type, (clean.source_account !== undefined && clean.source_account !== null) ? clean.source_account : '', (clean.target_account !== undefined && clean.target_account !== null) ? clean.target_account : '', clean.source_amount].join('|');
+    const key = [clean.tx_date_local, clean.tx_type, (clean.source_account !== undefined && clean.source_account !== null) ? clean.source_account : '', (clean.target_account !== undefined && clean.target_account !== null) ? clean.target_account : '', clean.source_amount_local].join('|');
     if (!seen.has(key)) { seen.add(key); payload.push(clean); }
   });
 
@@ -2182,7 +2173,7 @@ async function _submitTxImport(transactions) {
           ? ((tx.minor_category !== undefined && tx.minor_category !== null && String(tx.minor_category).trim() !== '') ? `${tx.major_category} / ${tx.minor_category}` : tx.major_category)
           : '';
         const parts = [
-          (tx.source_amount !== undefined && tx.source_amount !== null && tx.source_amount !== '') ? String(tx.source_amount) : '',
+          (tx.source_amount_local !== undefined && tx.source_amount_local !== null && tx.source_amount_local !== '') ? String(tx.source_amount_local) : '',
           _txAcctId,
           _txCatStr,
         ].filter(v => v !== undefined && v !== null && v !== '');

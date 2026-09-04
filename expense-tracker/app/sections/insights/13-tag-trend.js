@@ -125,9 +125,9 @@ export async function render(containerId, { txs, sym, from, to }) {
         if (!tag || !mk) return;
 
         const tagTxs = moneyOut.filter(t => {
-          if (!t.tx_date_time.startsWith(mk)) return false;
+          if (!t.tx_date_local.startsWith(mk)) return false;
           return String(t.tx_tags ?? '').split(';').map(s => s.toLowerCase().trim()).includes(tag);
-        }).sort((a, b) => new Date(b.tx_date_time) - new Date(a.tx_date_time));
+        }).sort((a, b) => new Date(b.tx_date_local) - new Date(a.tx_date_local));
 
         const shareTotal = tagTxs.reduce((s, t) => {
           const tags = String(t.tx_tags ?? '').split(';').filter(Boolean);

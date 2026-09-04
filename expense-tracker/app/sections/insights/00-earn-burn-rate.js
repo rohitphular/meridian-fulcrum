@@ -42,7 +42,7 @@ function _computeRates(from, to, windowDays) {
   const burnByDay = {};
 
   state.transactions.forEach(function(tx) {
-    const d = new Date(tx.tx_date_time);
+    const d = new Date(tx.tx_date_local);
     if (isNaN(d.getTime())) return;
     const acc = state.accounts ? state.accounts.find(a => a.id === tx.account_id) : null;
     if (!acc) return;

@@ -44,7 +44,7 @@ function _buildMonthly(months12, todayLocal) {
     // Partial month: filter to today for the last bucket
     const txs = (i === 11)
       ? all.filter(t => {
-          const d = new Date(t.tx_date_time);
+          const d = new Date(t.tx_date_local);
           return new Date(d.getFullYear(), d.getMonth(), d.getDate()) <= todayLocal;
         })
       : all;

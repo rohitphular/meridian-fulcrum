@@ -28,18 +28,19 @@ export const fmtBase    = (amount, from, rowFxRate) => _fmtBase(amount, from, ro
 export const fmtNative  = (amount, currency)        => _fmtNative(amount, currency, state.rates);
 
 const ET_COLS  = [
-  'tx_date_time', 'tx_timezone', 'tx_type', 'source_account', 'target_account',
+  'tx_date_local', 'tx_timezone_local', 'tx_type', 'source_account', 'target_account',
   'user_location_area', 'user_location_city', 'user_location_country',
   'user_location_latitude', 'user_location_longitude',
-  'source_amount', 'target_amount', 'major_category', 'minor_category',
+  'source_amount_local', 'target_amount_local', 'major_category', 'minor_category',
   'description', 'counterparty_name', 'tx_tags', 'beneficiaries',
 ];
-const ACC_COLS = ['name', 'type', 'sub_type', 'currency', 'opening_value', 'current_value', 'description', 'record_status'];
-// SUB_COLS intentionally excludes sync fields (sync_status, sync_date_time, sync_notes).
+const ACC_COLS = ['account_name', 'type', 'sub_type', 'local_currency', 'opening_value_local', 'current_value_local', 'description', 'record_status'];
+// SUB_COLS intentionally excludes sync fields (sync_status, sync_date, sync_notes).
 // Those fields are system-internal pipeline state that would be meaningless or misleading
 // on re-import — a re-imported row would always start as create-pending regardless of the
 // exported sync state, so exporting them serves no purpose and could confuse callers.
-const SUB_COLS = ['id', 'name', 'counterparty_name', 'amount', 'currency', 'frequency', 'day_of_month', 'day_of_week',
+// subscription_name is used instead of name so the exported CSV matches the import format.
+const SUB_COLS = ['id', 'subscription_name', 'counterparty_name', 'subscription_amount_local', 'frequency', 'day_of_month', 'day_of_week',
   'source_account', 'tx_type', 'major_category', 'minor_category', 'tags', 'record_status', 'description',
   'created_at', 'subscription_start_date', 'subscription_end_date', 'updated_at'];
 const CAT_COLS = [
@@ -73,45 +74,48 @@ export const exportData = (format, rows) => {
   const seen = {};
   rows.forEach(tx => {
     if (tx.parent_tx_id) return; // child leg: will be handled when parent is encountered
-    const acct   = state.accountMap[tx.account_id] ?? {};
-    const sib    = siblingMap[tx.id];
-    const sibAcc = sib ? state.accountMap[sib.account_id] ?? {} : null;
+    const acct   = (state.accountMap[tx.account_id] !== undefined && state.accountMap[tx.account_id] !== null) ? state.accountMap[tx.account_id] : null;
+    const sib    = (siblingMap[tx.id] !== undefined && siblingMap[tx.id] !== null) ? siblingMap[tx.id] : null;
+    const sibAcc = (sib !== null && state.accountMap[sib.account_id] !== undefined && state.accountMap[sib.account_id] !== null) ? state.accountMap[sib.account_id] : null;
+
+    const acctName    = (acct !== null && acct.account_name !== undefined && acct.account_name !== null) ? acct.account_name : (tx.account_id !== undefined && tx.account_id !== null ? tx.account_id : '');
+    const sibAccName  = (sibAcc !== null && sibAcc.account_name !== undefined && sibAcc.account_name !== null) ? sibAcc.account_name : (sib !== null && sib.account_id !== undefined && sib.account_id !== null ? sib.account_id : '');
 
     let source_account, target_account, source_amount, target_amount;
-    if (sibAcc) {
+    if (sibAcc !== null) {
       // Transfer: parent leg determines direction
       if (tx.tx_type === 'money-out') {
-        source_account = acct.name ?? tx.account_id ?? '';
-        target_account = sibAcc.name ?? sib.account_id ?? '';
+        source_account = acctName;
+        target_account = sibAccName;
         source_amount  = Number(tx.tx_amount);
         target_amount  = Number(sib.tx_amount);
       } else {
-        source_account = sibAcc.name ?? sib.account_id ?? '';
-        target_account = acct.name   ?? tx.account_id  ?? '';
+        source_account = sibAccName;
+        target_account = acctName;
         source_amount  = Number(sib.tx_amount);
         target_amount  = Number(tx.tx_amount);
       }
     } else {
       // Non-transfer
       if (tx.tx_type === 'money-out') {
-        source_account = acct.name ?? tx.account_id ?? '';
+        source_account = acctName;
         target_account = '';
         source_amount  = Number(tx.tx_amount);
         target_amount  = '';
       } else {
         source_account = '';
-        target_account = acct.name ?? tx.account_id ?? '';
+        target_account = acctName;
         source_amount  = Number(tx.tx_amount);
         target_amount  = '';
       }
     }
 
     exported.push(Object.assign({}, tx, {
-      tx_date_time:   utcToLocalInput(tx.tx_date_time),
+      tx_date_local:        utcToLocalInput(tx.tx_date_local),
       source_account,
       target_account,
-      source_amount,
-      target_amount,
+      source_amount_local:  source_amount,
+      target_amount_local:  target_amount,
     }));
     if (sib) seen[sib.id] = true;
   });
@@ -120,7 +124,7 @@ export const exportData = (format, rows) => {
 };
 export const exportAccounts      = (format, rows) => _exportData(format, rows, 'accounts', ACC_COLS);
 export const exportSubscriptions = (format, rows) => {
-  const normalised = rows.map(r => ({ ...r, created_at: utcToLocalInput(r.created_at) }));
+  const normalised = rows.map(r => ({ ...r, subscription_name: r.name, created_at: utcToLocalInput(r.created_at) }));
   return _exportData(format, normalised, 'subscriptions', SUB_COLS);
 };
 export const exportCategories    = (format, rows) => _exportData(format, rows, 'categories', CAT_COLS);

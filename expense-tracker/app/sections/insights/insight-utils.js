@@ -100,7 +100,7 @@ export function getPeriodBounds(period, customFrom, customTo) {
 
 export function filterTxByRange(txs, from, to) {
   return txs.filter(tx => {
-    const d = new Date(tx.tx_date_time);
+    const d = new Date(tx.tx_date_local);
     if (isNaN(d)) return false;
     const local = new Date(d.getFullYear(), d.getMonth(), d.getDate());
     return local >= from && local <= to;
@@ -112,7 +112,7 @@ export function filterTxByRange(txs, from, to) {
 export function groupByDay(txs) {
   const map = new Map();
   txs.forEach(tx => {
-    const d = new Date(tx.tx_date_time);
+    const d = new Date(tx.tx_date_local);
     if (isNaN(d)) return;
     const key = `${d.getFullYear()}-${_pad(d.getMonth() + 1)}-${_pad(d.getDate())}`;
     if (!map.has(key)) map.set(key, []);
@@ -124,7 +124,7 @@ export function groupByDay(txs) {
 export function groupByWeek(txs) {
   const map = new Map();
   txs.forEach(tx => {
-    const d = new Date(tx.tx_date_time);
+    const d = new Date(tx.tx_date_local);
     if (isNaN(d)) return;
     const key = _isoWeekKey(d);
     if (!map.has(key)) map.set(key, []);
@@ -136,7 +136,7 @@ export function groupByWeek(txs) {
 export function groupByMonth(txs) {
   const map = new Map();
   txs.forEach(tx => {
-    const d = new Date(tx.tx_date_time);
+    const d = new Date(tx.tx_date_local);
     if (isNaN(d)) return;
     const key = `${d.getFullYear()}-${_pad(d.getMonth() + 1)}`;
     if (!map.has(key)) map.set(key, []);
@@ -148,7 +148,7 @@ export function groupByMonth(txs) {
 export function groupByQuarter(txs) {
   const map = new Map();
   txs.forEach(tx => {
-    const d = new Date(tx.tx_date_time);
+    const d = new Date(tx.tx_date_local);
     if (isNaN(d)) return;
     const key = `${d.getFullYear()}-Q${Math.floor(d.getMonth() / 3) + 1}`;
     if (!map.has(key)) map.set(key, []);
@@ -209,7 +209,7 @@ export function accountBalanceByMonth(accounts, txs, months) {
     let balance = isNaN(openingRaw) ? 0 : openingRaw;
     const accTxs = txs
       .filter(tx => tx.account_id === acc.id)
-      .sort((a, b) => new Date(a.tx_date_time) - new Date(b.tx_date_time));
+      .sort((a, b) => new Date(a.tx_date_local) - new Date(b.tx_date_local));
 
     let txIdx = 0;
     months.forEach(monthKey => {
@@ -217,7 +217,7 @@ export function accountBalanceByMonth(accounts, txs, months) {
       const endOfMonth = new Date(yr, mo, 0, 23, 59, 59);
 
       while (txIdx < accTxs.length) {
-        const d = new Date(accTxs[txIdx].tx_date_time);
+        const d = new Date(accTxs[txIdx].tx_date_local);
         if (d > endOfMonth) break;
         const tx  = accTxs[txIdx];
         const amt = toBase(Number(tx.tx_amount), acc.currency);
@@ -245,11 +245,11 @@ export function computeBalancesAt(accounts, allTxs, date) {
   });
 
   const sorted = [...allTxs].sort(
-    (a, b) => new Date(a.tx_date_time) - new Date(b.tx_date_time)
+    (a, b) => new Date(a.tx_date_local) - new Date(b.tx_date_local)
   );
 
   for (const tx of sorted) {
-    if (new Date(tx.tx_date_time) > dateEnd) break;
+    if (new Date(tx.tx_date_local) > dateEnd) break;
     const acc = accountMap.get(tx.account_id);
     if (!acc) continue;
     const amt = toBase(Number(tx.tx_amount), acc.currency);
@@ -278,7 +278,7 @@ export function computeDailyTotalAssets(assetAccounts, allTxs, from, to) {
   });
 
   const sorted = [...allTxs].sort(
-    (a, b) => new Date(a.tx_date_time) - new Date(b.tx_date_time)
+    (a, b) => new Date(a.tx_date_local) - new Date(b.tx_date_local)
   );
   const daysInPeriod = Math.round((to - from) / 86400000) + 1;
   const dailyTotals  = [];
@@ -288,7 +288,7 @@ export function computeDailyTotalAssets(assetAccounts, allTxs, from, to) {
   for (let d = 0; d < daysInPeriod; d++) {
     const endOfDay = new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate(), 23, 59, 59, 999);
     while (txIdx < sorted.length) {
-      const txDate = new Date(sorted[txIdx].tx_date_time);
+      const txDate = new Date(sorted[txIdx].tx_date_local);
       if (txDate > endOfDay) break;
       const tx  = sorted[txIdx];
       const acc = accountMap.get(tx.account_id);
@@ -460,7 +460,7 @@ export function baseChartOptions(sym, C) {
 
 export function renderDrillTxTable(txs, sym) {
   const rows = txs.map(t => {
-    const date = (t.tx_date_time ?? '').slice(0, 10) || '—';
+    const date = (t.tx_date_local ?? '').slice(0, 10) || '—';
     const cp   = t.counterparty_name ?? '—';
     const cat  = t.minor_category ?? t.major_category ?? '—';
     const amt  = sumAmountBase([t]);

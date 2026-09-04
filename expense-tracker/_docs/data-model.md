@@ -8,7 +8,7 @@ All entity shapes. Field types are abstract — choose a concrete type appropria
 |---|---|---|
 | Transaction ID | `YYYY-MM-DD-NNN` (single creates) or `YYYY-MM-DD-XXXXXXXX` (bulk creates, date + UUID hex) | `2026-06-22-007` / `2026-06-22-a3f9c12b` |
 | Account ID | `ACC-YYYYMMDD-NNN` — date + sequential counter per day | `ACC-20260622-003` |
-| Timestamps (`tx_date_time`, `created_at`, etc.) | ISO-8601 UTC | `2026-06-22T14:30:00.000Z` |
+| Timestamps (`tx_date_local`, `created_at`, etc.) | Local time (YYYY-MM-DD HH:MM:SS) | `2026-06-22 14:30:00` |
 | Dates (e.g. subscription dates) | ISO-8601 date (no time) | `2026-06-22` |
 
 ## Account
@@ -63,8 +63,8 @@ Audit block: `record_status → sync_status → sync_date_time → sync_notes �
 | Col | Field | Type | Required | Notes |
 |---|---|---|---|---|
 | 1 | `id` | string | auto | `YYYY-MM-DD-NNN` for single creates; `YYYY-MM-DD-XXXXXXXX` (date + UUID hex) for bulk creates |
-| 2 | `tx_date_time` | timestamp | yes | ISO-8601 UTC |
-| 3 | `tx_timezone` | string | optional | IANA timezone string e.g. `Europe/London` |
+| 2 | `tx_date_local` | timestamp | yes | Local time as `YYYY-MM-DD HH:MM:SS` — no UTC conversion |
+| 3 | `tx_timezone_local` | string | optional | IANA timezone string e.g. `Europe/London`; auto-detected in browser, immutable after creation |
 | 4 | `parent_tx_id` | string | conditional | FK to the parent transaction row for transfers; empty on standalone rows and on the parent (money-out) row. Only the child (derived) row carries the parent's `id` as its `parent_tx_id`. |
 | 5 | `tx_type` | enum | yes | `money-in` \| `money-out`. No `money-transfer` type exists. |
 | 6 | `account_id` | Account ID | yes | The single account affected by this row. |

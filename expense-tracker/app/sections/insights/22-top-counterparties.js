@@ -55,7 +55,7 @@ function _prevSpend(labelLower) {
       if (t.tx_type !== 'money-out') return false;
       const cp = ((t.counterparty_name ?? '').trim() || 'unknown merchant').toLowerCase();
       if (cp !== labelLower) return false;
-      const d  = new Date(t.tx_date_time);
+      const d  = new Date(t.tx_date_local);
       const dl = new Date(d.getFullYear(), d.getMonth(), d.getDate());
       return dl >= prevFrom && dl <= prevTo;
     }));
@@ -79,10 +79,10 @@ function _showPanel(idx) {
   const diffClass = diff <= 0 ? 'positive' : 'negative'; // lower spend = good
   const diffArrow = diff <= 0 ? '↓' : '↑';
 
-  const sorted = [...row.txs].sort((a, b) => new Date(b.tx_date_time) - new Date(a.tx_date_time));
+  const sorted = [...row.txs].sort((a, b) => new Date(b.tx_date_local) - new Date(a.tx_date_local));
 
   const txRows = sorted.map(t => {
-    const d    = new Date(t.tx_date_time);
+    const d    = new Date(t.tx_date_local);
     const date = d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
     const cat  = esc(t.minor_category ?? t.major_category ?? '—');
     return `<li style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--hair);font-size:var(--text-sm)">
@@ -105,7 +105,7 @@ function _showPanel(idx) {
     ((t.counterparty_name ?? '').trim() || 'unknown merchant').toLowerCase() === labelLower
   );
   const monthlySpend = sparkMonths.map(mk =>
-    sumAmountBase(allMerchant.filter(t => t.tx_date_time.startsWith(mk)))
+    sumAmountBase(allMerchant.filter(t => t.tx_date_local.startsWith(mk)))
   );
   const hasSparkData = monthlySpend.some(v => v > 0);
 

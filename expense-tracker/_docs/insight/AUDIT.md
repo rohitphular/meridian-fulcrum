@@ -242,7 +242,7 @@ function _renderLevel3(container, moneyOut, major, minor, sym) {
   const txs = moneyOut.filter(t =>
     (t.major_category || 'Uncategorised') === major &&
     (t.minor_category || 'Other') === minor
-  ).sort((a, b) => new Date(b.tx_date_time) - new Date(a.tx_date_time));
+  ).sort((a, b) => new Date(b.tx_date_local) - new Date(a.tx_date_local));
   // render back button + scrollable table
 }
 ```
@@ -265,7 +265,7 @@ options: {
     const tag = segments[elements[0].index].label;
     const tagTxs = moneyOut.filter(t =>
       (t.tx_tags || '').split(';').map(s => s.toLowerCase().trim()).includes(tag)
-    ).sort((a, b) => new Date(b.tx_date_time) - new Date(a.tx_date_time));
+    ).sort((a, b) => new Date(b.tx_date_local) - new Date(a.tx_date_local));
     // render panel below chart
   }
 }
@@ -314,7 +314,7 @@ Using `state.transactions` filtered to the merchant, group by month, render a sm
 onClick: (_, elements) => {
   if (!elements.length) return;
   const mk = monthKeys[elements[0].index];
-  const monthTxs = txs.filter(t => t.tx_date_time.startsWith(mk));
+  const monthTxs = txs.filter(t => t.tx_date_local.startsWith(mk));
   // render two mini-tables: income by counterparty, expenses by major category
 }
 ```

@@ -106,7 +106,7 @@ function _buildSnapshot() {
   cutoff.setMonth(cutoff.getMonth() - 3);
 
   const recentTx = allTx.filter(function(tx) {
-    const d = new Date(tx.tx_date_time);
+    const d = new Date(tx.tx_date_local);
     return !isNaN(d.getTime()) && d >= cutoff && tx.tx_type;
   });
 
@@ -230,7 +230,7 @@ function _fetchRequestedData(request) {
   const accountMap = _loadAccountMap();
 
   const filtered = allTx.filter(function(tx) {
-    const d = new Date(tx.tx_date_time);
+    const d = new Date(tx.tx_date_local);
     if (isNaN(d.getTime()) || d < cutoff) return false;
     if (request.tx_type        && tx.tx_type        !== request.tx_type)        return false;
     if (request.major_category && tx.major_category !== request.major_category) return false;
@@ -239,13 +239,13 @@ function _fetchRequestedData(request) {
     return true;
   });
 
-  filtered.sort(function(a, b) { return new Date(b.tx_date_time) - new Date(a.tx_date_time); });
+  filtered.sort(function(a, b) { return new Date(b.tx_date_local) - new Date(a.tx_date_local); });
 
   return filtered.slice(0, limit).map(function(tx) {
     const accId = String(tx.account_id).trim();
     const acc   = accountMap[accId];
     return {
-      date:             tx.tx_date_time,
+      date:             tx.tx_date_local,
       type:             tx.tx_type,
       amount:           Number(tx.tx_amount),
       currency:         (acc !== undefined && acc !== null) ? acc.currency : null,

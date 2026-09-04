@@ -101,7 +101,7 @@ function _renderDrillPanel(drillEl, moneyOut, category, topLabels, sym) {
   const catTxs = (category === 'Other'
     ? moneyOut.filter(t => !topLabels.includes(t.major_category ?? 'Uncategorised'))
     : moneyOut.filter(t => (t.major_category ?? 'Uncategorised') === category)
-  ).sort((a, b) => new Date(b.tx_date_time) - new Date(a.tx_date_time));
+  ).sort((a, b) => new Date(b.tx_date_local) - new Date(a.tx_date_local));
 
   const total = sumAmountBase(catTxs);
 

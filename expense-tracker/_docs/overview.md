@@ -42,7 +42,7 @@ Transfers use two `money-out` / `money-in` rows linked via `parent_tx_id`. Cross
 |---|---|---|
 | **asset** | current, savings, cash | Positive = funds held |
 | **investment** | stocks_shares, isa, pension_sipp, crypto, fixed_deposit, bonds, property, commodities, p2p_lending, other | Positive = funds held |
-| **liability** | personal_loan, credit_card, mortgage, auto_loan, heloc, student_loan, medical_loan, debt_consolidation, overdraft | Stored **negative** (double-entry convention); UI displays `abs(current_value)` labelled "owed" — user always inputs and sees positive numbers |
+| **liability** | personal_loan, credit_card, mortgage, auto_loan, heloc, student_loan, medical_loan, debt_consolidation, overdraft | Stored **negative** (double-entry convention); UI displays `abs(current_value_local)` labelled "owed" — user always inputs and sees positive numbers |
 
 Liabilities are modelled as accounts with negative balances. There is no separate debt entity.
 

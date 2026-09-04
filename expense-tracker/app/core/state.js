@@ -23,7 +23,7 @@ export const state = {
     search:              '',
   },
 
-  txSort:    { col: 'tx_date_time', dir: 'desc' },
+  txSort:    { col: 'tx_date_local', dir: 'desc' },
   txPage:    1,
   txPerPage: 50,
 
@@ -102,7 +102,7 @@ export const state = {
   subImportOpen:  false,
   subEditRow:     null,
   subDeleteRow:   null,
-  subPrefill:     null,  // { name, counterparty_name, amount, currency, source_account, major_category, minor_category, tags }
+  subPrefill:     null,  // { name, counterparty_name, amount, source_account, tx_type, major_category, minor_category, tx_tags }
 
   subFilterOpen:  false,
   subFilters: {

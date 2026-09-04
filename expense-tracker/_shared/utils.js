@@ -42,7 +42,7 @@ export function nowLocalISO() {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-// Converts a local datetime string (datetime-local input or CSV tx_date_time) to UTC ISO.
+// Converts a local datetime string (datetime-local input or CSV tx_date_local) to UTC ISO.
 // Strings without a timezone suffix are treated as local time by the browser's Date parser.
 // Strings already ending in Z are normalised to full ISO format without re-converting.
 export function localToUtcISO(s) {

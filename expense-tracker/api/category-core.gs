@@ -78,15 +78,18 @@ function createCategory(body) {
   setCol('target_account_mandatory', body.target_account_mandatory === true || body.target_account_mandatory === 'true');
   setCol('is_subscription_eligible', body.is_subscription_eligible === true || body.is_subscription_eligible === 'true');
   setCol('sync_status',    SYNC_STATUS_CREATE_PENDING);
-  setCol('sync_date_time', '');
+  setCol('sync_date', '');
   setCol('sync_notes',     '');
   const now = new Date().toISOString();
   setCol('created_at', now);
   setCol('updated_at', now);
+  const id = (body.id !== undefined && body.id !== null && String(body.id).trim() !== '')
+    ? String(body.id).trim()
+    : Utilities.getUuid();
+  setCol('id', id);
 
   sheet.appendRow(row);
-  // Categories have no auto-generated id — the composite (tx_type_key, major_category_key, minor_category_key) is the key.
-  return { ok: true };
+  return { ok: true, id: id };
 }
 
 function updateCategory(body) {

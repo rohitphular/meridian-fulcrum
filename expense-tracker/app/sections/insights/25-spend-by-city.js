@@ -101,7 +101,7 @@ function _renderTxDrill(drillEl, outTxs, cityLabel, sym) {
 
   const cityTxs = outTxs
     .filter(t => _cityKey(t) === cityLabel)
-    .sort((a, b) => new Date(b.tx_date_time) - new Date(a.tx_date_time));
+    .sort((a, b) => new Date(b.tx_date_local) - new Date(a.tx_date_local));
 
   const total = sumAmountBase(cityTxs);
 

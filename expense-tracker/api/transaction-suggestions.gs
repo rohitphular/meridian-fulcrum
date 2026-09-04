@@ -27,7 +27,7 @@ function getSuggestedTransactions() {
   }).map(function(tx) {
     const acc = accountMap[String(tx.account_id)];
     return Object.assign({}, tx, {
-      currency: acc.currency,
+      currency: acc.local_currency,
       amount:   Number(tx.tx_amount),
     });
   });
@@ -70,7 +70,7 @@ function _applyRecurringMonthly(outTx, today, map) {
   // Group relevant transactions by key
   const groups = {};
   outTx.forEach(function(tx) {
-    const d = new Date(tx.tx_date_time);
+    const d = new Date(tx.tx_date_local);
     if (isNaN(d.getTime()) || d < cutoff) return;
     const key = (tx.counterparty_name ? String(tx.counterparty_name) : '') + '|' + (tx.minor_category ? String(tx.minor_category) : '');
     if (!groups[key]) groups[key] = { tx: tx, occurrences: [] };
@@ -143,7 +143,7 @@ function _applyRecurringWeekly(outTx, today, map) {
   // Group transactions from the past 8 weeks by key
   const groups = {};
   outTx.forEach(function(tx) {
-    const d = new Date(tx.tx_date_time);
+    const d = new Date(tx.tx_date_local);
     if (isNaN(d.getTime()) || d < cutoff) return;
     const key = (tx.counterparty_name ? String(tx.counterparty_name) : '') + '|' + (tx.minor_category ? String(tx.minor_category) : '');
     if (!groups[key]) groups[key] = { tx: tx, occurrences: [] };
@@ -217,7 +217,7 @@ function _applyTimeOfDay(outTx, today, map) {
   // Counterparties already transacted with today
   const transactedTodayCounterparties = {};
   outTx.forEach(function(tx) {
-    const d = new Date(tx.tx_date_time);
+    const d = new Date(tx.tx_date_local);
     if (!isNaN(d.getTime()) && _calendarDateStr(d) === todayDateString) {
       transactedTodayCounterparties[tx.counterparty_name ? String(tx.counterparty_name) : ''] = true;
     }
@@ -226,7 +226,7 @@ function _applyTimeOfDay(outTx, today, map) {
   // Group transactions from last 4 weeks by extended key (including dow + hour_bucket)
   const groups = {};
   outTx.forEach(function(tx) {
-    const d = new Date(tx.tx_date_time);
+    const d = new Date(tx.tx_date_local);
     if (isNaN(d.getTime()) || d < cutoff) return;
     const dow        = d.getDay();
     const hourBucket = Math.floor(d.getHours() / 2);
@@ -323,7 +323,7 @@ function _applyRecentFrequent(outTx, today, map) {
   // Counterparties already transacted with today
   const transactedToday = {};
   outTx.forEach(function(tx) {
-    const d = new Date(tx.tx_date_time);
+    const d = new Date(tx.tx_date_local);
     if (!isNaN(d.getTime()) && _calendarDateStr(d) === todayDateString) {
       transactedToday[tx.counterparty_name ? String(tx.counterparty_name) : ''] = true;
     }
@@ -332,7 +332,7 @@ function _applyRecentFrequent(outTx, today, map) {
   // Group by key over last 60 days
   const groups = {};
   outTx.forEach(function(tx) {
-    const d = new Date(tx.tx_date_time);
+    const d = new Date(tx.tx_date_local);
     if (isNaN(d.getTime()) || d < cutoff) return;
     const key = (tx.counterparty_name ? String(tx.counterparty_name) : '') + '|' + (tx.minor_category ? String(tx.minor_category) : '');
     if (!groups[key]) groups[key] = { tx: tx, occurrences: [] };

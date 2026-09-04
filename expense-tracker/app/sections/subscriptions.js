@@ -101,8 +101,7 @@ function _renderForm(sub = null) {
 
   const nameVal        = isEdit ? sub.name             : (p !== null && p !== undefined && p.name !== undefined && p.name !== null ? p.name : '');
   const cpVal          = isEdit ? sub.counterparty_name : (p !== null && p !== undefined && p.counterparty_name !== undefined && p.counterparty_name !== null ? p.counterparty_name : '');
-  const amountVal      = isEdit ? sub.amount            : (p !== null && p !== undefined && p.amount !== undefined && p.amount !== null ? p.amount : '');
-  const currencyVal    = isEdit ? sub.currency          : (p !== null && p !== undefined && p.currency !== undefined && p.currency !== null ? p.currency : '');
+  const amountVal      = isEdit ? sub.subscription_amount_local : (p !== null && p !== undefined && p.amount !== undefined && p.amount !== null ? p.amount : '');
   const freqVal        = isEdit ? sub.frequency         : (p !== null && p !== undefined && p.frequency !== undefined && p.frequency !== null && p.frequency !== '' ? p.frequency : 'monthly');
   const srcAccVal      = isEdit ? sub.source_account    : (p !== null && p !== undefined && p.source_account !== undefined && p.source_account !== null ? p.source_account : '');
   const txTypeVal      = isEdit ? sub.tx_type           : (p !== null && p !== undefined && p.tx_type !== undefined && p.tx_type !== null ? p.tx_type : '');
@@ -122,15 +121,8 @@ function _renderForm(sub = null) {
   const activeAccounts = state.accounts.filter(a => a.record_status === 'active');
   const accOpts = `<option value="">— select —</option>` +
     activeAccounts.map(a =>
-      `<option value="${esc(a.id)}" ${a.id === srcAccVal ? 'selected' : ''}>${esc(a.name)} (${esc(a.currency)})</option>`
+      `<option value="${esc(a.id)}" ${a.id === srcAccVal ? 'selected' : ''}>${esc(a.account_name)} (${esc(a.local_currency)})</option>`
     ).join('');
-
-  // Currency options — use unique currencies from active accounts plus current value
-  const ccySet = new Set(activeAccounts.map(a => a.currency));
-  if (currencyVal) ccySet.add(currencyVal);
-  const ccyOpts = [...ccySet].map(c =>
-    `<option value="${esc(c)}" ${c === currencyVal ? 'selected' : ''}>${esc(c)}</option>`
-  ).join('');
 
   const header = isEdit ? `Editing: ${esc(sub.name)}` : 'New subscription';
 
@@ -146,13 +138,9 @@ function _renderForm(sub = null) {
         <label for="subCounterparty">Counterparty name</label>
         <input type="text" id="subCounterparty" value="${esc(cpVal)}" placeholder="Netflix Inc.">
       </div>
-      <div class="field">
+      <div class="field form-grid-span-2">
         <label for="subAmount">Amount *</label>
         <input type="number" id="subAmount" min="0.01" step="0.01" placeholder="0.00" value="${esc(String(amountVal))}">
-      </div>
-      <div class="field">
-        <label for="subCurrency">Currency *</label>
-        <select id="subCurrency">${ccyOpts}</select>
       </div>
       <div class="field form-grid-span-2">
         <label for="subFrequency">Frequency *</label>
@@ -242,8 +230,10 @@ function _sortSubs(subs) {
   return [...subs].sort((a, b) => {
     let va, vb;
     if (col === 'amount_base') {
-      va = toBase(_toMonthly(parseFloat(a.amount), a.frequency), a.currency, null);
-      vb = toBase(_toMonthly(parseFloat(b.amount), b.frequency), b.currency, null);
+      const aCcy = (state.accountMap[a.source_account] !== undefined && state.accountMap[a.source_account] !== null) ? state.accountMap[a.source_account].local_currency : '';
+      const bCcy = (state.accountMap[b.source_account] !== undefined && state.accountMap[b.source_account] !== null) ? state.accountMap[b.source_account].local_currency : '';
+      va = toBase(_toMonthly(parseFloat(a.subscription_amount_local), a.frequency), aCcy, null);
+      vb = toBase(_toMonthly(parseFloat(b.subscription_amount_local), b.frequency), bCcy, null);
       const aIsNaN = !Number.isFinite(va);
       const bIsNaN = !Number.isFinite(vb);
       if (aIsNaN && bIsNaN) return 0;
@@ -326,9 +316,10 @@ function _renderSubRow(sub, sym) {
 
   const isActive    = sub.record_status === 'active';
   const dotCls      = isActive ? 'sub-status-active' : 'sub-status-paused';
-  const amtFmt      = `${getSymbol(sub.currency)}${parseFloat(sub.amount).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}/${_freqShort(sub.frequency)}`;
-  const isForeign   = sub.currency !== undefined && sub.currency !== null && sub.currency !== '' && sub.currency !== state.quoteCurrency;
-  const _baseVal    = isForeign ? toBase(_toMonthly(parseFloat(sub.amount), sub.frequency), sub.currency, null) : 0;
+  const subCcy      = (state.accountMap[sub.source_account] !== undefined && state.accountMap[sub.source_account] !== null) ? state.accountMap[sub.source_account].local_currency : '';
+  const amtFmt      = `${getSymbol(subCcy)}${parseFloat(sub.subscription_amount_local).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}/${_freqShort(sub.frequency)}`;
+  const isForeign   = subCcy !== '' && subCcy !== state.quoteCurrency;
+  const _baseVal    = isForeign ? toBase(_toMonthly(parseFloat(sub.subscription_amount_local), sub.frequency), subCcy, null) : 0;
   const baseAmt     = isForeign
     ? `<span class="td-base-amt">${!Number.isFinite(_baseVal) ? '—' : `${sym}${_baseVal.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}/mo`}</span>`
     : '';
@@ -348,7 +339,7 @@ function _renderSubRow(sub, sym) {
   }
 
   const _accEntry = state.accountMap[sub.source_account];
-  const accName   = (_accEntry !== undefined && _accEntry !== null && _accEntry.name !== undefined && _accEntry.name !== null) ? _accEntry.name : '—';
+  const accName   = (_accEntry !== undefined && _accEntry !== null && _accEntry.account_name !== undefined && _accEntry.account_name !== null) ? _accEntry.account_name : '—';
 
   return `<tr${isActive ? '' : ' style="opacity:0.6"'}>
     <td><span class="sub-status-dot ${dotCls}">●</span> ${esc(sub.name)}</td>
@@ -380,7 +371,11 @@ function _renderTable(subs) {
   const active  = state.subscriptions.filter(s => s.record_status === 'active').length;
   const estMonthly = state.subscriptions
     .filter(s => s.record_status === 'active')
-    .reduce((sum, s) => { const v = toBase(_toMonthly(s.amount, s.frequency), s.currency, null); return sum + (Number.isFinite(v) ? v : 0); }, 0);
+    .reduce((sum, s) => {
+      const sCcy = (state.accountMap[s.source_account] !== undefined && state.accountMap[s.source_account] !== null) ? state.accountMap[s.source_account].local_currency : '';
+      const v = toBase(_toMonthly(s.subscription_amount_local, s.frequency), sCcy, null);
+      return sum + (Number.isFinite(v) ? v : 0);
+    }, 0);
 
   return `
     <div class="summary-grid" style="margin-bottom:20px">
@@ -422,7 +417,7 @@ function _renderImportPanel() {
       <div class="field form-grid-span-2">
         <label for="subImportFile">CSV file</label>
         <input type="file" id="subImportFile" accept=".csv">
-        <div class="field-hint">Columns: name, counterparty_name, amount, currency, frequency, day_of_month, day_of_week, source_account, tx_type, major_category, minor_category, tags, description, subscription_start_date, subscription_end_date</div>
+        <div class="field-hint">Columns: subscription_name, counterparty_name, subscription_amount_local, frequency, day_of_month, day_of_week, source_account, tx_type, major_category, minor_category, tags, description, subscription_start_date, subscription_end_date</div>
       </div>
     </div>
     <div id="subImportStatus">${_subImportResult !== null ? _subImportResult : ''}</div>
@@ -447,22 +442,20 @@ function _parseSubscriptionsCsv(text) {
     const row  = {};
     headers.forEach((h, idx) => { row[h] = (vals[idx] !== undefined ? vals[idx] : '').trim(); });
 
-    if (String(row.name).trim() === '')      { errors.push(`Row ${i + 1}: missing name`);      continue; }
-    if (String(row.amount).trim() === '')    { errors.push(`Row ${i + 1}: missing amount`);    continue; }
-    if (String(row.currency).trim() === '')  { errors.push(`Row ${i + 1}: missing currency`);  continue; }
-    if (String(row.frequency).trim() === '') { errors.push(`Row ${i + 1}: missing frequency`); continue; }
+    if (String(row.subscription_name).trim() === '')               { errors.push(`Row ${i + 1}: missing name`);                        continue; }
+    if (String(row.subscription_amount_local).trim() === '') { errors.push(`Row ${i + 1}: missing subscription_amount_local`); continue; }
+    if (String(row.frequency).trim() === '')                       { errors.push(`Row ${i + 1}: missing frequency`);                     continue; }
 
-    const amount = parseFloat(row.amount);
-    if (!Number.isFinite(amount) || amount <= 0) {
-      errors.push(`Row ${i + 1}: invalid amount "${row.amount}"`);
+    const subscription_amount_local = parseFloat(row.subscription_amount_local);
+    if (!Number.isFinite(subscription_amount_local) || subscription_amount_local <= 0) {
+      errors.push(`Row ${i + 1}: invalid subscription_amount_local "${row.subscription_amount_local}"`);
       continue;
     }
 
     subscriptions.push({
-      name:              row.name,
+      name:              row.subscription_name,
       counterparty_name: row.counterparty_name,
-      amount,
-      currency:          row.currency.toUpperCase(),
+      subscription_amount_local,
       frequency:         row.frequency,
       day_of_month:      row.day_of_month,
       day_of_week:       row.day_of_week,
@@ -813,8 +806,7 @@ function _collectForm() {
   return {
     name:              el('subName').value.trim(),
     counterparty_name: el('subCounterparty').value.trim(),
-    amount:            parseFloat(el('subAmount').value),
-    currency:          el('subCurrency').value,
+    subscription_amount_local: parseFloat(el('subAmount').value),
     frequency:         freq,
     day_of_week:       dayOfWeek,
     day_of_month:      dayOfMonth,
@@ -841,12 +833,8 @@ async function _saveAdd() {
     if (errEl) errEl.textContent = 'Name is required.';
     return;
   }
-  if (!Number.isFinite(body.amount) || body.amount <= 0) {
+  if (!Number.isFinite(body.subscription_amount_local) || body.subscription_amount_local <= 0) {
     if (errEl) errEl.textContent = 'Enter a positive amount.';
-    return;
-  }
-  if (body.currency === undefined || body.currency === null || String(body.currency).trim() === '') {
-    if (errEl) errEl.textContent = 'Currency is required.';
     return;
   }
   if (body.source_account === undefined || body.source_account === null || String(body.source_account).trim() === '') {
@@ -898,12 +886,8 @@ async function _saveEdit(row) {
     if (errEl) errEl.textContent = 'Name is required.';
     return;
   }
-  if (!Number.isFinite(body.amount) || body.amount <= 0) {
+  if (!Number.isFinite(body.subscription_amount_local) || body.subscription_amount_local <= 0) {
     if (errEl) errEl.textContent = 'Enter a positive amount.';
-    return;
-  }
-  if (body.currency === undefined || body.currency === null || String(body.currency).trim() === '') {
-    if (errEl) errEl.textContent = 'Currency is required.';
     return;
   }
   if (body.source_account === undefined || body.source_account === null || String(body.source_account).trim() === '') {
@@ -943,8 +927,7 @@ async function _toggle(row) {
       row_num:                 row,
       name:                    sub.name,
       counterparty_name:       sub.counterparty_name,
-      amount:                  sub.amount,
-      currency:                sub.currency,
+      subscription_amount_local: sub.subscription_amount_local,
       frequency:               sub.frequency,
       day_of_month:            sub.day_of_month,
       day_of_week:             sub.day_of_week,

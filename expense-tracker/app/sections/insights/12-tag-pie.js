@@ -103,14 +103,14 @@ function _renderDrillPanel(drillEl, moneyOut, tag, sym) {
 
   const tagTxs = moneyOut
     .filter(t => String(t.tx_tags ?? '').split(';').map(s => s.toLowerCase().trim()).includes(tag))
-    .sort((a, b) => new Date(b.tx_date_time) - new Date(a.tx_date_time));
+    .sort((a, b) => new Date(b.tx_date_local) - new Date(a.tx_date_local));
 
   const total = sumAmountBase(tagTxs);
   const thS   = `padding:8px;font-size:var(--text-xs);color:var(--muted);font-weight:600;white-space:nowrap`;
   const tdS   = `padding:9px 8px;font-size:var(--text-sm);border-bottom:1px solid var(--hair)`;
 
   const bodyRows = tagTxs.map(t => {
-    const d    = new Date(t.tx_date_time);
+    const d    = new Date(t.tx_date_local);
     const date = d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: '2-digit' });
     const desc = t.description && t.description !== t.counterparty_name ? t.description : '';
     return `<tr>

@@ -47,24 +47,24 @@ function _buildCategoryMap() {
 //   internally. Callers that validate many rows in a loop MUST pass accountMap.
 //
 // Amount rules:
-//   source_amount — always the primary amount; required and > 0 when source account is mandatory.
-//   target_amount — only present for cross-currency transfers; if provided must be > 0.
-//                   Same-currency transfers leave it blank; the core defaults to source_amount.
+//   source_amount_local — always the primary amount; required and > 0 when source account is mandatory.
+//   target_amount_local — only present for cross-currency transfers; if provided must be > 0.
+//                   Same-currency transfers leave it blank; the core defaults to source_amount_local.
 //
 // TX-NEW-C-2: tx_amount is validated unconditionally (presence + isFinite) before
 //   any category-conditional checks. This ensures NaN can never be written regardless
 //   of whether a category has both mandatory flags false.
 
 function validateTransactionRecord(body, catMap, accountMap) {
-  if (body.tx_date_time === undefined || body.tx_date_time === null || String(body.tx_date_time).trim() === '')
+  if (body.tx_date_local === undefined || body.tx_date_local === null || String(body.tx_date_local).trim() === '')
     return { ok: false, error: 'missing_date' };
   if (body.tx_type === undefined || body.tx_type === null || String(body.tx_type).trim() === '' || !VALID_TRANSACTION_TYPES.includes(body.tx_type))
     return { ok: false, error: 'invalid_transaction_type' };
 
   // TX-NEW-C-2: unconditional amount validation — must run before category-conditional checks.
-  // At least one of source_amount or target_amount must be a finite positive number.
-  const srcAmtNum = (body.source_amount !== undefined && body.source_amount !== null && String(body.source_amount).trim() !== '') ? Number(body.source_amount) : NaN;
-  const tgtAmtNum = (body.target_amount !== undefined && body.target_amount !== null && String(body.target_amount).trim() !== '') ? Number(body.target_amount) : NaN;
+  // At least one of source_amount_local or target_amount_local must be a finite positive number.
+  const srcAmtNum = (body.source_amount_local !== undefined && body.source_amount_local !== null && String(body.source_amount_local).trim() !== '') ? Number(body.source_amount_local) : NaN;
+  const tgtAmtNum = (body.target_amount_local !== undefined && body.target_amount_local !== null && String(body.target_amount_local).trim() !== '') ? Number(body.target_amount_local) : NaN;
   if (!Number.isFinite(srcAmtNum) && !Number.isFinite(tgtAmtNum))
     return { ok: false, error: 'missing_source_amount' };
   if (Number.isFinite(srcAmtNum) && srcAmtNum <= 0)
@@ -84,14 +84,14 @@ function validateTransactionRecord(body, catMap, accountMap) {
   if (cat.source_account_mandatory) {
     if (body.source_account === undefined || body.source_account === null || String(body.source_account).trim() === '')
       return { ok: false, error: 'missing_source_account' };
-    if (body.source_amount === undefined || body.source_amount === null || !Number.isFinite(Number(body.source_amount)) || Number(body.source_amount) <= 0)
+    if (body.source_amount_local === undefined || body.source_amount_local === null || !Number.isFinite(Number(body.source_amount_local)) || Number(body.source_amount_local) <= 0)
       return { ok: false, error: 'missing_source_amount' };
   }
 
   if (cat.target_account_mandatory) {
     if (body.target_account === undefined || body.target_account === null || String(body.target_account).trim() === '')
       return { ok: false, error: 'missing_target_account' };
-    if (body.target_amount === undefined || body.target_amount === null || !Number.isFinite(Number(body.target_amount)) || Number(body.target_amount) <= 0)
+    if (body.target_amount_local === undefined || body.target_amount_local === null || !Number.isFinite(Number(body.target_amount_local)) || Number(body.target_amount_local) <= 0)
       return { ok: false, error: 'missing_target_amount' };
   }
 
@@ -110,7 +110,7 @@ function validateTransactionRecord(body, catMap, accountMap) {
 function validateTransactionUpdate(body, oldRow, catMap) {
   if (body.row_num === undefined || body.row_num === null || String(body.row_num).trim() === '')
     return { ok: false, error: 'missing_row_num' };
-  if (body.tx_date_time === undefined || body.tx_date_time === null || String(body.tx_date_time).trim() === '')
+  if (body.tx_date_local === undefined || body.tx_date_local === null || String(body.tx_date_local).trim() === '')
     return { ok: false, error: 'missing_date' };
   if (body.tx_type === undefined || body.tx_type === null || String(body.tx_type).trim() === '' || !VALID_TRANSACTION_TYPES.includes(body.tx_type))
     return { ok: false, error: 'invalid_transaction_type' };

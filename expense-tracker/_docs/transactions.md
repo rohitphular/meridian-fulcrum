@@ -22,8 +22,8 @@ Schema reference: [data-model.md § Transaction](data-model.md#transaction). Bal
 
 | Type | Meaning | Effect on account |
 |---|---|---|
-| `money-in` | Money enters `account_id` | `account.current_value += tx_amount` |
-| `money-out` | Money leaves `account_id` | `account.current_value -= tx_amount` |
+| `money-in` | Money enters `account_id` | `account.current_value_local += tx_amount` |
+| `money-out` | Money leaves `account_id` | `account.current_value_local -= tx_amount` |
 
 There is no `money-transfer` type. **Transfers** (moving money between owned accounts) are represented as two separate rows that share a `parent_tx_id`:
 
@@ -36,7 +36,7 @@ Both rows are created together and linked via `parent_tx_id`. If the two account
 
 | Field | Required when |
 |---|---|
-| `tx_date_time` | Always |
+| `tx_date_local` | Always |
 | `tx_type` | Always; must be `money-in` or `money-out` |
 | `account_id` | Always; the single account this row affects |
 | `tx_amount` | Always; must be > 0 |
@@ -45,7 +45,7 @@ Both rows are created together and linked via `parent_tx_id`. If the two account
 
 For a transfer, **two rows are required** — one money-out and one money-in. Both must be submitted together. Only the child (derived) row carries the parent's `id` as its `parent_tx_id`; the parent row's `parent_tx_id` is empty.
 
-The currency of any row is derived at runtime from the linked account (`account_id → account.currency`). It is not user-input and is not stored on the transaction row.
+The currency of any row is derived at runtime from the linked account (`account_id → account.local_currency`). It is not user-input and is not stored on the transaction row.
 
 ## Category-driven account-type hints
 
@@ -99,7 +99,7 @@ No `[FX: …]` marker is appended to `description` — the effective exchange ra
 
 | Filter | Type | Behaviour |
 |---|---|---|
-| Date range | Preset / custom | Bound `tx_date_time` to the selected period; applied before all other filters |
+| Date range | Preset / custom | Bound `tx_date_local` to the selected period; applied before all other filters |
 | Type | Multi-select (checkboxes) | Match any selected `tx_type` |
 | Account type | Multi-select (checkboxes) | Pre-filter the account dropdown by account `type` (asset, investment, liability) |
 | Account | Multi-select (checkboxes) | Match `account_id` |
@@ -119,7 +119,7 @@ Active filters are shown as a count badge on the Filters button. Individual filt
 
 ### Sortable columns
 
-Date, Type, Account (by account name), Category (by major). Default sort: `tx_date_time` descending. Click a column header to sort ascending; click again to flip to descending. Clicking a different column resets to ascending.
+Date, Type, Account (by account name), Category (by major). Default sort: `tx_date_local` descending. Click a column header to sort ascending; click again to flip to descending. Clicking a different column resets to ascending.
 
 ## Pagination
 
@@ -127,7 +127,7 @@ Client-side, default 50 rows per page (selectable: 10 / 25 / 50). Resets to page
 
 ## Malformed rows
 
-Rows missing `id`, `tx_date_time`, or with an invalid `tx_type` are diverted into a collapsed warning section. They:
+Rows missing `id`, `tx_date_local`, or with an invalid `tx_type` are diverted into a collapsed warning section. They:
 
 - Do NOT participate in insight totals
 - Do NOT affect account balances (their balance-effect would already have been applied at creation time)
@@ -148,9 +148,9 @@ The export operates on the **currently filtered rows** — the same set visible 
 | Operation | Behaviour |
 |---|---|
 | `list_transactions` | Return all rows (including soft-deleted) |
-| `create_transaction` | Validate (`tx_amount` validated unconditionally, regardless of category flags); duplicate check on `(tx_date_time, tx_type, account_id, tx_amount)` skipping deleted rows → `duplicate_transaction`; assign `id`; stamp `record_status = active`, `created_at`, `updated_at`; append. For transfers, both legs are duplicate-checked BEFORE any row is written — see Transfer atomicity below. |
+| `create_transaction` | Validate (`tx_amount` validated unconditionally, regardless of category flags); duplicate check on `(tx_date_local, tx_type, account_id, tx_amount)` skipping deleted rows → `duplicate_transaction`; assign `id`; stamp `record_status = active`, `created_at`, `updated_at`; append. For transfers, both legs are duplicate-checked BEFORE any row is written — see Transfer atomicity below. |
 | `create_transactions_bulk` | Accept `transactions[]`; validate all rows (including unconditional `tx_amount` check), generate IDs, and write them in a single `sheet.setValues()` call — per-row `create_transaction` is NOT called; return `{ ok, created, failed, results }` |
-| `update_transaction` | Locked guard → `record_locked`; deleted guard → `transaction_deleted`; validate; duplicate check on `(tx_date_time, tx_type, account_id, tx_amount)` excluding the current row (via `excludeRowNum` parameter on `_checkDuplicate`) → `duplicate_transaction`; validates `major_category` / `minor_category` FK when those fields are present in the update body (returns `unknown_category` if the composite key `(tx_type, major_category, minor_category)` is not found); overwrite editable fields in a single batch write; stamp `updated_at`; advance `sync_status` |
+| `update_transaction` | Locked guard → `record_locked`; deleted guard → `transaction_deleted`; validate; duplicate check on `(tx_date_local, tx_type, account_id, tx_amount)` excluding the current row (via `excludeRowNum` parameter on `_checkDuplicate`) → `duplicate_transaction`; validates `major_category` / `minor_category` FK when those fields are present in the update body (returns `unknown_category` if the composite key `(tx_type, major_category, minor_category)` is not found); overwrite editable fields in a single batch write; stamp `updated_at`; advance `sync_status` |
 | `delete_transaction` | Already-deleted guard → `transaction_already_deleted`; locked guard → `record_locked`; soft-delete (`record_status → deleted`) in a single `setValues()` write; stamp `updated_at` |
 | `restore_transaction` | Check `record_status = deleted`; set `record_status → active` in a single `setValues()` write; stamp `updated_at` |
 
@@ -160,17 +160,19 @@ For transfers (`create_transaction` where both a source and target account are r
 
 ### Amount validation
 
-`tx_amount` (and the equivalent `source_amount` / `target_amount` fields on the create path) is validated unconditionally before any category-conditional checks run. A category where both `source_account_mandatory` and `target_account_mandatory` are `false` does NOT bypass amount validation — at least one of `source_amount` or `target_amount` must be a finite positive number for any create call to succeed.
+`tx_amount` (and the equivalent `source_amount_local` / `target_amount_local` fields on the create path) is validated unconditionally before any category-conditional checks run. A category where both `source_account_mandatory` and `target_account_mandatory` are `false` does NOT bypass amount validation — at least one of `source_amount_local` or `target_amount_local` must be a finite positive number for any create call to succeed.
 
 The internal `_writeSingleTransaction` function also guards against a non-finite `tx_amount` immediately before the sheet write, returning `invalid_tx_amount` as a safety net.
 
 ### Duplicate check (`_checkDuplicate`)
 
-`_checkDuplicate(sheet, body, excludeRowNum)` scans existing rows for a matching `(tx_date_time, tx_type, account_id, tx_amount)` tuple, skipping deleted rows. The optional `excludeRowNum` parameter (1-based sheet row number) causes that row to be skipped during the scan — used by `updateTransaction` to prevent the current row from matching itself as a duplicate.
+`_checkDuplicate(sheet, body, excludeRowNum)` scans existing rows for a matching `(tx_date_local, tx_type, account_id, tx_amount)` tuple, skipping deleted rows. The optional `excludeRowNum` parameter (1-based sheet row number) causes that row to be skipped during the scan — used by `updateTransaction` to prevent the current row from matching itself as a duplicate.
 
-### Transaction ID format
+### Transaction ID format and uniqueness
 
 Sequential IDs generated by `create_transaction` (single-row path) use the format `YYYY-MM-DD-NNN` where `NNN` is a zero-padded 3-digit decimal sequence number. Bulk IDs generated by `create_transactions_bulk` use the format `YYYY-MM-DD-XXXXXXXX` where the suffix is 8 hex characters from a UUID. The sequential scanner in `generateTransactionId` ignores any ID that does not match the `YYYY-MM-DD-NNN` pattern — hex-suffix bulk IDs are skipped when computing the next sequential number, preventing them from corrupting the sequence counter.
+
+Each transaction row's `id` is unique. The sequential ID generator guarantees uniqueness by scanning existing IDs before assigning the next one. UUID-based bulk IDs achieve uniqueness through collision-resistant generation. The `id` field is `editable: false` — it is set once on creation and never changed.
 
 ## Error codes
 
@@ -178,18 +180,18 @@ Error code strings carry no embedded values. Where additional context is needed 
 
 | Code | Triggered by | Meaning | Extra properties |
 |---|---|---|---|
-| `missing_date` | create, update | `tx_date_time` not provided | — |
+| `missing_date` | create, update | `tx_date_local` not provided | — |
 | `invalid_transaction_type` | create, update | `tx_type` is not `money-in` or `money-out` | — |
 | `missing_category` | create, update | `major_category` or `minor_category` is blank | — |
 | `unknown_category` | create, update | `(tx_type, major_category, minor_category)` composite key not found in the category schema | — |
 | `missing_source_account` | create | Source account required by category but not provided | — |
-| `missing_source_amount` | create | Source amount required but missing or non-positive | — |
+| `missing_source_amount_local` | create | Source amount required but missing or non-positive | — |
 | `missing_target_account` | create | Target account required by category but not provided | — |
-| `missing_target_amount` | create | Target amount required but missing or non-positive | — |
+| `missing_target_amount_local` | create | Target amount required but missing or non-positive | — |
 | `unknown_account_id` | create, update | `account_id` is not a known account | — |
 | `unknown_source_account` | create | `source_account` is not a known account | — |
 | `unknown_target_account` | create | `target_account` is not a known account | — |
-| `duplicate_transaction` | create, update | Row with same `(tx_date_time, tx_type, account_id, tx_amount)` already exists (non-deleted) | — |
+| `duplicate_transaction` | create, update | Row with same `(tx_date_local, tx_type, account_id, tx_amount)` already exists (non-deleted) | — |
 | `missing_row_num` | update, delete, restore | `row_num` not provided | — |
 | `invalid_row` | update, delete, restore | `row_num` is out of bounds | — |
 | `record_locked` | update, delete | Transaction is locked | — |
@@ -208,14 +210,14 @@ The import panel accepts a CSV file. Canonical column names (no aliases):
 
 | Column | Required | Notes |
 |---|---|---|
-| `id` | No | If omitted, assigned on import |
-| `tx_date_time` | Yes | ISO-8601 UTC date/time of the transaction |
-| `tx_timezone` | No | IANA timezone string |
+| `id` | No | UUID. If omitted, the backend assigns one. Each transaction `id` is unique — the backend enforces this by construction (sequential IDs scan for uniqueness; bulk UUIDs are collision-resistant). |
+| `tx_date_local` | Yes | Date/time of the transaction in local time (e.g. `2026-08-12 14:30:00`). Stored as-is — no UTC conversion. |
+| `tx_timezone_local` | No | IANA timezone string (e.g. `Europe/London`). When submitting via the UI form, this is auto-detected from the browser (`Intl.DateTimeFormat().resolvedOptions().timeZone`) and sent silently — it is never a user-typed input. CSV import may supply it explicitly. Immutable after creation. |
 | `tx_type` | Yes | `money-in` or `money-out` |
 | `source_account` | Yes | Account name (not ID). Resolved to account ID at import time. |
 | `target_account` | Conditional | Required for transfer rows. Target account name (resolved to account ID at import time). |
-| `source_amount` | Yes | Positive number in the source account's currency |
-| `target_amount` | Conditional | Required for transfer rows. Amount arriving in the target account's currency. |
+| `source_amount_local` | Yes | Positive number in the source account's currency |
+| `target_amount_local` | Conditional | Required for transfer rows. Amount arriving in the target account's currency. |
 | `major_category` | Yes | |
 | `minor_category` | Yes | |
 | `description` | No | |
@@ -229,23 +231,25 @@ The import panel accepts a CSV file. Canonical column names (no aliases):
 | `user_location_longitude` | No | |
 | `record_status` | No | System field — accepted in header but silently ignored on import |
 | `sync_status` | No | System field — accepted in header but silently ignored on import |
-| `sync_date_time` | No | System field — accepted in header but silently ignored on import |
+| `sync_date` | No | System field — accepted in header but silently ignored on import |
 | `sync_notes` | No | System field — accepted in header but silently ignored on import |
 | `created_at` | No | System field — accepted in header but silently ignored on import |
 | `updated_at` | No | System field — accepted in header but silently ignored on import |
 
-The system fields (`id`, `record_status`, `sync_status`, `sync_date_time`, `sync_notes`, `created_at`, `updated_at`) are accepted in the CSV header row but are silently ignored on import — the backend always assigns its own values for system fields.
+The system fields (`id`, `record_status`, `sync_status`, `sync_date`, `sync_notes`, `created_at`, `updated_at`) are accepted in the CSV header row but are silently ignored on import — the backend always assigns its own values for system fields.
 
 `parent_tx_id` is not accepted as a CSV column. The backend auto-generates the parent-child transfer relationship from the `source_account` and `target_account` columns — do not include it in the CSV file.
 
-Preview is shown before submission. Duplicate rows (matched on `tx_date_time` + `tx_type` + `account_id` + `tx_amount`) are shown with an "already exists" badge and counted in `skipped`, not `failed`. Results summary: `N imported · M already existed`.
+Preview is shown before submission. Duplicate rows (matched on `tx_date_local` + `tx_type` + `account_id` + `tx_amount`) are shown with an "already exists" badge and counted in `skipped`, not `failed`. Results summary: `N imported · M already existed`.
 
 ## Add / edit form layout
 
 Both transaction types share one form template:
 
-- **Standalone money-in or money-out**: Type, Major, Minor, Account (single `account_id` field), Date, Timezone, Counterparty, Amount (`tx_amount`), Location fields, Tags, Beneficiaries, Description.
+- **Standalone money-in or money-out**: Type, Major, Minor, Account (single `account_id` field), Date, Counterparty, Amount (`tx_amount`), Location fields, Tags, Beneficiaries, Description.
 - **Transfer**: same fields as above for the primary leg, plus a sibling-amount field (the partner leg's `tx_amount`) so the user can enter what arrives in the target account. The UI creates both rows on submit.
+- `tx_timezone_local` is NOT a form input — it is auto-detected from `Intl.DateTimeFormat().resolvedOptions().timeZone` in the browser and sent silently with the create payload. It is displayed as a read-only field in the view and edit panels. It is immutable after creation (`editable: false` in the schema).
+- `tx_date_local` is stored in local time as-is — no UTC conversion is applied. The corresponding `tx_timezone_local` captures the timezone context.
 
 The Edit form renders **above** the table, not inline within a table row. Delete confirmation stays inline (one-row confirmation).
 

@@ -56,7 +56,7 @@ No automatic seeding exists. Categories must be populated via the bulk CSV impor
 | Operation | Behaviour |
 |---|---|
 | `list_categories` | Return all rows |
-| `create_category` | Validate required fields; duplicate check → `duplicate_category`; append; stamps `created_at`, `updated_at`, `sync_status = create-pending`. `record_status` is always written as `active` on create — passing any other value (including `'inactive'`) returns `invalid_record_status`. The add form therefore only offers `active` as a choice. |
+| `create_category` | Validate required fields; duplicate check → `duplicate_category`; append; stamps `created_at`, `updated_at`, `sync_status = create-pending`, and a UUID `id`. If `body.id` is provided (e.g. from a seeded CSV import), that value is used; otherwise a UUID is generated. `record_status` is always written as `active` on create — passing any other value (including `'inactive'`) returns `invalid_record_status`. The add form therefore only offers `active` as a choice. Returns `{ ok: true, id: '<uuid>' }`. |
 | `create_categories_bulk` | Accept `categories[]`; deduplicates against the sheet (existing rows are updated rather than re-created); within-batch duplicates of newly created rows are treated as failures and appear in the `failed` count; return `{ created, updated, failed, results }` |
 | `update_category` | Validate required fields (including optional `record_status` if present); locked guard; FK check if composite key is changing (see below); overwrite the row; stamps `updated_at`. `record_status` is written only if present in the request body — if absent, the existing status is preserved. To restore a deleted category, pass `record_status: 'active'` via this action. Optional parameter: `force` (boolean). |
 | `delete_category` | Locked guard; soft-delete (`record_status → deleted`); stamps `updated_at` |
@@ -98,6 +98,7 @@ The import panel (accessible via the **Import** button in the section header) ac
 
 | Column | Required | Notes |
 |---|---|---|
+| `id` | No | UUID for the row. When present on a **newly created** row, this value is used as the row's `id` — useful for pre-assigned UUIDs in seed files. Ignored on updates (existing `id` is retained). |
 | `tx_type_key` | Yes | Must be exactly `money-in` or `money-out`. Invalid values are rejected as parse errors before submission — the row is skipped and reported in the preview error list. |
 | `major_category_label` | Yes | |
 | `minor_category_label` | Yes | |
@@ -111,42 +112,45 @@ The import panel (accessible via the **Import** button in the section header) ac
 | `is_subscription_eligible` | No | `true` / `false` |
 | `record_status` | No | For rows that **already exist** (matched by composite key), the value is passed to `update_category` and applied — including `deleted` or `locked`. For rows that are **newly created**, `record_status` is always `active` regardless of the CSV value (`create_category` rejects any other value). Note: if the target row is currently `locked`, the update will fail with `record_locked` regardless of the `record_status` value in the CSV. |
 
-Audit columns (`sync_status`, `sync_date_time`, `sync_notes`, `created_at`, `updated_at`) are stamped by the backend on import and must not be present in the CSV.
+An `id` column is optional in the CSV. When present, the value is used as the UUID for newly created rows, allowing pre-assigned UUIDs from seed files to be preserved (useful for cross-entity FK references in seed data). For rows that are matched as updates (existing composite key), the `id` field is ignored — the existing `id` is retained. Audit columns (`sync_status`, `sync_date`, `sync_notes`, `created_at`, `updated_at`) are stamped by the backend on import and must not be present in the CSV.
+
+Derived columns (`tx_type_label`, `major_category_key`, `minor_category_key`) are computed by the backend from the label fields via `slugify` and `TX_TYPE_LABEL_MAP` — they are never read from the CSV. If present in the file (e.g. exported CSVs that include all sheet columns), they are silently ignored by the parser.
 
 Preview is shown before submission. Results summary: `N imported · M updated · K failed`.
 
 ## Column positions
 
-The sheet stores 20 columns in this order:
+The sheet stores 21 columns in this order:
 
 | # | Field |
 |---|---|
-| 1 | `tx_type_key` |
-| 2 | `tx_type_label` |
-| 3 | `major_category_key` |
-| 4 | `major_category_label` |
-| 5 | `minor_category_key` |
-| 6 | `minor_category_label` |
-| 7 | `description` |
-| 8 | `tag_keywords` |
-| 9 | `counterparty_examples` |
-| 10 | `source_account_types` |
-| 11 | `target_account_types` |
-| 12 | `source_account_mandatory` |
-| 13 | `target_account_mandatory` |
-| 14 | `is_subscription_eligible` |
-| 15 | `record_status` |
-| 16 | `sync_status` |
-| 17 | `sync_date_time` |
-| 18 | `sync_notes` |
-| 19 | `created_at` |
-| 20 | `updated_at` |
+| 1 | `id` |
+| 2 | `tx_type_key` |
+| 3 | `tx_type_label` |
+| 4 | `major_category_key` |
+| 5 | `major_category_label` |
+| 6 | `minor_category_key` |
+| 7 | `minor_category_label` |
+| 8 | `description` |
+| 9 | `tag_keywords` |
+| 10 | `counterparty_examples` |
+| 11 | `source_account_types` |
+| 12 | `target_account_types` |
+| 13 | `source_account_mandatory` |
+| 14 | `target_account_mandatory` |
+| 15 | `is_subscription_eligible` |
+| 16 | `record_status` |
+| 17 | `sync_status` |
+| 18 | `sync_date` |
+| 19 | `sync_notes` |
+| 20 | `created_at` |
+| 21 | `updated_at` |
 
 Column positions are append-only — never change an existing position.
 
 ## Identity and row addressing
 
-Categories have **no surrogate `id` field**. Identity is the composite key `(tx_type_key, major_category_key, minor_category_key)`. All update and delete operations locate the target row by `row_num` (the row's position in the sheet), which the frontend receives from `list_categories` and must pass back on mutations.
+Each category row carries a UUID `id` in column 1, set once on creation and never changed. The composite key `(tx_type_key, major_category_key, minor_category_key)` remains the uniqueness constraint for duplicate detection. All update and delete operations locate the target row by `row_num` (the row's position in the sheet), which the frontend receives from `list_categories` and must pass back on mutations. `list_categories` returns `id` in each row object alongside `_row`.
 
 ## Form behaviour
 

@@ -4,7 +4,7 @@
 // Storage model: one row per account movement (account_id + tx_amount).
 // Transfers create 2 rows linked via parent_tx_id.
 //
-// Create API receives: source_account, target_account, source_amount, target_amount
+// Create API receives: source_account, target_account, source_amount_local, target_amount_local
 // (same as CSV import format). Backend maps to account_id / tx_amount per row.
 //
 // Update API receives: account_id, tx_amount (single-row edit — no source/target).
@@ -16,13 +16,13 @@ function listTransactions() {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Create
-// body: { tx_type, source_account, target_account, source_amount, target_amount,
+// body: { tx_type, source_account, target_account, source_amount_local, target_amount_local,
 //         major_category, minor_category, + location/text fields }
 // ─────────────────────────────────────────────────────────────────────────────
 function createTransaction(body) {
-  if ((body.target_amount === undefined || body.target_amount === null || String(body.target_amount).trim() === '' || !Number.isFinite(Number(body.target_amount)) || Number(body.target_amount) <= 0) &&
-      body.source_amount !== undefined && body.source_amount !== null && Number.isFinite(Number(body.source_amount)) && Number(body.source_amount) > 0) {
-    body.target_amount = body.source_amount;
+  if ((body.target_amount_local === undefined || body.target_amount_local === null || String(body.target_amount_local).trim() === '' || !Number.isFinite(Number(body.target_amount_local)) || Number(body.target_amount_local) <= 0) &&
+      body.source_amount_local !== undefined && body.source_amount_local !== null && Number.isFinite(Number(body.source_amount_local)) && Number(body.source_amount_local) > 0) {
+    body.target_amount_local = body.source_amount_local;
   }
 
   const catMap     = _buildCategoryMap();
@@ -37,8 +37,8 @@ function createTransaction(body) {
     && body.target_account !== undefined && body.target_account !== null && String(body.target_account).trim() !== '';
 
   if (isTransfer) {
-    const srcAmt = Number(body.source_amount);
-    const tgtAmt = Number(body.target_amount);
+    const srcAmt = Number(body.source_amount_local);
+    const tgtAmt = Number(body.target_amount_local);
 
     // Parent = the leg matching the submitted tx_type.
     // money-out submitted → source account is the primary leg (parent).
@@ -81,7 +81,7 @@ function createTransaction(body) {
 
   // Non-transfer: single row. Account and amount come from whichever side is mandatory.
   const account_id = cat.source_account_mandatory ? body.source_account : body.target_account;
-  const tx_amount  = cat.source_account_mandatory ? Number(body.source_amount) : Number(body.target_amount);
+  const tx_amount  = cat.source_account_mandatory ? Number(body.source_amount_local) : Number(body.target_amount_local);
 
   return _writeSingleTransaction(Object.assign(_txSharedFields(body), {
     tx_type:      body.tx_type,
@@ -94,8 +94,8 @@ function createTransaction(body) {
 // Shared categorisation/location/text fields extracted from the create body.
 function _txSharedFields(body) {
   return {
-    tx_date_time:            body.tx_date_time,
-    tx_timezone:             body.tx_timezone             !== undefined && body.tx_timezone             !== null ? String(body.tx_timezone)             : '',
+    tx_date_local:            body.tx_date_local,
+    tx_timezone_local:             body.tx_timezone_local             !== undefined && body.tx_timezone_local             !== null ? String(body.tx_timezone_local)             : '',
     user_location_area:      body.user_location_area      !== undefined && body.user_location_area      !== null ? String(body.user_location_area)      : '',
     user_location_city:      body.user_location_city      !== undefined && body.user_location_city      !== null ? String(body.user_location_city)       : '',
     user_location_country:   body.user_location_country   !== undefined && body.user_location_country   !== null ? String(body.user_location_country)    : '',
@@ -133,7 +133,7 @@ function _writeSingleTransaction(body, opts) {
     if (dupCheck) return dupCheck;
   }
 
-  const id  = generateTransactionId(sheet, body.tx_date_time);
+  const id  = generateTransactionId(sheet, body.tx_date_local);
   const row = new Array(cols.length).fill('');
 
   function setCol(key, value) {
@@ -142,8 +142,8 @@ function _writeSingleTransaction(body, opts) {
   }
 
   setCol('id',                      id);
-  setCol('tx_date_time',            body.tx_date_time);
-  setCol('tx_timezone',             body.tx_timezone             !== undefined && body.tx_timezone             !== null ? String(body.tx_timezone)             : '');
+  setCol('tx_date_local',            body.tx_date_local);
+  setCol('tx_timezone_local',             body.tx_timezone_local             !== undefined && body.tx_timezone_local             !== null ? String(body.tx_timezone_local)             : '');
   setCol('parent_tx_id',            body.parent_tx_id            !== undefined && body.parent_tx_id            !== null ? String(body.parent_tx_id)            : '');
   setCol('tx_type',                 body.tx_type);
   setCol('account_id',              body.account_id              !== undefined && body.account_id              !== null ? String(body.account_id)              : '');
@@ -163,7 +163,7 @@ function _writeSingleTransaction(body, opts) {
   const now = new Date().toISOString();
   setCol('record_status',   'active');
   setCol('sync_status',     SYNC_STATUS_CREATE_PENDING);
-  setCol('sync_date_time',  '');
+  setCol('sync_date',       '');
   setCol('sync_notes',      '');
   setCol('created_at',      now);
   setCol('updated_at',      now);
@@ -199,7 +199,7 @@ function updateTransaction(body) {
 
   // TX-M-6: duplicate check — exclude the current row from the scan.
   const dupResult = _checkDuplicate(sheet, {
-    tx_date_time: body.tx_date_time,
+    tx_date_local: body.tx_date_local,
     tx_type:      body.tx_type,
     account_id:   body.account_id,
     tx_amount:    body.tx_amount,
@@ -215,8 +215,7 @@ function updateTransaction(body) {
     updatedRow[field.sheet_column_position - 1] = (value === undefined || value === null) ? '' : value;
   }
 
-  writeField('tx_date_time',           body.tx_date_time);
-  writeField('tx_timezone',            body.tx_timezone             !== undefined && body.tx_timezone             !== null ? String(body.tx_timezone)             : '');
+  writeField('tx_date_local',           body.tx_date_local);
   writeField('tx_type',                body.tx_type);
   writeField('account_id',             body.account_id              !== undefined && body.account_id              !== null ? String(body.account_id)              : '');
   writeField('user_location_area',     body.user_location_area      !== undefined && body.user_location_area      !== null ? String(body.user_location_area)      : '');
@@ -348,7 +347,7 @@ function createTransactionsBulk(body) {
   (function seedDupSet() {
     const existing = sheet.getDataRange().getValues();
     if (existing.length <= 1) return;
-    const ciDate  = txColIndex('tx_date_time');
+    const ciDate  = txColIndex('tx_date_local');
     const ciType  = txColIndex('tx_type');
     const ciAcct  = txColIndex('account_id');
     const ciAmt   = txColIndex('tx_amount');
@@ -381,8 +380,8 @@ function createTransactionsBulk(body) {
       if (f) row[f.sheet_column_position - 1] = (value === undefined || value === null) ? '' : value;
     }
     setC('id',                      id);
-    setC('tx_date_time',            b.tx_date_time);
-    setC('tx_timezone',             b.tx_timezone             !== undefined && b.tx_timezone             !== null ? String(b.tx_timezone)             : '');
+    setC('tx_date_local',            b.tx_date_local);
+    setC('tx_timezone_local',             b.tx_timezone_local             !== undefined && b.tx_timezone_local             !== null ? String(b.tx_timezone_local)             : '');
     setC('parent_tx_id',            b.parent_tx_id            !== undefined && b.parent_tx_id            !== null ? String(b.parent_tx_id)            : '');
     setC('tx_type',                 b.tx_type);
     setC('account_id',              b.account_id              !== undefined && b.account_id              !== null ? String(b.account_id)              : '');
@@ -400,7 +399,7 @@ function createTransactionsBulk(body) {
     setC('user_location_longitude', b.user_location_longitude !== undefined && b.user_location_longitude !== null ? b.user_location_longitude         : '');
     setC('record_status',           'active');
     setC('sync_status',             SYNC_STATUS_CREATE_PENDING);
-    setC('sync_date_time',          '');
+    setC('sync_date',               '');
     setC('sync_notes',              '');
     setC('created_at',              now);
     setC('updated_at',              now);
@@ -413,15 +412,15 @@ function createTransactionsBulk(body) {
 
   body.transactions.forEach(function(tx) {
     const txBody = Object.assign({}, tx);
-    const labelDate = tx.tx_date_time !== undefined && tx.tx_date_time !== null ? String(tx.tx_date_time).slice(0, 10) : '';
+    const labelDate = tx.tx_date_local !== undefined && tx.tx_date_local !== null ? String(tx.tx_date_local).slice(0, 10) : '';
     const labelDesc = tx.description !== undefined && tx.description !== null && String(tx.description).trim() !== ''
       ? String(tx.description)
       : (tx.counterparty_name !== undefined && tx.counterparty_name !== null ? String(tx.counterparty_name) : '');
     const label = labelDate + ' ' + labelDesc.slice(0, 40);
 
-    if ((txBody.target_amount === undefined || txBody.target_amount === null || String(txBody.target_amount).trim() === '' || !Number.isFinite(Number(txBody.target_amount)) || Number(txBody.target_amount) <= 0) &&
-        txBody.source_amount !== undefined && txBody.source_amount !== null && Number.isFinite(Number(txBody.source_amount)) && Number(txBody.source_amount) > 0) {
-      txBody.target_amount = txBody.source_amount;
+    if ((txBody.target_amount_local === undefined || txBody.target_amount_local === null || String(txBody.target_amount_local).trim() === '' || !Number.isFinite(Number(txBody.target_amount_local)) || Number(txBody.target_amount_local) <= 0) &&
+        txBody.source_amount_local !== undefined && txBody.source_amount_local !== null && Number.isFinite(Number(txBody.source_amount_local)) && Number(txBody.source_amount_local) > 0) {
+      txBody.target_amount_local = txBody.source_amount_local;
     }
 
     const val = validateTransactionRecord(txBody, catMap, accountMap);
@@ -437,8 +436,8 @@ function createTransactionsBulk(body) {
       && txBody.target_account !== undefined && txBody.target_account !== null && String(txBody.target_account).trim() !== '';
 
     if (isTransfer) {
-      const srcAmt = Number(txBody.source_amount);
-      const tgtAmt = Number(txBody.target_amount);
+      const srcAmt = Number(txBody.source_amount_local);
+      const tgtAmt = Number(txBody.target_amount_local);
 
       var parentAcct, parentAmt, parentType, childAcct, childAmt, childType;
       if (txBody.tx_type === 'money-out') {
@@ -449,15 +448,15 @@ function createTransactionsBulk(body) {
         childAcct  = txBody.source_account; childAmt  = srcAmt; childType  = 'money-out';
       }
 
-      const pKey = dupKey(txBody.tx_date_time, parentType, parentAcct, parentAmt);
-      const cKey = dupKey(txBody.tx_date_time, childType,  childAcct,  childAmt);
+      const pKey = dupKey(txBody.tx_date_local, parentType, parentAcct, parentAmt);
+      const cKey = dupKey(txBody.tx_date_local, childType,  childAcct,  childAmt);
       if (dupSet.has(pKey) || dupSet.has(cKey)) {
         results.push({ label: label, ok: false, error: 'duplicate_transaction', id: null, ids: null });
         return;
       }
 
-      const parentId = nextId(txBody.tx_date_time);
-      const childId  = nextId(txBody.tx_date_time);
+      const parentId = nextId(txBody.tx_date_local);
+      const childId  = nextId(txBody.tx_date_local);
       dupSet.add(pKey);
       dupSet.add(cKey);
 
@@ -470,15 +469,15 @@ function createTransactionsBulk(body) {
 
     // Non-transfer: single row. Account and amount from whichever side is mandatory.
     const acct = cat.source_account_mandatory ? txBody.source_account : txBody.target_account;
-    const amt  = cat.source_account_mandatory ? Number(txBody.source_amount) : Number(txBody.target_amount);
-    const dKey = dupKey(txBody.tx_date_time, txBody.tx_type, acct, amt);
+    const amt  = cat.source_account_mandatory ? Number(txBody.source_amount_local) : Number(txBody.target_amount_local);
+    const dKey = dupKey(txBody.tx_date_local, txBody.tx_type, acct, amt);
 
     if (dupSet.has(dKey)) {
       results.push({ label: label, ok: false, error: 'duplicate_transaction', id: null, ids: null });
       return;
     }
 
-    const id = nextId(txBody.tx_date_time);
+    const id = nextId(txBody.tx_date_local);
     dupSet.add(dKey);
     batchRows.push(buildRow(Object.assign(_txSharedFields(txBody), {
       tx_type: txBody.tx_type, account_id: acct, tx_amount: amt, parent_tx_id: '',
@@ -502,20 +501,20 @@ function createTransactionsBulk(body) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Duplicate check
-// Key: (tx_date_time, tx_type, account_id, tx_amount) — skips deleted rows.
+// Key: (tx_date_local, tx_type, account_id, tx_amount) — skips deleted rows.
 // ─────────────────────────────────────────────────────────────────────────────
 // excludeRowNum — optional 1-based sheet row number to skip (used by updateTransaction to exclude the row being edited).
 function _checkDuplicate(sheet, body, excludeRowNum) {
   const rows = sheet.getDataRange().getValues();
   if (rows.length < 2) return null;
 
-  const ciDate  = txColIndex('tx_date_time');
+  const ciDate  = txColIndex('tx_date_local');
   const ciType  = txColIndex('tx_type');
   const ciAcct  = txColIndex('account_id');
   const ciAmt   = txColIndex('tx_amount');
   const ciRstat = txColIndex('record_status');
 
-  const inDate = body.tx_date_time !== undefined && body.tx_date_time !== null ? String(body.tx_date_time) : '';
+  const inDate = body.tx_date_local !== undefined && body.tx_date_local !== null ? String(body.tx_date_local) : '';
   const inType = body.tx_type      !== undefined && body.tx_type      !== null ? String(body.tx_type)      : '';
   const inAcct = body.account_id   !== undefined && body.account_id   !== null ? String(body.account_id)   : '';
   const inAmt  = Number(body.tx_amount);

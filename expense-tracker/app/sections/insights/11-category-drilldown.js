@@ -219,7 +219,7 @@ function _renderLevel3(container, moneyOut, major, majorColor, minor, sym) {
       (t.major_category ?? 'Uncategorised') === major &&
       (t.minor_category ?? 'Other') === minor
     )
-    .sort((a, b) => new Date(b.tx_date_time) - new Date(a.tx_date_time));
+    .sort((a, b) => new Date(b.tx_date_local) - new Date(a.tx_date_local));
 
   const total = sumAmountBase(txs);
   const fmt   = v => sym + Math.abs(v).toLocaleString('en-GB', { minimumFractionDigits: 0, maximumFractionDigits: 0 });

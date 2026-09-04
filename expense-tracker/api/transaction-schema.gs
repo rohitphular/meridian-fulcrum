@@ -12,7 +12,7 @@
 //
 // Currency is NOT stored — derived at runtime from the account's currency field.
 // Column block order: identity → core → financial → categorisation → location → audit
-// Audit block sequence: record_status → sync_status → sync_date_time →
+// Audit block sequence: record_status → sync_status → sync_date →
 //                       sync_notes → created_at → updated_at
 // =============================================================================
 
@@ -33,8 +33,8 @@ const TRANSACTION_SCHEMA = {
   },
 
   // ── Core (columns 2–6) ───────────────────────────────────────────────────
-  tx_date_time: {
-    sheet_column_name: 'tx_date_time',
+  tx_date_local: {
+    sheet_column_name: 'tx_date_local',
     sheet_column_position: 2,
     ui_label: 'Date/Time',
     type: 'date',
@@ -42,13 +42,13 @@ const TRANSACTION_SCHEMA = {
     editable: true,
     default_value: null,
   },
-  tx_timezone: {
-    sheet_column_name: 'tx_timezone',
+  tx_timezone_local: {
+    sheet_column_name: 'tx_timezone_local',
     sheet_column_position: 3,
     ui_label: 'Timezone',
     type: 'string',
-    group: 'core',
-    editable: true,
+    group: 'system',
+    editable: false,
     default_value: '',
   },
   parent_tx_id: {
@@ -218,10 +218,10 @@ const TRANSACTION_SCHEMA = {
     editable: false,
     default_value: 'create-pending',
   },
-  sync_date_time: {
-    sheet_column_name: 'sync_date_time',
+  sync_date: {
+    sheet_column_name: 'sync_date',
     sheet_column_position: 21,
-    ui_label: 'Sync Date/Time',
+    ui_label: 'Sync date',
     type: 'string',
     group: 'system',
     editable: false,

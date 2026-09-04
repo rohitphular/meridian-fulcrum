@@ -13,32 +13,31 @@ Subscriptions differ from transactions in two fundamental ways:
 
 ## Schema
 
-22 columns, append-only positions.
+21 columns, append-only positions.
 
 | # | Field | Type | Editable | Description |
 |---|---|---|---|---|
 | 1 | `id` | string | No | System-generated ID. Format: `SUB-YYYYMMDD-NNN` (e.g. `SUB-20260829-001`). Counter resets per calendar day; `NNN` is padded to 3 digits and incremented from the highest existing ID with the same date prefix. |
 | 2 | `name` | string | Yes | User-facing display name for the subscription. Must be unique across non-deleted subscriptions (case-insensitive, trimmed). |
 | 3 | `counterparty_name` | string | Yes | Merchant, provider, or payee name. Optional. |
-| 4 | `amount` | number | Yes | Recurring charge amount in the subscription's own currency. Must be a positive number. |
-| 5 | `currency` | string | Yes | ISO 4217 currency code (uppercased). Must exist in the rates table. Base currency is XAU (1 gram of gold). |
-| 6 | `frequency` | enum | Yes | Recurrence cadence. Valid values: `weekly`, `monthly`, `quarterly`, `annual`. Determines which schedule anchor field is required. |
-| 7 | `day_of_month` | number | Yes | Day of the month (1–31) on which payment falls. Required when `frequency` is `monthly`, `quarterly`, or `annual`. Values that exceed the month's length are clamped to the last day of that month at runtime. Blank for `weekly` subscriptions. |
-| 8 | `day_of_week` | number | Yes | Day of the week (1=Monday … 7=Sunday). Required when `frequency` is `weekly`. Blank for all other frequencies. |
-| 9 | `source_account` | string | Yes | Account ID (FK to `accounts.id`) from which the payment is drawn. Required. Displayed in the UI via `state.accountMap` keyed by this ID. |
-| 10 | `tx_type` | enum | Yes | Direction of the payment. Valid values: `money-in`, `money-out`. Optional; defaults to blank if not supplied. |
-| 11 | `major_category` | string | Yes | Top-level category. Must come from a category where `is_subscription_eligible = true`. Optional. |
-| 12 | `minor_category` | string | Yes | Sub-category under `major_category`. Optional. |
-| 13 | `tags` | string | Yes | Semicolon-delimited in storage; displayed as comma-separated in the UI. Normalised by `normaliseTags()`. This field is named `tags` on subscriptions; the equivalent field on transactions is named `tx_tags`. |
-| 14 | `description` | string | Yes | Free-text notes. Optional. UI label: "Notes". |
-| 15 | `record_status` | enum | No | Lifecycle state. Valid values: `active`, `inactive`, `deleted`, `locked`. Default on creation: `active` (or `inactive` if `subscription_end_date` is already in the past). |
-| 16 | `created_at` | string | No | ISO 8601 UTC timestamp set at creation. **Structural note:** this field sits at column position 16, after `record_status` at position 15. Columns 15 and 16 were swapped from an earlier incorrect ordering in Round 5 (migration complete; migration function removed in Round 13). Do not reorder. |
-| 17 | `sync_status` | string | No | Sync pipeline state. Valid values: `create-pending`, `update-pending`, `in-sync`, `create-failed`, `update-failed`. Set to `create-pending` on creation; advanced by `computeSyncStatus()` on each mutation. |
-| 18 | `sync_date_time` | string | No | ISO 8601 UTC timestamp of the last successful sync. |
-| 19 | `sync_notes` | string | No | Notes written by the sync pipeline (e.g. error detail). Cleared on each mutation. |
-| 20 | `updated_at` | string | No | ISO 8601 UTC timestamp of the last write. Stamped on both create and update. |
-| 21 | `subscription_start_date` | string | Yes | ISO date (YYYY-MM-DD) from which the subscription is active. Optional; informational only — does not affect `next_payment_date` computation or `record_status`. |
-| 22 | `subscription_end_date` | string | Yes | ISO date (YYYY-MM-DD) after which the subscription expires. Optional. When present and in the past, triggers lazy auto-expiry (see below). |
+| 4 | `subscription_amount_local` | number | Yes | Recurring charge amount in the source account's local currency. Currency is derived at display time from `state.accountMap[source_account].local_currency` — it is not stored on the subscription row. Must be a positive number. |
+| 5 | `frequency` | enum | Yes | Recurrence cadence. Valid values: `weekly`, `monthly`, `quarterly`, `annual`. Determines which schedule anchor field is required. |
+| 6 | `day_of_month` | number | Yes | Day of the month (1–31) on which payment falls. Required when `frequency` is `monthly`, `quarterly`, or `annual`. Values that exceed the month's length are clamped to the last day of that month at runtime. Blank for `weekly` subscriptions. |
+| 7 | `day_of_week` | number | Yes | Day of the week (1=Monday … 7=Sunday). Required when `frequency` is `weekly`. Blank for all other frequencies. |
+| 8 | `source_account` | string | Yes | Account ID (FK to `accounts.id`) from which the payment is drawn. Required. Displayed in the UI via `state.accountMap` keyed by this ID. Also the source of the subscription's currency (via `local_currency` on the account). |
+| 9 | `tx_type` | enum | Yes | Direction of the payment. Valid values: `money-in`, `money-out`. Optional; defaults to blank if not supplied. |
+| 10 | `major_category` | string | Yes | Top-level category. Must come from a category where `is_subscription_eligible = true`. Optional. |
+| 11 | `minor_category` | string | Yes | Sub-category under `major_category`. Optional. |
+| 12 | `tags` | string | Yes | Semicolon-delimited in storage; displayed as comma-separated in the UI. Normalised by `normaliseTags()`. This field is named `tags` on subscriptions; the equivalent field on transactions is named `tx_tags`. |
+| 13 | `description` | string | Yes | Free-text notes. Optional. UI label: "Notes". |
+| 14 | `record_status` | enum | Yes | Lifecycle state. Valid values: `active`, `inactive`, `deleted`, `locked`. Default on creation: `active` (or `inactive` if `subscription_end_date` is already in the past). Updatable via `update_subscription` to `active` or `inactive` only (`invalid_record_status` is returned for any other value). |
+| 15 | `created_at` | string | No | ISO 8601 UTC timestamp set at creation. **Structural note:** this field sits at column position 15, after `record_status` at position 14. Columns 14 and 15 were swapped from an earlier incorrect ordering in Round 5 (migration complete; migration function removed in Round 13). Do not reorder. |
+| 16 | `sync_status` | string | No | Sync pipeline state. Valid values: `create-pending`, `update-pending`, `in-sync`, `create-failed`, `update-failed`. Set to `create-pending` on creation; advanced by `computeSyncStatus()` on each mutation. |
+| 17 | `sync_date` | string | No | Timestamp of the last successful sync. Written by the sync pipeline. |
+| 18 | `sync_notes` | string | No | Notes written by the sync pipeline (e.g. error detail). Cleared on each mutation. |
+| 19 | `updated_at` | string | No | ISO 8601 UTC timestamp of the last write. Stamped on both create and update. |
+| 20 | `subscription_start_date` | string | Yes | ISO date (YYYY-MM-DD) from which the subscription is active. Optional; informational only — does not affect `next_payment_date` computation or `record_status`. |
+| 21 | `subscription_end_date` | string | Yes | ISO date (YYYY-MM-DD) after which the subscription expires. Optional. When present and in the past, triggers lazy auto-expiry (see below). |
 
 ## Frequency and schedule logic
 
@@ -120,7 +119,7 @@ All subscription endpoints are routed through the single `/exec` GAS endpoint.
 | `get_subscription_schema` | GET | Returns the `frequencies` enum array. Used by the frontend to populate frequency dropdowns without hardcoding. |
 | `create_subscription` | POST | Validates required fields; duplicate name check (`duplicate_subscription`); appends row; returns `{ ok: true, id }`. |
 | `create_subscriptions_bulk` | POST | Accepts `{ subscriptions: [] }`; validates all rows in memory, then appends all valid rows in a single `setValues` call; returns `{ ok, created, skipped, failed, results }`. Duplicates go in `skipped`, not `failed`. Within-batch duplicate names are caught against both the pre-existing sheet rows and any rows already accepted earlier in the same batch. |
-| `update_subscription` | POST | Validates editable fields; locked guard; applies changed fields in memory then writes the row in a single `setValues` call; advances `sync_status`; stamps `updated_at`. Toggling `record_status` (pause/resume) via `update_subscription` requires all other required fields (`name`, `currency`, `frequency`, `source_account`, and the schedule anchor) to be included in the payload. Omitting them will return the corresponding `missing_*` error. |
+| `update_subscription` | POST | Validates editable fields; locked guard; applies changed fields in memory then writes the row in a single `setValues` call; advances `sync_status`; stamps `updated_at`. Toggling `record_status` (pause/resume) via `update_subscription` requires all other required fields (`name`, `frequency`, `source_account`, and the schedule anchor) to be included in the payload. Omitting them will return the corresponding `missing_*` error. |
 | `delete_subscription` | POST | Locked guard; reads full row into memory, applies `record_status → deleted` and sync fields, then writes back in a single `setValues` call; advances `sync_status`; stamps `updated_at`. No FK guard (subscriptions are not referenced by other entities). |
 | `restore_subscription` | POST | Verifies record is in `deleted` state; checks no other active subscription has the same name; reads the full row into memory, applies `record_status → active` and sync fields, then writes back in a single `setValues` call; stamps `updated_at`. Always restores to `active`. |
 
@@ -129,8 +128,8 @@ All subscription endpoints are routed through the single `/exec` GAS endpoint.
 | Error | Trigger |
 |---|---|
 | `missing_name` | `name` absent, null, or empty string |
-| `missing_currency` | `currency` absent, null, or empty string (required on both create and update) |
-| `invalid_amount` | `amount` is not a positive number, or is empty string (on update). On create, `amount` must be present and positive. On update, if `amount` is absent from the body it is not written; if it is present (including as empty string), it must be a positive number. |
+| `missing_subscription_amount_local` | `subscription_amount_local` absent or null on create |
+| `invalid_subscription_amount_local` | `subscription_amount_local` is not a positive number. On create, must be present and positive. On update, if absent from the body it is not written; if present, it must be a positive number. |
 | `missing_source_account` | `source_account` absent, null, or empty string |
 | `missing_frequency` | `frequency` absent, null, or empty string on both create and update. |
 | `invalid_frequency` | `frequency` is present and non-empty but not in `VALID_FREQUENCIES`. |
@@ -155,9 +154,8 @@ The frontend parses a CSV file client-side before submitting to `create_subscrip
 
 | Column | Rule |
 |---|---|
-| `name` | Non-empty string |
-| `amount` | Positive number |
-| `currency` | ISO code; uppercased by the parser |
+| `subscription_name` | Non-empty string |
+| `subscription_amount_local` | Positive number |
 | `frequency` | Must be a valid frequency value |
 
 ### Optional columns
@@ -167,13 +165,14 @@ The frontend parses a CSV file client-side before submitting to `create_subscrip
 ### Rules
 
 - `id` is never read from the CSV — it is always auto-generated by `generateSubscriptionId()`.
-- Rows that fail client-side validation (missing name, missing amount, missing currency, missing frequency, non-positive amount) are logged as parse errors and excluded from the payload; they are not sent to the backend.
+- Currency is not a CSV column. It is derived at display time from `state.accountMap[source_account].local_currency`.
+- Rows that fail client-side validation (missing name, missing subscription_amount_local, missing frequency, non-positive amount) are logged as parse errors and excluded from the payload; they are not sent to the backend.
 - Rows that pass client-side parsing but fail backend validation are returned in `results` with `ok: false`.
 - Duplicate names (matched against existing non-deleted subscriptions) are returned in `skipped`, not `failed`. The `ok` field on the bulk response is `true` as long as there are no non-duplicate failures.
 - The response shape is `{ ok, created, skipped, failed, results }`.
 
 ## Known structural notes
 
-**`record_status` at column position 15, `created_at` at column 16.** The original subscription schema had these two columns reversed (`created_at` at 15, `record_status` at 16). In Round 5 the schema was corrected and `migrateSubscriptionColumnOrder()` was run from the GAS Script Editor to swap the values in the pre-existing sheet. The migration is complete and the function has been removed from `subscription-core.gs` (dead code as of Round 13). Column positions are append-only — do not reorder further.
+**`record_status` at column position 14, `created_at` at column 15.** The original subscription schema had these two columns reversed (`created_at` at 14, `record_status` at 15). In Round 5 the schema was corrected and `migrateSubscriptionColumnOrder()` was run from the GAS Script Editor to swap the values in the pre-existing sheet. The migration is complete and the function has been removed from `subscription-core.gs` (dead code as of Round 13). Column positions are append-only — do not reorder further.
 
 **`tags` vs `tx_tags`.** The subscription entity uses the field name `tags` for its tag list (semicolon-delimited in storage; displayed as comma-separated in the UI). The transaction entity uses `tx_tags` for the same concept. These are parallel constructs with different names; they share the `normaliseTags()` utility function but are stored on separate sheets and never merged.

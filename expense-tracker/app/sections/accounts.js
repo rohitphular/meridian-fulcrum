@@ -53,12 +53,12 @@ function _fmtBal(n) {
 }
 
 function _balanceCell(a) {
-  const val = parseFloat(a.current_value);
+  const val = parseFloat(a.current_value_local);
   if (Number.isFinite(val) === false) return '<span class="muted">—</span>';
-  const sym     = getSymbol(a.currency);
-  const foreign = a.currency !== state.quoteCurrency;
+  const sym     = getSymbol(a.local_currency);
+  const foreign = a.local_currency !== state.quoteCurrency;
   const baseTag = foreign
-    ? ` <span class="td-base-amt">${esc(fmtBase(Math.abs(val), a.currency, null))}</span>`
+    ? ` <span class="td-base-amt">${esc(fmtBase(Math.abs(val), a.local_currency, null))}</span>`
     : '';
 
   if (_isLiability(a)) {
@@ -112,15 +112,15 @@ function _renderNetWorth() {
 
   const totalAssets = state.accounts
     .filter(a => a.record_status !== 'deleted' && (a.type === 'asset' || a.type === 'investment'))
-    .reduce((s, a) => { const v = toBase(parseFloat(a.current_value), a.currency, null); return Number.isFinite(v) ? s + v : s; }, 0);
+    .reduce((s, a) => { const v = toBase(parseFloat(a.current_value_local), a.local_currency, null); return Number.isFinite(v) ? s + v : s; }, 0);
 
   const totalLiab = state.accounts
     .filter(a => a.record_status !== 'deleted' && a.type === 'liability')
-    .reduce((s, a) => { const v = toBase(parseFloat(a.current_value), a.currency, null); return Number.isFinite(v) ? s + Math.abs(v) : s; }, 0);
+    .reduce((s, a) => { const v = toBase(parseFloat(a.current_value_local), a.local_currency, null); return Number.isFinite(v) ? s + Math.abs(v) : s; }, 0);
 
   const liquidCash = state.accounts
     .filter(a => a.record_status !== 'deleted' && a.type === 'asset' && LIQUID_SUB_TYPES.has(a.sub_type))
-    .reduce((s, a) => { const v = toBase(parseFloat(a.current_value), a.currency, null); return Number.isFinite(v) ? s + v : s; }, 0);
+    .reduce((s, a) => { const v = toBase(parseFloat(a.current_value_local), a.local_currency, null); return Number.isFinite(v) ? s + v : s; }, 0);
 
   const netWorth = totalAssets - totalLiab;
 
@@ -163,10 +163,10 @@ function _applyAccFilters(accounts) {
   return accounts.filter(a => {
     if (f.type !== 'all' && a.type !== f.type) return false;
     if (f.subType !== 'all' && a.sub_type !== f.subType) return false;
-    if (f.currency !== 'all' && a.currency !== f.currency) return false;
+    if (f.currency !== 'all' && a.local_currency !== f.currency) return false;
     if (f.search !== '') {
       const q   = f.search.toLowerCase();
-      const hay = (a.name + ' ' + a.description).toLowerCase();
+      const hay = (a.account_name + ' ' + a.description).toLowerCase();
       if (hay.includes(q) === false) return false;
     }
     if (f.recordStatuses.length < ALL_RECORD_STATUSES.length && f.recordStatuses.includes(a.record_status) === false) return false;
@@ -181,7 +181,7 @@ function _renderAccFilterBar() {
   const currencies = [];
   const seenC = {};
   state.accounts.forEach(a => {
-    if (seenC[a.currency] === undefined) { seenC[a.currency] = true; currencies.push(a.currency); }
+    if (seenC[a.local_currency] === undefined) { seenC[a.local_currency] = true; currencies.push(a.local_currency); }
   });
   currencies.sort();
 
@@ -280,7 +280,7 @@ function _renderImportPanel() {
       <div class="field form-grid-span-2">
         <label for="accImportFile">CSV file</label>
         <input type="file" id="accImportFile" accept=".csv">
-        <div class="field-hint">Required: name, type, sub_type, currency. Optional: opening_value (defaults to 0), record_status, description</div>
+        <div class="field-hint">Required: account_name, type, sub_type, local_currency, opening_date_local. Optional: id, legal_entity_name, local_timezone, closing_date_local, opening_value_local (defaults to 0), record_status, description</div>
       </div>
     </div>
     <div id="accImportStatus"></div>
@@ -305,14 +305,15 @@ function _parseAccountsCsv(text) {
     const row  = {};
     headers.forEach((h, idx) => { row[h] = (vals[idx] !== undefined && vals[idx] !== null ? String(vals[idx]).trim() : ''); });
 
-    if (row.name === '')     { errors.push(`Row ${i + 1}: missing name`);     continue; }
-    if (row.type === '')     { errors.push(`Row ${i + 1}: missing type`);     continue; }
-    if (row.sub_type === '') { errors.push(`Row ${i + 1}: missing sub_type`); continue; }
-    if (row.currency === '') { errors.push(`Row ${i + 1}: missing currency`); continue; }
+    if (row.account_name === '')     { errors.push(`Row ${i + 1}: missing account_name`);     continue; }
+    if (row.type === '')             { errors.push(`Row ${i + 1}: missing type`);               continue; }
+    if (row.sub_type === '')         { errors.push(`Row ${i + 1}: missing sub_type`);           continue; }
+    if (row.local_currency === '')   { errors.push(`Row ${i + 1}: missing local_currency`);     continue; }
+    if (row.opening_date_local === '') { errors.push(`Row ${i + 1}: missing opening_date_local`); continue; }
 
-    const openingVal = row.opening_value === '' ? 0 : parseFloat(row.opening_value);
+    const openingVal = row.opening_value_local === '' ? 0 : parseFloat(row.opening_value_local);
     if (Number.isFinite(openingVal) === false) {
-      errors.push(`Row ${i + 1}: invalid opening_value "${row.opening_value}"`); continue;
+      errors.push(`Row ${i + 1}: invalid opening_value_local "${row.opening_value_local}"`); continue;
     }
 
     const rsRaw = (row.record_status !== undefined && row.record_status !== null ? String(row.record_status).trim() : '');
@@ -324,13 +325,18 @@ function _parseAccountsCsv(text) {
     const descRaw = (row.description !== undefined && row.description !== null ? String(row.description).trim() : '');
 
     accounts.push({
-      name:          row.name,
-      type:          row.type,
-      sub_type:      row.sub_type,
-      currency:      row.currency.toUpperCase(),
-      opening_value: openingVal,
-      record_status: resolvedStatus,
-      description:   descRaw,
+      id:                 (row.id !== undefined && row.id !== null ? String(row.id).trim() : ''),
+      account_name:       row.account_name,
+      legal_entity_name:  (row.legal_entity_name !== undefined && row.legal_entity_name !== null ? String(row.legal_entity_name).trim() : ''),
+      type:               row.type,
+      sub_type:           row.sub_type,
+      local_currency:     row.local_currency.toUpperCase(),
+      local_timezone:     (row.local_timezone !== undefined && row.local_timezone !== null ? String(row.local_timezone).trim() : ''),
+      opening_date_local: String(row.opening_date_local).trim(),
+      closing_date_local: (row.closing_date_local !== undefined && row.closing_date_local !== null ? String(row.closing_date_local).trim() : ''),
+      opening_value_local: openingVal,
+      record_status:      resolvedStatus,
+      description:        descRaw,
     });
   }
 
@@ -359,12 +365,12 @@ function _renderAccountForm(a, mode) {
   const v = val => esc(String(val));
 
   const currencyOpts = state.rates.map(r =>
-    `<option value="${esc(r.currency)}" ${(!isAdd && a.currency === r.currency) ? 'selected' : ''}>${esc(r.currency)}</option>`
+    `<option value="${esc(r.currency)}" ${(!isAdd && a.local_currency === r.currency) ? 'selected' : ''}>${esc(r.currency)}</option>`
   ).join('');
 
   const header = (!isAdd) ? `
     <div class="cat-form-header">
-      ${isView ? 'Viewing' : 'Editing'} — <strong>${esc(a.name)}</strong>
+      ${isView ? 'Viewing' : 'Editing'} — <strong>${esc(a.account_name)}</strong>
     </div>` : '';
 
   const typeField = isAdd
@@ -377,7 +383,7 @@ function _renderAccountForm(a, mode) {
       ? `<input type="text" id="accEditSubType" value="${esc(_subTypeLabel(a.sub_type))}" disabled>`
       : `<select id="accEditSubType">${_subTypeOptsHtml(a.type, a.sub_type)}</select>`;
 
-  const sym = isAdd ? '' : getSymbol(a.currency);
+  const sym = isAdd ? '' : getSymbol(a.local_currency);
 
   // 'deleted' is excluded from the edit form — deletion goes through delete_account, not update_account.
   const EDIT_RECORD_STATUSES = ['active', 'inactive', 'locked'];
@@ -391,6 +397,35 @@ function _renderAccountForm(a, mode) {
         </select>
       </div>` : '';
 
+  // Opening date: editable datetime-local on add, read-only text on view/edit
+  const openingDateField = isAdd
+    ? `<div class="field">
+         <label for="accNewOpeningDate">Opening date *</label>
+         <input type="datetime-local" id="accNewOpeningDate">
+         <div class="field-hint">Date this account was opened (local time)</div>
+       </div>`
+    : `<div class="field">
+         <label>Opening date</label>
+         <input type="text" value="${v(a.opening_date_local !== undefined && a.opening_date_local !== null ? a.opening_date_local : '')}" disabled>
+       </div>`;
+
+  // Closing date: not shown on add; read-only in view, editable in edit
+  const closingDateField = !isAdd ? `
+    <div class="field">
+      <label for="${pfx}ClosingDate">Closing date</label>
+      ${isView
+        ? `<input type="text" value="${v(a.closing_date_local !== undefined && a.closing_date_local !== null ? a.closing_date_local : '')}" disabled>`
+        : `<input type="datetime-local" id="accEditClosingDate" value="${a.closing_date_local ? String(a.closing_date_local).replace(' ', 'T').substring(0, 16) : ''}">`}
+    </div>` : '';
+
+  // Timezone: not shown on add (auto-detected from browser); read-only in view/edit
+  const timezoneField = !isAdd ? `
+    <div class="field">
+      <label>Timezone</label>
+      <input type="text" value="${v(a.local_timezone !== undefined && a.local_timezone !== null ? a.local_timezone : '')}" disabled>
+      <div class="field-hint">Detected from browser at account creation</div>
+    </div>` : '';
+
   const syncStatusLine = isView ? `
     <div class="field-hint" style="margin-top:8px">
       Sync: ${syncStatusIcon(a.sync_status)} ${esc((a.sync_notes !== undefined && a.sync_notes !== null) ? a.sync_notes : '')}
@@ -402,16 +437,16 @@ function _renderAccountForm(a, mode) {
 
     <div class="form-grid" style="margin-bottom:16px">
       <div class="field">
-        <label for="${pfx}Name">Name *</label>
+        <label for="${pfx}Name">Account name *</label>
         <input type="text" id="${pfx}Name"
-               value="${isAdd ? '' : v(a.name)}"
+               value="${isAdd ? '' : v(a.account_name)}"
                ${isAdd ? 'placeholder="e.g. Barclays Current"' : ''}${dis}>
       </div>
       <div class="field">
-        <label for="${pfx}Currency">Currency${isAdd ? ' *' : ''}</label>
-        ${isAdd
-          ? `<select id="accNewCurrency">${currencyOpts}</select>`
-          : `<input type="text" id="accEditCurrency" value="${v(a.currency)}" disabled>`}
+        <label for="${pfx}LegalEntity">Legal entity</label>
+        <input type="text" id="${pfx}LegalEntity"
+               value="${isAdd ? '' : v(a.legal_entity_name !== undefined && a.legal_entity_name !== null ? a.legal_entity_name : '')}"
+               ${isAdd ? 'placeholder="e.g. Barclays Bank UK"' : ' disabled'}>
       </div>
       <div class="field">
         <label for="${pfx}Type">Type${isAdd ? ' *' : ''}</label>
@@ -421,6 +456,15 @@ function _renderAccountForm(a, mode) {
         <label for="${pfx}SubType">Sub-type${isAdd ? ' *' : ''}</label>
         ${subTypeField}
       </div>
+      <div class="field">
+        <label for="${pfx}Currency">Currency${isAdd ? ' *' : ''}</label>
+        ${isAdd
+          ? `<select id="accNewCurrency">${currencyOpts}</select>`
+          : `<input type="text" id="accEditCurrency" value="${v(a.local_currency)}" disabled>`}
+      </div>
+      ${timezoneField}
+      ${openingDateField}
+      ${closingDateField}
       ${recordStatusField}
     </div>
 
@@ -432,13 +476,13 @@ function _renderAccountForm(a, mode) {
       </div>` : `
       <div class="field">
         <label>Opening value</label>
-        <input type="text" value="${_isLiability(a) ? v('−' + sym + _fmtBal(Math.abs(parseFloat(a.opening_value)))) : v(sym + _fmtBal(parseFloat(a.opening_value)))}" disabled>
+        <input type="text" value="${_isLiability(a) ? v('−' + sym + _fmtBal(Math.abs(parseFloat(a.opening_value_local)))) : v(sym + _fmtBal(parseFloat(a.opening_value_local)))}" disabled>
       </div>
       <div class="field">
         <label>Current value</label>
         <input type="text" value="${_isLiability(a)
-          ? v('−' + sym + _fmtBal(Math.abs(parseFloat(a.current_value))))
-          : v(sym + _fmtBal(parseFloat(a.current_value)))}" disabled>
+          ? v('−' + sym + _fmtBal(Math.abs(parseFloat(a.current_value_local))))
+          : v(sym + _fmtBal(parseFloat(a.current_value_local)))}" disabled>
       </div>`}
       <div class="field">
         <label for="${pfx}Description">Notes</label>
@@ -475,7 +519,7 @@ function _renderAccountRow(a) {
       const noun = n === 1 ? 'transaction refers' : 'transactions refer';
       return `<tr${rowStyle}>
         <td colspan="5">
-          <span class="confirm-text">Cannot delete <strong>${esc(a.name)}</strong> — <strong>${n}</strong> ${noun} to this account.</span>
+          <span class="confirm-text">Cannot delete <strong>${esc(a.account_name)}</strong> — <strong>${n}</strong> ${noun} to this account.</span>
           <div style="color:var(--muted);font-size:var(--text-sm);margin-top:4px">
             Delete or reassign those transactions first, or deactivate the account instead.
           </div>
@@ -487,7 +531,7 @@ function _renderAccountRow(a) {
       </tr>`;
     }
     return `<tr${rowStyle}>
-      <td colspan="5"><span class="confirm-text">Delete <strong>${esc(a.name)}</strong>? This marks the account as deleted.</span></td>
+      <td colspan="5"><span class="confirm-text">Delete <strong>${esc(a.account_name)}</strong>? This marks the account as deleted.</span></td>
       <td><div class="row-actions">
         <button class="btn-link danger" data-action="acc-confirm-delete" data-row="${a._row}">Yes, delete</button>
         <button class="btn-link" data-action="acc-cancel-delete">Cancel</button>
@@ -497,9 +541,9 @@ function _renderAccountRow(a) {
 
   return `<tr${rowStyle}>
     <td class="td-mono" style="color:var(--muted);font-size:11px">${esc(a.id)}</td>
-    <td>${esc(a.name)}${(a.description !== undefined && a.description !== null && a.description !== '') ? `<span class="info-icon-wrap"><span style="cursor:help;color:var(--teal);font-size:13px">ⓘ</span><span class="info-tooltip">${esc(a.description)}</span></span>` : ''}</td>
+    <td>${esc(a.account_name)}${(a.description !== undefined && a.description !== null && a.description !== '') ? `<span class="info-icon-wrap"><span style="cursor:help;color:var(--teal);font-size:13px">ⓘ</span><span class="info-tooltip">${esc(a.description)}</span></span>` : ''}</td>
     <td style="color:var(--muted);font-size:12px">${esc(_subTypeLabel(a.sub_type))}</td>
-    <td>${esc(a.currency)}</td>
+    <td>${esc(a.local_currency)}</td>
     <td>${_balanceCell(a)}</td>
     <td><div style="display:flex;align-items:center;justify-content:flex-end;gap:5px">
       ${recordStatusIcon(a.record_status)}${syncStatusIcon(a.sync_status)}
@@ -542,8 +586,8 @@ function _renderTable(accounts) {
     if (accs === undefined || accs === null || accs.length === 0) return [];
     const countable = accs.filter(a => a.record_status !== 'deleted');
     const total = g.isLiab
-      ? countable.reduce((s, a) => { const v = toBase(parseFloat(a.current_value), a.currency, null); return Number.isFinite(v) ? s + Math.abs(v) : s; }, 0)
-      : countable.reduce((s, a) => { const v = toBase(parseFloat(a.current_value), a.currency, null); return Number.isFinite(v) ? s + v : s; }, 0);
+      ? countable.reduce((s, a) => { const v = toBase(parseFloat(a.current_value_local), a.local_currency, null); return Number.isFinite(v) ? s + Math.abs(v) : s; }, 0)
+      : countable.reduce((s, a) => { const v = toBase(parseFloat(a.current_value_local), a.local_currency, null); return Number.isFinite(v) ? s + v : s; }, 0);
     return [_groupHeader(g.label, total, sym, g.isLiab), ...accs.map(_renderAccountRow)];
   }).join('');
 
@@ -561,8 +605,8 @@ function _renderTable(accounts) {
                         : '';
         return `<div class="acc-card"${cardStyle}>
           <div class="acc-card-body">
-            <div class="acc-card-name">${esc(a.name)}</div>
-            <div class="acc-card-meta">${esc(_subTypeLabel(a.sub_type))} · ${esc(a.currency)}</div>
+            <div class="acc-card-name">${esc(a.account_name)}</div>
+            <div class="acc-card-meta">${esc(_subTypeLabel(a.sub_type))} · ${esc(a.local_currency)}</div>
           </div>
           <div class="acc-card-bal">${_balanceCell(a)}</div>
           <div style="display:flex;align-items:center;gap:6px">
@@ -906,32 +950,42 @@ function _v(id) {
 // ── Save new ──────────────────────────────────────────────────────────────────
 
 async function _saveNew() {
-  const name        = _v('accNewName').trim();
-  const currency    = _v('accNewCurrency');
-  const type        = _v('accNewType');
-  const sub_type    = _v('accNewSubType');
-  const description = _v('accNewDescription').trim();
-  const errEl       = el('accAddError');
+  const account_name   = _v('accNewName').trim();
+  const legal_entity   = _v('accNewLegalEntity').trim();
+  const local_currency = _v('accNewCurrency');
+  const type           = _v('accNewType');
+  const sub_type       = _v('accNewSubType');
+  const description    = _v('accNewDescription').trim();
+  const opening_date_raw = _v('accNewOpeningDate').trim();
+  const errEl          = el('accAddError');
 
-  if (String(name).trim() === '')                                                                    { errEl.textContent = 'Name is required.';     return; }
-  if (type === undefined || type === null || !_validTypes().has(type))                               { errEl.textContent = 'Type is required.';     return; }
-  if (sub_type === undefined || sub_type === null || String(sub_type).trim() === '')                 { errEl.textContent = 'Sub-type is required.'; return; }
-  if (currency === undefined || currency === null || String(currency).trim() === '' || !(currency in state.rateMap)) { errEl.textContent = 'Currency is required.'; return; }
+  if (account_name === '')                                                                                                   { errEl.textContent = 'Account name is required.';  return; }
+  if (type === undefined || type === null || !_validTypes().has(type))                                                       { errEl.textContent = 'Type is required.';            return; }
+  if (sub_type === undefined || sub_type === null || String(sub_type).trim() === '')                                         { errEl.textContent = 'Sub-type is required.';        return; }
+  if (local_currency === undefined || local_currency === null || String(local_currency).trim() === '' || !(local_currency in state.rateMap)) { errEl.textContent = 'Currency is required.';  return; }
+  if (opening_date_raw === '')                                                                                                { errEl.textContent = 'Opening date is required.';   return; }
   errEl.textContent = '';
 
   const ovStr = _v('accNewOpeningValue').trim();
   if (ovStr === '') { errEl.textContent = 'Opening value is required.'; return; }
   const rawOV = parseFloat(ovStr);
   if (Number.isFinite(rawOV) === false) { errEl.textContent = 'Opening value must be a finite number.'; return; }
-  const openingVal = rawOV;
+
+  // Capture browser timezone automatically — not a user input field.
+  const local_timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  // Convert datetime-local format (YYYY-MM-DDTHH:MM) to stored format (YYYY-MM-DD HH:MM).
+  const opening_date_local = opening_date_raw.replace('T', ' ');
 
   const payload = {
-    name,
-    currency,
+    account_name,
+    legal_entity_name:  legal_entity,
+    local_currency,
+    local_timezone,
     type,
     sub_type,
+    opening_date_local,
     description,
-    opening_value: openingVal,
+    opening_value_local: rawOV,
   };
 
   const btn = el('accSaveNew');
@@ -946,9 +1000,10 @@ async function _saveNew() {
     } else {
       console.warn('[accounts] _saveNew failed:', res.error);
       const errCode = (res.error !== undefined && res.error !== null) ? res.error : 'unknown';
-      const msg = errCode === 'duplicate_account'      ? 'An account with this name already exists.'
-                : errCode === 'missing_opening_value'  ? 'Opening value is required.'
-                : errCode === 'invalid_opening_value'  ? 'Opening value must be a finite number.'
+      const msg = errCode === 'duplicate_account'           ? 'An account with this name already exists.'
+                : errCode === 'missing_opening_value_local'       ? 'Opening value is required.'
+                : errCode === 'invalid_opening_value_local'       ? 'Opening value must be a finite number.'
+                : errCode === 'missing_opening_date_local'  ? 'Opening date is required.'
                 : 'Error: ' + errCode;
       errEl.textContent = msg;
       if (btn !== null) { btn.disabled = false; btn.textContent = 'Save'; }
@@ -968,21 +1023,25 @@ async function _saveEdit() {
   const rowNum = state.accEditRow;
   if (rowNum === null || rowNum === undefined) return;
 
-  const name  = el('accEditName').value.trim();
-  const errEl = el('accEditError');
-  if (String(name).trim() === '') { errEl.textContent = 'Name is required.'; return; }
+  const account_name = el('accEditName').value.trim();
+  const errEl        = el('accEditError');
+  if (account_name === '') { errEl.textContent = 'Account name is required.'; return; }
 
   errEl.textContent = '';
 
-  const subTypeEl = el('accEditSubType');
+  const subTypeEl      = el('accEditSubType');
+  const closingDateEl  = el('accEditClosingDate');
   const payload = {
     row_num:       rowNum,
-    name,
+    account_name,
     record_status: el('accEditRecordStatus').value,
     description:   el('accEditDescription').value.trim(),
   };
   if (subTypeEl !== null && subTypeEl.tagName === 'SELECT' && subTypeEl.value !== '') {
     payload.sub_type = subTypeEl.value;
+  }
+  if (closingDateEl !== null && closingDateEl.value !== '') {
+    payload.closing_date_local = closingDateEl.value.replace('T', ' ');
   }
 
   const btn = el('accSaveEdit');
@@ -1061,7 +1120,7 @@ async function _deactivateAccount(rowNum) {
   try {
     const res = await ExpenseAPI.updateAccount({
       row_num:       rowNum,
-      name:          acc.name,
+      account_name:  acc.account_name,
       record_status: 'inactive',
       description:   acc.description,
     });
@@ -1151,7 +1210,7 @@ async function _submitImport(accounts) {
     } else {
       const resultRows = (res.results !== undefined && res.results !== null ? res.results : []).map(r => `
         <tr>
-          <td>${esc(r.name)}</td>
+          <td>${esc(r.account_name)}</td>
           <td>${r.ok
             ? `<span class="badge badge-et-in">created</span>`
             : r.error === 'duplicate_account'

@@ -32,7 +32,7 @@ function _repaymentTxs(acc) {
     t.tx_type === 'money-out' &&
     t.major_category === 'debt-repayment' &&
     t.account_id === acc.id
-  ).sort((a, b) => new Date(a.tx_date_time) - new Date(b.tx_date_time));
+  ).sort((a, b) => new Date(a.tx_date_local) - new Date(b.tx_date_local));
 }
 
 // ── Per-loan computation ──────────────────────────────────────────────────────
@@ -49,7 +49,7 @@ function _loanStats(acc) {
   const hasOpening    = originalBal > 0;
 
   const repayTxs      = _repaymentTxs(acc);
-  const openingDate   = acc.opening_date ?? repayTxs[0]?.tx_date_time ?? null;
+  const openingDate   = acc.opening_date ?? repayTxs[0]?.tx_date_local ?? null;
   const months        = _monthsSince(openingDate);
   const avgMonthly    = totalRepaid > 0 ? totalRepaid / months : 0;
   const monthsToPayoff = (avgMonthly > 0 && currentBal > 0) ? Math.ceil(currentBal / avgMonthly) : null;
@@ -74,7 +74,7 @@ function _renderHistoryChart(canvasId, loan, sym, C) {
   const amounts    = loan.repayTxs.map(t => Math.abs(sumAmountBase([t])));
   const cumulative = amounts.map((_, i) => amounts.slice(0, i + 1).reduce((s, v) => s + v, 0));
   const labels     = loan.repayTxs.map(t => {
-    const d = new Date(t.tx_date_time);
+    const d = new Date(t.tx_date_local);
     return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: '2-digit' });
   });
 
@@ -166,7 +166,7 @@ function _loanCardHtml(loan, sym) {
 
   // Repayment history table rows
   const txRows = [...loan.repayTxs].reverse().slice(0, 24).map(t => {
-    const d   = new Date(t.tx_date_time);
+    const d   = new Date(t.tx_date_local);
     const date = d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: '2-digit' });
     const amt  = Math.abs(sumAmountBase([t]));
     return `<tr>

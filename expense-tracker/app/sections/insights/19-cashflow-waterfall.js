@@ -209,7 +209,7 @@ export async function render(containerId, { txs, accounts, from, sym }) {
         if (expIdx < 0 || expIdx >= expGroups.length) return; // Opening/Income/Transfers/Closing
 
         const { cat, txs: catTxs } = expGroups[expIdx];
-        const sorted = [...catTxs].sort((a, b) => new Date(b.tx_date_time) - new Date(a.tx_date_time));
+        const sorted = [...catTxs].sort((a, b) => new Date(b.tx_date_local) - new Date(a.tx_date_local));
         const total  = sumAmountBase(sorted);
         const fmt    = v => sym + Math.abs(v).toLocaleString('en-GB', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
 

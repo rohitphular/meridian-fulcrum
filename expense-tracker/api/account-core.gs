@@ -8,14 +8,14 @@ function listAccounts() {
   const accounts = sheetToObjectsWithRow(sheet);
   const netMap   = _buildAccountNetMap(accounts);
   return accounts.map(function(a) {
-    const opening = Number(a.opening_value);
+    const opening = Number(a.opening_value_local);
     // netMap is pre-seeded for every account id by _buildAccountNetMap.
     const net     = netMap[a.id];
-    return Object.assign({}, a, { current_value: opening + net });
+    return Object.assign({}, a, { current_value_local: opening + net });
   });
 }
 
-// Scans the transactions sheet and returns a map of { accountName → net change }.
+// Scans the transactions sheet and returns a map of { accountId → net change }.
 // tx_amount is always stored as a positive value; tx_type (money-in / money-out)
 // determines the sign applied to the running balance.
 function _buildAccountNetMap(accounts) {
@@ -53,29 +53,32 @@ function createAccount(body) {
   const validation = validateAccountCreate(body);
   if (validation.ok === false) return validation;
 
-  const normCurrency = String(body.currency).trim().toUpperCase();
+  const normCurrency = String(body.local_currency).trim().toUpperCase();
 
   const cols   = getAccountSheetColumns();
   const sheet  = getOrCreateSheet(ACCOUNTS_SHEET, cols);
 
-  // Duplicate guard — reject if an account with the same name already exists
-  const nameColIdx  = acctColIndex('name');
+  // Duplicate guard — reject if an account with the same account_name already exists
+  const nameColIdx   = acctColIndex('account_name');
   const existingRows = sheet.getDataRange().getValues();
-  const normName     = String(body.name).trim().toLowerCase();
+  const normName     = String(body.account_name).trim().toLowerCase();
   for (let i = 1; i < existingRows.length; i++) {
     if (String(existingRows[i][nameColIdx]).trim().toLowerCase() === normName) {
       return { ok: false, error: 'duplicate_account' };
     }
   }
 
-  const id     = generateAccountId(sheet, existingRows);
-  const now    = new Date().toISOString();
-  const type   = String(body.type).trim();
+  // Use caller-supplied id (seed CSV import) when provided; otherwise generate a UUID.
+  const id  = (body.id !== undefined && body.id !== null && String(body.id).trim() !== '')
+    ? String(body.id).trim()
+    : Utilities.getUuid();
+  const now = new Date().toISOString();
+  const type = String(body.type).trim();
   const isLiabilityAccount = isLiabilityType(type);
 
   // Liabilities stored as negative; user always inputs positive.
   // opening_value presence and numeric validity already checked by validateAccountCreate.
-  const rawOV = Number(body.opening_value);
+  const rawOV = Number(body.opening_value_local);
   const openingValue = isLiabilityAccount ? -(Math.abs(rawOV)) : rawOV;
 
   const row = new Array(cols.length).fill('');
@@ -85,19 +88,23 @@ function createAccount(body) {
     if (field !== undefined && field !== null) row[field.sheet_column_position - 1] = (value === undefined || value === null) ? '' : value;
   }
 
-  setCol('id',            id);
-  setCol('name',          String(body.name).trim());
-  setCol('type',          type);
-  setCol('sub_type',      body.sub_type    !== undefined && body.sub_type    !== null ? String(body.sub_type).trim()    : '');
-  setCol('currency',      normCurrency);
-  setCol('opening_value', openingValue);
-  setCol('record_status', 'active');
-  setCol('description',   body.description !== undefined && body.description !== null ? String(body.description).trim() : '');
-  setCol('sync_status',    SYNC_STATUS_CREATE_PENDING);
-  setCol('sync_date_time', '');
-  setCol('sync_notes',     '');
-  setCol('created_at',     now);
-  setCol('updated_at',     now);
+  setCol('id',                 id);
+  setCol('account_name',       String(body.account_name).trim());
+  setCol('legal_entity_name',  body.legal_entity_name  !== undefined && body.legal_entity_name  !== null ? String(body.legal_entity_name).trim()  : '');
+  setCol('type',               type);
+  setCol('sub_type',           body.sub_type            !== undefined && body.sub_type            !== null ? String(body.sub_type).trim()            : '');
+  setCol('local_currency',     normCurrency);
+  setCol('local_timezone',     body.local_timezone      !== undefined && body.local_timezone      !== null ? String(body.local_timezone).trim()      : '');
+  setCol('opening_date_local', String(body.opening_date_local).trim());
+  setCol('closing_date_local', body.closing_date_local  !== undefined && body.closing_date_local  !== null ? String(body.closing_date_local).trim()  : '');
+  setCol('opening_value_local', openingValue);
+  setCol('record_status',      'active');
+  setCol('description',        body.description         !== undefined && body.description         !== null ? String(body.description).trim()         : '');
+  setCol('sync_status',        SYNC_STATUS_CREATE_PENDING);
+  setCol('sync_date',          '');
+  setCol('sync_notes',         '');
+  setCol('created_at',         now);
+  setCol('updated_at',         now);
 
   sheet.appendRow(row);
   return { ok: true, id: id };
@@ -110,7 +117,7 @@ function createAccountsBulk(body) {
   const results = [];
   body.accounts.forEach(function(acct) {
     const r = createAccount(acct);
-    const entry = { name: acct.name, ok: r.ok };
+    const entry = { account_name: acct.account_name, ok: r.ok };
     if (r.id !== undefined) entry.id = r.id;
     if (r.error !== undefined) entry.error = r.error;
     results.push(entry);
@@ -133,7 +140,7 @@ function updateAccount(body) {
   const sheet   = getOrCreateSheet(ACCOUNTS_SHEET, cols);
   const rowNum  = Number(body.row_num);
   const lastRow = sheet.getLastRow();
-  if (rowNum < 2 || rowNum > lastRow) return { ok: false, error: 'invalid_row' };
+  if (!Number.isFinite(rowNum) || rowNum < 2 || rowNum > lastRow) return { ok: false, error: 'invalid_row' };
 
   const allRows = sheet.getDataRange().getValues();
 
@@ -145,10 +152,10 @@ function updateAccount(body) {
   const validation = validateAccountUpdate(body, currentType);
   if (validation.ok === false) return validation;
 
-  // Duplicate name guard — reject if a different non-deleted row already has the same name
-  const nameIdx      = acctColIndex('name');
+  // Duplicate name guard — reject if a different non-deleted row already has the same account_name
+  const nameIdx      = acctColIndex('account_name');
   const rstatIdx     = acctColIndex('record_status');
-  const normName     = String(body.name).trim().toLowerCase();
+  const normName     = String(body.account_name).trim().toLowerCase();
   for (let i = 1; i < allRows.length; i++) {
     if (i + 1 === rowNum) continue;
     if (String(allRows[i][rstatIdx]) === 'deleted') continue;
@@ -166,9 +173,12 @@ function updateAccount(body) {
     updatedRow[field.sheet_column_position - 1] = value;
   }
 
-  writeField('name', String(body.name).trim());
+  writeField('account_name', String(body.account_name).trim());
   if (body.sub_type !== undefined && body.sub_type !== null) {
     writeField('sub_type', String(body.sub_type).trim());
+  }
+  if (body.closing_date_local !== undefined && body.closing_date_local !== null) {
+    writeField('closing_date_local', String(body.closing_date_local).trim());
   }
   if (body.description !== undefined && body.description !== null) {
     writeField('description', String(body.description).trim());
@@ -198,7 +208,7 @@ function deleteAccount(body) {
   const sheet   = getOrCreateSheet(ACCOUNTS_SHEET, cols);
   const rowNum  = Number(body.row_num);
   const lastRow = sheet.getLastRow();
-  if (rowNum < 2 || rowNum > lastRow) return { ok: false, error: 'invalid_row' };
+  if (!Number.isFinite(rowNum) || rowNum < 2 || rowNum > lastRow) return { ok: false, error: 'invalid_row' };
 
   // Single read — extract all needed values from this row before mutating.
   const allData       = sheet.getDataRange().getValues();
@@ -261,7 +271,7 @@ function restoreAccount(body) {
   const sheet   = getOrCreateSheet(ACCOUNTS_SHEET, cols);
   const rowNum  = Number(body.row_num);
   const lastRow = sheet.getLastRow();
-  if (rowNum < 2 || rowNum > lastRow) return { ok: false, error: 'invalid_row' };
+  if (!Number.isFinite(rowNum) || rowNum < 2 || rowNum > lastRow) return { ok: false, error: 'invalid_row' };
 
   // Single read — extract both the status check and the sync_status from the same read.
   const allData = sheet.getDataRange().getValues();

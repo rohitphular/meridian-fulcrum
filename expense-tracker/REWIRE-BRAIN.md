@@ -54,7 +54,7 @@ Shared code for all Forge modules: `forge/_shared/` (sheets-client.js, auth.js, 
 | **Transaction model** | Single-leg. Each row has one `account_id` + `tx_amount`. A transfer between two accounts is two rows linked via `parent_tx_id`. No `money-transfer` tx_type; no `source_account`/`target_account` on rows; no `fx_rate` column. |
 | **Lifecycle field** | `record_status` (`active` / `inactive` / `deleted` / `locked`). There is no `is_active` field anywhere in the codebase. |
 | **Balance field** | `current_value` on accounts. Not `current_balance`. System-managed — never written directly via the account API. |
-| **Timestamp field** | `tx_date_time` on transactions. Not `transaction_date_utc`. |
+| **Timestamp field** | `tx_date_local` on transactions. Not `transaction_date_utc`. |
 
 ---
 
@@ -630,7 +630,7 @@ Cross-referenced every doc claim against the five schema files (`account-schema.
 
 **No doc issues found in:**
 - All column positions in all five schema tables are correctly reflected in every doc that references them.
-- `tx_amount`, `tx_date_time`, `account_id`, `record_status`, `sync_status` field names are correct throughout.
+- `tx_amount`, `tx_date_local`, `account_id`, `record_status`, `sync_status` field names are correct throughout.
 - No `is_active`, `transaction_date_utc`, `source_account`/`target_account` on transactions, `money-transfer`, `fx_rate`, or `adjustAccountBalance` references anywhere in the docs.
 - Base currency correctly stated as XAU (1 gram of gold) throughout. GBP and `£` appear only as illustrative worked-example currencies (cross-currency transfer example in `balance-lifecycle.md`, `£100` typo-edit example in `financial-rules.md`), not as base currency claims.
 - Subscription `tags` vs transaction `tx_tags` distinction correctly documented in `subscriptions.md`, `data-model.md`, and all cross-references.

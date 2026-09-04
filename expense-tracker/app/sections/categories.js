@@ -472,7 +472,7 @@ function _renderCatImportPanel() {
       <div class="field form-grid-span-2">
         <label for="catImportFile">CSV file</label>
         <input type="file" id="catImportFile" accept=".csv">
-        <div class="field-hint">Required: tx_type_key, major_category_label, minor_category_label. Optional: description, record_status, tag_keywords, counterparty_examples, source_account_types, target_account_types, source_account_mandatory, target_account_mandatory, is_subscription_eligible</div>
+        <div class="field-hint">Required: tx_type_key, major_category_label, minor_category_label. Optional: id, description, record_status, tag_keywords, counterparty_examples, source_account_types, target_account_types, source_account_mandatory, target_account_mandatory, is_subscription_eligible</div>
       </div>
     </div>
     <div id="catImportStatus"></div>
@@ -505,6 +505,7 @@ function _parseCatCsv(text) {
     if (row.minor_category_label === '') { errors.push(`Row ${i + 1}: missing minor_category_label`); continue; }
 
     categories.push({
+      id:                        row.id,
       tx_type_key:               row.tx_type_key,
       tx_type_label:             row.tx_type_label,
       major_category_key:        row.major_category_key,

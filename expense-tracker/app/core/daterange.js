@@ -27,7 +27,7 @@ export function getRangeBounds() {
 
 export function txInRange(tx) {
   const { from, to } = getRangeBounds();
-  const raw = tx.tx_date_time;
+  const raw = tx.tx_date_local;
   if (raw === undefined || raw === null || String(raw).trim() === '') return true;
   const d = new Date(raw);
   if (!Number.isFinite(d.getTime())) return true;

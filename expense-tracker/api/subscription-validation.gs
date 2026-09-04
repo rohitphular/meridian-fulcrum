@@ -6,12 +6,10 @@
 function validateSubscriptionCreate(body) {
   if (body.name === undefined || body.name === null || String(body.name).trim() === '')
     return { ok: false, error: 'missing_name' };
-  if (body.currency === undefined || body.currency === null || String(body.currency).trim() === '')
-    return { ok: false, error: 'missing_currency' };
 
-  if (body.amount === undefined || body.amount === null) return { ok: false, error: 'missing_amount' };
-  const amount = Number(body.amount);
-  if (isNaN(amount) || amount <= 0) return { ok: false, error: 'invalid_amount' };
+  if (body.subscription_amount_local === undefined || body.subscription_amount_local === null) return { ok: false, error: 'missing_subscription_amount_local' };
+  const amount = Number(body.subscription_amount_local);
+  if (isNaN(amount) || amount <= 0) return { ok: false, error: 'invalid_subscription_amount_local' };
 
   if (body.source_account === undefined || body.source_account === null || String(body.source_account).trim() === '')
     return { ok: false, error: 'missing_source_account' };
@@ -38,16 +36,13 @@ function validateSubscriptionUpdate(body) {
   if (body.source_account === undefined || body.source_account === null || String(body.source_account).trim() === '')
     return { ok: false, error: 'missing_source_account' };
 
-  if (body.currency === undefined || body.currency === null || String(body.currency).trim() === '') {
-    return { ok: false, error: 'missing_currency' };
-  }
   if (body.frequency === undefined || body.frequency === null || String(body.frequency).trim() === '') {
     return { ok: false, error: 'missing_frequency' };
   }
 
-  if (body.amount !== undefined && body.amount !== null) {
-    const amount = Number(body.amount);
-    if (isNaN(amount) || amount <= 0) return { ok: false, error: 'invalid_amount' };
+  if (body.subscription_amount_local !== undefined && body.subscription_amount_local !== null) {
+    const amount = Number(body.subscription_amount_local);
+    if (isNaN(amount) || amount <= 0) return { ok: false, error: 'invalid_subscription_amount_local' };
   }
 
   const schedErr = _validateSchedule(body);
@@ -63,7 +58,7 @@ function validateSubscriptionUpdate(body) {
   const fields = getFieldsForSubscriptionType(null);
   for (let i = 0; i < fields.length; i++) {
     const field = fields[i];
-    if (!field.editable && field.key !== 'record_status' && body[field.key] !== undefined) {
+    if (!field.editable && body[field.key] !== undefined) {
       return { ok: false, error: 'field_not_editable', field: field.key };
     }
   }

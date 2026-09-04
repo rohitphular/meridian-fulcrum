@@ -1,27 +1,27 @@
 # Balance Lifecycle
 
-How `account.current_value` is derived and how it changes when a transaction is created, edited, or deleted.
+How `account.current_value_local` is derived and how it changes when a transaction is created, edited, or deleted.
 
 ## Computation model
 
-Account balances are **computed at read time**, not maintained incrementally. The sheet stores only `opening_value` for each account. When `listAccounts` is called, `_buildAccountNetMap` scans the transactions sheet and returns a `{ accountId → net }` map; the response value `current_value` is then assembled as:
+Account balances are **computed at read time**, not maintained incrementally. The sheet stores only `opening_value_local` for each account. When `listAccounts` is called, `_buildAccountNetMap` scans the transactions sheet and returns a `{ accountId → net }` map; the response value `current_value_local` is then assembled as:
 
 ```
-current_value = opening_value + net
+current_value_local = opening_value_local + net
 ```
 
-`current_value` is never written back to the sheet after initial account creation. No transaction create/update/delete touches the accounts sheet.
+`current_value_local` is never written back to the sheet after initial account creation. No transaction create/update/delete touches the accounts sheet.
 
 There is no `adjustAccountBalance` function — it was removed in Round 5. The `workflow-engine.gs` file that previously hosted it is now an empty comment stub.
 
 ## Sign convention
 
-| Type | Stored `opening_value` | UI display of `current_value` |
+| Type | Stored `opening_value_local` | UI display of `current_value_local` |
 |---|---|---|
 | `asset`, `investment` | Positive | As-is |
-| `liability` | **Negative** (double-entry convention) | `abs(current_value)` labelled "owed" |
+| `liability` | **Negative** (double-entry convention) | `abs(current_value_local)` labelled "owed" |
 
-The user always inputs and sees positive numbers for liabilities. The store negates on write; `current_value` naturally stays negative as liabilities are debited (money-out).
+The user always inputs and sees positive numbers for liabilities. The store negates on write; `current_value_local` naturally stays negative as liabilities are debited (money-out).
 
 ## How net is computed
 
@@ -33,21 +33,21 @@ for each non-deleted transaction row:
     if tx_type === 'money-out': net[account_id] -= tx_amount
 ```
 
-The resulting `net[id]` value is the total effect of all transactions on the account since `opening_value` was recorded.
+The resulting `net[id]` value is the total effect of all transactions on the account since `opening_value_local` was recorded.
 
 Each transaction row touches exactly **one** account via `account_id`. A transfer between two accounts is two rows, each accumulating into its own account's net independently.
 
 ## Effect of transaction operations on computed balance
 
-Because `current_value` is derived, any change to the transactions sheet is automatically reflected the next time `listAccounts` is called. The logical effects are:
+Because `current_value_local` is derived, any change to the transactions sheet is automatically reflected the next time `listAccounts` is called. The logical effects are:
 
 ### Create
 
 **money-in:**
-`net[account_id] += tx_amount` → `current_value` rises by `tx_amount`.
+`net[account_id] += tx_amount` → `current_value_local` rises by `tx_amount`.
 
 **money-out:**
-`net[account_id] -= tx_amount` → `current_value` falls by `tx_amount`.
+`net[account_id] -= tx_amount` → `current_value_local` falls by `tx_amount`.
 
 **Transfer (two rows, same parent_tx_id):**
 Row A (money-out on source): `net[source_id] -= Row A.tx_amount`
@@ -62,20 +62,20 @@ An edit is logically equivalent to removing the old row's contribution and addin
 For financial rule validation at edit time, the frontend and backend must compute the **post-reversal balance** before checking insufficient-balance rules:
 
 ```
-post_reversal_balance = current_value
+post_reversal_balance = current_value_local
 
 if old.account_id == new.account_id:
     if old.tx_type == 'money-in':  post_reversal_balance -= old.tx_amount
     if old.tx_type == 'money-out': post_reversal_balance += old.tx_amount
 ```
 
-Pass `post_reversal_balance` to Rules 1–2 in [financial-rules.md](financial-rules.md). This adjustment is needed because `current_value` already includes the old row's contribution, so checking the raw balance against the new amount would incorrectly double-count it.
+Pass `post_reversal_balance` to Rules 1–2 in [financial-rules.md](financial-rules.md). This adjustment is needed because `current_value_local` already includes the old row's contribution, so checking the raw balance against the new amount would incorrectly double-count it.
 
 For transfers, apply the same reversal logic independently to both legs before checking either.
 
 ### Delete (soft)
 
-Setting `record_status = deleted` causes `_buildAccountNetMap` to skip the row (the map excludes deleted rows). The row's contribution is removed from all future `current_value` computations without any write to the accounts sheet.
+Setting `record_status = deleted` causes `_buildAccountNetMap` to skip the row (the map excludes deleted rows). The row's contribution is removed from all future `current_value_local` computations without any write to the accounts sheet.
 
 ## Idempotency
 
@@ -88,8 +88,8 @@ Single-user model. No locking is required — requests are sequential. If ported
 ## Worked example — cross-currency transfer (GBP to INR)
 
 State before:
-- `lloyds_current.opening_value = 1000` (GBP); no transactions yet → `current_value = 1000`
-- `icici_savings.opening_value = 50000` (INR); no transactions yet → `current_value = 50000`
+- `lloyds_current.opening_value_local = 1000` (GBP); no transactions yet → `current_value_local = 1000`
+- `icici_savings.opening_value_local = 50000` (INR); no transactions yet → `current_value_local = 50000`
 
 Create transfer: Row A = money-out on `lloyds_current`, `tx_amount = 500`. Row B = money-in on `icici_savings`, `tx_amount = 52500`.
 
@@ -99,7 +99,7 @@ _buildAccountNetMap returns:
   lloyds_current → −500
   icici_savings  → +52500
 
-current_value:
+current_value_local:
   lloyds_current = 1000 + (−500) = 500
   icici_savings  = 50000 + 52500 = 102500
 ```
@@ -110,8 +110,8 @@ Effective exchange rate: `52500 / 500 = 105 INR per GBP`. Recoverable at any tim
 
 Before edit, transactions sheet has: `tx_type = 'money-out'`, `account_id = gbp_current`, `tx_amount = 150`.
 
-`listAccounts` returns: `gbp_current.current_value = opening − 150`.
+`listAccounts` returns: `gbp_current.current_value_local = opening − 150`.
 
-User edits `tx_amount` to 200. After the sheet write, next `listAccounts` returns: `gbp_current.current_value = opening − 200`. The old 150 contribution is no longer in the sheet; the new 200 is.
+User edits `tx_amount` to 200. After the sheet write, next `listAccounts` returns: `gbp_current.current_value_local = opening − 200`. The old 150 contribution is no longer in the sheet; the new 200 is.
 
 For validation at edit time, the frontend uses the post-reversal formula above to confirm the account's net position after the old row is "removed" before checking whether the new amount fits.

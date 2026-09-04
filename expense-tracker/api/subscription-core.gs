@@ -112,8 +112,7 @@ function createSubscription(body) {
   setCol('id',               id);
   setCol('name',             String(body.name).trim());
   setCol('counterparty_name', body.counterparty_name !== undefined && body.counterparty_name !== null ? String(body.counterparty_name).trim() : '');
-  setCol('amount',           Number(body.amount));
-  setCol('currency',         String(body.currency).trim().toUpperCase());
+  setCol('subscription_amount_local', Number(body.subscription_amount_local));
   setCol('frequency',        String(body.frequency).trim());
   setCol('day_of_month',     body.day_of_month !== undefined && body.day_of_month !== null && body.day_of_month !== '' ? Number(body.day_of_month) : '');
   setCol('day_of_week',      body.day_of_week  !== undefined && body.day_of_week  !== null && body.day_of_week  !== '' ? Number(body.day_of_week)  : '');
@@ -126,7 +125,7 @@ function createSubscription(body) {
   setCol('tx_type',          body.tx_type !== undefined && body.tx_type !== null ? String(body.tx_type).trim() : '');
   setCol('record_status',    initStatus);
   setCol('sync_status',      SYNC_STATUS_CREATE_PENDING);
-  setCol('sync_date_time',   '');
+  setCol('sync_date',   '');
   setCol('sync_notes',       '');
   setCol('updated_at',       now);
   setCol('subscription_start_date', body.subscription_start_date !== undefined && body.subscription_start_date !== null ? String(body.subscription_start_date).trim() : '');
@@ -173,8 +172,7 @@ function createSubscriptionsBulk(body) {
     setC('id',               id);
     setC('name',             String(b.name).trim());
     setC('counterparty_name', b.counterparty_name !== undefined && b.counterparty_name !== null ? String(b.counterparty_name).trim() : '');
-    setC('amount',           Number(b.amount));
-    setC('currency',         String(b.currency).trim().toUpperCase());
+    setC('subscription_amount_local', Number(b.subscription_amount_local));
     setC('frequency',        String(b.frequency).trim());
     setC('day_of_month',     b.day_of_month !== undefined && b.day_of_month !== null && b.day_of_month !== '' ? Number(b.day_of_month) : '');
     setC('day_of_week',      b.day_of_week  !== undefined && b.day_of_week  !== null && b.day_of_week  !== '' ? Number(b.day_of_week)  : '');
@@ -187,7 +185,7 @@ function createSubscriptionsBulk(body) {
     setC('tx_type',          b.tx_type !== undefined && b.tx_type !== null ? String(b.tx_type).trim() : '');
     setC('record_status',    initStatus);
     setC('sync_status',      SYNC_STATUS_CREATE_PENDING);
-    setC('sync_date_time',   '');
+    setC('sync_date',   '');
     setC('sync_notes',       '');
     setC('updated_at',       now);
     setC('subscription_start_date', b.subscription_start_date !== undefined && b.subscription_start_date !== null ? String(b.subscription_start_date).trim() : '');
@@ -278,8 +276,7 @@ function updateSubscription(body) {
 
   setField('name',             String(body.name).trim());
   setField('counterparty_name', body.counterparty_name !== undefined && body.counterparty_name !== null ? String(body.counterparty_name).trim() : '');
-  if (body.amount !== undefined && body.amount !== null) setField('amount', Number(body.amount));
-  setField('currency',         String(body.currency).trim().toUpperCase());
+  if (body.subscription_amount_local !== undefined && body.subscription_amount_local !== null) setField('subscription_amount_local', Number(body.subscription_amount_local));
   setField('frequency',        String(body.frequency).trim());
   setField('day_of_month',     body.day_of_month !== undefined && body.day_of_month !== null && body.day_of_month !== '' ? Number(body.day_of_month) : '');
   setField('day_of_week',      body.day_of_week  !== undefined && body.day_of_week  !== null && body.day_of_week  !== '' ? Number(body.day_of_week)  : '');

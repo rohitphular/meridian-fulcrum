@@ -41,7 +41,7 @@ The last bucket (index 11) is the current month, filtered to transactions up to 
 `_buildMonthly(months12, todayLocal)`:
 - Groups all `state.transactions` by month via `groupByMonth`.
 - For each month: sums `money-in` as income, `money-out` as expense.
-- Last bucket (index 11): filtered to `tx_date_time ≤ todayLocal`.
+- Last bucket (index 11): filtered to `tx_date_local ≤ todayLocal`.
 - Returns `{ income[], expense[], net[] }` — 12 values each.
 
 ### Stat cards (4)

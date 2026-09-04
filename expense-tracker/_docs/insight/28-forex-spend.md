@@ -94,7 +94,7 @@ Scatter chart — one dataset per foreign currency that has at least one `fx_rat
 
 | Axis | Value |
 |---|---|
-| X | `new Date(tx.tx_date_time).getTime()` (ms epoch), rendered as `"Jul '26"` via tick callback |
+| X | `new Date(tx.tx_date_local).getTime()` (ms epoch), rendered as `"Jul '26"` via tick callback |
 | Y | `tx.fx_rate` (4 decimal places) |
 
 No date adapter dependency — X scale is `type: 'linear'` with a `ticks.callback` that formats timestamps with `toLocaleDateString`.

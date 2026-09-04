@@ -8,7 +8,7 @@ The rules apply to the **post-reversal balance** during an update (see [balance-
 
 **Triggers when:** `tx_type = 'money-out'` AND the account linked via `account_id` has `type ∈ {asset, investment}`.
 
-**Blocks if:** `account.current_value < tx_amount` at the time of the transaction.
+**Blocks if:** `account.current_value_local < tx_amount` at the time of the transaction.
 
 **Rationale:** Asset and investment accounts cannot go negative through the app. Genuine overdrafts should be modelled as `overdraft` accounts.
 
@@ -53,14 +53,14 @@ No `fx_rate` column is stored on the row and no explicit rate input is required 
 When validating an **edit** rather than a create, evaluate the rules against the account's balance *after* the old row has been reversed:
 
 ```
-post_reversal_balance = account.current_value
+post_reversal_balance = account.current_value_local
 
 if old.account_id == new.account_id:
     if old.tx_type == 'money-in':  post_reversal_balance -= old.tx_amount
     if old.tx_type == 'money-out': post_reversal_balance += old.tx_amount
 ```
 
-Pass `post_reversal_balance` to Rules 1–2 instead of the raw `current_value`. Without this adjustment, edits that merely *change* a transaction (e.g. fix a typo'd amount of £100 to £105) would be rejected when the resulting balance is still fine.
+Pass `post_reversal_balance` to Rules 1–2 instead of the raw `current_value_local`. Without this adjustment, edits that merely *change* a transaction (e.g. fix a typo'd amount of £100 to £105) would be rejected when the resulting balance is still fine.
 
 For transfers, apply the same reversal logic independently to both legs before checking either leg against the rules.
 
@@ -72,6 +72,6 @@ These are signalled in the UI but do not prevent saving:
 |---|---|---|
 | `?` badge on amount | The linked account's currency is not present in the `rates` table | Transactions list |
 | `†` marker next to amount | Row is one leg of a transfer and the implied rate (money-in ÷ money-out) differs from the current global rate for that currency pair | Transactions list |
-| `⚠ N rows have warnings` banner | Stored row has missing `id`, missing `tx_date_time`, or invalid `tx_type` | Above transactions table |
+| `⚠ N rows have warnings` banner | Stored row has missing `id`, missing `tx_date_local`, or invalid `tx_type` | Above transactions table |
 
 Malformed rows are excluded from insight totals and account balance arithmetic — they exist purely as a diagnostic to surface bad data in the underlying store.

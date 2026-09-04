@@ -8,7 +8,7 @@ The default landing view. Summarises income, expenses, net flow, and savings rat
 - The accounts list (for name lookup on the per-account chart).
 - The rates table (for converting all amounts to the base currency).
 
-Malformed rows (missing `id`, `tx_date_time`, or invalid `tx_type`) are excluded from every calculation.
+Malformed rows (missing `id`, `tx_date_local`, or invalid `tx_type`) are excluded from every calculation.
 
 ## Summary cards
 
@@ -63,7 +63,7 @@ The date range applies to every insight calculation and to the transactions list
 | `all` | Year 2000 → today (effectively "all time") |
 | `custom` | Two date inputs: `from` and `to`. Either blank falls back to `all` on that side. |
 
-The filter is **inclusive on both ends** and operates on the local-time date portion of `tx_date_time`. Rows with no date are *included* (treated as no constraint) rather than dropped — they are still flagged as malformed elsewhere.
+The filter is **inclusive on both ends** and operates on the local-time date portion of `tx_date_local`. Rows with no date are *included* (treated as no constraint) rather than dropped — they are still flagged as malformed elsewhere.
 
 ## Rendering rules
 

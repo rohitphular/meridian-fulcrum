@@ -53,13 +53,13 @@ function _detectRecurring(outTxs) {
   for (const [, rows] of map) {
     if (rows.length < 2) continue;
 
-    const sorted  = [...rows].sort((a, b) => new Date(a.tx_date_time) - new Date(b.tx_date_time));
+    const sorted  = [...rows].sort((a, b) => new Date(a.tx_date_local) - new Date(b.tx_date_local));
     const amounts = sorted.map(t => sumAmountBase([t]));
     const amtMean = _mean(amounts);
     if (amtMean <= 0) continue;
     if (_stdDev(amounts) / amtMean > 0.15) continue; // too variable
 
-    const dates = sorted.map(t => new Date(t.tx_date_time));
+    const dates = sorted.map(t => new Date(t.tx_date_local));
     const gaps  = dates.slice(1).map((d, i) => _daysBetween(dates[i], d));
     const gMean = _mean(gaps);
     const gSd   = _stdDev(gaps);
@@ -190,7 +190,7 @@ function _showHistory(historyEl, cpKey) {
       t.tx_type === 'money-out' &&
       ((t.counterparty_name ?? '').trim() || 'unknown').toLowerCase() === cpKey
     )
-    .sort((a, b) => new Date(a.tx_date_time) - new Date(b.tx_date_time));
+    .sort((a, b) => new Date(a.tx_date_local) - new Date(b.tx_date_local));
 
   if (!cpTxs.length) {
     historyEl.hidden = true;
@@ -200,7 +200,7 @@ function _showHistory(historyEl, cpKey) {
   // Group by YYYY-MM for bar chart
   const monthMap = new Map();
   for (const t of cpTxs) {
-    const mk = t.tx_date_time.slice(0, 7);
+    const mk = t.tx_date_local.slice(0, 7);
     if (!monthMap.has(mk)) monthMap.set(mk, 0);
     monthMap.set(mk, monthMap.get(mk) + sumAmountBase([t]));
   }

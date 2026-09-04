@@ -95,7 +95,7 @@ function _renderDonut(viewEl, segments, sym, C, field, fallback, inTxs) {
         if (label === 'Other') return;
         const segTxs = inTxs
           .filter(t => ((t[field] ?? '').trim() || fallback) === label)
-          .sort((a, b) => new Date(b.tx_date_time) - new Date(a.tx_date_time));
+          .sort((a, b) => new Date(b.tx_date_local) - new Date(a.tx_date_local));
         const segTotal = sumAmountBase(segTxs);
 
         drillEl.innerHTML = `

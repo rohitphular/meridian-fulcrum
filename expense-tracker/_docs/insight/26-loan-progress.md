@@ -69,7 +69,7 @@ Each card is a `<details>` element:
 Clicking the summary expands a history panel containing:
 
 1. **Area chart** (`_renderHistoryChart`): cumulative repaid over time
-   - X: repayment dates (`tx_date_time` formatted as `"15 Jul '26"`)
+   - X: repayment dates (`tx_date_local` formatted as `"15 Jul '26"`)
    - Y: `min: 0`, `max: originalBal` (shows paydown progress against the ceiling)
    - `borderColor: '#34d399'`, `fill: true`, `tension: 0.3`
    - Canvas height: 200px

@@ -9,7 +9,7 @@ Reverse-engineered, language-agnostic specification for the Expense Tracker app.
 3. **[../../../documentation/APP-AUTH-PIN-TOTP.md](../../../documentation/APP-AUTH-PIN-TOTP.md)** — Single-user authentication with PIN + optional TOTP, IP rate limiting, session model (shared Forge doc)
 4. **[accounts.md](accounts.md)** — Account types, balance conventions, derived fields, net-worth and utilisation calculations
 5. **[transactions.md](transactions.md)** — The two transaction types (money-in, money-out), single-leg model, required fields, filters, sort, export, malformed-row handling
-6. **[balance-lifecycle.md](balance-lifecycle.md)** — How `current_value` is derived at read time via `_buildAccountNetMap`, and the post-reversal formula used when validating edits
+6. **[balance-lifecycle.md](balance-lifecycle.md)** — How `current_value_local` is derived at read time via `_buildAccountNetMap`, and the post-reversal formula used when validating edits
 7. **[financial-rules.md](financial-rules.md)** — The six hard-block validation rules (insufficient balance, credit limit, no-money-out-from-loan, FX required, …)
 8. **[categories.md](categories.md)** — Two-level taxonomy, archive semantics, account-type hints, auto-seed
 9. **[rates.md](rates.md)** — FX rates, upsert semantics, conversion function, row-level vs global rate priority

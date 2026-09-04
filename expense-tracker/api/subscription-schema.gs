@@ -10,7 +10,7 @@
 const VALID_FREQUENCIES = ['weekly', 'monthly', 'quarterly', 'annual'];
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Schema — 22 fields in column-position order
+// Schema — 21 fields in column-position order
 // Column positions are append-only — never change an existing position.
 // ─────────────────────────────────────────────────────────────────────────────
 const SUBSCRIPTION_SCHEMA = {
@@ -21,7 +21,7 @@ const SUBSCRIPTION_SCHEMA = {
     ui_label: 'ID',
     type: 'string',
     enum_values: null,
-    group: 'core',
+    group: 'system',
     applies_to: null,
     required_for: null,
     editable: false,
@@ -51,8 +51,8 @@ const SUBSCRIPTION_SCHEMA = {
     editable: true,
     default_value: '',
   },
-  amount: {
-    sheet_column_name: 'amount',
+  subscription_amount_local: {
+    sheet_column_name: 'subscription_amount_local',
     sheet_column_position: 4,
     ui_label: 'Amount',
     type: 'number',
@@ -63,21 +63,9 @@ const SUBSCRIPTION_SCHEMA = {
     editable: true,
     default_value: null,
   },
-  currency: {
-    sheet_column_name: 'currency',
-    sheet_column_position: 5,
-    ui_label: 'Currency',
-    type: 'string',
-    enum_values: null,
-    group: 'core',
-    applies_to: null,
-    required_for: null,
-    editable: true,
-    default_value: null,
-  },
   frequency: {
     sheet_column_name: 'frequency',
-    sheet_column_position: 6,
+    sheet_column_position: 5,
     ui_label: 'Frequency',
     type: 'enum',
     enum_values: VALID_FREQUENCIES,
@@ -89,7 +77,7 @@ const SUBSCRIPTION_SCHEMA = {
   },
   day_of_month: {
     sheet_column_name: 'day_of_month',
-    sheet_column_position: 7,
+    sheet_column_position: 6,
     ui_label: 'Day of Month',
     type: 'number',
     enum_values: null,
@@ -101,7 +89,7 @@ const SUBSCRIPTION_SCHEMA = {
   },
   day_of_week: {
     sheet_column_name: 'day_of_week',
-    sheet_column_position: 8,
+    sheet_column_position: 7,
     ui_label: 'Day of Week',
     type: 'number',
     enum_values: null,
@@ -113,7 +101,7 @@ const SUBSCRIPTION_SCHEMA = {
   },
   source_account: {
     sheet_column_name: 'source_account',
-    sheet_column_position: 9,
+    sheet_column_position: 8,
     ui_label: 'Source Account',
     type: 'string',
     enum_values: null,
@@ -125,7 +113,7 @@ const SUBSCRIPTION_SCHEMA = {
   },
   tx_type: {
     sheet_column_name: 'tx_type',
-    sheet_column_position: 10,
+    sheet_column_position: 9,
     ui_label: 'Type',
     type: 'enum',
     enum_values: ['money-in', 'money-out'],
@@ -137,7 +125,7 @@ const SUBSCRIPTION_SCHEMA = {
   },
   major_category: {
     sheet_column_name: 'major_category',
-    sheet_column_position: 11,
+    sheet_column_position: 10,
     ui_label: 'Major Category',
     type: 'string',
     enum_values: null,
@@ -149,7 +137,7 @@ const SUBSCRIPTION_SCHEMA = {
   },
   minor_category: {
     sheet_column_name: 'minor_category',
-    sheet_column_position: 12,
+    sheet_column_position: 11,
     ui_label: 'Minor Category',
     type: 'string',
     enum_values: null,
@@ -161,7 +149,7 @@ const SUBSCRIPTION_SCHEMA = {
   },
   tags: {
     sheet_column_name: 'tags',
-    sheet_column_position: 13,
+    sheet_column_position: 12,
     ui_label: 'Tags',
     type: 'string',
     enum_values: null,
@@ -173,7 +161,7 @@ const SUBSCRIPTION_SCHEMA = {
   },
   description: {
     sheet_column_name: 'description',
-    sheet_column_position: 14,
+    sheet_column_position: 13,
     ui_label: 'Notes',
     type: 'string',
     enum_values: null,
@@ -185,23 +173,23 @@ const SUBSCRIPTION_SCHEMA = {
   },
   record_status: {
     sheet_column_name: 'record_status',
-    sheet_column_position: 15,
+    sheet_column_position: 14,
     ui_label: 'Record Status',
     type: 'enum',
     enum_values: ['active', 'inactive', 'deleted', 'locked'],
-    group: 'core',
+    group: 'system',
     applies_to: null,
     required_for: null,
-    editable: false,
+    editable: true,
     default_value: 'active',
   },
   created_at: {
     sheet_column_name: 'created_at',
-    sheet_column_position: 16,
+    sheet_column_position: 15,
     ui_label: 'Created At',
     type: 'string',
     enum_values: null,
-    group: 'core',
+    group: 'system',
     applies_to: null,
     required_for: [],
     editable: false,
@@ -209,7 +197,7 @@ const SUBSCRIPTION_SCHEMA = {
   },
   sync_status: {
     sheet_column_name: 'sync_status',
-    sheet_column_position: 17,
+    sheet_column_position: 16,
     ui_label: 'Sync Status',
     type: 'enum',
     enum_values: ['create-pending', 'update-pending', 'in-sync', 'create-failed', 'update-failed'],
@@ -219,10 +207,10 @@ const SUBSCRIPTION_SCHEMA = {
     editable: false,
     default_value: 'create-pending',
   },
-  sync_date_time: {
-    sheet_column_name: 'sync_date_time',
-    sheet_column_position: 18,
-    ui_label: 'Sync Date/Time',
+  sync_date: {
+    sheet_column_name: 'sync_date',
+    sheet_column_position: 17,
+    ui_label: 'Sync date',
     type: 'string',
     enum_values: null,
     group: 'system',
@@ -233,7 +221,7 @@ const SUBSCRIPTION_SCHEMA = {
   },
   sync_notes: {
     sheet_column_name: 'sync_notes',
-    sheet_column_position: 19,
+    sheet_column_position: 18,
     ui_label: 'Sync Notes',
     type: 'string',
     enum_values: null,
@@ -245,7 +233,7 @@ const SUBSCRIPTION_SCHEMA = {
   },
   updated_at: {
     sheet_column_name: 'updated_at',
-    sheet_column_position: 20,
+    sheet_column_position: 19,
     ui_label: 'Updated At',
     type: 'string',
     enum_values: null,
@@ -257,7 +245,7 @@ const SUBSCRIPTION_SCHEMA = {
   },
   subscription_start_date: {
     sheet_column_name: 'subscription_start_date',
-    sheet_column_position: 21,
+    sheet_column_position: 20,
     ui_label: 'Start Date',
     type: 'string',
     enum_values: null,
@@ -269,7 +257,7 @@ const SUBSCRIPTION_SCHEMA = {
   },
   subscription_end_date: {
     sheet_column_name: 'subscription_end_date',
-    sheet_column_position: 22,
+    sheet_column_position: 21,
     ui_label: 'End Date',
     type: 'string',
     enum_values: null,

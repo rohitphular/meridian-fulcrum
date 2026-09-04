@@ -26,7 +26,7 @@ function _buildMonthly(txs, monthKeys) {
 
     const filterPartial = arr => isPartial
       ? arr.filter(t => {
-          const d = new Date(t.tx_date_time);
+          const d = new Date(t.tx_date_local);
           return new Date(d.getFullYear(), d.getMonth(), d.getDate()) <= todayLocal;
         })
       : arr;

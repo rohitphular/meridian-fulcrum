@@ -46,7 +46,7 @@ function _buildYtdCumulative(txs, yearStart, numMonths, partialMonthTo) {
     let monthTotal;
     if (isLastMonth && partialMonthTo !== null) {
       const filtered = (byMonth.get(monthKey) ?? []).filter(t => {
-        const d = new Date(t.tx_date_time);
+        const d = new Date(t.tx_date_local);
         return new Date(d.getFullYear(), d.getMonth(), d.getDate()) <= partialMonthTo;
       });
       monthTotal = sumAmountBase(filtered);

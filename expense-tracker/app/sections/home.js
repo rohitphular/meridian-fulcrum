@@ -18,7 +18,7 @@ function _allTimeBounds() {
   }
   let minTs = Infinity;
   state.transactions.forEach(tx => {
-    const d = new Date(tx.tx_date_time);
+    const d = new Date(tx.tx_date_local);
     if (!isNaN(d)) minTs = Math.min(minTs, d.getTime());
   });
   const earliest = new Date(minTs);
