@@ -19,7 +19,7 @@ Automatically detected recurring payments (subscriptions, loan repayments, rent)
 
 1. **Group** `money-out` transactions by `counterparty.trim().toLowerCase()`.
 2. **Skip groups with fewer than 2 transactions.**
-3. **Amount consistency check:** compute mean and stdDev of `toBase(tx.tx_amount, account.currency)` per group. Skip if `stdDev / mean > 0.05` (more than 5% variance → not a fixed recurring charge).
+3. **Amount consistency check:** compute mean and stdDev of `toBase(tx.tx_amount_local, account.currency)` per group. Skip if `stdDev / mean > 0.05` (more than 5% variance → not a fixed recurring charge).
 4. **Gap analysis:** compute day-gaps between consecutive transactions (sorted by `tx_date_local`). Compute mean gap and stdDev of gaps.
 5. **Frequency detection:**
    | Band | Mean gap (days) | Max gap stdDev |

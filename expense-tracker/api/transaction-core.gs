@@ -1,13 +1,13 @@
 // =============================================================================
 // FULCRUM FORGE — Transaction Core: CRUD + balance adjustment
 //
-// Storage model: one row per account movement (account_id + tx_amount).
+// Storage model: one row per account movement (account_id + tx_amount_local).
 // Transfers create 2 rows linked via parent_tx_id.
 //
 // Create API receives: source_account, target_account, source_amount_local, target_amount_local
-// (same as CSV import format). Backend maps to account_id / tx_amount per row.
+// (same as CSV import format). Backend maps to account_id / tx_amount_local per row.
 //
-// Update API receives: account_id, tx_amount (single-row edit — no source/target).
+// Update API receives: account_id, tx_amount_local (single-row edit — no source/target).
 // =============================================================================
 
 function listTransactions() {
@@ -57,10 +57,10 @@ function createTransaction(body) {
     // Opening the sheet once here; _checkDuplicate does its own getDataRange() read.
     const txSheet    = getOrCreateSheet(TRANSACTIONS_SHEET, getTransactionSheetColumns());
     const parentBody = Object.assign(_txSharedFields(body), {
-      tx_type: parentType, account_id: parentAcct, tx_amount: parentAmt, parent_tx_id: '',
+      tx_type: parentType, account_id: parentAcct, tx_amount_local: parentAmt, parent_tx_id: '',
     });
     const childBody  = Object.assign(_txSharedFields(body), {
-      tx_type: childType, account_id: childAcct, tx_amount: childAmt, parent_tx_id: '',
+      tx_type: childType, account_id: childAcct, tx_amount_local: childAmt, parent_tx_id: '',
     });
 
     const parentDup = _checkDuplicate(txSheet, parentBody);
@@ -81,13 +81,13 @@ function createTransaction(body) {
 
   // Non-transfer: single row. Account and amount come from whichever side is mandatory.
   const account_id = cat.source_account_mandatory ? body.source_account : body.target_account;
-  const tx_amount  = cat.source_account_mandatory ? Number(body.source_amount_local) : Number(body.target_amount_local);
+  const tx_amount_local  = cat.source_account_mandatory ? Number(body.source_amount_local) : Number(body.target_amount_local);
 
   return _writeSingleTransaction(Object.assign(_txSharedFields(body), {
-    tx_type:      body.tx_type,
-    account_id:   account_id,
-    tx_amount:    tx_amount,
-    parent_tx_id: '',
+    tx_type:         body.tx_type,
+    account_id:      account_id,
+    tx_amount_local: tx_amount_local,
+    parent_tx_id:    '',
   }));
 }
 
@@ -112,7 +112,7 @@ function _txSharedFields(body) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Write one row to the sheet
-// body: { tx_type, account_id, tx_amount, parent_tx_id, + shared fields }
+// body: { tx_type, account_id, tx_amount_local, parent_tx_id, + shared fields }
 // opts: { skipDupCheck: boolean, sheet: Sheet } — skipDupCheck: set true when
 //   caller has already run _checkDuplicate (e.g. the transfer path pre-checks
 //   both legs before any write). sheet: pre-opened sheet object; when provided
@@ -125,7 +125,7 @@ function _writeSingleTransaction(body, opts) {
     : getOrCreateSheet(TRANSACTIONS_SHEET, cols);
 
   // TX-NEW-H-7: guard against NaN amounts before any sheet interaction.
-  if (!Number.isFinite(Number(body.tx_amount))) return { ok: false, error: 'invalid_tx_amount' };
+  if (!Number.isFinite(Number(body.tx_amount_local))) return { ok: false, error: 'invalid_tx_amount' };
 
   // T-C1/T-C3: skip internal dup check when the caller has already done it.
   if (!opts || !opts.skipDupCheck) {
@@ -152,7 +152,7 @@ function _writeSingleTransaction(body, opts) {
   setCol('user_location_country',   body.user_location_country   !== undefined && body.user_location_country   !== null ? String(body.user_location_country)   : '');
   setCol('user_location_latitude',  body.user_location_latitude  !== undefined && body.user_location_latitude  !== null ? body.user_location_latitude          : '');
   setCol('user_location_longitude', body.user_location_longitude !== undefined && body.user_location_longitude !== null ? body.user_location_longitude         : '');
-  setCol('tx_amount',               Number(body.tx_amount));
+  setCol('tx_amount_local',         Number(body.tx_amount_local));
   setCol('major_category',          body.major_category          !== undefined && body.major_category          !== null ? String(body.major_category)           : '');
   setCol('minor_category',          body.minor_category          !== undefined && body.minor_category          !== null ? String(body.minor_category)           : '');
   setCol('description',             body.description             !== undefined && body.description             !== null ? String(body.description)             : '');
@@ -174,7 +174,7 @@ function _writeSingleTransaction(body, opts) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Update (single row)
-// body: { row_num, tx_type, account_id, tx_amount, + categorisation/location fields }
+// body: { row_num, tx_type, account_id, tx_amount_local, + categorisation/location fields }
 // ─────────────────────────────────────────────────────────────────────────────
 function updateTransaction(body) {
   if (body.row_num === undefined || body.row_num === null) return { ok: false, error: 'missing_row_num' };
@@ -199,10 +199,10 @@ function updateTransaction(body) {
 
   // TX-M-6: duplicate check — exclude the current row from the scan.
   const dupResult = _checkDuplicate(sheet, {
-    tx_date_local: body.tx_date_local,
-    tx_type:      body.tx_type,
-    account_id:   body.account_id,
-    tx_amount:    body.tx_amount,
+    tx_date_local:   body.tx_date_local,
+    tx_type:         body.tx_type,
+    account_id:      body.account_id,
+    tx_amount_local: body.tx_amount_local,
   }, rowNum);
   if (dupResult) return dupResult;
 
@@ -223,7 +223,7 @@ function updateTransaction(body) {
   writeField('user_location_country',  body.user_location_country   !== undefined && body.user_location_country   !== null ? String(body.user_location_country)   : '');
   writeField('user_location_latitude', body.user_location_latitude  !== undefined && body.user_location_latitude  !== null ? body.user_location_latitude          : '');
   writeField('user_location_longitude',body.user_location_longitude !== undefined && body.user_location_longitude !== null ? body.user_location_longitude         : '');
-  writeField('tx_amount',              Number(body.tx_amount));
+  writeField('tx_amount_local',        Number(body.tx_amount_local));
   writeField('major_category',         body.major_category          !== undefined && body.major_category          !== null ? String(body.major_category)           : '');
   writeField('minor_category',         body.minor_category          !== undefined && body.minor_category          !== null ? String(body.minor_category)           : '');
   writeField('description',            body.description             !== undefined && body.description             !== null ? String(body.description)             : '');
@@ -350,7 +350,7 @@ function createTransactionsBulk(body) {
     const ciDate  = txColIndex('tx_date_local');
     const ciType  = txColIndex('tx_type');
     const ciAcct  = txColIndex('account_id');
-    const ciAmt   = txColIndex('tx_amount');
+    const ciAmt   = txColIndex('tx_amount_local');
     const ciRstat = txColIndex('record_status');
     for (var i = 1; i < existing.length; i++) {
       if (String(existing[i][ciRstat]) === 'deleted') continue;
@@ -385,7 +385,7 @@ function createTransactionsBulk(body) {
     setC('parent_tx_id',            b.parent_tx_id            !== undefined && b.parent_tx_id            !== null ? String(b.parent_tx_id)            : '');
     setC('tx_type',                 b.tx_type);
     setC('account_id',              b.account_id              !== undefined && b.account_id              !== null ? String(b.account_id)              : '');
-    setC('tx_amount',               Number(b.tx_amount));
+    setC('tx_amount_local',         Number(b.tx_amount_local));
     setC('major_category',          b.major_category          !== undefined && b.major_category          !== null ? String(b.major_category)          : '');
     setC('minor_category',          b.minor_category          !== undefined && b.minor_category          !== null ? String(b.minor_category)          : '');
     setC('description',             b.description             !== undefined && b.description             !== null ? String(b.description)             : '');
@@ -461,8 +461,8 @@ function createTransactionsBulk(body) {
       dupSet.add(cKey);
 
       const shared = _txSharedFields(txBody);
-      batchRows.push(buildRow(Object.assign({}, shared, { tx_type: parentType, account_id: parentAcct, tx_amount: parentAmt, parent_tx_id: '' }), parentId));
-      batchRows.push(buildRow(Object.assign({}, shared, { tx_type: childType,  account_id: childAcct,  tx_amount: childAmt,  parent_tx_id: parentId }), childId));
+      batchRows.push(buildRow(Object.assign({}, shared, { tx_type: parentType, account_id: parentAcct, tx_amount_local: parentAmt, parent_tx_id: '' }), parentId));
+      batchRows.push(buildRow(Object.assign({}, shared, { tx_type: childType,  account_id: childAcct,  tx_amount_local: childAmt,  parent_tx_id: parentId }), childId));
       results.push({ label: label, ok: true, error: null, id: null, ids: [parentId, childId] });
       return;
     }
@@ -480,7 +480,7 @@ function createTransactionsBulk(body) {
     const id = nextId(txBody.tx_date_local);
     dupSet.add(dKey);
     batchRows.push(buildRow(Object.assign(_txSharedFields(txBody), {
-      tx_type: txBody.tx_type, account_id: acct, tx_amount: amt, parent_tx_id: '',
+      tx_type: txBody.tx_type, account_id: acct, tx_amount_local: amt, parent_tx_id: '',
     }), id));
     results.push({ label: label, ok: true, error: null, id: id, ids: null });
   });
@@ -501,7 +501,7 @@ function createTransactionsBulk(body) {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Duplicate check
-// Key: (tx_date_local, tx_type, account_id, tx_amount) — skips deleted rows.
+// Key: (tx_date_local, tx_type, account_id, tx_amount_local) — skips deleted rows.
 // ─────────────────────────────────────────────────────────────────────────────
 // excludeRowNum — optional 1-based sheet row number to skip (used by updateTransaction to exclude the row being edited).
 function _checkDuplicate(sheet, body, excludeRowNum) {
@@ -511,13 +511,13 @@ function _checkDuplicate(sheet, body, excludeRowNum) {
   const ciDate  = txColIndex('tx_date_local');
   const ciType  = txColIndex('tx_type');
   const ciAcct  = txColIndex('account_id');
-  const ciAmt   = txColIndex('tx_amount');
+  const ciAmt   = txColIndex('tx_amount_local');
   const ciRstat = txColIndex('record_status');
 
-  const inDate = body.tx_date_local !== undefined && body.tx_date_local !== null ? String(body.tx_date_local) : '';
-  const inType = body.tx_type      !== undefined && body.tx_type      !== null ? String(body.tx_type)      : '';
-  const inAcct = body.account_id   !== undefined && body.account_id   !== null ? String(body.account_id)   : '';
-  const inAmt  = Number(body.tx_amount);
+  const inDate = body.tx_date_local   !== undefined && body.tx_date_local   !== null ? String(body.tx_date_local)   : '';
+  const inType = body.tx_type         !== undefined && body.tx_type         !== null ? String(body.tx_type)         : '';
+  const inAcct = body.account_id      !== undefined && body.account_id      !== null ? String(body.account_id)      : '';
+  const inAmt  = Number(body.tx_amount_local);
 
   // TX-NEW-C-1: NaN amount can never match — return null (no duplicate found) immediately.
   if (!Number.isFinite(inAmt)) return null;

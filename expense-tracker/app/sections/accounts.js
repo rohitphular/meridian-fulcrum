@@ -46,6 +46,11 @@ function _subTypeLabel(v) {
   return v.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
 }
 
+function _fmtDateDisplay(raw) {
+  if (raw === undefined || raw === null || String(raw).trim() === '') return '—';
+  return String(raw).replace('T', ' ').substring(0, 16);
+}
+
 function _fmtBal(n) {
   const v = Math.abs(parseFloat(n));
   if (Number.isFinite(v) === false) return '—';
@@ -373,9 +378,11 @@ function _renderAccountForm(a, mode) {
       ${isView ? 'Viewing' : 'Editing'} — <strong>${esc(a.account_name)}</strong>
     </div>` : '';
 
+  const typeDisplay = (type !== '') ? type.charAt(0).toUpperCase() + type.slice(1) : '';
+
   const typeField = isAdd
     ? `<select id="accNewType"><option value="">— select —</option>${_typeOptsHtml('')}</select>`
-    : `<input type="text" id="accEditType" value="${esc(type)}" disabled>`;
+    : `<input type="text" id="accEditType" value="${esc(typeDisplay)}" disabled>`;
 
   const subTypeField = isAdd
     ? `<select id="accNewSubType"><option value="">— select —</option></select>`
@@ -390,11 +397,13 @@ function _renderAccountForm(a, mode) {
   const recordStatusField = !isAdd ? `
       <div class="field">
         <label for="accEditRecordStatus">Record status</label>
-        <select id="accEditRecordStatus"${dis}>
+        ${isView
+          ? `<input type="text" value="${esc(a.record_status.charAt(0).toUpperCase() + a.record_status.slice(1))}" disabled>`
+          : `<select id="accEditRecordStatus">
           ${EDIT_RECORD_STATUSES.map(s =>
             `<option value="${esc(s)}"${a.record_status === s ? ' selected' : ''}>${esc(s.charAt(0).toUpperCase() + s.slice(1))}</option>`
           ).join('')}
-        </select>
+        </select>`}
       </div>` : '';
 
   // Opening date: editable datetime-local on add, read-only text on view/edit
@@ -406,7 +415,7 @@ function _renderAccountForm(a, mode) {
        </div>`
     : `<div class="field">
          <label>Opening date</label>
-         <input type="text" value="${v(a.opening_date_local !== undefined && a.opening_date_local !== null ? a.opening_date_local : '')}" disabled>
+         <input type="text" value="${v(_fmtDateDisplay(a.opening_date_local))}" disabled>
        </div>`;
 
   // Closing date: not shown on add; read-only in view, editable in edit
@@ -414,7 +423,7 @@ function _renderAccountForm(a, mode) {
     <div class="field">
       <label for="${pfx}ClosingDate">Closing date</label>
       ${isView
-        ? `<input type="text" value="${v(a.closing_date_local !== undefined && a.closing_date_local !== null ? a.closing_date_local : '')}" disabled>`
+        ? `<input type="text" value="${v(_fmtDateDisplay(a.closing_date_local))}" disabled>`
         : `<input type="datetime-local" id="accEditClosingDate" value="${a.closing_date_local ? String(a.closing_date_local).replace(' ', 'T').substring(0, 16) : ''}">`}
     </div>` : '';
 
@@ -437,7 +446,7 @@ function _renderAccountForm(a, mode) {
 
     <div class="form-grid" style="margin-bottom:16px">
       <div class="field">
-        <label for="${pfx}Name">Account name *</label>
+        <label for="${pfx}Name">Account name${isAdd ? ' *' : ''}</label>
         <input type="text" id="${pfx}Name"
                value="${isAdd ? '' : v(a.account_name)}"
                ${isAdd ? 'placeholder="e.g. Barclays Current"' : ''}${dis}>

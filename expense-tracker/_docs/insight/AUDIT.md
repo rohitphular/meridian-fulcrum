@@ -54,18 +54,18 @@ Clicking the "Category" header sorts the table by frequency (weekly/monthly/quar
 
 ---
 
-### B3 — Insight 22 / 26 / 28: `tx_amount` used raw without coercion
+### B3 — Insight 22 / 26 / 28: `tx_amount_local` used raw without coercion
 **Files:** `22-top-counterparties.js:85`, `26-loan-progress.js:71`, `28-forex-spend.js:36`
 
-Several insights access `t.tx_amount || 0` directly for arithmetic, bypassing `sumAmountBase` / `toBase()`. If `tx_amount` is stored as a string (which can happen with CSV import), the `||` operator won't coerce it — you get `"123.45" || 0` → `"123.45"` (a string), and numeric operations silently produce `NaN` or string concatenation. Note: `amount_base` is not a stored field — it is a value computed at query time via `toBase(tx.tx_amount, account.currency)`; never read it directly from a row.
+Several insights access `t.tx_amount_local || 0` directly for arithmetic, bypassing `sumAmountBase` / `toBase()`. If `tx_amount_local` is stored as a string (which can happen with CSV import), the `||` operator won't coerce it — you get `"123.45" || 0` → `"123.45"` (a string), and numeric operations silently produce `NaN` or string concatenation. Note: `amount_base` is not a stored field — it is a value computed at query time via `toBase(tx.tx_amount_local, account.currency)`; never read it directly from a row.
 
 Specific locations:
-- D22 `_showPanel`: `t.tx_amount || 0` in the drill panel (displays as NaN when string)
-- D22 `_prevSpend`: `t.tx_amount || 0` in the comparison calculation  
-- D26 `_renderHistoryChart`: `Math.abs(t.tx_amount || 0)` for cumulative repaid amounts
-- D28 `_groupByCurrency`: `Math.abs(t.tx_amount || 0)` for native currency totals
+- D22 `_showPanel`: `t.tx_amount_local || 0` in the drill panel (displays as NaN when string)
+- D22 `_prevSpend`: `t.tx_amount_local || 0` in the comparison calculation  
+- D26 `_renderHistoryChart`: `Math.abs(t.tx_amount_local || 0)` for cumulative repaid amounts
+- D28 `_groupByCurrency`: `Math.abs(t.tx_amount_local || 0)` for native currency totals
 
-**Fix:** Replace with `Number(t.tx_amount) || 0` or use `sumAmountBase([t])` where `toBase()` already handles coercion.
+**Fix:** Replace with `Number(t.tx_amount_local) || 0` or use `sumAmountBase([t])` where `toBase()` already handles coercion.
 
 ---
 

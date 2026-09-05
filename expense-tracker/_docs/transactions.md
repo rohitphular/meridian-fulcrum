@@ -22,15 +22,15 @@ Schema reference: [data-model.md § Transaction](data-model.md#transaction). Bal
 
 | Type | Meaning | Effect on account |
 |---|---|---|
-| `money-in` | Money enters `account_id` | `account.current_value_local += tx_amount` |
-| `money-out` | Money leaves `account_id` | `account.current_value_local -= tx_amount` |
+| `money-in` | Money enters `account_id` | `account.current_value_local += tx_amount_local` |
+| `money-out` | Money leaves `account_id` | `account.current_value_local -= tx_amount_local` |
 
 There is no `money-transfer` type. **Transfers** (moving money between owned accounts) are represented as two separate rows that share a `parent_tx_id`:
 
-- **money-out row**: `account_id` = source account, `tx_amount` = amount leaving in the source account's currency.
-- **money-in row**: `account_id` = target account, `tx_amount` = amount arriving in the target account's currency.
+- **money-out row**: `account_id` = source account, `tx_amount_local` = amount leaving in the source account's currency.
+- **money-in row**: `account_id` = target account, `tx_amount_local` = amount arriving in the target account's currency.
 
-Both rows are created together and linked via `parent_tx_id`. If the two accounts share a currency, both `tx_amount` values are equal. If they differ, the ratio `money-in.tx_amount ÷ money-out.tx_amount` is the effective exchange rate — no explicit FX marker or column is stored.
+Both rows are created together and linked via `parent_tx_id`. If the two accounts share a currency, both `tx_amount_local` values are equal. If they differ, the ratio `money-in.tx_amount_local ÷ money-out.tx_amount_local` is the effective exchange rate — no explicit FX marker or column is stored.
 
 ## Required fields
 
@@ -39,7 +39,7 @@ Both rows are created together and linked via `parent_tx_id`. If the two account
 | `tx_date_local` | Always |
 | `tx_type` | Always; must be `money-in` or `money-out` |
 | `account_id` | Always; the single account this row affects |
-| `tx_amount` | Always; must be > 0 |
+| `tx_amount_local` | Always; must be > 0 |
 | `major_category`, `minor_category` | Always (both types are categorised) |
 | `parent_tx_id` | Not accepted in CSV import — the backend auto-generates the parent-child transfer relationship. Present in the data model for linked transfer rows but not user-supplied. |
 
@@ -84,14 +84,14 @@ The cascade applies identically in both the add form and the edit form.
 
 | Path | Behaviour |
 |---|---|
-| Same-currency standalone | `tx_amount` debits or credits the account; no second row needed |
-| Same-currency transfer | Two rows with equal `tx_amount` values; both carry the same `parent_tx_id` |
-| Cross-currency transfer | Two rows with different `tx_amount` values (each in their account's currency); effective rate = money-in `tx_amount` ÷ money-out `tx_amount` |
+| Same-currency standalone | `tx_amount_local` debits or credits the account; no second row needed |
+| Same-currency transfer | Two rows with equal `tx_amount_local` values; both carry the same `parent_tx_id` |
+| Cross-currency transfer | Two rows with different `tx_amount_local` values (each in their account's currency); effective rate = money-in `tx_amount_local` ÷ money-out `tx_amount_local` |
 | Display in the table | Base-currency conversion uses the global rate from `rates` for each account's currency; a `†` marker indicates a row-level implied rate differs from the current global rate |
 
-The `tx_amount` values on the two transfer legs are preserved indefinitely. Reversing an edit or delete uses the same stored amounts, so balance arithmetic remains exact even if the global rates table is later edited.
+The `tx_amount_local` values on the two transfer legs are preserved indefinitely. Reversing an edit or delete uses the same stored amounts, so balance arithmetic remains exact even if the global rates table is later edited.
 
-No `[FX: …]` marker is appended to `description` — the effective exchange rate is fully recoverable from the two stored `tx_amount` values.
+No `[FX: …]` marker is appended to `description` — the effective exchange rate is fully recoverable from the two stored `tx_amount_local` values.
 
 ## Filtering and sorting
 
@@ -148,9 +148,9 @@ The export operates on the **currently filtered rows** — the same set visible 
 | Operation | Behaviour |
 |---|---|
 | `list_transactions` | Return all rows (including soft-deleted) |
-| `create_transaction` | Validate (`tx_amount` validated unconditionally, regardless of category flags); duplicate check on `(tx_date_local, tx_type, account_id, tx_amount)` skipping deleted rows → `duplicate_transaction`; assign `id`; stamp `record_status = active`, `created_at`, `updated_at`; append. For transfers, both legs are duplicate-checked BEFORE any row is written — see Transfer atomicity below. |
-| `create_transactions_bulk` | Accept `transactions[]`; validate all rows (including unconditional `tx_amount` check), generate IDs, and write them in a single `sheet.setValues()` call — per-row `create_transaction` is NOT called; return `{ ok, created, failed, results }` |
-| `update_transaction` | Locked guard → `record_locked`; deleted guard → `transaction_deleted`; validate; duplicate check on `(tx_date_local, tx_type, account_id, tx_amount)` excluding the current row (via `excludeRowNum` parameter on `_checkDuplicate`) → `duplicate_transaction`; validates `major_category` / `minor_category` FK when those fields are present in the update body (returns `unknown_category` if the composite key `(tx_type, major_category, minor_category)` is not found); overwrite editable fields in a single batch write; stamp `updated_at`; advance `sync_status` |
+| `create_transaction` | Validate (`tx_amount_local` validated unconditionally, regardless of category flags); duplicate check on `(tx_date_local, tx_type, account_id, tx_amount_local)` skipping deleted rows → `duplicate_transaction`; assign `id`; stamp `record_status = active`, `created_at`, `updated_at`; append. For transfers, both legs are duplicate-checked BEFORE any row is written — see Transfer atomicity below. |
+| `create_transactions_bulk` | Accept `transactions[]`; validate all rows (including unconditional `tx_amount_local` check), generate IDs, and write them in a single `sheet.setValues()` call — per-row `create_transaction` is NOT called; return `{ ok, created, failed, results }` |
+| `update_transaction` | Locked guard → `record_locked`; deleted guard → `transaction_deleted`; validate; duplicate check on `(tx_date_local, tx_type, account_id, tx_amount_local)` excluding the current row (via `excludeRowNum` parameter on `_checkDuplicate`) → `duplicate_transaction`; validates `major_category` / `minor_category` FK when those fields are present in the update body (returns `unknown_category` if the composite key `(tx_type, major_category, minor_category)` is not found); overwrite editable fields in a single batch write; stamp `updated_at`; advance `sync_status` |
 | `delete_transaction` | Already-deleted guard → `transaction_already_deleted`; locked guard → `record_locked`; soft-delete (`record_status → deleted`) in a single `setValues()` write; stamp `updated_at` |
 | `restore_transaction` | Check `record_status = deleted`; set `record_status → active` in a single `setValues()` write; stamp `updated_at` |
 
@@ -160,13 +160,13 @@ For transfers (`create_transaction` where both a source and target account are r
 
 ### Amount validation
 
-`tx_amount` (and the equivalent `source_amount_local` / `target_amount_local` fields on the create path) is validated unconditionally before any category-conditional checks run. A category where both `source_account_mandatory` and `target_account_mandatory` are `false` does NOT bypass amount validation — at least one of `source_amount_local` or `target_amount_local` must be a finite positive number for any create call to succeed.
+`tx_amount_local` (and the equivalent `source_amount_local` / `target_amount_local` fields on the create path) is validated unconditionally before any category-conditional checks run. A category where both `source_account_mandatory` and `target_account_mandatory` are `false` does NOT bypass amount validation — at least one of `source_amount_local` or `target_amount_local` must be a finite positive number for any create call to succeed.
 
-The internal `_writeSingleTransaction` function also guards against a non-finite `tx_amount` immediately before the sheet write, returning `invalid_tx_amount` as a safety net.
+The internal `_writeSingleTransaction` function also guards against a non-finite `tx_amount_local` immediately before the sheet write, returning `invalid_tx_amount_local` as a safety net.
 
 ### Duplicate check (`_checkDuplicate`)
 
-`_checkDuplicate(sheet, body, excludeRowNum)` scans existing rows for a matching `(tx_date_local, tx_type, account_id, tx_amount)` tuple, skipping deleted rows. The optional `excludeRowNum` parameter (1-based sheet row number) causes that row to be skipped during the scan — used by `updateTransaction` to prevent the current row from matching itself as a duplicate.
+`_checkDuplicate(sheet, body, excludeRowNum)` scans existing rows for a matching `(tx_date_local, tx_type, account_id, tx_amount_local)` tuple, skipping deleted rows. The optional `excludeRowNum` parameter (1-based sheet row number) causes that row to be skipped during the scan — used by `updateTransaction` to prevent the current row from matching itself as a duplicate.
 
 ### Transaction ID format and uniqueness
 
@@ -191,18 +191,18 @@ Error code strings carry no embedded values. Where additional context is needed 
 | `unknown_account_id` | create, update | `account_id` is not a known account | — |
 | `unknown_source_account` | create | `source_account` is not a known account | — |
 | `unknown_target_account` | create | `target_account` is not a known account | — |
-| `duplicate_transaction` | create, update | Row with same `(tx_date_local, tx_type, account_id, tx_amount)` already exists (non-deleted) | — |
+| `duplicate_transaction` | create, update | Row with same `(tx_date_local, tx_type, account_id, tx_amount_local)` already exists (non-deleted) | — |
 | `missing_row_num` | update, delete, restore | `row_num` not provided | — |
 | `invalid_row` | update, delete, restore | `row_num` is out of bounds | — |
 | `record_locked` | update, delete | Transaction is locked | — |
 | `transaction_deleted` | update | Attempted to update a soft-deleted transaction | — |
-| `invalid_amount` | update | `tx_amount` is not a positive finite number | — |
+| `invalid_amount` | update | `tx_amount_local` is not a positive finite number | — |
 | `missing_account_id` | update | `account_id` not provided | — |
 | `field_not_editable` | update | Attempted to change an immutable field | `field: '<field_key>'` |
 | `not_deleted` | restore | Transaction is not in `deleted` state | — |
 | `missing_transactions` | bulk create | `transactions[]` array missing or empty | — |
 | `transaction_already_deleted` | delete | Attempted to soft-delete a transaction that is already in `deleted` state | — |
-| `invalid_tx_amount` | create, bulk create | `tx_amount` resolved to a non-finite number before the sheet write (`_writeSingleTransaction` guard) | — |
+| `invalid_tx_amount_local` | create, bulk create | `tx_amount_local` resolved to a non-finite number before the sheet write (`_writeSingleTransaction` guard) | — |
 
 ## CSV import
 
@@ -240,14 +240,14 @@ The system fields (`id`, `record_status`, `sync_status`, `sync_date`, `sync_note
 
 `parent_tx_id` is not accepted as a CSV column. The backend auto-generates the parent-child transfer relationship from the `source_account` and `target_account` columns — do not include it in the CSV file.
 
-Preview is shown before submission. Duplicate rows (matched on `tx_date_local` + `tx_type` + `account_id` + `tx_amount`) are shown with an "already exists" badge and counted in `skipped`, not `failed`. Results summary: `N imported · M already existed`.
+Preview is shown before submission. Duplicate rows (matched on `tx_date_local` + `tx_type` + `account_id` + `tx_amount_local`) are shown with an "already exists" badge and counted in `skipped`, not `failed`. Results summary: `N imported · M already existed`.
 
 ## Add / edit form layout
 
 Both transaction types share one form template:
 
-- **Standalone money-in or money-out**: Type, Major, Minor, Account (single `account_id` field), Date, Counterparty, Amount (`tx_amount`), Location fields, Tags, Beneficiaries, Description.
-- **Transfer**: same fields as above for the primary leg, plus a sibling-amount field (the partner leg's `tx_amount`) so the user can enter what arrives in the target account. The UI creates both rows on submit.
+- **Standalone money-in or money-out**: Type, Major, Minor, Account (single `account_id` field), Date, Counterparty, Amount (`tx_amount_local`), Location fields, Tags, Beneficiaries, Description.
+- **Transfer**: same fields as above for the primary leg, plus a sibling-amount field (the partner leg's `tx_amount_local`) so the user can enter what arrives in the target account. The UI creates both rows on submit.
 - `tx_timezone_local` is NOT a form input — it is auto-detected from `Intl.DateTimeFormat().resolvedOptions().timeZone` in the browser and sent silently with the create payload. It is displayed as a read-only field in the view and edit panels. It is immutable after creation (`editable: false` in the schema).
 - `tx_date_local` is stored in local time as-is — no UTC conversion is applied. The corresponding `tx_timezone_local` captures the timezone context.
 

@@ -29,8 +29,8 @@ The user always inputs and sees positive numbers for liabilities. The store nega
 
 ```
 for each non-deleted transaction row:
-    if tx_type === 'money-in':  net[account_id] += tx_amount
-    if tx_type === 'money-out': net[account_id] -= tx_amount
+    if tx_type === 'money-in':  net[account_id] += tx_amount_local
+    if tx_type === 'money-out': net[account_id] -= tx_amount_local
 ```
 
 The resulting `net[id]` value is the total effect of all transactions on the account since `opening_value_local` was recorded.
@@ -44,20 +44,20 @@ Because `current_value_local` is derived, any change to the transactions sheet i
 ### Create
 
 **money-in:**
-`net[account_id] += tx_amount` → `current_value_local` rises by `tx_amount`.
+`net[account_id] += tx_amount_local` → `current_value_local` rises by `tx_amount_local`.
 
 **money-out:**
-`net[account_id] -= tx_amount` → `current_value_local` falls by `tx_amount`.
+`net[account_id] -= tx_amount_local` → `current_value_local` falls by `tx_amount_local`.
 
 **Transfer (two rows, same parent_tx_id):**
-Row A (money-out on source): `net[source_id] -= Row A.tx_amount`
-Row B (money-in on target): `net[target_id] += Row B.tx_amount`
+Row A (money-out on source): `net[source_id] -= Row A.tx_amount_local`
+Row B (money-in on target): `net[target_id] += Row B.tx_amount_local`
 
-If source and target accounts differ in currency, `Row B.tx_amount ≠ Row A.tx_amount`. The implicit exchange rate is `Row B.tx_amount / Row A.tx_amount`.
+If source and target accounts differ in currency, `Row B.tx_amount_local ≠ Row A.tx_amount_local`. The implicit exchange rate is `Row B.tx_amount_local / Row A.tx_amount_local`.
 
 ### Update — logical two-phase reversal
 
-An edit is logically equivalent to removing the old row's contribution and adding the new row's contribution. Because the net map is computed fresh from the sheet on every read, this happens automatically — editing the row's `tx_amount` or `tx_type` or `account_id` changes the data that `_buildAccountNetMap` will aggregate on the next call.
+An edit is logically equivalent to removing the old row's contribution and adding the new row's contribution. Because the net map is computed fresh from the sheet on every read, this happens automatically — editing the row's `tx_amount_local` or `tx_type` or `account_id` changes the data that `_buildAccountNetMap` will aggregate on the next call.
 
 For financial rule validation at edit time, the frontend and backend must compute the **post-reversal balance** before checking insufficient-balance rules:
 
@@ -65,8 +65,8 @@ For financial rule validation at edit time, the frontend and backend must comput
 post_reversal_balance = current_value_local
 
 if old.account_id == new.account_id:
-    if old.tx_type == 'money-in':  post_reversal_balance -= old.tx_amount
-    if old.tx_type == 'money-out': post_reversal_balance += old.tx_amount
+    if old.tx_type == 'money-in':  post_reversal_balance -= old.tx_amount_local
+    if old.tx_type == 'money-out': post_reversal_balance += old.tx_amount_local
 ```
 
 Pass `post_reversal_balance` to Rules 1–2 in [financial-rules.md](financial-rules.md). This adjustment is needed because `current_value_local` already includes the old row's contribution, so checking the raw balance against the new amount would incorrectly double-count it.
@@ -91,7 +91,7 @@ State before:
 - `lloyds_current.opening_value_local = 1000` (GBP); no transactions yet → `current_value_local = 1000`
 - `icici_savings.opening_value_local = 50000` (INR); no transactions yet → `current_value_local = 50000`
 
-Create transfer: Row A = money-out on `lloyds_current`, `tx_amount = 500`. Row B = money-in on `icici_savings`, `tx_amount = 52500`.
+Create transfer: Row A = money-out on `lloyds_current`, `tx_amount_local = 500`. Row B = money-in on `icici_savings`, `tx_amount_local = 52500`.
 
 After next `listAccounts`:
 ```
@@ -104,14 +104,14 @@ current_value_local:
   icici_savings  = 50000 + 52500 = 102500
 ```
 
-Effective exchange rate: `52500 / 500 = 105 INR per GBP`. Recoverable at any time from the two stored `tx_amount` values.
+Effective exchange rate: `52500 / 500 = 105 INR per GBP`. Recoverable at any time from the two stored `tx_amount_local` values.
 
 ## Worked example — edit of a money-out row
 
-Before edit, transactions sheet has: `tx_type = 'money-out'`, `account_id = gbp_current`, `tx_amount = 150`.
+Before edit, transactions sheet has: `tx_type = 'money-out'`, `account_id = gbp_current`, `tx_amount_local = 150`.
 
 `listAccounts` returns: `gbp_current.current_value_local = opening − 150`.
 
-User edits `tx_amount` to 200. After the sheet write, next `listAccounts` returns: `gbp_current.current_value_local = opening − 200`. The old 150 contribution is no longer in the sheet; the new 200 is.
+User edits `tx_amount_local` to 200. After the sheet write, next `listAccounts` returns: `gbp_current.current_value_local = opening − 200`. The old 150 contribution is no longer in the sheet; the new 200 is.
 
 For validation at edit time, the frontend uses the post-reversal formula above to confirm the account's net position after the old row is "removed" before checking whether the new amount fits.

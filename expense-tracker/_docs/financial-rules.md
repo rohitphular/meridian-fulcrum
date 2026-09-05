@@ -8,7 +8,7 @@ The rules apply to the **post-reversal balance** during an update (see [balance-
 
 **Triggers when:** `tx_type = 'money-out'` AND the account linked via `account_id` has `type ∈ {asset, investment}`.
 
-**Blocks if:** `account.current_value_local < tx_amount` at the time of the transaction.
+**Blocks if:** `account.current_value_local < tx_amount_local` at the time of the transaction.
 
 **Rationale:** Asset and investment accounts cannot go negative through the app. Genuine overdrafts should be modelled as `overdraft` accounts.
 
@@ -42,11 +42,11 @@ Similarly, if the source account of a transfer is a `liability/credit_card`, the
 
 **Triggers when:** a row has a non-empty `parent_tx_id` AND the source and target accounts have different currencies.
 
-**Blocks if:** the partner row (identified by `parent_tx_id`) is missing or its `tx_amount` is absent or ≤ 0.
+**Blocks if:** the partner row (identified by `parent_tx_id`) is missing or its `tx_amount_local` is absent or ≤ 0.
 
-**Rationale:** For a cross-currency transfer, the money-in row's `tx_amount` implicitly provides the exchange rate via the ratio `tx_in.tx_amount / tx_out.tx_amount`. If the money-in row is missing or has no `tx_amount`, the balance arithmetic on the target account is incomplete and the effective rate is undefined. Both rows must be present and valid before either is committed.
+**Rationale:** For a cross-currency transfer, the money-in row's `tx_amount_local` implicitly provides the exchange rate via the ratio `tx_in.tx_amount_local / tx_out.tx_amount_local`. If the money-in row is missing or has no `tx_amount_local`, the balance arithmetic on the target account is incomplete and the effective rate is undefined. Both rows must be present and valid before either is committed.
 
-No `fx_rate` column is stored on the row and no explicit rate input is required from the user — the rate is fully encoded in the two `tx_amount` values.
+No `fx_rate` column is stored on the row and no explicit rate input is required from the user — the rate is fully encoded in the two `tx_amount_local` values.
 
 ## Post-reversal balance formula (for edit)
 
@@ -56,8 +56,8 @@ When validating an **edit** rather than a create, evaluate the rules against the
 post_reversal_balance = account.current_value_local
 
 if old.account_id == new.account_id:
-    if old.tx_type == 'money-in':  post_reversal_balance -= old.tx_amount
-    if old.tx_type == 'money-out': post_reversal_balance += old.tx_amount
+    if old.tx_type == 'money-in':  post_reversal_balance -= old.tx_amount_local
+    if old.tx_type == 'money-out': post_reversal_balance += old.tx_amount_local
 ```
 
 Pass `post_reversal_balance` to Rules 1–2 instead of the raw `current_value_local`. Without this adjustment, edits that merely *change* a transaction (e.g. fix a typo'd amount of £100 to £105) would be rejected when the resulting balance is still fine.

@@ -16,7 +16,7 @@ function listAccounts() {
 }
 
 // Scans the transactions sheet and returns a map of { accountId → net change }.
-// tx_amount is always stored as a positive value; tx_type (money-in / money-out)
+// tx_amount_local is always stored as a positive value; tx_type (money-in / money-out)
 // determines the sign applied to the running balance.
 function _buildAccountNetMap(accounts) {
   // Seed the map to zero for every account first — accounts with no transactions must
@@ -29,7 +29,7 @@ function _buildAccountNetMap(accounts) {
   if (values.length <= 1) return net;  // return zero-seeded map, not {}
 
   const accIdx  = txColIndex('account_id');    // account_id column stores the account UUID
-  const amtIdx  = txColIndex('tx_amount');
+  const amtIdx  = txColIndex('tx_amount_local');
   const typeIdx = txColIndex('tx_type');
   const statIdx = txColIndex('record_status');
 

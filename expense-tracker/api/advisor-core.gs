@@ -113,7 +113,7 @@ function _buildSnapshot() {
   const catSpend = {}, cpSpend = {};
   let totalIn = 0, totalOut = 0;
   recentTx.forEach(function(tx) {
-    const amt = Number(tx.tx_amount);
+    const amt = Number(tx.tx_amount_local);
     if (tx.tx_type === 'money-out') {
       totalOut += amt;
       const key = tx.major_category + ' / ' + tx.minor_category;
@@ -247,7 +247,7 @@ function _fetchRequestedData(request) {
     return {
       date:             tx.tx_date_local,
       type:             tx.tx_type,
-      amount:           Number(tx.tx_amount),
+      amount:           Number(tx.tx_amount_local),
       currency:         (acc !== undefined && acc !== null) ? acc.currency : null,
       major:            tx.major_category,
       minor:            tx.minor_category,

@@ -87,25 +87,25 @@ export const exportData = (format, rows) => {
       if (tx.tx_type === 'money-out') {
         source_account = acctName;
         target_account = sibAccName;
-        source_amount  = Number(tx.tx_amount);
-        target_amount  = Number(sib.tx_amount);
+        source_amount  = Number(tx.tx_amount_local);
+        target_amount  = Number(sib.tx_amount_local);
       } else {
         source_account = sibAccName;
         target_account = acctName;
-        source_amount  = Number(sib.tx_amount);
-        target_amount  = Number(tx.tx_amount);
+        source_amount  = Number(sib.tx_amount_local);
+        target_amount  = Number(tx.tx_amount_local);
       }
     } else {
       // Non-transfer
       if (tx.tx_type === 'money-out') {
         source_account = acctName;
         target_account = '';
-        source_amount  = Number(tx.tx_amount);
+        source_amount  = Number(tx.tx_amount_local);
         target_amount  = '';
       } else {
         source_account = '';
         target_account = acctName;
-        source_amount  = Number(tx.tx_amount);
+        source_amount  = Number(tx.tx_amount_local);
         target_amount  = '';
       }
     }

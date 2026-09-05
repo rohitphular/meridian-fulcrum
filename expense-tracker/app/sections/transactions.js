@@ -49,18 +49,18 @@ function _dispatchTxAction(action, row) {
     if (tx === undefined || tx === null) return;
     const _copySibling = _siblingMap[tx.id] !== undefined ? _siblingMap[tx.id] : null;
     // Reconstruct source/target for the add form (which still uses source/target format)
-    let _cpySrcAcc = '', _cpyTgtAcc = '', _cpySrcAmt = Number(tx.tx_amount), _cpyTgtAmt = '';
+    let _cpySrcAcc = '', _cpyTgtAcc = '', _cpySrcAmt = Number(tx.tx_amount_local), _cpyTgtAmt = '';
     if (tx.tx_type === 'money-out') {
       _cpySrcAcc = (tx.account_id !== undefined && tx.account_id !== null) ? tx.account_id : '';
       if (_copySibling !== null && _copySibling.tx_type === 'money-in') {
         _cpyTgtAcc = (_copySibling.account_id !== undefined && _copySibling.account_id !== null) ? _copySibling.account_id : '';
-        _cpyTgtAmt = Number(_copySibling.tx_amount) !== _cpySrcAmt ? String(_copySibling.tx_amount) : '';
+        _cpyTgtAmt = Number(_copySibling.tx_amount_local) !== _cpySrcAmt ? String(_copySibling.tx_amount_local) : '';
       }
     } else {
       _cpyTgtAcc = (tx.account_id !== undefined && tx.account_id !== null) ? tx.account_id : '';
       if (_copySibling !== null && _copySibling.tx_type === 'money-out') {
         _cpySrcAcc = (_copySibling.account_id !== undefined && _copySibling.account_id !== null) ? _copySibling.account_id : '';
-        _cpySrcAmt = Number(_copySibling.tx_amount);
+        _cpySrcAmt = Number(_copySibling.tx_amount_local);
       }
     }
     state.txCopyPrefill = {
@@ -92,7 +92,7 @@ function _dispatchTxAction(action, row) {
     state.subPrefill = {
       name:              (tx.counterparty_name !== undefined && tx.counterparty_name !== null) ? tx.counterparty_name : '',
       counterparty_name: (tx.counterparty_name !== undefined && tx.counterparty_name !== null) ? tx.counterparty_name : '',
-      amount:            Number(tx.tx_amount),
+      amount:            Number(tx.tx_amount_local),
       source_account:    (tx.account_id !== undefined && tx.account_id !== null) ? tx.account_id : '',
       tx_type:           (tx.tx_type !== undefined && tx.tx_type !== null) ? tx.tx_type : '',
       major_category:    (tx.major_category !== undefined && tx.major_category !== null) ? tx.major_category : '',
@@ -501,7 +501,7 @@ function _renderTxTable(validRows, warnRows) {
     const _txAccTbl   = (state.accountMap[tx.account_id] !== undefined && state.accountMap[tx.account_id] !== null) ? state.accountMap[tx.account_id] : {};
     const txCur       = (_txAccTbl.local_currency !== undefined && _txAccTbl.local_currency !== null) ? _txAccTbl.local_currency : '';
     const missingRate = state.rateMap[txCur] === undefined || state.rateMap[txCur] === null;
-    const displayAmt  = Number(tx.tx_amount);
+    const displayAmt  = Number(tx.tx_amount_local);
     const acctName    = (_txAccTbl.account_name !== undefined && _txAccTbl.account_name !== null) ? _txAccTbl.account_name : '—';
     const _sibling    = (_siblingMap[tx.id] !== undefined && _siblingMap[tx.id] !== null) ? _siblingMap[tx.id] : null;
     const _sibAccTbl  = _sibling !== null ? ((state.accountMap[_sibling.account_id] !== undefined && state.accountMap[_sibling.account_id] !== null) ? state.accountMap[_sibling.account_id] : {}) : null;
@@ -680,9 +680,9 @@ function _sortTx(rows) {
       if (bNil) return -1;
       return va < vb ? -dir : va > vb ? dir : 0;
     }
-    if (col === 'tx_amount') {
-      const va = parseFloat(a.tx_amount);
-      const vb = parseFloat(b.tx_amount);
+    if (col === 'tx_amount_local') {
+      const va = parseFloat(a.tx_amount_local);
+      const vb = parseFloat(b.tx_amount_local);
       const aNil = !Number.isFinite(va); const bNil = !Number.isFinite(vb);
       if (aNil && bNil) return 0;
       if (aNil) return 1;
@@ -1172,7 +1172,7 @@ function _renderTxForm(tx, mode) {
 
   if (mode === 'view') {
     const txCurView = (_txAccForm.local_currency !== undefined && _txAccForm.local_currency !== null) ? _txAccForm.local_currency : '';
-    const viewAmt   = Number(tx.tx_amount);
+    const viewAmt   = Number(tx.tx_amount_local);
     const _sibAccFormName = (_sibAccForm !== null && _sibAccForm !== undefined && _sibAccForm.account_name !== undefined && _sibAccForm.account_name !== null) ? _sibAccForm.account_name : '—';
     const viewAcct  = _sibAccForm !== null
       ? (tx.tx_type === 'money-out'
@@ -1238,7 +1238,7 @@ function _renderTxForm(tx, mode) {
     </div>`;
   }
 
-  // Edit mode — single-row edit: one account_id, one tx_amount (no source/target split)
+  // Edit mode — single-row edit: one account_id, one tx_amount_local (no source/target split)
   const activeAccounts = state.accounts.filter(a => a.record_status === 'active');
   const _editCat       = _getCat(tx.tx_type, tx.major_category, tx.minor_category);
   const _editAccTypes  = tx.tx_type === 'money-out'
@@ -1299,7 +1299,7 @@ function _renderTxForm(tx, mode) {
       </div>
       <div class="field form-grid-span-2">
         <label>Amount</label>
-        <input type="number" id="txEditAmount" min="0.01" step="0.01" value="${esc(String(Number(tx.tx_amount)))}">
+        <input type="number" id="txEditAmount" min="0.01" step="0.01" value="${esc(String(Number(tx.tx_amount_local)))}">
       </div>
       <!-- Row 4: Counterparty | Tags -->
       <div class="field form-grid-span-3">
@@ -1367,7 +1367,7 @@ function _renderTxDeleteRow(tx) {
         ? acctName + ' → ' + _delSibAccName
         : _delSibAccName + ' → ' + acctName)
     : acctName;
-  const delAmt = Number(tx.tx_amount);
+  const delAmt = Number(tx.tx_amount_local);
   const _delCur = (_txAccDel.local_currency !== undefined && _txAccDel.local_currency !== null) ? _txAccDel.local_currency : '';
   return `<tr>
     <td colspan="6">
@@ -1459,8 +1459,8 @@ async function _saveEdit() {
   if (major_category === '')                                     { errEl.textContent = 'Major category is required.'; return; }
   if (minor_category === '')                                     { errEl.textContent = 'Minor category is required.'; return; }
 
-  const tx_amount  = parseFloat(tx_amount_raw);
-  const oldTx      = state.transactions.find(t => t._row === rowNum);
+  const tx_amount_local = parseFloat(tx_amount_raw);
+  const oldTx           = state.transactions.find(t => t._row === rowNum);
   const acctEdit   = state.accountMap[account_id];
 
   // Post-reversal balance: backend reverses the old row before writing the new values.
@@ -1468,13 +1468,13 @@ async function _saveEdit() {
   if (acctEdit === undefined || acctEdit === null || !Number.isFinite(Number(acctEdit.current_value_local))) { errEl.textContent = 'Account not found or has no valid balance.'; return; }
   let postRevBal = Number(acctEdit.current_value_local);
   if (oldTx && String(oldTx.account_id) === String(account_id)) {
-    const oldAmt = Number(oldTx.tx_amount);
+    const oldAmt = Number(oldTx.tx_amount_local);
     if (oldTx.tx_type === 'money-in')  postRevBal -= oldAmt;
     if (oldTx.tx_type === 'money-out') postRevBal += oldAmt;
   }
   const acctPR = Object.assign({}, acctEdit, { current_value_local: postRevBal });
 
-  const balanceErrorEdit = _checkBalanceRules(tx_type, acctPR, false, tx_amount);
+  const balanceErrorEdit = _checkBalanceRules(tx_type, acctPR, false, tx_amount_local);
   if (balanceErrorEdit) { errEl.textContent = balanceErrorEdit; return; }
 
   const rule5ErrorEdit = _checkRule5(tx_type, acctEdit, major_category, minor_category);
@@ -1484,7 +1484,7 @@ async function _saveEdit() {
   try {
     const res = await ExpenseAPI.updateTransaction({
       row_num: rowNum, tx_date_local: (dateRaw.replace('T', ' ') + ':00').substring(0, 19), tx_type,
-      account_id, tx_amount,
+      account_id, tx_amount_local,
       major_category, minor_category, counterparty_name,
       user_location_area, user_location_city, user_location_country,
       tx_tags, description,

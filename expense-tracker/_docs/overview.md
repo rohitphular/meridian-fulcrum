@@ -27,7 +27,7 @@ The base currency is **XAU (1 gram of gold, rate = 1, never editable)**. All cro
 
 ## Transaction types
 
-Transactions use a **single-leg model**: each row represents one account movement. The field `account_id` identifies the affected account and `tx_amount` holds the movement amount. Transfers between owned accounts are represented as two linked rows sharing a `parent_tx_id`.
+Transactions use a **single-leg model**: each row represents one account movement. The field `account_id` identifies the affected account and `tx_amount_local` holds the movement amount. Transfers between owned accounts are represented as two linked rows sharing a `parent_tx_id`.
 
 | Type | Direction | `account_id` | Categorised |
 |---|---|---|---|
@@ -52,12 +52,12 @@ Liabilities are modelled as accounts with negative balances. There is no separat
 |---|---|
 | Authentication | PIN + optional TOTP, IP rate-limit, audit log |
 | Accounts | CRUD; archive without delete; per-type fields (loan terms, credit limits, overdraft, investment platform, etc.); utilisation and repayment-progress derived fields |
-| Transactions | CRUD; single-leg model (`account_id` + `tx_amount`); eight filter dimensions; client-side date range; sort; pagination; CSV/JSON export; cascading category dropdowns; FX rate when accounts differ in currency |
+| Transactions | CRUD; single-leg model (`account_id` + `tx_amount_local`); eight filter dimensions; client-side date range; sort; pagination; CSV/JSON export; cascading category dropdowns; FX rate when accounts differ in currency |
 | Categories | CRUD; two-level taxonomy scoped per transaction type; archive without delete; auto-seed on first run |
 | Rates | Upsert per currency; XAU base currency read-only (rate = 1); auto-seed on first run |
 | Subscriptions | Registry of recurring payment obligations; frequency, amount, account, and category linkage; 22-column schema |
 | Insight | Income/Expense/Net/Savings-rate cards; monthly bar chart; spend by category (drillable major → minor); spend by account |
-| Multi-currency | Per-account currency; XAU base currency conversion via rates table; effective exchange rate for cross-currency transfers is implicit in the two stored `tx_amount` values |
+| Multi-currency | Per-account currency; XAU base currency conversion via rates table; effective exchange rate for cross-currency transfers is implicit in the two stored `tx_amount_local` values |
 | Theming | Light + dark, persisted per user |
 
 ## Out of scope

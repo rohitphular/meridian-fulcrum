@@ -39,4 +39,4 @@ Required regardless of platform:
 - Server-side enforcement of the six financial rules (the frontend's pre-checks are convenience only)
 - Sign-convention for liabilities (stored negative; displayed as positive "owed")
 - The two-phase reversal pattern for transaction updates
-- Storing `tx_amount` on each transfer leg (not a single `fx_rate` column) so balance reversal stays exact even when the global rate is later changed
+- Storing `tx_amount_local` on each transfer leg (not a single `fx_rate` column) so balance reversal stays exact even when the global rate is later changed

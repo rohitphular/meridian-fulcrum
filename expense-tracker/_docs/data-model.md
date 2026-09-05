@@ -68,7 +68,7 @@ Audit block: `record_status → sync_status → sync_date_time → sync_notes �
 | 4 | `parent_tx_id` | string | conditional | FK to the parent transaction row for transfers; empty on standalone rows and on the parent (money-out) row. Only the child (derived) row carries the parent's `id` as its `parent_tx_id`. |
 | 5 | `tx_type` | enum | yes | `money-in` \| `money-out`. No `money-transfer` type exists. |
 | 6 | `account_id` | Account ID | yes | The single account affected by this row. |
-| 7 | `tx_amount` | number | yes | Always positive. `tx_type` determines direction: `money-in` credits the account; `money-out` debits it. |
+| 7 | `tx_amount_local` | number | yes | Always positive. `tx_type` determines direction: `money-in` credits the account; `money-out` debits it. |
 | 8 | `major_category` | string | yes | References `categories.major_category_key` |
 | 9 | `minor_category` | string | yes | References `categories.minor_category_key` |
 | 10 | `description` | string | optional | Free text |
@@ -91,10 +91,10 @@ Audit block: `record_status → sync_status → sync_date_time → sync_notes �
 
 A transfer (moving money between owned accounts) produces **two rows** linked via `parent_tx_id`:
 
-- **Row A (money-out, parent):** `account_id` = source account, `tx_type` = `money-out`, `tx_amount` = amount in the source account's currency. `parent_tx_id` = empty.
-- **Row B (money-in, child):** `account_id` = target account, `tx_type` = `money-in`, `tx_amount` = amount in the target account's currency. `parent_tx_id` = Row A's `id`.
+- **Row A (money-out, parent):** `account_id` = source account, `tx_type` = `money-out`, `tx_amount_local` = amount in the source account's currency. `parent_tx_id` = empty.
+- **Row B (money-in, child):** `account_id` = target account, `tx_type` = `money-in`, `tx_amount_local` = amount in the target account's currency. `parent_tx_id` = Row A's `id`.
 
-The effective exchange rate is **implicit**: `rate = Row B.tx_amount ÷ Row A.tx_amount`. No `fx_rate` column is stored; no `[FX: …]` marker is embedded in `description`. If both accounts share the same currency, Row B's `tx_amount` equals Row A's `tx_amount`.
+The effective exchange rate is **implicit**: `rate = Row B.tx_amount_local ÷ Row A.tx_amount_local`. No `fx_rate` column is stored; no `[FX: …]` marker is embedded in `description`. If both accounts share the same currency, Row B's `tx_amount_local` equals Row A's `tx_amount_local`.
 
 ## Subscription
 

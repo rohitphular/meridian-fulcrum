@@ -28,7 +28,7 @@ function getSuggestedTransactions() {
     const acc = accountMap[String(tx.account_id)];
     return Object.assign({}, tx, {
       currency: acc.local_currency,
-      amount:   Number(tx.tx_amount),
+      amount:   Number(tx.tx_amount_local),
     });
   });
   console.log(fnName + ': money_out_count=' + outTx.length);

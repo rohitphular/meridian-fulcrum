@@ -176,7 +176,7 @@ export function sumAmountBase(txs) {
     const acc = state.accounts ? state.accounts.find(a => a.id === tx.account_id) : null;
     const currency = acc ? acc.currency : null;
     if (!currency) return sum;
-    const v = toBase(Number(tx.tx_amount), currency);
+    const v = toBase(Number(tx.tx_amount_local), currency);
     return sum + (isNaN(v) ? 0 : v);
   }, 0);
 }
@@ -220,7 +220,7 @@ export function accountBalanceByMonth(accounts, txs, months) {
         const d = new Date(accTxs[txIdx].tx_date_local);
         if (d > endOfMonth) break;
         const tx  = accTxs[txIdx];
-        const amt = toBase(Number(tx.tx_amount), acc.currency);
+        const amt = toBase(Number(tx.tx_amount_local), acc.currency);
         if (tx.tx_type === 'money-out') balance -= (isNaN(amt) ? 0 : amt);
         if (tx.tx_type === 'money-in')  balance += (isNaN(amt) ? 0 : amt);
         txIdx++;
@@ -252,7 +252,7 @@ export function computeBalancesAt(accounts, allTxs, date) {
     if (new Date(tx.tx_date_local) > dateEnd) break;
     const acc = accountMap.get(tx.account_id);
     if (!acc) continue;
-    const amt = toBase(Number(tx.tx_amount), acc.currency);
+    const amt = toBase(Number(tx.tx_amount_local), acc.currency);
     if (tx.tx_type === 'money-out') {
       balance[tx.account_id] -= isNaN(amt) ? 0 : amt;
     } else if (tx.tx_type === 'money-in') {
@@ -293,7 +293,7 @@ export function computeDailyTotalAssets(assetAccounts, allTxs, from, to) {
       const tx  = sorted[txIdx];
       const acc = accountMap.get(tx.account_id);
       if (acc) {
-        const amt = toBase(Number(tx.tx_amount), acc.currency);
+        const amt = toBase(Number(tx.tx_amount_local), acc.currency);
         if (tx.tx_type === 'money-out') {
           balance[tx.account_id] -= isNaN(amt) ? 0 : amt;
         } else if (tx.tx_type === 'money-in') {

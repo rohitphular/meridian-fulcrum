@@ -4,8 +4,8 @@
 // and applicability rules. No magic column numbers anywhere else in the codebase.
 //
 // Storage model: one row per account movement.
-//   account_id  — the single account involved in this row
-//   tx_amount   — the amount moved (always positive; direction from tx_type)
+//   account_id      — the single account involved in this row
+//   tx_amount_local — the amount moved (always positive; direction from tx_type)
 //   parent_tx_id — blank for standalone/root; set on derived rows pointing to parent.id
 //                  Enables chains: money-out parent → money-in child (transfer),
 //                  or any future multi-leg derivation regardless of tx_type.
@@ -81,8 +81,8 @@ const TRANSACTION_SCHEMA = {
   },
 
   // ── Financial (column 7) ─────────────────────────────────────────────────
-  tx_amount: {
-    sheet_column_name: 'tx_amount',
+  tx_amount_local: {
+    sheet_column_name: 'tx_amount_local',
     sheet_column_position: 7,
     ui_label: 'Amount',
     type: 'number',

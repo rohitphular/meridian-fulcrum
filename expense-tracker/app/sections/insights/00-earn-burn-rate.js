@@ -46,7 +46,7 @@ function _computeRates(from, to, windowDays) {
     if (isNaN(d.getTime())) return;
     const acc = state.accounts ? state.accounts.find(a => a.id === tx.account_id) : null;
     if (!acc) return;
-    const amt = toBase(Number(tx.tx_amount), acc.currency);
+    const amt = toBase(Number(tx.tx_amount_local), acc.currency);
     if (!amt || isNaN(amt)) return;
     const key = _dayKey(d);
     if (tx.tx_type === 'money-in')  earnByDay[key] = (earnByDay[key] || 0) + amt;

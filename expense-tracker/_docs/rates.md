@@ -46,11 +46,11 @@ toBase(amount, currency)
 
 Note the division — rates are stored as `currency-units per 1 XAU`, so to convert *to* XAU you divide. A missing or zero rate must throw/signal an error; silent 1:1 fallback is banned.
 
-For cross-currency transfers, the effective rate is implicit in the two stored `tx_amount` values (one per leg). The display layer may show a `†` marker when the implied leg ratio differs from the current global rate, but no separate `fx_rate` column is stored on the transaction row.
+For cross-currency transfers, the effective rate is implicit in the two stored `tx_amount_local` values (one per leg). The display layer may show a `†` marker when the implied leg ratio differs from the current global rate, but no separate `fx_rate` column is stored on the transaction row.
 
 ## Historical rates
 
-NOT supported. A single current rate per currency applies to all transactions regardless of date. For cross-currency transfers, the effective rate is preserved implicitly in the two stored `tx_amount` values — one per transfer leg — so the balance reversal on edit or delete remains exact even if the global rate changes later.
+NOT supported. A single current rate per currency applies to all transactions regardless of date. For cross-currency transfers, the effective rate is preserved implicitly in the two stored `tx_amount_local` values — one per transfer leg — so the balance reversal on edit or delete remains exact even if the global rate changes later.
 
 ## API surface
 

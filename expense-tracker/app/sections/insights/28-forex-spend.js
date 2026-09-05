@@ -36,7 +36,7 @@ function _groupByCurrency(outTxs, quoteCcy) {
 
   const rows = [...map.entries()].map(([ccy, entries]) => {
     const txs         = entries.map(e => e.tx);
-    const nativeTotal = txs.reduce((s, t) => s + Math.abs(Number(t.tx_amount)), 0);
+    const nativeTotal = txs.reduce((s, t) => s + Math.abs(Number(t.tx_amount_local)), 0);
     const gbpEquiv    = sumAmountBase(txs);
     const count       = txs.length;
     // fx_rate is not stored on transactions — use rateMap for display purposes only

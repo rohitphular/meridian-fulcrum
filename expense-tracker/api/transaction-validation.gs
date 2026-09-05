@@ -51,7 +51,7 @@ function _buildCategoryMap() {
 //   target_amount_local — only present for cross-currency transfers; if provided must be > 0.
 //                   Same-currency transfers leave it blank; the core defaults to source_amount_local.
 //
-// TX-NEW-C-2: tx_amount is validated unconditionally (presence + isFinite) before
+// TX-NEW-C-2: tx_amount_local is validated unconditionally (presence + isFinite) before
 //   any category-conditional checks. This ensures NaN can never be written regardless
 //   of whether a category has both mandatory flags false.
 
@@ -114,7 +114,7 @@ function validateTransactionUpdate(body, oldRow, catMap) {
     return { ok: false, error: 'missing_date' };
   if (body.tx_type === undefined || body.tx_type === null || String(body.tx_type).trim() === '' || !VALID_TRANSACTION_TYPES.includes(body.tx_type))
     return { ok: false, error: 'invalid_transaction_type' };
-  if (body.tx_amount === undefined || body.tx_amount === null || !Number.isFinite(Number(body.tx_amount)) || Number(body.tx_amount) <= 0)
+  if (body.tx_amount_local === undefined || body.tx_amount_local === null || !Number.isFinite(Number(body.tx_amount_local)) || Number(body.tx_amount_local) <= 0)
     return { ok: false, error: 'invalid_amount' };
   if (body.account_id === undefined || body.account_id === null || String(body.account_id).trim() === '')
     return { ok: false, error: 'missing_account_id' };

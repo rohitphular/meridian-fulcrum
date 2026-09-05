@@ -40,8 +40,8 @@ For each currency group:
 
 | Field | Source |
 |---|---|
-| `nativeTotal` | `txs.reduce((s, t) => s + Math.abs(t.tx_amount), 0)` — sum in native currency |
-| `baseEquiv` | `sumAmountBase(txs)` — sum converted to base currency (XAU) via `toBase(tx.tx_amount, account.currency)` |
+| `nativeTotal` | `txs.reduce((s, t) => s + Math.abs(t.tx_amount_local), 0)` — sum in native currency |
+| `baseEquiv` | `sumAmountBase(txs)` — sum converted to base currency (XAU) via `toBase(tx.tx_amount_local, account.currency)` |
 | `count` | `txs.length` |
 | `avgRate` | Mean of `t.fx_rate` for txs that have it; falls back to `state.rateMap[ccy]` |
 | `hasEstimated` | `true` when any tx in the group is missing `fx_rate` (foreign only) |
@@ -145,6 +145,6 @@ Module-level constant covering common currencies: GBP £, USD $, EUR €, INR �
 | No `money-out` transactions | `chart-empty` "No spend transactions for this period." |
 | Only domestic spend | Foreign stat card = `£0 (0%)`; no "FX Rates" pill |
 | `tx.currency` blank | Treated as `state.quoteCurrency` |
-| `fx_rate` null for foreign tx | Base-currency equiv computed via `toBase(tx.tx_amount, account.currency)`; avg rate falls back to `rateMap`; `~` prefix on table base equiv |
+| `fx_rate` null for foreign tx | Base-currency equiv computed via `toBase(tx.tx_amount_local, account.currency)`; avg rate falls back to `rateMap`; `~` prefix on table base equiv |
 | Currency not in `rateMap` | `⚠` warning badge in table; scatter point omitted (no `fx_rate`) |
 | > 8 currencies | `buildPalette` colours cycle (8-colour palette repeats) |
