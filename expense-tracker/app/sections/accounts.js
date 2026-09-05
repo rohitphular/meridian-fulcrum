@@ -411,7 +411,6 @@ function _renderAccountForm(a, mode) {
     ? `<div class="field">
          <label for="accNewOpeningDate">Opening date *</label>
          <input type="datetime-local" id="accNewOpeningDate">
-         <div class="field-hint">Date this account was opened (local time)</div>
        </div>`
     : `<div class="field">
          <label>Opening date</label>
@@ -432,7 +431,6 @@ function _renderAccountForm(a, mode) {
     <div class="field">
       <label>Timezone</label>
       <input type="text" value="${v(a.local_timezone !== undefined && a.local_timezone !== null ? a.local_timezone : '')}" disabled>
-      <div class="field-hint">Detected from browser at account creation</div>
     </div>` : '';
 
   const syncStatusLine = isView ? `
@@ -444,7 +442,8 @@ function _renderAccountForm(a, mode) {
   <div class="card" style="margin-bottom:20px">
     ${header}
 
-    <div class="form-grid" style="margin-bottom:16px">
+    <div class="form-grid form-grid-3" style="margin-bottom:16px">
+
       <div class="field">
         <label for="${pfx}Name">Account name${isAdd ? ' *' : ''}</label>
         <input type="text" id="${pfx}Name"
@@ -458,6 +457,13 @@ function _renderAccountForm(a, mode) {
                ${isAdd ? 'placeholder="e.g. Barclays Bank UK"' : ' disabled'}>
       </div>
       <div class="field">
+        <label for="${pfx}Description">Notes</label>
+        <input type="text" id="${pfx}Description"
+               value="${isAdd ? '' : v(a.description)}"
+               ${isAdd ? 'placeholder="Optional notes"' : ''}${dis}>
+      </div>
+
+      <div class="field">
         <label for="${pfx}Type">Type${isAdd ? ' *' : ''}</label>
         ${typeField}
       </div>
@@ -465,24 +471,23 @@ function _renderAccountForm(a, mode) {
         <label for="${pfx}SubType">Sub-type${isAdd ? ' *' : ''}</label>
         ${subTypeField}
       </div>
-      <div class="field">
-        <label for="${pfx}Currency">Currency${isAdd ? ' *' : ''}</label>
-        ${isAdd
-          ? `<select id="accNewCurrency">${currencyOpts}</select>`
-          : `<input type="text" id="accEditCurrency" value="${v(a.local_currency)}" disabled>`}
-      </div>
-      ${timezoneField}
       ${openingDateField}
-      ${closingDateField}
-      ${recordStatusField}
-    </div>
 
-    <div class="form-grid" style="margin-bottom:16px;align-items:start">
       ${isAdd ? `
       <div class="field">
         <label for="accNewOpeningValue">Opening value *</label>
         <input type="number" id="accNewOpeningValue" step="0.01" placeholder="e.g. 1000.00">
+      </div>
+      <div class="field">
+        <label for="accNewCurrency">Currency *</label>
+        <select id="accNewCurrency">${currencyOpts}</select>
       </div>` : `
+      <div class="field">
+        <label>Currency</label>
+        <input type="text" id="accEditCurrency" value="${v(a.local_currency)}" disabled>
+      </div>
+      ${timezoneField}
+      ${closingDateField}
       <div class="field">
         <label>Opening value</label>
         <input type="text" value="${_isLiability(a) ? v('−' + sym + _fmtBal(Math.abs(parseFloat(a.opening_value_local)))) : v(sym + _fmtBal(parseFloat(a.opening_value_local)))}" disabled>
@@ -492,13 +497,9 @@ function _renderAccountForm(a, mode) {
         <input type="text" value="${_isLiability(a)
           ? v('−' + sym + _fmtBal(Math.abs(parseFloat(a.current_value_local))))
           : v(sym + _fmtBal(parseFloat(a.current_value_local)))}" disabled>
-      </div>`}
-      <div class="field">
-        <label for="${pfx}Description">Notes</label>
-        <input type="text" id="${pfx}Description"
-               value="${isAdd ? '' : v(a.description)}"
-               ${isAdd ? 'placeholder="Optional notes"' : ''}${dis}>
       </div>
+      ${recordStatusField}`}
+
     </div>
 
     ${syncStatusLine}
