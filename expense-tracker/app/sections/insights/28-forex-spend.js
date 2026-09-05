@@ -29,7 +29,7 @@ function _groupByCurrency(outTxs, quoteCcy) {
   const map = new Map();
   for (const tx of outTxs) {
     const acc = accountMap.get(tx.account_id);
-    const ccy = (acc ? acc.currency : quoteCcy ?? 'GBP').trim().toUpperCase();
+    const ccy = (acc ? acc.local_currency : quoteCcy ?? 'GBP').trim().toUpperCase();
     if (!map.has(ccy)) map.set(ccy, []);
     map.get(ccy).push({ tx, acc });
   }
@@ -40,7 +40,7 @@ function _groupByCurrency(outTxs, quoteCcy) {
     const gbpEquiv    = sumAmountBase(txs);
     const count       = txs.length;
     // fx_rate is not stored on transactions — use rateMap for display purposes only
-    const rateFromMap = state.rateMap?.[ccy] || null;
+    const rateFromMap = (state.rateMap !== undefined && state.rateMap !== null && ccy in state.rateMap) ? state.rateMap[ccy] : null;
     const avgRate     = rateFromMap;
     const hasEstimated = false;
     const rateUnavail = ccy !== quoteCcy && !avgRate;

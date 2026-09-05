@@ -174,7 +174,7 @@ export function monthRange(from, to) {
 export function sumAmountBase(txs) {
   return txs.reduce((sum, tx) => {
     const acc = state.accounts ? state.accounts.find(a => a.id === tx.account_id) : null;
-    const currency = acc ? acc.currency : null;
+    const currency = acc ? acc.local_currency : null;
     if (!currency) return sum;
     const v = toBase(Number(tx.tx_amount_local), currency);
     return sum + (isNaN(v) ? 0 : v);
@@ -205,7 +205,7 @@ export function accountBalanceByMonth(accounts, txs, months) {
   months.forEach(m => result.set(m, {}));
 
   accounts.forEach(acc => {
-    const openingRaw = Number(acc.opening_value);
+    const openingRaw = Number(acc.opening_value_local);
     let balance = isNaN(openingRaw) ? 0 : openingRaw;
     const accTxs = txs
       .filter(tx => tx.account_id === acc.id)
@@ -220,7 +220,7 @@ export function accountBalanceByMonth(accounts, txs, months) {
         const d = new Date(accTxs[txIdx].tx_date_local);
         if (d > endOfMonth) break;
         const tx  = accTxs[txIdx];
-        const amt = toBase(Number(tx.tx_amount_local), acc.currency);
+        const amt = toBase(Number(tx.tx_amount_local), acc.local_currency);
         if (tx.tx_type === 'money-out') balance -= (isNaN(amt) ? 0 : amt);
         if (tx.tx_type === 'money-in')  balance += (isNaN(amt) ? 0 : amt);
         txIdx++;
@@ -240,7 +240,7 @@ export function computeBalancesAt(accounts, allTxs, date) {
   const accountMap = new Map(accounts.map(a => [a.id, a]));
   const balance    = {};
   accounts.forEach(a => {
-    const v = toBase(Number(a.opening_value), a.currency);
+    const v = toBase(Number(a.opening_value_local), a.local_currency);
     balance[a.id] = isNaN(v) ? 0 : v;
   });
 
@@ -252,7 +252,7 @@ export function computeBalancesAt(accounts, allTxs, date) {
     if (new Date(tx.tx_date_local) > dateEnd) break;
     const acc = accountMap.get(tx.account_id);
     if (!acc) continue;
-    const amt = toBase(Number(tx.tx_amount_local), acc.currency);
+    const amt = toBase(Number(tx.tx_amount_local), acc.local_currency);
     if (tx.tx_type === 'money-out') {
       balance[tx.account_id] -= isNaN(amt) ? 0 : amt;
     } else if (tx.tx_type === 'money-in') {
@@ -273,7 +273,7 @@ export function computeDailyTotalAssets(assetAccounts, allTxs, from, to) {
   const accountMap = new Map(assetAccounts.map(a => [a.id, a]));
   const balance    = {};
   assetAccounts.forEach(a => {
-    const v = toBase(Number(a.opening_value), a.currency);
+    const v = toBase(Number(a.opening_value_local), a.local_currency);
     balance[a.id] = isNaN(v) ? 0 : v;
   });
 
@@ -293,7 +293,7 @@ export function computeDailyTotalAssets(assetAccounts, allTxs, from, to) {
       const tx  = sorted[txIdx];
       const acc = accountMap.get(tx.account_id);
       if (acc) {
-        const amt = toBase(Number(tx.tx_amount_local), acc.currency);
+        const amt = toBase(Number(tx.tx_amount_local), acc.local_currency);
         if (tx.tx_type === 'money-out') {
           balance[tx.account_id] -= isNaN(amt) ? 0 : amt;
         } else if (tx.tx_type === 'money-in') {
@@ -330,7 +330,7 @@ export function normCountry(raw) {
 }
 
 export function domesticCountry() {
-  return _CURRENCY_COUNTRY[state.quoteCurrency] ?? null;
+  return state.quoteCurrency in _CURRENCY_COUNTRY ? _CURRENCY_COUNTRY[state.quoteCurrency] : null;
 }
 
 // ── Tags ──────────────────────────────────────────────────────────────────────
@@ -352,7 +352,7 @@ export function findMissingRates(txs, accounts) {
   const { rateMap, quoteCurrency } = state;
   // Currency is derived from the linked account — check account currencies only
   (accounts ?? []).forEach(acc => {
-    if (acc.currency && acc.currency !== quoteCurrency && !rateMap[acc.currency]) missing.add(acc.currency);
+    if (acc.local_currency && acc.local_currency !== quoteCurrency && !rateMap[acc.local_currency]) missing.add(acc.local_currency);
   });
   return [...missing];
 }
@@ -432,8 +432,10 @@ export function baseChartOptions(sym, C) {
         bodyColor: C.ink,
         callbacks: {
           label: ctx => {
-            const raw = ctx.parsed.y ?? ctx.parsed.x ?? 0;
-            return `  ${ctx.dataset.label ?? ''}: ${sym}${Math.abs(raw).toLocaleString('en-GB', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
+            const _py = ctx.parsed.y !== undefined ? ctx.parsed.y : (ctx.parsed.x !== undefined ? ctx.parsed.x : 0);
+            const raw = _py;
+            const _lbl = (ctx.dataset.label !== undefined && ctx.dataset.label !== null) ? ctx.dataset.label : '';
+            return `  ${_lbl}: ${sym}${Math.abs(raw).toLocaleString('en-GB', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
           },
         },
       },

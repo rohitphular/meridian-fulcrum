@@ -39,7 +39,7 @@ For each segment, the visible bar spans from `baseVals[i]` to `baseVals[i] + vis
 1. Filters `accounts` to `record_status === 'active'`.
 2. Derives `prevEnd = new Date(from.getFullYear(), from.getMonth(), 0)` — last day of the previous month.
 3. Calls `computeDailyTotalAssets(active, state.transactions, prevEnd, prevEnd)` — single-day replay.
-4. Returns `daily[0] || 0`.
+4. Returns `daily[0] ?? 0`.
 
 All active accounts (assets + liabilities + investments) are included. This gives the net balance (net worth) at the start of the month.
 

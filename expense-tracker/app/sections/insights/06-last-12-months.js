@@ -193,14 +193,14 @@ function _renderAccounts(container, { accounts, sym }) {
         ? todayLocal
         : new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 0);
       const dayIdx = Math.round((sampleDate - rangeStart) / 86400000);
-      return daily[Math.min(dayIdx, daily.length - 1)] ?? 0;
+      return daily.length > 0 ? daily[Math.min(dayIdx, daily.length - 1)] : 0;
     });
     const label = groupKey.charAt(0).toUpperCase() + groupKey.slice(1).replace(/_/g, ' ');
     return { label, data, backgroundColor: palette[i % palette.length] + 'cc', stack: 'assets', borderRadius: 3, order: 2 };
   });
 
   // Total for stat card = sum of all groups on last month
-  const totalAssets = groupEntries.reduce((s, _, i) => s + (datasets[i].data[11] ?? 0), 0);
+  const totalAssets = groupEntries.reduce((s, _, i) => s + (11 < datasets[i].data.length ? datasets[i].data[11] : 0), 0);
   const fmt = v => sym + Math.abs(v).toLocaleString('en-GB', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
 
   container.innerHTML = `

@@ -18,11 +18,9 @@ Per-loan paydown detail: original balance, amount repaid, remaining balance, % p
 
 ```js
 const liabAccounts = accounts.filter(a =>
-  a.record_status === 'active' && liabilityTypes.has(a.type)
+  a.record_status === 'active' && a.type === 'liability'
 );
 ```
-
-`liabilityTypes` = `new Set(state.accountSchema?.liability_types || [])`.
 
 ---
 
@@ -33,7 +31,7 @@ For each liability account:
 | Field | Source |
 |---|---|
 | `currentBal` | `computeDailyTotalAssets([acc], state.transactions, todayLocal, todayLocal)[0]` — `Math.abs` |
-| `originalBal` | `Math.abs(parseFloat(acc.opening_value))` |
+| `originalBal` | `Math.abs(parseFloat(acc.opening_value_local))` |
 | `totalRepaid` | `Math.max(0, originalBal − currentBal)` — capped at 0 for new drawdowns |
 | `avgMonthly` | `totalRepaid / _monthsSince(openingDate)` |
 | `monthsToPayoff` | `Math.ceil(currentBal / avgMonthly)` — `null` when `avgMonthly = 0` |
@@ -41,7 +39,7 @@ For each liability account:
 | `paidOff` | `currentBal ≤ 0` |
 | `balIncreased` | `currentBal > originalBal` — new drawdown detected |
 
-`_monthsSince(dateStr)`: computes calendar months between `acc.opening_date` (or first repayment tx date) and today. Minimum 1.
+`_monthsSince(dateStr)`: computes calendar months between `acc.opening_date_local` (or first repayment tx date) and today. Minimum 1.
 
 ---
 
@@ -112,7 +110,7 @@ Returns `{ destroy() }` — destroys all charts in `_historyCharts` on navigatio
 
 | Scenario | Behaviour |
 |---|---|
-| `opening_value` blank | `originalBal = 0`; progress bar omitted; "Original balance unknown" note |
+| `opening_value_local` blank | `originalBal = 0`; progress bar omitted; "Original balance unknown" note |
 | No repayment transactions | `totalRepaid = 0`, `avgMonthly = 0`; projection = N/A |
 | Loan fully paid (`balance = 0`) | Full green progress bar; "Paid off ✓" badge |
 | Balance increased (new drawdown) | `totalRepaid = 0` (capped); amber warning "Balance increased" |

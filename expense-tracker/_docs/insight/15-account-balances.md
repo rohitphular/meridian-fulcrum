@@ -23,16 +23,16 @@ Current balance of every active account, grouped by type — a single-screen vie
 
 ## Balance computation
 
-`_currentBalance(account)`:
+All active accounts are snapshotted in a single pass using `computeBalancesAt`:
+
 ```js
+const today      = new Date();
 const todayLocal = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-const daily      = computeDailyTotalAssets([account], state.transactions, todayLocal, todayLocal);
-return daily[0] || 0;
+const balanceMap = computeBalancesAt(active, state.transactions, todayLocal);
+const withBalance = active.map(a => ({ ...a, balance: balanceMap.get(a.id) ?? 0 }));
 ```
 
-Single-day range (`from = to = today`). `computeDailyTotalAssets` replays all transactions chronologically on the first (only) day iteration, giving the correct balance as of end-of-today.
-
-Called once per active account. For a personal app with ~20 accounts, this is O(20 × M) — negligible.
+`computeBalancesAt` replays all transactions up to end-of-today once across all accounts — O(M) total rather than O(N × M) per-account.
 
 ---
 
@@ -40,9 +40,9 @@ Called once per active account. For a personal app with ~20 accounts, this is O(
 
 | Section | Condition | Sort |
 |---|---|---|
-| Assets | `!liabilityTypes.has(type) && !investmentTypes.has(type)` | Balance descending |
-| Liabilities | `liabilityTypes.has(type)` (from `state.accountSchema.liability_types`) | Most negative first |
-| Investments | `type === 'investment'` | Balance descending |
+| Assets | `a.type !== 'liability' && !investmentTypes.has(a.type)` | Balance descending |
+| Liabilities | `a.type === 'liability'` | Most negative first |
+| Investments | `investmentTypes.has(a.type)` (`investmentTypes = new Set(['investment'])`) | Balance descending |
 
 Investments section is omitted entirely from the DOM if there are no investment accounts.
 
@@ -99,7 +99,7 @@ Colors:
 
 | Utility | Source |
 |---|---|
-| `computeDailyTotalAssets` | `insight-utils.js` |
+| `computeBalancesAt` | `insight-utils.js` |
 | `getCssColors`, `baseChartOptions` | `insight-utils.js` |
 
 ---

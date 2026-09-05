@@ -87,7 +87,7 @@ const { labels, values } = cumulativeByDay(expenses, from, to);
 
 ### `accountBalanceByMonth(accounts, txs, months)` → `Map<'YYYY-MM', { [accountId]: number }>`
 
-Replays all transactions chronologically to compute end-of-month balance per account. Starts from `account.opening_value`. Returns a map from month key to object of `{ accountId: balance }`.
+Replays all transactions chronologically to compute end-of-month balance per account. Starts from `account.opening_value_local`. Returns a map from month key to object of `{ accountId: balance }`.
 
 ```js
 const months = monthRange(from, to);
@@ -97,20 +97,39 @@ const totals = months.map(m => Object.values(balances.get(m) || {}).reduce((s, v
 
 ---
 
+## Point-in-time balance snapshot
+
+### `computeBalancesAt(accounts, allTxs, date)` → `Map<accountId, number>`
+
+Replays all transactions up to and including `date` (23:59:59 on that day) to produce a per-account balance snapshot. Returns a `Map` from account ID to balance in quote currency.
+
+```js
+const date = new Date('2026-09-01');
+const balances = computeBalancesAt(state.accounts, state.transactions, date);
+const total = [...balances.values()].reduce((s, v) => s + v, 0);
+```
+
+- Initialises from `opening_value_local` via `toBase`.
+- Applies `money-out` (subtract) and `money-in` (add); transfer legs are not double-counted.
+- Transactions are sorted chronologically before replay.
+- `isNaN` guards used throughout — no `|| 0` fallback.
+
+---
+
 ## Daily asset balance replay
 
 ### `computeDailyTotalAssets(assetAccounts, allTxs, from, to)` → `number[]`
 
-Replays ALL transactions chronologically from each account's `opening_value`, returning one total-asset-value entry per calendar day in `[from, to]` (inclusive). Used by MoM (01), YoY (02), WoW (03), and Net Worth insights.
+Replays ALL transactions chronologically from each account's `opening_value_local`, returning one total-asset-value entry per calendar day in `[from, to]` (inclusive). Used by MoM (01), YoY (02), WoW (03), and Net Worth insights.
 
 ```js
 const months   = monthRange(from, to);
-const assetAccounts = accounts.filter(a => a.record_status === 'active' && !liabilityTypes.has(a.type));
+const assetAccounts = accounts.filter(a => a.record_status === 'active' && a.type !== 'liability');
 const dailyA   = computeDailyTotalAssets(assetAccounts, state.transactions, aFrom, aTo);
 // → [12450.00, 12450.00, 12380.50, ...]   one value per day
 ```
 
-- Initialises each account from `opening_value` (via `toBase` to convert to quote currency).
+- Initialises each account from `opening_value_local` (via `toBase` to convert to quote currency).
 - Applies `money-out` (subtracts from account), `money-in` (adds to account); for transfer rows (non-empty `parent_tx_id`) applies both legs — only for accounts in `assetAccounts`.
 - Transactions before `from` are replayed first (on the first day iteration) to establish the correct opening balance for the period.
 - Exchange rates applied at current `state.rateMap` values — historical rate accuracy is not guaranteed.
@@ -126,7 +145,7 @@ Expands transactions with multiple tags (semicolon-separated) into one entry per
 ```js
 const tagPairs = splitTags(txs);
 const freq = {};
-tagPairs.forEach(({ tag }) => freq[tag] = (freq[tag] || 0) + 1);
+tagPairs.forEach(({ tag }) => { freq[tag] = isNaN(freq[tag]) ? 1 : freq[tag] + 1; });
 ```
 
 ---
@@ -135,7 +154,7 @@ tagPairs.forEach(({ tag }) => freq[tag] = (freq[tag] || 0) + 1);
 
 ### `findMissingRates(txs, accounts)` → `string[]`
 
-Returns currencies that appear in transactions or accounts but have no entry in `state.rateMap`. Used to render the `.insight-warn` banner.
+Returns currencies that appear in accounts but have no entry in `state.rateMap`. The `txs` parameter is accepted for signature compatibility but currencies are derived from account `local_currency` fields only. Used to render the `.insight-warn` banner.
 
 ```js
 const missing = findMissingRates(txs, state.accounts);

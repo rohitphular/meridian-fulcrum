@@ -15,7 +15,7 @@ Month-end net worth (total assets − total liabilities) plotted over time — t
 
 ## Sign convention for liabilities
 
-`computeDailyTotalAssets` is passed **all active accounts** (assets + liabilities). Asset accounts have positive `opening_value`; liability accounts have negative `opening_value` (debt stored as a negative balance). When the function sums all balances, assets cancel liabilities naturally — the result is net worth directly, with no separate subtraction step needed.
+`computeDailyTotalAssets` is passed **all active accounts** (assets + liabilities). Asset accounts have positive `opening_value_local`; liability accounts have negative `opening_value_local` (debt stored as a negative balance). When the function sums all balances, assets cancel liabilities naturally — the result is net worth directly, with no separate subtraction step needed.
 
 ---
 

@@ -62,8 +62,8 @@ function _buildChartOptions(sym, C, isMobile) {
             const incomeItem = tooltipItems.find(t => t.datasetIndex === 0);
             const netItem    = tooltipItems.find(t => t.datasetIndex === 2);
             if (!incomeItem || !netItem) return [];
-            const inc  = incomeItem.parsed.y ?? 0;
-            const net  = netItem.parsed.y    ?? 0;
+            const inc  = incomeItem.parsed.y !== undefined ? incomeItem.parsed.y : 0;
+            const net  = netItem.parsed.y    !== undefined ? netItem.parsed.y    : 0;
             if (inc <= 0) return [];
             const rate = Math.round(net / inc * 100);
             return [`  Savings rate: ${rate}%`];
@@ -204,7 +204,7 @@ export async function render(containerId, { txs, from, to, sym }) {
         const incMap = new Map();
         for (const t of monthIn) {
           const k = (t.counterparty_name !== undefined && t.counterparty_name !== null) ? t.counterparty_name : '(unknown)';
-          incMap.set(k, (incMap.get(k) ?? 0) + sumAmountBase([t]));
+          incMap.set(k, (incMap.has(k) ? incMap.get(k) : 0) + sumAmountBase([t]));
         }
         const incRows = [...incMap.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8)
           .map(([cp, v]) => `<tr><td style="${tdS}">${esc(cp)}</td><td style="${tdS};text-align:right;white-space:nowrap" class="positive">${esc(fmtV(v))}</td></tr>`)
@@ -214,7 +214,7 @@ export async function render(containerId, { txs, from, to, sym }) {
         const expMap = new Map();
         for (const t of monthOut) {
           const k = (t.major_category !== undefined && t.major_category !== null) ? t.major_category : 'Uncategorised';
-          expMap.set(k, (expMap.get(k) ?? 0) + sumAmountBase([t]));
+          expMap.set(k, (expMap.has(k) ? expMap.get(k) : 0) + sumAmountBase([t]));
         }
         const expRows = [...expMap.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8)
           .map(([cat, v]) => `<tr><td style="${tdS}">${esc(cat)}</td><td style="${tdS};text-align:right;white-space:nowrap" class="negative">${esc(fmtV(v))}</td></tr>`)

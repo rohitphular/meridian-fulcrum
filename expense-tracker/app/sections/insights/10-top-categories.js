@@ -102,7 +102,7 @@ export async function render(containerId, { txs, sym, from, to }) {
   // Union of categories, sorted by Period A desc, top N
   const allCats = [...new Set([...groupA.keys(), ...groupB.keys()])];
   const rows    = allCats
-    .map(cat => ({ cat, amtA: groupA.get(cat) ?? 0, amtB: groupB.get(cat) ?? 0 }))
+    .map(cat => ({ cat, amtA: groupA.has(cat) ? groupA.get(cat) : 0, amtB: groupB.has(cat) ? groupB.get(cat) : 0 }))
     .sort((a, b) => b.amtA - a.amtA)
     .slice(0, TOP_N);
 

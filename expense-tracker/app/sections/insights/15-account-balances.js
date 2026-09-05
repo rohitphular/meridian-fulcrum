@@ -91,7 +91,7 @@ export async function render(containerId, { accounts, sym }) {
   const today      = new Date();
   const todayLocal = new Date(today.getFullYear(), today.getMonth(), today.getDate());
   const balanceMap = computeBalancesAt(active, state.transactions, todayLocal);
-  const withBalance = active.map(a => ({ ...a, balance: balanceMap.get(a.id) ?? 0 }));
+  const withBalance = active.map(a => ({ ...a, balance: balanceMap.has(a.id) ? balanceMap.get(a.id) : 0 }));
 
   // Partition
   const assets      = withBalance.filter(a => a.type !== 'liability' && !investmentTypes.has(a.type)).sort((a, b) => b.balance - a.balance);

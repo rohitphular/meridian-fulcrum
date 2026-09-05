@@ -50,9 +50,9 @@ Period B is always the full calendar month immediately before Period A regardles
 
 ### Computation
 
-1. Identify asset accounts: `accounts.filter(a => a.record_status === 'active' && !liabilityTypes.has(a.type))` where `liabilityTypes` comes from `state.accountSchema.liability_types`.
-2. For each period, call `_computeDailyTotalAssets(assetAccounts, state.transactions, from, to)`:
-   - Initialises each account's balance from `opening_value`.
+1. Identify asset accounts: `accounts.filter(a => a.record_status === 'active' && a.type !== 'liability')`.
+2. For each period, call `computeDailyTotalAssets(assetAccounts, state.transactions, from, to)` (from `insight-utils.js`):
+   - Initialises each account's balance from `opening_value_local`.
    - Sorts ALL `state.transactions` chronologically.
    - Walks day by day from period start; applies every transaction (money-in, money-out, transfer) to the relevant account balances as it passes each day boundary.
    - Returns an array of total asset values, one per day.
@@ -101,13 +101,13 @@ Only `this_month`, `last_month`, and `custom` are meaningful for this day-by-day
 | No money-out in Period B | Period B line absent from chart (all-zero array still renders as a flat zero line) |
 | No active asset accounts | Show `.chart-empty` "No active asset accounts found."; return `null` — "active" means `record_status === 'active'` |
 | Currency with no rate | `toBase` returns 0 for that transaction; effectively excluded from sums (`.dash-warn` shown by coordinator) |
-| `opening_value` missing | Treated as 0 — `Number(a.opening_value) \|\| 0` |
+| `opening_value_local` missing | Treated as 0 — `isNaN(Number(a.opening_value_local)) ? 0 : Number(a.opening_value_local)` guard in `computeDailyTotalAssets` |
 
 ---
 
 ## Implementation notes
 
 - Period B transactions are fetched inside the renderer from `state.transactions` (not from `options.txs`).
-- `_computeDailyTotalAssets` sorts ALL `state.transactions` on each call. This is intentional — it ensures account balances at the start of Period B are correctly computed by replaying history from `opening_value`.
+- `computeDailyTotalAssets` sorts ALL `state.transactions` on each call. This is intentional — it ensures account balances at the start of Period B are correctly computed by replaying history from `opening_value_local`.
 - Exchange rates are applied at the current `state.rateMap` values (not historical rates). This is acceptable for a personal finance app.
 - Canvas is found via `container.querySelector('canvas')` — not `el()` — since the canvas is inside the coordinator-provided container, not directly in the document root.

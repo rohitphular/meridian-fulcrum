@@ -45,7 +45,7 @@ Untagged txs are skipped.
 ```js
 sorted.map(({ tag }, i) => ({
   label:   tag,
-  data:    monthKeys.map(mk => monthMap.get(mk) || 0),
+  data:    monthKeys.map(mk => monthMap.get(mk) ?? 0),
   hidden:  i >= 6,    // top 6 visible, rest hidden but legend-togglable
   ...
 }))

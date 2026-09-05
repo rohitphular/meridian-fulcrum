@@ -23,7 +23,7 @@ function _buildTagMonthly(moneyOut, monthKeys) {
       tags.forEach(tag => {
         if (!tagMonthMap.has(tag)) tagMonthMap.set(tag, new Map());
         const monthMap = tagMonthMap.get(tag);
-        monthMap.set(mk, (monthMap.get(mk) ?? 0) + share);
+        monthMap.set(mk, (monthMap.has(mk) ? monthMap.get(mk) : 0) + share);
       });
     });
   });
@@ -73,7 +73,7 @@ export async function render(containerId, { txs, sym, from, to }) {
     const monthMap = tagMonthMap.get(tag);
     return {
       label:            tag,
-      data:             monthKeys.map(mk => monthMap.get(mk) ?? 0),
+      data:             monthKeys.map(mk => (monthMap.has(mk) ? monthMap.get(mk) : 0)),
       borderColor:      palette[i % palette.length],
       backgroundColor:  palette[i % palette.length] + '22',
       tension:          0.3,

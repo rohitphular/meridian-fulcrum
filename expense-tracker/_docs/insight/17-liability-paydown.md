@@ -17,11 +17,9 @@ Month-end balance remaining for each active liability account (loans, credit car
 
 ```js
 const liabAccounts = accounts.filter(a =>
-  a.record_status === 'active' && liabilityTypes.has(a.type)
+  a.record_status === 'active' && a.type === 'liability'
 );
 ```
-
-`liabilityTypes` = `new Set(state.accountSchema?.liability_types || [])`.
 
 ---
 
@@ -89,8 +87,8 @@ Account name                   42% paid
 
 | Field | Computation |
 |---|---|
-| Fill % | `(1 - currentBalance / Math.abs(opening_value)) * 100`, clamped `[0, 100]` |
-| `% paid` label | `Math.round(paid) + '%'`; `"% paid: N/A"` if `opening_value` blank or 0 |
+| Fill % | `(1 - currentBalance / Math.abs(opening_value_local)) * 100`, clamped `[0, 100]` |
+| `% paid` label | `Math.round(paid) + '%'`; `"% paid: N/A"` if `opening_value_local` blank or 0 |
 | Meta line | `"£X remaining · ~N months to clear (Mon YYYY)"` or `"Fully paid off"` if `currentBalance <= 0` |
 
 Progress bar implemented as inline CSS (`height:8px`, `border-radius:4px`, `background:var(--hair)`; fill div uses `background:var(--ember)` with CSS `transition: width 0.4s ease`).
@@ -102,7 +100,7 @@ Progress bar implemented as inline CSS (`height:8px`, `border-radius:4px`, `back
 | Card | Value | Colour |
 |---|---|---|
 | Outstanding | Sum of all current liability balances (absolute) | `.negative` |
-| Started with | Sum of `Math.abs(opening_value)` across all accounts; `—` if all blank | neutral |
+| Started with | Sum of `Math.abs(opening_value_local)` across all accounts; `—` if all blank | neutral |
 | Overall paid | `(1 - totalCurrent / totalOpening) * 100`; `"N/A"` if no opening data | `.positive` |
 | Accounts | Count of active liability accounts | neutral |
 
@@ -125,7 +123,7 @@ Progress bar implemented as inline CSS (`height:8px`, `border-radius:4px`, `back
 |---|---|
 | No active liability accounts | `chart-empty` "No active liability accounts found."; returns `null` |
 | Account with rising balance | Line goes up — shown as-is; reflects new credit or charges |
-| `opening_value` blank or 0 | Progress bar fill = 0%; pct label = `"% paid: N/A"` |
+| `opening_value_local` blank or 0 | Progress bar fill = 0%; pct label = `"% paid: N/A"` |
 | Fully paid account (balance = 0) | Line flatlines at 0; progress bar 100%; meta = `"Fully paid off"` |
 | Balance falling but non-monotonically | `_projectPayoff` uses only positive reductions — credit card fluctuations don't distort projection |
 | More than 6 liability accounts | First 6 lines visible by default; extras togglable via Chart.js legend click |

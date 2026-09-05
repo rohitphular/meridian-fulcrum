@@ -45,13 +45,13 @@ function _buildYtdCumulative(txs, yearStart, numMonths, partialMonthTo) {
     const isLastMonth = m === numMonths - 1;
     let monthTotal;
     if (isLastMonth && partialMonthTo !== null) {
-      const filtered = (byMonth.get(monthKey) ?? []).filter(t => {
+      const filtered = (byMonth.has(monthKey) ? byMonth.get(monthKey) : []).filter(t => {
         const d = new Date(t.tx_date_local);
         return new Date(d.getFullYear(), d.getMonth(), d.getDate()) <= partialMonthTo;
       });
       monthTotal = sumAmountBase(filtered);
     } else {
-      monthTotal = sumAmountBase(byMonth.get(monthKey) ?? []);
+      monthTotal = sumAmountBase(byMonth.has(monthKey) ? byMonth.get(monthKey) : []);
     }
     running += monthTotal;
     result.push(running);
@@ -73,7 +73,7 @@ function _sampleMonthEndAssets(assetAccounts, yearStart, aEnd, numMonths, isCurr
       ? aEnd
       : new Date(yearA, m + 1, 0);  // last day of month m (0-indexed)
     const dayIdx = Math.round((sampleDate - yearStart) / 86400000);
-    result.push(dailyTotals[Math.min(dayIdx, dailyTotals.length - 1)] ?? 0);
+    result.push(dailyTotals.length > 0 ? dailyTotals[Math.min(dayIdx, dailyTotals.length - 1)] : 0);
   }
   return result;
 }
@@ -138,8 +138,8 @@ function _renderTransactions(container, { from, to, sym }) {
   const dataA = _buildYtdCumulative(moneyOutA, yearStart, numMonths, isCurrentYear ? aEnd : null);
   const dataB = _buildYtdCumulative(moneyOutB, bStart,    numMonths, null);
 
-  const totalA     = dataA[dataA.length - 1] ?? 0;
-  const totalB     = dataB[dataB.length - 1] ?? 0;
+  const totalA     = dataA.length > 0 ? dataA[dataA.length - 1] : 0;
+  const totalB     = dataB.length > 0 ? dataB[dataB.length - 1] : 0;
   const hasPrevData = moneyOutB.length > 0;
 
   const labelA = isCurrentYear ? `${yearA} YTD` : String(yearA);
@@ -190,8 +190,8 @@ function _renderAccounts(container, { from, to, accounts, sym }) {
   const dataA = _sampleMonthEndAssets(assetAccounts, yearStart, aEnd,  numMonths, isCurrentYear);
   const dataB = _sampleMonthEndAssets(assetAccounts, bStart,    bEnd,  numMonths, false);
 
-  const latestA = dataA[dataA.length - 1] ?? 0;
-  const latestB = dataB[dataB.length - 1] ?? 0;
+  const latestA = dataA.length > 0 ? dataA[dataA.length - 1] : 0;
+  const latestB = dataB.length > 0 ? dataB[dataB.length - 1] : 0;
 
   const labelA = isCurrentYear ? `${yearA} YTD` : String(yearA);
   const labelB = isCurrentYear ? `${yearB} (same period)` : String(yearB);

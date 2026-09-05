@@ -67,7 +67,7 @@ NOT supported. A single current rate per currency applies to all transactions re
 
 ## Known structural gaps
 
-The Rate entity has only 4 columns (`currency`, `symbol`, `rate`, `updated_at`). It is missing `record_status`, `sync_status`, `sync_date_time`, `sync_notes`, and `created_at`. Consequences:
+The Rate entity has only 4 columns (`currency`, `rate`, `symbol`, `updated_at`). It is missing `record_status`, `sync_status`, `sync_date`, `sync_notes`, and `created_at`. Consequences:
 
 - No lifecycle control — rates cannot be soft-deleted or locked through the app; they must be removed directly from the store.
 - No sync audit trail — the sync pipeline cannot signal a failed rate update on the row.

@@ -107,8 +107,8 @@ function _renderTransactions(container, { from, sym }) {
   const dataA = _buildWeeklyDaily(moneyOutA, aFrom, cutoffDate);
   const dataB = _buildWeeklyDaily(moneyOutB, bFrom, null);
 
-  const totalA = moneyOutA.reduce((s, t) => s + (sumAmountBase([t]) ?? 0), 0);
-  const totalB = moneyOutB.reduce((s, t) => s + (sumAmountBase([t]) ?? 0), 0);
+  const totalA = moneyOutA.reduce((s, t) => { const _v = sumAmountBase([t]); return s + (isNaN(_v) ? 0 : _v); }, 0);
+  const totalB = moneyOutB.reduce((s, t) => { const _v = sumAmountBase([t]); return s + (isNaN(_v) ? 0 : _v); }, 0);
 
   const labelA    = _isoWeekLabel(aFrom) + (isCurrentWeek ? ' (current)' : '');
   const labelB    = _isoWeekLabel(bFrom) + ' (prev)';
@@ -181,8 +181,10 @@ function _renderAccounts(container, { from, accounts, sym }) {
   const dataA = dailyA.map((v, i) => (cutoffDay !== null && i >= cutoffDay) ? null : v);
   const dataB = dailyB.slice(0, 7);
 
-  const latestA    = dataA.filter(v => v !== null).slice(-1)[0] ?? 0;
-  const latestB    = dataB.slice(-1)[0] ?? 0;
+  const _filteredA = dataA.filter(v => v !== null);
+  const latestA    = _filteredA.length > 0 ? _filteredA[_filteredA.length - 1] : 0;
+  const _slicedB   = dataB.slice(-1);
+  const latestB    = _slicedB.length > 0 ? _slicedB[0] : 0;
   const labelA     = _isoWeekLabel(aFrom) + (isCurrentWeek ? ' (current)' : '');
   const labelB     = _isoWeekLabel(bFrom) + ' (prev)';
   const weekLabel  = _isoWeekLabel(aFrom);

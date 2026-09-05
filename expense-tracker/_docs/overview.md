@@ -55,7 +55,7 @@ Liabilities are modelled as accounts with negative balances. There is no separat
 | Transactions | CRUD; single-leg model (`account_id` + `tx_amount_local`); eight filter dimensions; client-side date range; sort; pagination; CSV/JSON export; cascading category dropdowns; FX rate when accounts differ in currency |
 | Categories | CRUD; two-level taxonomy scoped per transaction type; archive without delete; auto-seed on first run |
 | Rates | Upsert per currency; XAU base currency read-only (rate = 1); auto-seed on first run |
-| Subscriptions | Registry of recurring payment obligations; frequency, amount, account, and category linkage; 22-column schema |
+| Subscriptions | Registry of recurring payment obligations; frequency, amount, account, and category linkage; 21-column schema |
 | Insight | Income/Expense/Net/Savings-rate cards; monthly bar chart; spend by category (drillable major → minor); spend by account |
 | Multi-currency | Per-account currency; XAU base currency conversion via rates table; effective exchange rate for cross-currency transfers is implicit in the two stored `tx_amount_local` values |
 | Theming | Light + dark, persisted per user |

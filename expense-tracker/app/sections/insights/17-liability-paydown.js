@@ -30,7 +30,7 @@ function _buildMonthlyBalances(liabAccounts, monthKeys) {
     const daily = computeDailyTotalAssets([acc], state.transactions, from, to);
     result[acc.id] = monthKeys.map(mk => {
       const dayIdx = Math.round((_monthEnd(mk) - from) / 86400000);
-      const raw    = daily[Math.min(dayIdx, daily.length - 1)] ?? 0;
+      const raw    = daily.length > 0 ? daily[Math.min(dayIdx, daily.length - 1)] : 0;
       return Math.abs(raw);
     });
   }
@@ -67,7 +67,7 @@ function _payoffDateStr(n) {
 
 function _progressHtml(acc, balances, sym) {
   const current    = balances.length ? balances[balances.length - 1] : 0;
-  const openingRaw = parseFloat(acc.opening_value);
+  const openingRaw = parseFloat(acc.opening_value_local);
   const opening    = isNaN(openingRaw) ? 0 : Math.abs(openingRaw);
 
   const fmt = v => sym + Math.abs(v).toLocaleString('en-GB', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
@@ -157,10 +157,10 @@ export async function render(containerId, { accounts, from, to, sym }) {
 
   const totalCurrent = liabAccounts.reduce((s, a) => {
     const b = allBalances[a.id];
-    return s + (b ? (b[b.length - 1] ?? 0) : 0);
+    return s + (b && b.length > 0 ? b[b.length - 1] : 0);
   }, 0);
   const totalOpening = liabAccounts.reduce((s, a) => {
-    const v = parseFloat(a.opening_value);
+    const v = parseFloat(a.opening_value_local);
     return s + (isNaN(v) ? 0 : Math.abs(v));
   }, 0);
   const overallPaid = totalOpening > 0

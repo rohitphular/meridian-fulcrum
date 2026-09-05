@@ -34,8 +34,8 @@ Empty account group → zero-filled array of the same length (avoids a second `c
 
 ## Account partitioning
 
-- **Asset accounts:** `!liabilityTypes.has(a.type)` — includes investments.
-- **Liability accounts:** `liabilityTypes.has(a.type)` — from `state.accountSchema.liability_types`.
+- **Asset accounts:** `a.type !== 'liability'` — includes investments.
+- **Liability accounts:** `a.type === 'liability'`.
 
 ---
 

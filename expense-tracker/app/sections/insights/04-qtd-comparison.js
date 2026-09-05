@@ -45,7 +45,7 @@ function _buildQtdCumulative(txs, quarterStart, numDays) {
   for (let d = 0; d < numDays; d++) {
     const day = new Date(quarterStart.getFullYear(), quarterStart.getMonth(), quarterStart.getDate() + d);
     const key = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, '0')}-${String(day.getDate()).padStart(2, '0')}`;
-    running += sumAmountBase(byDay.get(key) ?? []);
+    running += sumAmountBase(byDay.has(key) ? byDay.get(key) : []);
     result.push(running);
   }
   return result;
@@ -103,7 +103,7 @@ function _dayLabels(numDays) {
 
 function _padTo(arr, targetLength) {
   if (arr.length >= targetLength) return arr;
-  return [...arr, ...Array(targetLength - arr.length).fill(arr[arr.length - 1] ?? 0)];
+  return [...arr, ...Array(targetLength - arr.length).fill(arr.length > 0 ? arr[arr.length - 1] : 0)];
 }
 
 // ── Transactions tab ──────────────────────────────────────────────────────────
@@ -119,8 +119,8 @@ function _renderTransactions(container, { from, to, sym }) {
   const rawA = _buildQtdCumulative(moneyOutA, aFrom, daysElapsed);
   const rawB = _buildQtdCumulative(moneyOutB, bFrom, daysElapsed);
 
-  const totalA     = rawA[rawA.length - 1] ?? 0;
-  const totalB     = rawB[rawB.length - 1] ?? 0;
+  const totalA     = rawA.length > 0 ? rawA[rawA.length - 1] : 0;
+  const totalB     = rawB.length > 0 ? rawB[rawB.length - 1] : 0;
   const hasPrevData = moneyOutB.length > 0;
 
   const currentQLabel = _quarterLabel(aFrom) + (isCurrentQ ? ' (to date)' : '');
@@ -171,8 +171,8 @@ function _renderAccounts(container, { from, to, accounts, sym }) {
   const rawA = computeDailyTotalAssets(assetAccounts, state.transactions, aFrom, aEnd);
   const rawB = computeDailyTotalAssets(assetAccounts, state.transactions, bFrom, bTo);
 
-  const latestA = rawA[rawA.length - 1] ?? 0;
-  const latestB = rawB[rawB.length - 1] ?? 0;
+  const latestA = rawA.length > 0 ? rawA[rawA.length - 1] : 0;
+  const latestB = rawB.length > 0 ? rawB[rawB.length - 1] : 0;
 
   const currentQLabel = _quarterLabel(aFrom) + (isCurrentQ ? ' (to date)' : '');
   const prevQLabel    = _quarterLabel(bFrom) + ' (same days)';

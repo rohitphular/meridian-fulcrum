@@ -33,7 +33,7 @@ function _buildMonthlyNetworth(allAccounts, monthKeys) {
 
   return monthKeys.map(mk => {
     const dayIdx = Math.round((_monthEnd(mk) - from) / 86400000);
-    return daily[Math.min(dayIdx, daily.length - 1)] ?? 0;
+    return daily.length > 0 ? daily[Math.min(dayIdx, daily.length - 1)] : 0;
   });
 }
 
@@ -41,7 +41,7 @@ function _buildMonthlyNetworth(allAccounts, monthKeys) {
 function _networthAtMonthEnd(allAccounts, yyyyMM) {
   const end   = _monthEnd(yyyyMM);
   const daily = computeDailyTotalAssets(allAccounts, state.transactions, end, end);
-  return daily[0] ?? 0;
+  return daily.length > 0 ? daily[0] : 0;
 }
 
 // ── Chart options (with zero-line grid) ───────────────────────────────────────
@@ -80,9 +80,9 @@ export async function render(containerId, { accounts, from, to, sym }) {
 
   const monthKeys    = monthRange(from, to);
   const networths    = _buildMonthlyNetworth(allAccounts, monthKeys);
-  const current      = networths[networths.length - 1] ?? 0;
+  const current      = networths.length > 0 ? networths[networths.length - 1] : 0;
   const prevMonth    = networths.length >= 2 ? networths[networths.length - 2] : current;
-  const periodStart  = networths[0] ?? 0;
+  const periodStart  = networths.length > 0 ? networths[0] : 0;
 
   // 12-months-ago reference (independent of selected period)
   const today        = new Date();
@@ -164,7 +164,7 @@ export async function render(containerId, { accounts, from, to, sym }) {
         const tdS     = `padding:9px 8px;font-size:var(--text-sm);border-bottom:1px solid var(--hair)`;
 
         const accRows = allAccounts
-          .map(a => ({ name: a.name, type: a.type, balance: balMap.get(a.id) ?? 0 }))
+          .map(a => ({ name: a.name, type: a.type, balance: balMap.has(a.id) ? balMap.get(a.id) : 0 }))
           .sort((a, b) => Math.abs(b.balance) - Math.abs(a.balance))
           .map(a => {
             const cls = a.balance >= 0 ? 'positive' : 'negative';

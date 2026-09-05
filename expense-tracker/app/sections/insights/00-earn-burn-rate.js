@@ -46,11 +46,11 @@ function _computeRates(from, to, windowDays) {
     if (isNaN(d.getTime())) return;
     const acc = state.accounts ? state.accounts.find(a => a.id === tx.account_id) : null;
     if (!acc) return;
-    const amt = toBase(Number(tx.tx_amount_local), acc.currency);
+    const amt = toBase(Number(tx.tx_amount_local), acc.local_currency);
     if (!amt || isNaN(amt)) return;
     const key = _dayKey(d);
-    if (tx.tx_type === 'money-in')  earnByDay[key] = (earnByDay[key] || 0) + amt;
-    if (tx.tx_type === 'money-out') burnByDay[key] = (burnByDay[key] || 0) + amt;
+    if (tx.tx_type === 'money-in')  earnByDay[key] = (key in earnByDay ? earnByDay[key] : 0) + amt;
+    if (tx.tx_type === 'money-out') burnByDay[key] = (key in burnByDay ? burnByDay[key] : 0) + amt;
   });
 
   const labels       = [];
@@ -71,8 +71,8 @@ function _computeRates(from, to, windowDays) {
     let earnSum = 0, burnSum = 0;
     for (let i = 0; i < windowDays; i++) {
       const k = _dayKey(_shiftDay(cursor, -i));
-      earnSum += earnByDay[k] ?? 0;
-      burnSum += burnByDay[k] ?? 0;
+      earnSum += k in earnByDay ? earnByDay[k] : 0;
+      burnSum += k in burnByDay ? burnByDay[k] : 0;
     }
     incomeRates.push(earnSum / windowDays);
     expenseRates.push(burnSum / windowDays);
@@ -90,9 +90,9 @@ function _statCards(sym, incomeRates, expenseRates, savingsRates) {
   const fmt    = v => sym + Math.abs(v).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const fmtSgn = v => (v >= 0 ? '+' : '−') + sym + Math.abs(v).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-  const income   = incomeRates[incomeRates.length   - 1] ?? 0;
-  const expense  = expenseRates[expenseRates.length - 1] ?? 0;
-  const savings  = savingsRates[savingsRates.length - 1] ?? 0;
+  const income   = incomeRates.length  > 0 ? incomeRates[incomeRates.length   - 1] : 0;
+  const expense  = expenseRates.length > 0 ? expenseRates[expenseRates.length - 1] : 0;
+  const savings  = savingsRates.length > 0 ? savingsRates[savingsRates.length - 1] : 0;
   const savingsPct = income > 0
     ? ((savings / income) * 100).toFixed(1) + '%'
     : '—';
@@ -181,7 +181,7 @@ function _buildChart(canvas, labels, incomeRates, expenseRates, savingsRates, sy
           ...base.plugins.tooltip,
           callbacks: {
             label: ctx => {
-              const v    = ctx.parsed.y ?? 0;
+              const v    = ctx.parsed.y !== undefined ? ctx.parsed.y : 0;
               const neg  = v < 0;
               const sign = neg ? '−' : '';
               return `  ${ctx.dataset.label}: ${sign}${sym}${Math.abs(v).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}/day`;
@@ -210,9 +210,9 @@ function _buildChart(canvas, labels, incomeRates, expenseRates, savingsRates, sy
 
 function _render(container, { from, to, sym }) {
   const { labels, incomeRates, expenseRates, savingsRates } = _computeRates(from, to, _windowDays);
-  const currentSavings = savingsRates[savingsRates.length - 1] ?? 0;
-  const currentIncome  = incomeRates[incomeRates.length   - 1] ?? 0;
-  const currentExpense = expenseRates[expenseRates.length - 1] ?? 0;
+  const currentSavings = savingsRates.length > 0 ? savingsRates[savingsRates.length - 1] : 0;
+  const currentIncome  = incomeRates.length  > 0 ? incomeRates[incomeRates.length   - 1] : 0;
+  const currentExpense = expenseRates.length > 0 ? expenseRates[expenseRates.length - 1] : 0;
 
   container.innerHTML = `
     ${_statCards(sym, incomeRates, expenseRates, savingsRates)}

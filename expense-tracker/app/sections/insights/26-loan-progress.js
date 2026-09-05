@@ -41,15 +41,15 @@ function _loanStats(acc) {
   const today      = new Date();
   const todayLocal = new Date(today.getFullYear(), today.getMonth(), today.getDate());
   const daily      = computeDailyTotalAssets([acc], state.transactions, todayLocal, todayLocal);
-  const currentBal = Math.abs(daily[0] ?? 0);
+  const currentBal = Math.abs(daily.length > 0 ? daily[0] : 0);
 
-  const openingRaw    = parseFloat(acc.opening_value);
+  const openingRaw    = parseFloat(acc.opening_value_local);
   const originalBal   = isNaN(openingRaw) ? 0 : Math.abs(openingRaw);
   const totalRepaid   = Math.max(0, originalBal - currentBal);
   const hasOpening    = originalBal > 0;
 
   const repayTxs      = _repaymentTxs(acc);
-  const openingDate   = (acc.opening_date !== undefined && acc.opening_date !== null) ? acc.opening_date : (repayTxs[0]?.tx_date_local !== undefined && repayTxs[0]?.tx_date_local !== null) ? repayTxs[0].tx_date_local : null;
+  const openingDate   = (acc.opening_date_local !== undefined && acc.opening_date_local !== null) ? acc.opening_date_local : (repayTxs[0]?.tx_date_local !== undefined && repayTxs[0]?.tx_date_local !== null) ? repayTxs[0].tx_date_local : null;
   const months        = _monthsSince(openingDate);
   const avgMonthly    = totalRepaid > 0 ? totalRepaid / months : 0;
   const monthsToPayoff = (avgMonthly > 0 && currentBal > 0) ? Math.ceil(currentBal / avgMonthly) : null;
@@ -192,7 +192,7 @@ function _loanCardHtml(loan, sym) {
     </div>` : `<p style="font-size:var(--text-xs);color:var(--muted);margin:12px 0 0">No repayment transactions found.</p>`;
 
   const cat      = esc((loan.acc.sub_type !== undefined && loan.acc.sub_type !== null) ? loan.acc.sub_type : (loan.acc.type !== undefined && loan.acc.type !== null) ? loan.acc.type : 'Liability');
-  const currency = esc((loan.acc.currency !== undefined && loan.acc.currency !== null) ? loan.acc.currency : '—');
+  const currency = esc((loan.acc.local_currency !== undefined && loan.acc.local_currency !== null) ? loan.acc.local_currency : '—');
 
   return `
     <details style="background:var(--panel);border:1px solid var(--hair);border-radius:8px;padding:16px;margin-bottom:16px" data-loan-id="${esc(String(accId))}">

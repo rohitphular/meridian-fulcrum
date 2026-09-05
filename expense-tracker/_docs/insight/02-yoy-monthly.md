@@ -64,9 +64,9 @@ The user controls which month to view via the coordinator's standard period pick
 
 ### Computation
 
-Same as Insight 01 accounts tab, using `_computeDailyTotalAssets` with Period A and Period B derived above.
+Same as Insight 01 accounts tab, using `computeDailyTotalAssets` (from `insight-utils.js`) with Period A and Period B derived above.
 
-Asset accounts: `accounts.filter(a => a.record_status === 'active' && !liabilityTypes.has(a.type))`.
+Asset accounts: `accounts.filter(a => a.record_status === 'active' && a.type !== 'liability')`.
 
 ### Stat cards
 
@@ -99,6 +99,6 @@ Asset accounts: `accounts.filter(a => a.record_status === 'active' && !liability
 ## Implementation notes
 
 - Both periods fetch from `state.transactions` directly — `options.txs` (which is filtered to the selected period by the coordinator) is not used, because the sub-insight needs Period B independently.
-- `_buildCumulative` and `_computeDailyTotalAssets` are duplicated from `01-mom-cumulative.js`. Extract to `insight-utils.js` when a third insight needs them.
+- `_buildCumulative` is a local helper duplicated from `01-mom-cumulative.js`. `computeDailyTotalAssets` is imported from `insight-utils.js`.
 - Amber `#f59e0b` is used for Period B (previous year) — consistent with Chart.js palette position 2 across all YoY/WoW insights.
 - The period picker shows all 12 standard presets; the meaningful ones for this insight are `this_month`, `last_month`, `this_quarter` (picks quarter start month), and `custom`.

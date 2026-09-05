@@ -138,6 +138,7 @@ All subscription endpoints are routed through the single `/exec` GAS endpoint.
 | `missing_day_of_week` | `frequency` is weekly and `day_of_week` is absent |
 | `invalid_day_of_week` | `day_of_week` is not an integer between 1 and 7 |
 | `duplicate_subscription` | A non-deleted subscription with the same name already exists |
+| `invalid_tx_type` | `tx_type` is present and non-empty but is not `money-in` or `money-out`. Checked on both create and update. |
 | `invalid_record_status` | `record_status` value is not `active` or `inactive` |
 | `field_not_editable` | Update payload includes a field where `editable: false`. Response shape: `{ ok: false, error: 'field_not_editable', field: '<key>' }` |
 | `missing_row_num` | `row_num` absent on update or delete |

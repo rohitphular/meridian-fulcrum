@@ -25,7 +25,7 @@ function _groupByCountry(outTxs) {
 
     // Most common major category in this country
     const catFreq = {};
-    for (const t of txs) { const c = (t.major_category !== undefined && t.major_category !== null) ? t.major_category : '—'; catFreq[c] = (catFreq[c] ?? 0) + 1; }
+    for (const t of txs) { const c = (t.major_category !== undefined && t.major_category !== null) ? t.major_category : '—'; catFreq[c] = (c in catFreq ? catFreq[c] : 0) + 1; }
     const topCat = Object.entries(catFreq).sort((a, b) => b[1] - a[1])[0]?.[0] ?? '—';
 
     return { label, total, count, avg: count ? total / count : 0, topCat };

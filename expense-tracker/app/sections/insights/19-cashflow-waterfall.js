@@ -18,7 +18,7 @@ function _startBalance(accounts, from) {
   const prevEnd = new Date(from.getFullYear(), from.getMonth(), 0);
   if (prevEnd < new Date(2000, 0, 1)) return 0; // guard against very early dates
   const daily = computeDailyTotalAssets(active, state.transactions, prevEnd, prevEnd);
-  return daily[0] ?? 0;
+  return daily.length > 0 ? daily[0] : 0;
 }
 
 // ── Expense grouping ──────────────────────────────────────────────────────────
@@ -100,7 +100,7 @@ function _buildChartOptions(sym, C) {
       tooltip: {
         ...base.plugins.tooltip,
         callbacks: {
-          title: ctx => ctx[0]?.label ?? '',
+          title: ctx => (ctx[0] !== undefined && ctx[0] !== null) ? ctx[0].label : '',
           label: ctx => {
             // Only show tooltip for the visible dataset (index 1), not the invisible base
             if (ctx.datasetIndex === 0) return null;
