@@ -32,8 +32,9 @@ function _destroyChart() {
 function _groupCounterparties(outTxs) {
   const map = new Map();
   for (const tx of outTxs) {
-    const key = ((tx.counterparty_name ?? '').trim() || 'Unknown merchant').toLowerCase();
-    const display = ((tx.counterparty_name ?? '').trim() || 'Unknown merchant');
+    const _cp = (tx.counterparty_name !== undefined && tx.counterparty_name !== null) ? String(tx.counterparty_name).trim() : '';
+    const key = (_cp || 'Unknown merchant').toLowerCase();
+    const display = _cp || 'Unknown merchant';
     if (!map.has(key)) map.set(key, { label: display, txs: [] });
     map.get(key).txs.push(tx);
   }
@@ -53,7 +54,7 @@ function _prevSpend(labelLower) {
   return sumAmountBase(state.transactions
     .filter(t => {
       if (t.tx_type !== 'money-out') return false;
-      const cp = ((t.counterparty_name ?? '').trim() || 'unknown merchant').toLowerCase();
+      const cp = ((t.counterparty_name !== undefined && t.counterparty_name !== null) ? String(t.counterparty_name).trim() : '' || 'unknown merchant').toLowerCase();
       if (cp !== labelLower) return false;
       const d  = new Date(t.tx_date_local);
       const dl = new Date(d.getFullYear(), d.getMonth(), d.getDate());
@@ -84,7 +85,7 @@ function _showPanel(idx) {
   const txRows = sorted.map(t => {
     const d    = new Date(t.tx_date_local);
     const date = d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
-    const cat  = esc(t.minor_category ?? t.major_category ?? '—');
+    const cat  = esc((t.minor_category !== undefined && t.minor_category !== null) ? t.minor_category : (t.major_category !== undefined && t.major_category !== null) ? t.major_category : '—');
     return `<li style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--hair);font-size:var(--text-sm)">
       <span style="color:var(--muted);width:60px;flex-shrink:0">${esc(date)}</span>
       <span style="flex:1;padding:0 8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${cat}</span>
@@ -102,7 +103,7 @@ function _showPanel(idx) {
   const labelLower   = row.label.toLowerCase();
   const allMerchant  = state.transactions.filter(t =>
     t.tx_type === 'money-out' &&
-    ((t.counterparty_name ?? '').trim() || 'unknown merchant').toLowerCase() === labelLower
+    ((t.counterparty_name !== undefined && t.counterparty_name !== null) ? String(t.counterparty_name).trim() : '' || 'unknown merchant').toLowerCase() === labelLower
   );
   const monthlySpend = sparkMonths.map(mk =>
     sumAmountBase(allMerchant.filter(t => t.tx_date_local.startsWith(mk)))

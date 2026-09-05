@@ -25,7 +25,7 @@ function _destroyChart() { _setChart(null); }
 function _groupBy(inTxs, field, fallback) {
   const map = new Map();
   for (const tx of inTxs) {
-    const key = (tx[field] ?? '').trim() || fallback;
+    const key = ((tx[field] !== undefined && tx[field] !== null) ? String(tx[field]) : '').trim() || fallback;
     if (!map.has(key)) map.set(key, []);
     map.get(key).push(tx);
   }
@@ -94,7 +94,7 @@ function _renderDonut(viewEl, segments, sym, C, field, fallback, inTxs) {
         const label = labels[elements[0].index];
         if (label === 'Other') return;
         const segTxs = inTxs
-          .filter(t => ((t[field] ?? '').trim() || fallback) === label)
+          .filter(t => (((t[field] !== undefined && t[field] !== null) ? String(t[field]) : '').trim() || fallback) === label)
           .sort((a, b) => new Date(b.tx_date_local) - new Date(a.tx_date_local));
         const segTotal = sumAmountBase(segTxs);
 

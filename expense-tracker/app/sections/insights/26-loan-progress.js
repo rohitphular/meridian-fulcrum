@@ -49,7 +49,7 @@ function _loanStats(acc) {
   const hasOpening    = originalBal > 0;
 
   const repayTxs      = _repaymentTxs(acc);
-  const openingDate   = acc.opening_date ?? repayTxs[0]?.tx_date_local ?? null;
+  const openingDate   = (acc.opening_date !== undefined && acc.opening_date !== null) ? acc.opening_date : (repayTxs[0]?.tx_date_local !== undefined && repayTxs[0]?.tx_date_local !== null) ? repayTxs[0].tx_date_local : null;
   const months        = _monthsSince(openingDate);
   const avgMonthly    = totalRepaid > 0 ? totalRepaid / months : 0;
   const monthsToPayoff = (avgMonthly > 0 && currentBal > 0) ? Math.ceil(currentBal / avgMonthly) : null;
@@ -119,7 +119,7 @@ function _renderHistoryChart(canvasId, loan, sym, C) {
 function _loanCardHtml(loan, sym) {
   const fmt    = v => sym + Math.abs(v).toLocaleString('en-GB', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
   const fmtAvg = v => sym + Math.abs(v).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  const accId  = _safeId(loan.acc.id ?? loan.acc.name);
+  const accId  = _safeId((loan.acc.id !== undefined && loan.acc.id !== null) ? loan.acc.id : loan.acc.name);
 
   let progressHtml = '';
   if (loan.paidOff) {
@@ -191,8 +191,8 @@ function _loanCardHtml(loan, sym) {
       </div>
     </div>` : `<p style="font-size:var(--text-xs);color:var(--muted);margin:12px 0 0">No repayment transactions found.</p>`;
 
-  const cat      = esc(loan.acc.sub_type ?? loan.acc.type ?? 'Liability');
-  const currency = esc(loan.acc.currency ?? '—');
+  const cat      = esc((loan.acc.sub_type !== undefined && loan.acc.sub_type !== null) ? loan.acc.sub_type : (loan.acc.type !== undefined && loan.acc.type !== null) ? loan.acc.type : 'Liability');
+  const currency = esc((loan.acc.currency !== undefined && loan.acc.currency !== null) ? loan.acc.currency : '—');
 
   return `
     <details style="background:var(--panel);border:1px solid var(--hair);border-radius:8px;padding:16px;margin-bottom:16px" data-loan-id="${esc(String(accId))}">
@@ -269,7 +269,7 @@ export async function render(containerId, { accounts, sym }) {
       if (!details.open) return;
       const accId = details.dataset.loanId;
       if (_historyCharts.has(accId)) return; // already created
-      const loan   = loans.find(l => _safeId(l.acc.id ?? l.acc.name) === accId);
+      const loan   = loans.find(l => _safeId((l.acc.id !== undefined && l.acc.id !== null) ? l.acc.id : l.acc.name) === accId);
       if (!loan) return;
       const chart = _renderHistoryChart(`history-canvas-${accId}`, loan, sym, C);
       if (chart) _historyCharts.set(accId, chart);

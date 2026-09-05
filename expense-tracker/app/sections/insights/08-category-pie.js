@@ -9,7 +9,7 @@ const MAX_SEGMENTS = 7;  // segments beyond this are merged into "Other"
 function _groupByMajor(moneyOut) {
   const map = new Map();
   moneyOut.forEach(t => {
-    const cat = t.major_category ?? 'Uncategorised';
+    const cat = (t.major_category !== undefined && t.major_category !== null) ? t.major_category : 'Uncategorised';
     map.set(cat, (map.get(cat) ?? []).concat(t));
   });
   return map;
@@ -18,8 +18,10 @@ function _groupByMajor(moneyOut) {
 function _groupByMinor(moneyOut) {
   const map = new Map();
   moneyOut.forEach(t => {
-    const key = `${t.major_category ?? 'Uncategorised'}|||${t.minor_category ?? '—'}`;
-    if (!map.has(key)) map.set(key, { major: t.major_category ?? 'Uncategorised', minor: t.minor_category ?? '—', txs: [] });
+    const _maj = (t.major_category !== undefined && t.major_category !== null) ? t.major_category : 'Uncategorised';
+    const _min = (t.minor_category !== undefined && t.minor_category !== null) ? t.minor_category : '—';
+    const key = `${_maj}|||${_min}`;
+    if (!map.has(key)) map.set(key, { major: _maj, minor: _min, txs: [] });
     map.get(key).txs.push(t);
   });
   return map;
@@ -99,8 +101,8 @@ function _renderDrillPanel(drillEl, moneyOut, category, topLabels, sym) {
   const fmt = v => sym + Math.abs(v).toLocaleString('en-GB', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
 
   const catTxs = (category === 'Other'
-    ? moneyOut.filter(t => !topLabels.includes(t.major_category ?? 'Uncategorised'))
-    : moneyOut.filter(t => (t.major_category ?? 'Uncategorised') === category)
+    ? moneyOut.filter(t => !topLabels.includes((t.major_category !== undefined && t.major_category !== null) ? t.major_category : 'Uncategorised'))
+    : moneyOut.filter(t => ((t.major_category !== undefined && t.major_category !== null) ? t.major_category : 'Uncategorised') === category)
   ).sort((a, b) => new Date(b.tx_date_local) - new Date(a.tx_date_local));
 
   const total = sumAmountBase(catTxs);

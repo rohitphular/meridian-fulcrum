@@ -15,7 +15,7 @@ function _buildDatasets(moneyOut, monthKeys, C) {
   const monthCatMaps = monthKeys.map(key => {
     const catMap = new Map();
     (byMonth.get(key) ?? []).forEach(t => {
-      const cat = t.major_category ?? 'Uncategorised';
+      const cat = (t.major_category !== undefined && t.major_category !== null) ? t.major_category : 'Uncategorised';
       if (!catMap.has(cat)) catMap.set(cat, []);
       catMap.get(cat).push(t);
     });

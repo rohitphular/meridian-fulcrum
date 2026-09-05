@@ -203,7 +203,7 @@ export async function render(containerId, { txs, from, to, sym }) {
         // Top income by counterparty
         const incMap = new Map();
         for (const t of monthIn) {
-          const k = t.counterparty_name ?? '(unknown)';
+          const k = (t.counterparty_name !== undefined && t.counterparty_name !== null) ? t.counterparty_name : '(unknown)';
           incMap.set(k, (incMap.get(k) ?? 0) + sumAmountBase([t]));
         }
         const incRows = [...incMap.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8)
@@ -213,7 +213,7 @@ export async function render(containerId, { txs, from, to, sym }) {
         // Top expenses by major category
         const expMap = new Map();
         for (const t of monthOut) {
-          const k = t.major_category ?? 'Uncategorised';
+          const k = (t.major_category !== undefined && t.major_category !== null) ? t.major_category : 'Uncategorised';
           expMap.set(k, (expMap.get(k) ?? 0) + sumAmountBase([t]));
         }
         const expRows = [...expMap.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8)

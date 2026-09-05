@@ -102,7 +102,7 @@ function _renderDrillPanel(drillEl, moneyOut, tag, sym) {
   }
 
   const tagTxs = moneyOut
-    .filter(t => String(t.tx_tags ?? '').split(';').map(s => s.toLowerCase().trim()).includes(tag))
+    .filter(t => String(t.tx_tags !== undefined && t.tx_tags !== null ? t.tx_tags : '').split(';').map(s => s.toLowerCase().trim()).includes(tag))
     .sort((a, b) => new Date(b.tx_date_local) - new Date(a.tx_date_local));
 
   const total = sumAmountBase(tagTxs);
@@ -115,7 +115,7 @@ function _renderDrillPanel(drillEl, moneyOut, tag, sym) {
     const desc = t.description && t.description !== t.counterparty_name ? t.description : '';
     return `<tr>
       <td style="${tdS};color:var(--muted);white-space:nowrap">${esc(date)}</td>
-      <td style="${tdS}">${esc(t.counterparty_name ?? '—')}</td>
+      <td style="${tdS}">${esc((t.counterparty_name !== undefined && t.counterparty_name !== null) ? String(t.counterparty_name) : '—')}</td>
       <td style="${tdS};color:var(--muted)">${esc(desc)}</td>
       <td style="${tdS};text-align:right;white-space:nowrap">${esc(fmt(sumAmountBase([t])))}</td>
     </tr>`;

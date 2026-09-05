@@ -26,7 +26,7 @@ function _startBalance(accounts, from) {
 function _groupExpenses(outTxs) {
   const catMap = new Map();
   for (const tx of outTxs) {
-    const cat = tx.major_category ?? 'Uncategorised';
+    const cat = (tx.major_category !== undefined && tx.major_category !== null) ? tx.major_category : 'Uncategorised';
     if (!catMap.has(cat)) catMap.set(cat, []);
     catMap.get(cat).push(tx);
   }

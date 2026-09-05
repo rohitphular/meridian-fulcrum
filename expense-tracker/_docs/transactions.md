@@ -185,9 +185,9 @@ Error code strings carry no embedded values. Where additional context is needed 
 | `missing_category` | create, update | `major_category` or `minor_category` is blank | — |
 | `unknown_category` | create, update | `(tx_type, major_category, minor_category)` composite key not found in the category schema | — |
 | `missing_source_account` | create | Source account required by category but not provided | — |
-| `missing_source_amount_local` | create | Source amount required but missing or non-positive | — |
+| `missing_source_amount` | create | Source amount required but missing or non-positive | — |
 | `missing_target_account` | create | Target account required by category but not provided | — |
-| `missing_target_amount_local` | create | Target amount required but missing or non-positive | — |
+| `missing_target_amount` | create | Target amount required but missing or non-positive | — |
 | `unknown_account_id` | create, update | `account_id` is not a known account | — |
 | `unknown_source_account` | create | `source_account` is not a known account | — |
 | `unknown_target_account` | create | `target_account` is not a known account | — |
@@ -214,10 +214,10 @@ The import panel accepts a CSV file. Canonical column names (no aliases):
 | `tx_date_local` | Yes | Date/time of the transaction in local time (e.g. `2026-08-12 14:30:00`). Stored as-is — no UTC conversion. |
 | `tx_timezone_local` | No | IANA timezone string (e.g. `Europe/London`). When submitting via the UI form, this is auto-detected from the browser (`Intl.DateTimeFormat().resolvedOptions().timeZone`) and sent silently — it is never a user-typed input. CSV import may supply it explicitly. Immutable after creation. |
 | `tx_type` | Yes | `money-in` or `money-out` |
-| `source_account` | Yes | Account name (not ID). Resolved to account ID at import time. |
-| `target_account` | Conditional | Required for transfer rows. Target account name (resolved to account ID at import time). |
-| `source_amount_local` | Yes | Positive number in the source account's currency |
-| `target_amount_local` | Conditional | Required for transfer rows. Amount arriving in the target account's currency. |
+| `source_account` | Conditional | Account name (not ID). Required for `money-out` and transfer rows; empty for standalone `money-in` rows. Resolved to account ID at import time. |
+| `target_account` | Conditional | Account name (not ID). Required for `money-in` and transfer rows; empty for standalone `money-out` rows. Resolved to account ID at import time. |
+| `source_amount_local` | Conditional | Positive number in the source account's currency. At least one of `source_amount_local` or `target_amount_local` must be a finite positive number. Both are required for cross-currency transfers. |
+| `target_amount_local` | Conditional | Amount arriving in the target account's currency. Required for cross-currency transfers; may be omitted for same-currency transfers (defaults to `source_amount_local`). |
 | `major_category` | Yes | |
 | `minor_category` | Yes | |
 | `description` | No | |

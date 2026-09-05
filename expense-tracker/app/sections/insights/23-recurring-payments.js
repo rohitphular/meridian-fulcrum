@@ -44,7 +44,7 @@ function _detectRecurring(outTxs) {
   // Group by normalised counterparty name
   const map = new Map();
   for (const tx of outTxs) {
-    const key = ((tx.counterparty_name ?? '').trim() || 'unknown').toLowerCase();
+    const key = ((tx.counterparty_name !== undefined && tx.counterparty_name !== null) ? String(tx.counterparty_name).trim() : '' || 'unknown').toLowerCase();
     if (!map.has(key)) map.set(key, []);
     map.get(key).push(tx);
   }
@@ -71,12 +71,12 @@ function _detectRecurring(outTxs) {
     if (!frequency) continue;
 
     recurring.push({
-      counterparty: (sorted[0].counterparty_name ?? 'Unknown').trim(),
+      counterparty: ((sorted[0].counterparty_name !== undefined && sorted[0].counterparty_name !== null) ? String(sorted[0].counterparty_name) : 'Unknown').trim(),
       amount:       amtMean,
       frequency,
       count:        sorted.length,
       lastDate:     dates[dates.length - 1],
-      category:     sorted[sorted.length - 1].major_category ?? 'Other',
+      category: (sorted[sorted.length - 1].major_category !== undefined && sorted[sorted.length - 1].major_category !== null) ? sorted[sorted.length - 1].major_category : 'Other',
     });
   }
 
@@ -188,7 +188,7 @@ function _showHistory(historyEl, cpKey) {
   const cpTxs = state.transactions
     .filter(t =>
       t.tx_type === 'money-out' &&
-      ((t.counterparty_name ?? '').trim() || 'unknown').toLowerCase() === cpKey
+      ((t.counterparty_name !== undefined && t.counterparty_name !== null) ? String(t.counterparty_name).trim() : '' || 'unknown').toLowerCase() === cpKey
     )
     .sort((a, b) => new Date(a.tx_date_local) - new Date(b.tx_date_local));
 
@@ -298,7 +298,7 @@ export async function render(containerId, { txs, from, to, sym }) {
   // Then filter to only those that fired at least once within the selected period.
   const allOutTxs    = state.transactions.filter(t => t.tx_type === 'money-out');
   const periodOutTxs = txs.filter(t => t.tx_type === 'money-out');
-  const periodKeys   = new Set(periodOutTxs.map(t => ((t.counterparty_name ?? '').trim() || 'unknown').toLowerCase()));
+  const periodKeys   = new Set(periodOutTxs.map(t => ((t.counterparty_name !== undefined && t.counterparty_name !== null) ? String(t.counterparty_name).trim() : '' || 'unknown').toLowerCase()));
   _recurring = _detectRecurring(allOutTxs).filter(r => periodKeys.has(r.counterparty.toLowerCase()));
   _C           = getCssColors();
 

@@ -182,7 +182,7 @@ function updateTransaction(body) {
   const sheet   = getOrCreateSheet(TRANSACTIONS_SHEET, cols);
   const rowNum  = Number(body.row_num);
   const lastRow = sheet.getLastRow();
-  if (rowNum < 2 || rowNum > lastRow) return { ok: false, error: 'invalid_row' };
+  if (!Number.isFinite(rowNum) || rowNum < 2 || rowNum > lastRow) return { ok: false, error: 'invalid_row' };
 
   const oldRow = sheet.getRange(rowNum, 1, 1, cols.length).getValues()[0];
 
@@ -251,7 +251,7 @@ function deleteTransaction(body) {
   const sheet   = getOrCreateSheet(TRANSACTIONS_SHEET, cols);
   const rowNum  = Number(body.row_num);
   const lastRow = sheet.getLastRow();
-  if (rowNum < 2 || rowNum > lastRow) return { ok: false, error: 'invalid_row' };
+  if (!Number.isFinite(rowNum) || rowNum < 2 || rowNum > lastRow) return { ok: false, error: 'invalid_row' };
 
   // TX-NEW-H-1 + T-H6: single row read; mutate in-array; single setValues() write.
   const rowData           = sheet.getRange(rowNum, 1, 1, cols.length).getValues()[0];
@@ -289,7 +289,7 @@ function restoreTransaction(body) {
   const sheet   = getOrCreateSheet(TRANSACTIONS_SHEET, cols);
   const rowNum  = Number(body.row_num);
   const lastRow = sheet.getLastRow();
-  if (rowNum < 2 || rowNum > lastRow) return { ok: false, error: 'invalid_row' };
+  if (!Number.isFinite(rowNum) || rowNum < 2 || rowNum > lastRow) return { ok: false, error: 'invalid_row' };
 
   // T-H6: single row read for all field values — replaces N individual getValue() calls.
   const rowData           = sheet.getRange(rowNum, 1, 1, cols.length).getValues()[0];

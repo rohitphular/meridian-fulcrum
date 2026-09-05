@@ -13,7 +13,7 @@ const TOP_N = 10;
 function _groupByMinor(txs) {
   const buckets = new Map();
   txs.forEach(t => {
-    const cat = t.minor_category ?? 'Uncategorised';
+    const cat = (t.minor_category !== undefined && t.minor_category !== null) ? t.minor_category : 'Uncategorised';
     if (!buckets.has(cat)) buckets.set(cat, []);
     buckets.get(cat).push(t);
   });

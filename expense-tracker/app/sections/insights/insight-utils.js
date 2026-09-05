@@ -338,7 +338,7 @@ export function domesticCountry() {
 export function splitTags(txs) {
   const pairs = [];
   txs.forEach(tx => {
-    const tags = String(tx.tx_tags ?? '').split(';').map(t => t.trim()).filter(Boolean);
+    const tags = String(tx.tx_tags !== undefined && tx.tx_tags !== null ? tx.tx_tags : '').split(';').map(t => t.trim()).filter(Boolean);
     const tagCount = tags.length;
     tags.forEach(tag => pairs.push({ tag, tx, tagCount }));
   });
@@ -460,9 +460,9 @@ export function baseChartOptions(sym, C) {
 
 export function renderDrillTxTable(txs, sym) {
   const rows = txs.map(t => {
-    const date = (t.tx_date_local ?? '').slice(0, 10) || '—';
-    const cp   = t.counterparty_name ?? '—';
-    const cat  = t.minor_category ?? t.major_category ?? '—';
+    const date = ((t.tx_date_local !== undefined && t.tx_date_local !== null) ? String(t.tx_date_local) : '').slice(0, 10) || '—';
+    const cp   = (t.counterparty_name !== undefined && t.counterparty_name !== null && String(t.counterparty_name).trim() !== '') ? t.counterparty_name : '—';
+    const cat  = (t.minor_category !== undefined && t.minor_category !== null && String(t.minor_category).trim() !== '') ? t.minor_category : (t.major_category !== undefined && t.major_category !== null && String(t.major_category).trim() !== '') ? t.major_category : '—';
     const amt  = sumAmountBase([t]);
     const amtFmt = sym + Math.abs(amt).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     return `<tr class="drill-row">

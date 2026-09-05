@@ -17,7 +17,7 @@ function _buildTagMonthly(moneyOut, monthKeys) {
 
   monthKeys.forEach(mk => {
     (byMonth.get(mk) ?? []).forEach(tx => {
-      const tags = String(tx.tx_tags ?? '').split(';').map(t => t.toLowerCase().trim()).filter(Boolean);
+      const tags = String(tx.tx_tags !== undefined && tx.tx_tags !== null ? tx.tx_tags : '').split(';').map(t => t.toLowerCase().trim()).filter(Boolean);
       if (!tags.length) return;
       const share = sumAmountBase([tx]) / tags.length;
       tags.forEach(tag => {
@@ -126,11 +126,11 @@ export async function render(containerId, { txs, sym, from, to }) {
 
         const tagTxs = moneyOut.filter(t => {
           if (!t.tx_date_local.startsWith(mk)) return false;
-          return String(t.tx_tags ?? '').split(';').map(s => s.toLowerCase().trim()).includes(tag);
+          return String(t.tx_tags !== undefined && t.tx_tags !== null ? t.tx_tags : '').split(';').map(s => s.toLowerCase().trim()).includes(tag);
         }).sort((a, b) => new Date(b.tx_date_local) - new Date(a.tx_date_local));
 
         const shareTotal = tagTxs.reduce((s, t) => {
-          const tags = String(t.tx_tags ?? '').split(';').filter(Boolean);
+          const tags = String(t.tx_tags !== undefined && t.tx_tags !== null ? t.tx_tags : '').split(';').filter(Boolean);
           return s + sumAmountBase([t]) / Math.max(tags.length, 1);
         }, 0);
         const fmtV = v => sym + Math.abs(v).toLocaleString('en-GB', { minimumFractionDigits: 0, maximumFractionDigits: 0 });

@@ -175,7 +175,7 @@ function _renderAccounts(container, { accounts, sym }) {
   // Group asset accounts by sub_type (fall back to type)
   const groupMap = new Map();
   assetAccounts.forEach(a => {
-    const key = a.sub_type ?? a.type ?? 'other';
+    const key = (a.sub_type !== undefined && a.sub_type !== null) ? a.sub_type : (a.type !== undefined && a.type !== null) ? a.type : 'other';
     if (!groupMap.has(key)) groupMap.set(key, []);
     groupMap.get(key).push(a);
   });

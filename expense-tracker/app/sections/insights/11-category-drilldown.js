@@ -29,7 +29,7 @@ function _setChart(instance) {
 function _groupMajors(moneyOut) {
   const map = new Map();
   moneyOut.forEach(t => {
-    const cat = t.major_category ?? 'Uncategorised';
+    const cat = (t.major_category !== undefined && t.major_category !== null) ? t.major_category : 'Uncategorised';
     if (!map.has(cat)) map.set(cat, []);
     map.get(cat).push(t);
   });
@@ -39,10 +39,10 @@ function _groupMajors(moneyOut) {
 }
 
 function _groupMinors(moneyOut, major) {
-  const relevant = moneyOut.filter(t => (t.major_category ?? 'Uncategorised') === major);
+  const relevant = moneyOut.filter(t => ((t.major_category !== undefined && t.major_category !== null) ? t.major_category : 'Uncategorised') === major);
   const map = new Map();
   relevant.forEach(t => {
-    const cat = t.minor_category ?? 'Other';
+    const cat = (t.minor_category !== undefined && t.minor_category !== null) ? t.minor_category : 'Other';
     if (!map.has(cat)) map.set(cat, []);
     map.get(cat).push(t);
   });
@@ -216,8 +216,8 @@ function _renderLevel2(container, moneyOut, major, majorColor, sym) {
 function _renderLevel3(container, moneyOut, major, majorColor, minor, sym) {
   const txs   = moneyOut
     .filter(t =>
-      (t.major_category ?? 'Uncategorised') === major &&
-      (t.minor_category ?? 'Other') === minor
+      ((t.major_category !== undefined && t.major_category !== null) ? t.major_category : 'Uncategorised') === major &&
+      ((t.minor_category !== undefined && t.minor_category !== null) ? t.minor_category : 'Other') === minor
     )
     .sort((a, b) => new Date(b.tx_date_local) - new Date(a.tx_date_local));
 
@@ -279,14 +279,14 @@ export async function render(containerId, { txs, sym }) {
 
   if (state.insightDrillMajor) {
     // Verify the drilled major still has data in the current period
-    const exists = moneyOut.some(t => (t.major_category ?? 'Uncategorised') === state.insightDrillMajor);
+    const exists = moneyOut.some(t => ((t.major_category !== undefined && t.major_category !== null) ? t.major_category : 'Uncategorised') === state.insightDrillMajor);
     if (!exists) { state.insightDrillMajor = null; state.insightDrillMinor = null; }
   }
 
   if (state.insightDrillMajor && state.insightDrillMinor) {
     const minorExists = moneyOut.some(t =>
-      (t.major_category ?? 'Uncategorised') === state.insightDrillMajor &&
-      (t.minor_category ?? 'Other') === state.insightDrillMinor
+      ((t.major_category !== undefined && t.major_category !== null) ? t.major_category : 'Uncategorised') === state.insightDrillMajor &&
+      ((t.minor_category !== undefined && t.minor_category !== null) ? t.minor_category : 'Other') === state.insightDrillMinor
     );
     if (!minorExists) state.insightDrillMinor = null;
   }

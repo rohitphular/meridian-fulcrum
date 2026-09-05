@@ -14,7 +14,7 @@ function _normalise(raw) {
 function _groupByCountry(outTxs) {
   const map = new Map();
   for (const tx of outTxs) {
-    const label = _normalise(tx.tx_location_country ?? '');
+    const label = _normalise((tx.user_location_country !== undefined && tx.user_location_country !== null) ? tx.user_location_country : '');
     if (!map.has(label)) map.set(label, []);
     map.get(label).push(tx);
   }
@@ -25,7 +25,7 @@ function _groupByCountry(outTxs) {
 
     // Most common major category in this country
     const catFreq = {};
-    for (const t of txs) { const c = t.major_category ?? '—'; catFreq[c] = (catFreq[c] ?? 0) + 1; }
+    for (const t of txs) { const c = (t.major_category !== undefined && t.major_category !== null) ? t.major_category : '—'; catFreq[c] = (catFreq[c] ?? 0) + 1; }
     const topCat = Object.entries(catFreq).sort((a, b) => b[1] - a[1])[0]?.[0] ?? '—';
 
     return { label, total, count, avg: count ? total / count : 0, topCat };
@@ -104,13 +104,13 @@ function _renderCityDrill(drillEl, outTxs, country, sym) {
   const tdS    = `padding:9px 8px;font-size:var(--text-sm);border-bottom:1px solid var(--hair)`;
 
   const countryTxs = country === 'Unknown'
-    ? outTxs.filter(t => !t.tx_location_country || !t.tx_location_country.trim())
-    : outTxs.filter(t => _normalise(t.tx_location_country ?? '') === country);
+    ? outTxs.filter(t => !t.user_location_country || !t.user_location_country.trim())
+    : outTxs.filter(t => _normalise((t.user_location_country !== undefined && t.user_location_country !== null) ? t.user_location_country : '') === country);
 
   // Group by city
   const cityMap = new Map();
   for (const t of countryTxs) {
-    const rawCity = t.tx_location_city?.trim();
+    const rawCity = (t.user_location_city !== undefined && t.user_location_city !== null) ? String(t.user_location_city).trim() : '';
     const city = rawCity ? rawCity : '(city unknown)';
     if (!cityMap.has(city)) cityMap.set(city, []);
     cityMap.get(city).push(t);
