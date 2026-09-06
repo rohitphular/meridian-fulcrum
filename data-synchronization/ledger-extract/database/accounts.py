@@ -50,7 +50,7 @@ def _to_sync_notes(e: Exception) -> str:
     if isinstance(e, ValueError):
         return str(e).removeprefix("accounts: ")
     if isinstance(e, pg_errors.UniqueViolation):
-        return "Duplicate account_id — already exists in DB"
+        return "Duplicate account — account with this ID already exists in DB"
     if isinstance(e, pg_errors.ForeignKeyViolation):
         constraint = e.diag.constraint_name
         if constraint == "fk_am_rate_ref":
@@ -139,7 +139,7 @@ def upsert_accounts(conn: Any, sheets_client: SheetsClient, rows: list[dict[str,
                 failed += 1
                 continue
 
-            natural_key = typed["account_id"]
+            natural_key = typed["id"]
 
             if sync_status in ("create-pending", "create-failed"):
                 local_currency = typed["local_currency"]
@@ -173,26 +173,32 @@ def upsert_accounts(conn: Any, sheets_client: SheetsClient, rows: list[dict[str,
                         cursor.execute(
                             """
                             INSERT INTO account_master (
-                                account_id, account_name, account_type, account_subtype,
+                                id, account_name, legal_entity_name, account_type, account_subtype,
+                                local_timezone, opening_date_local, closing_date_local,
                                 opening_amount_local_value, opening_amount_base_value,
                                 local_currency, base_currency,
                                 currency_rate_ref,
                                 account_description, record_status, created_at, updated_at
-                            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now(), now())
-                            ON CONFLICT (account_id) DO UPDATE SET
+                            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now(), now())
+                            ON CONFLICT (id) DO UPDATE SET
                                 account_name        = EXCLUDED.account_name,
                                 account_type        = EXCLUDED.account_type,
                                 account_subtype     = EXCLUDED.account_subtype,
+                                closing_date_local  = EXCLUDED.closing_date_local,
                                 account_description = EXCLUDED.account_description,
                                 record_status       = EXCLUDED.record_status,
                                 updated_at          = now()
                             RETURNING id
                             """,
                             (
-                                typed["account_id"],
+                                typed["id"],
                                 typed["account_name"],
+                                typed["legal_entity_name"],
                                 typed["account_type"],
                                 typed["account_subtype"],
+                                typed["local_timezone"],
+                                typed["opening_date_local"],
+                                typed["closing_date_local"],
                                 local_minor,
                                 base_minor,
                                 local_currency,
@@ -204,7 +210,7 @@ def upsert_accounts(conn: Any, sheets_client: SheetsClient, rows: list[dict[str,
                         )
                         pk_row = cursor.fetchone()
                     if pk_row is None:
-                        raise RuntimeError(f"INSERT returned no id for account_id={natural_key}")
+                        raise RuntimeError(f"INSERT returned no id for id={natural_key}")
                     conn.commit()
                     sync_dt = datetime.now(timezone.utc).isoformat()
                     write_backs.append(sheets_accounts.write_back(sheet_row_num, "in-sync", sync_dt, ""))
@@ -234,19 +240,21 @@ def upsert_accounts(conn: Any, sheets_client: SheetsClient, rows: list[dict[str,
                                 account_name        = %s,
                                 account_type        = %s,
                                 account_subtype     = %s,
+                                closing_date_local  = %s,
                                 account_description = %s,
                                 record_status       = %s,
                                 updated_at          = now()
-                            WHERE account_id = %s
+                            WHERE id = %s
                             RETURNING id
                             """,
                             (
                                 typed["account_name"],
                                 typed["account_type"],
                                 typed["account_subtype"],
+                                typed["closing_date_local"],
                                 typed["account_description"],
                                 typed["record_status"],
-                                typed["account_id"],
+                                typed["id"],
                             ),
                         )
                         row_result = cursor.fetchone()
@@ -285,26 +293,32 @@ def upsert_accounts(conn: Any, sheets_client: SheetsClient, rows: list[dict[str,
                             cursor.execute(
                                 """
                                 INSERT INTO account_master (
-                                    account_id, account_name, account_type, account_subtype,
+                                    id, account_name, legal_entity_name, account_type, account_subtype,
+                                    local_timezone, opening_date_local, closing_date_local,
                                     opening_amount_local_value, opening_amount_base_value,
                                     local_currency, base_currency,
                                     currency_rate_ref,
                                     account_description, record_status, created_at, updated_at
-                                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now(), now())
-                                ON CONFLICT (account_id) DO UPDATE SET
+                                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now(), now())
+                                ON CONFLICT (id) DO UPDATE SET
                                     account_name        = EXCLUDED.account_name,
                                     account_type        = EXCLUDED.account_type,
                                     account_subtype     = EXCLUDED.account_subtype,
+                                    closing_date_local  = EXCLUDED.closing_date_local,
                                     account_description = EXCLUDED.account_description,
                                     record_status       = EXCLUDED.record_status,
                                     updated_at          = now()
                                 RETURNING id
                                 """,
                                 (
-                                    typed["account_id"],
+                                    typed["id"],
                                     typed["account_name"],
+                                    typed["legal_entity_name"],
                                     typed["account_type"],
                                     typed["account_subtype"],
+                                    typed["local_timezone"],
+                                    typed["opening_date_local"],
+                                    typed["closing_date_local"],
                                     local_minor,
                                     base_minor,
                                     local_currency,
@@ -316,7 +330,7 @@ def upsert_accounts(conn: Any, sheets_client: SheetsClient, rows: list[dict[str,
                             )
                             fallback_pk_row = cursor.fetchone()
                         if fallback_pk_row is None:
-                            raise RuntimeError(f"fallback INSERT returned no id for account_id={natural_key}")
+                            raise RuntimeError(f"fallback INSERT returned no id for id={natural_key}")
 
                     conn.commit()
                     sync_dt = datetime.now(timezone.utc).isoformat()

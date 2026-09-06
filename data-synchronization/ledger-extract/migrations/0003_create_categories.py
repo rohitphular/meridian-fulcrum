@@ -5,7 +5,7 @@ def upgrade(client: Any) -> None:
     with client.cursor() as cursor:
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS category_master (
-                id                       UUID        NOT NULL DEFAULT gen_random_uuid(),
+                id                       UUID        NOT NULL,
                 tx_type_key              TEXT        NOT NULL,
                 tx_type_label            TEXT        NOT NULL,
                 major_category_key       TEXT        NOT NULL,

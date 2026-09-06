@@ -69,6 +69,7 @@ def _insert_category(conn: Any, typed: dict[str, Any]) -> str:
         cursor.execute(
             """
             INSERT INTO category_master (
+                id,
                 tx_type_key, tx_type_label,
                 major_category_key, major_category_label,
                 minor_category_key, minor_category_label,
@@ -76,7 +77,7 @@ def _insert_category(conn: Any, typed: dict[str, Any]) -> str:
                 source_account_mandatory, target_account_mandatory,
                 is_subscription_eligible, record_status,
                 created_at, updated_at
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now(), now())
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now(), now())
             ON CONFLICT (tx_type_key, major_category_key, minor_category_key) DO UPDATE SET
                 tx_type_label            = EXCLUDED.tx_type_label,
                 major_category_label     = EXCLUDED.major_category_label,
@@ -92,6 +93,7 @@ def _insert_category(conn: Any, typed: dict[str, Any]) -> str:
             RETURNING id
             """,
             (
+                typed["id"],
                 typed["tx_type_key"],
                 typed["tx_type_label"],
                 typed["major_category_key"],

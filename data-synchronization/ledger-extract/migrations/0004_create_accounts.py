@@ -5,11 +5,14 @@ def upgrade(client: Any) -> None:
     with client.cursor() as cursor:
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS account_master (
-                id                         UUID        NOT NULL DEFAULT gen_random_uuid(),
-                account_id                 TEXT        NOT NULL,
+                id                         UUID        NOT NULL,
                 account_name               TEXT        NOT NULL,
+                legal_entity_name          TEXT,
                 account_type               TEXT        NOT NULL,
                 account_subtype            TEXT        NOT NULL,
+                local_timezone             TEXT,
+                opening_date_local         TEXT,
+                closing_date_local         TEXT,
                 opening_amount_local_value BIGINT      NOT NULL,
                 opening_amount_base_value  BIGINT      NOT NULL,
                 local_currency             CHAR(3)     NOT NULL,
@@ -21,7 +24,6 @@ def upgrade(client: Any) -> None:
                 updated_at                 TIMESTAMPTZ NOT NULL,
 
                 CONSTRAINT pk_am                      PRIMARY KEY (id),
-                CONSTRAINT uq_am_account_id           UNIQUE (account_id),
                 CONSTRAINT fk_am_account_type_subtype FOREIGN KEY (account_type, account_subtype) REFERENCES account_types(account_type, account_subtype),
                 CONSTRAINT fk_am_rate_ref             FOREIGN KEY (currency_rate_ref) REFERENCES currency_rates(id),
                 CONSTRAINT chk_am_account_type        CHECK (account_type IN ('asset', 'investment', 'liability')),

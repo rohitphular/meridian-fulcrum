@@ -21,10 +21,10 @@ None — all design decisions confirmed.
 | Q4 | Extension table PK | Surrogate `id UUID` — `(account_master_id, effective_from_dt)` UNIQUE. Multiple rows per account as state changes over time. |
 | Q5 | SCD pattern | `effective_from_dt TIMESTAMPTZ NOT NULL`, `effective_to_dt TIMESTAMPTZ NULL` — NULL means current record. Only one row per account may have `effective_to_dt IS NULL` at any time, enforced by a partial unique index. All datetimes stored and processed as UTC. |
 | Q6 | Entity linkage in extension tables | Polymorphic `entity_type TEXT` + `entity_id UUID` (both nullable, consistency enforced by CHECK). Phase 1: always NULL (no entity-driven trigger at account-creation time). Replaces any single FK approach. |
-| Q7 | Natural key | `{account_id}` — the sheet `id` column (`ACC-YYYYMMDD-NNN`) |
-| Q8 | Sheet `id` naming in DB | `account_id TEXT NOT NULL UNIQUE` — avoids collision with surrogate `id UUID` PK |
+| Q7 | Natural key | `{id}` — the sheet `id` column (UUID stamped by GAS on create) |
+| Q8 | Sheet `id` in DB | `id UUID NOT NULL` — used directly as the PK; no surrogate UUID, no `account_id` column. Same pattern as `category_master`. |
 | Q9 | Base table name | `account_master` — consistent with `category_master` naming pattern |
-| Q10 | 2-word minimum column names | Enforced on all non-PK columns. PK stays `id`. Sheet `name` → `account_name`; sheet `type` → `account_type`; sheet `sub_type` → `account_subtype`; sheet `currency` → `local_currency`; sheet `opening_value` → `opening_amount_local_value`; sheet `description` → `account_description`. All other mappings follow the same pattern. |
+| Q10 | 2-word minimum column names | Enforced on all non-PK columns. PK stays `id`. Sheet `account_name` → `account_name`; sheet `type` → `account_type`; sheet `sub_type` → `account_subtype`; sheet `local_currency` → `local_currency`; sheet `opening_value_local` → `opening_amount_local_value`; sheet `description` → `account_description`. All other mappings follow the same pattern. |
 | Q11 | `account_master` FK to `account_types` | `FOREIGN KEY (account_type, account_subtype) REFERENCES account_types(account_type, account_subtype)` |
 | Q12 | Deletion model | `record_status TEXT NOT NULL` is the sole status field — mirrored verbatim from the sheet on every insert/update. When a user deletes an account via the app, GAS sets `record_status = 'deleted'` and `sync_status = 'update-pending'`; the extractor picks it up via the normal update path. No `is_deleted` flag, no `deleted_at` timestamp, no soft-delete pass. Same pattern as `category_master`. |
 | Q13 | `opening_amount_local_value` sign convention | Stored in minor units — the sheet value (major units) is converted to `int` minor units by the extract job at write time. Negative for liabilities (the GAS backend negates user input on write; minor unit conversion preserves sign). `opening_amount_base_value` follows the same sign — for non-XAU accounts computed as `int(local_major / rate_value × 10^9)` nanograms; for XAU accounts `base_minor = local_minor` (no rate lookup — see Q40). Since `rate_value > 0` (enforced by CHECK on `currency_rates`), sign is preserved for non-XAU. Extension tables use positive magnitudes (see Q14). |
@@ -56,24 +56,28 @@ None — all design decisions confirmed.
 
 ---
 
-## Sheet schema (14 columns)
+## Sheet schema (18 columns)
 
 | # | Column | Notes |
 |---|--------|-------|
-| 1 | `id` | Natural key — `ACC-YYYYMMDD-NNN`. Maps to `account_id`. |
-| 2 | `name` | Maps to `account_name`. |
-| 3 | `type` | `asset`, `investment`, `liability`. Maps to `account_type`. |
-| 4 | `sub_type` | Maps to `account_subtype`. |
-| 5 | `currency` | Stored uppercase — maps to `local_currency` |
-| 6 | `opening_value` | Balance at import. Negative in sheet for liabilities (backend negates user input). Immutable after create. Maps to `opening_amount_local_value`. |
-| 7 | `current_value` | Virtual — always blank in sheet; injected at read time. Not stored in DB. |
-| 8 | `description` | Optional. Maps to `account_description`. NULL if empty. |
-| 9 | `record_status` | `active`, `inactive`, `deleted`, `locked` |
-| 10 | `sync_status` | Written back by extract job |
-| 11 | `sync_date_time` | Written back by extract job |
-| 12 | `sync_notes` | Written back by extract job |
-| 13 | `created_at` | Backend-stamped audit column — not stored in DB |
-| 14 | `updated_at` | Backend-stamped audit column — not stored in DB |
+| 1 | `id` | UUID — stamped by GAS on create; never changed; authoritative row identifier |
+| 2 | `account_name` | |
+| 3 | `legal_entity_name` | Optional — institution name; immutable after create |
+| 4 | `type` | `asset`, `investment`, `liability`. Maps to `account_type`. |
+| 5 | `sub_type` | Maps to `account_subtype`. |
+| 6 | `local_currency` | 3-char uppercase ISO code; stored uppercase; immutable after create |
+| 7 | `local_timezone` | IANA timezone string auto-detected from browser; immutable after create; never a user-typed field |
+| 8 | `opening_date_local` | Datetime the account was opened, stored in local time as-is (no UTC conversion); immutable after create |
+| 9 | `closing_date_local` | Optional — set when account is closed; editable |
+| 10 | `opening_value_local` | Balance at import in major units. Negative in sheet for liabilities (GAS negates user input). Immutable after create. Maps to `opening_amount_local_value`. |
+| 11 | `current_value_local` | Virtual — always blank in sheet; injected at read time by GAS. Not stored in DB. |
+| 12 | `description` | Optional. Maps to `account_description`. NULL if empty. |
+| 13 | `record_status` | `active`, `inactive`, `deleted`, `locked` |
+| 14 | `sync_status` | Backend-stamped — extractor writes back cols 14–16 only |
+| 15 | `sync_date` | Backend-stamped |
+| 16 | `sync_notes` | Backend-stamped |
+| 17 | `created_at` | Backend-stamped audit column — not stored in DB |
+| 18 | `updated_at` | Backend-stamped audit column — not stored in DB |
 
 ---
 
@@ -109,24 +113,26 @@ Common columns shared by every account regardless of account subtype.
 
 | Column | Sheet col | DB type | Notes |
 |--------|-----------|---------|-------|
-| `id` | — | `UUID NOT NULL DEFAULT gen_random_uuid()` | Surrogate PK |
-| `account_id` | 1 (`id`) | `TEXT NOT NULL` | Natural key — UNIQUE; `ACC-YYYYMMDD-NNN` |
-| `account_name` | 2 (`name`) | `TEXT NOT NULL` | Hard error if empty |
-| `account_type` | 3 (`type`) | `TEXT NOT NULL` | FK to account_types; hard error if not in `{'asset', 'investment', 'liability'}` |
-| `account_subtype` | 4 (`sub_type`) | `TEXT NOT NULL` | FK to account_types; hard error if empty |
-| `opening_amount_local_value` | 6 (`opening_value`) | `BIGINT NOT NULL` | Sheet value converted to minor units (e.g., pence for GBP, nanograms for XAU) — negative for liabilities; immutable after create |
+| `id` | 1 (`id`) | `UUID NOT NULL` | PK — read from sheet col 1; UUID stamped by GAS on create; never changed |
+| `account_name` | 2 (`account_name`) | `TEXT NOT NULL` | Hard error if empty |
+| `legal_entity_name` | 3 (`legal_entity_name`) | `TEXT` | Optional; NULL if empty; immutable after create |
+| `account_type` | 4 (`type`) | `TEXT NOT NULL` | FK to account_types; hard error if not in `{'asset', 'investment', 'liability'}` |
+| `account_subtype` | 5 (`sub_type`) | `TEXT NOT NULL` | FK to account_types; hard error if empty |
+| `local_timezone` | 7 (`local_timezone`) | `TEXT` | Optional; NULL if empty; immutable after create |
+| `opening_date_local` | 8 (`opening_date_local`) | `TEXT` | Stored as-is from sheet (no UTC conversion); immutable after create |
+| `closing_date_local` | 9 (`closing_date_local`) | `TEXT` | Optional; NULL if empty; editable — included in UPDATE SET |
+| `opening_amount_local_value` | 10 (`opening_value_local`) | `BIGINT NOT NULL` | Sheet value converted to minor units (e.g., pence for GBP, nanograms for XAU) — negative for liabilities; immutable after create |
 | `opening_amount_base_value` | — | `BIGINT NOT NULL` | XAU equivalent of `opening_amount_local_value` in nanograms (`10^9` nanograms = 1 gram); computed by extract job; immutable after create |
-| `local_currency` | 5 (`currency`) | `CHAR(3) NOT NULL` | 3-char uppercase ISO code; immutable after create |
+| `local_currency` | 6 (`local_currency`) | `CHAR(3) NOT NULL` | 3-char uppercase ISO code; immutable after create |
 | `base_currency` | — | `CHAR(3) NOT NULL` | Base currency active at create time (currently always `'XAU'`); immutable after create |
 | `currency_rate_ref` | — | `UUID` | FK → `currency_rates(id)`; NULL when `local_currency = base_currency`; immutable after create |
-| `account_description` | 8 (`description`) | `TEXT` | NULL if empty |
-| `record_status` | 9 (`record_status`) | `TEXT NOT NULL` | Mirrors sheet verbatim; hard error if empty or not in `{'active', 'inactive', 'deleted', 'locked'}` |
+| `account_description` | 12 (`description`) | `TEXT` | NULL if empty |
+| `record_status` | 13 (`record_status`) | `TEXT NOT NULL` | Mirrors sheet verbatim; hard error if empty or not in `{'active', 'inactive', 'deleted', 'locked'}` |
 | `created_at` | — | `TIMESTAMPTZ NOT NULL` | When first written by the extract job |
 | `updated_at` | — | `TIMESTAMPTZ NOT NULL` | When last updated by the extract job |
 
 Constraints:
 - `CONSTRAINT pk_am PRIMARY KEY (id)`
-- `CONSTRAINT uq_am_account_id UNIQUE (account_id)`
 - `CONSTRAINT fk_am_account_type_subtype FOREIGN KEY (account_type, account_subtype) REFERENCES account_types(account_type, account_subtype)`
 - `CONSTRAINT fk_am_rate_ref FOREIGN KEY (currency_rate_ref) REFERENCES currency_rates(id)`
 - `CONSTRAINT chk_am_account_type CHECK (account_type IN ('asset', 'investment', 'liability'))`
@@ -137,7 +143,7 @@ Constraints:
 - `CONSTRAINT chk_am_base_value_sign CHECK ((account_type IN ('asset', 'investment') AND opening_amount_base_value >= 0) OR (account_type = 'liability' AND opening_amount_base_value <= 0))`
 - `CONSTRAINT chk_am_rate_ref_required CHECK (local_currency = base_currency OR currency_rate_ref IS NOT NULL)`
 
-Note: sheet col 7 (`current_value`) is virtual and always blank — not stored. Sheet cols 10–12 (`sync_status`, `sync_date_time`, `sync_notes`) are written back to the sheet by the extract job. Sheet cols 13–14 (`created_at`, `updated_at`) are not stored in the DB. `local_currency` and `base_currency` are table-level columns shared by all monetary fields in the row — consistent naming with all extension tables.
+Note: sheet col 11 (`current_value_local`) is virtual and always blank — not stored. Sheet cols 14–16 (`sync_status`, `sync_date`, `sync_notes`) are written back by the extract job. Sheet cols 17–18 (`created_at`, `updated_at`) are not stored in the DB. `local_currency` and `base_currency` are table-level columns shared by all monetary fields in the row — consistent naming with all extension tables.
 
 ---
 
@@ -516,7 +522,7 @@ Constraints:
 
 **Sheet tab:** `'accounts'`
 
-**Model:** sync_status (same pattern as categories). The extract job reads `sync_status` from col 10 and writes back `sync_status`, `sync_date_time`, `sync_notes` (cols 10–12) in batch at the end of each batch.
+**Model:** sync_status (same pattern as categories). The extract job reads `sync_status` from col 14 and writes back `sync_status`, `sync_date`, `sync_notes` (cols 14–16) in batch at the end of each batch.
 
 **Batch size:** `_BATCH_SIZE = 1000` (same as all other entities).
 
@@ -534,21 +540,25 @@ Constraints:
 
 Missing or unrecognised `sync_status` → skip with a `warning` log; do not write back.
 
-**Natural key:** `account_id` — the sheet `id` value (`ACC-YYYYMMDD-NNN`). Hard error if empty after stripping whitespace.
+**Natural key:** `id` — the sheet UUID stamped by GAS on create. Hard error if empty after stripping whitespace.
 
 **Before the per-row loop (once per batch):** Call `_load_decimal_places(conn)` — `SELECT currency_code, decimal_places FROM currency_master` — and store the result as `{currency_code: decimal_places}`. This dict is used for minor unit conversion on every create row (and update fallback row) processed in the batch. Must execute before the loop begins, not conditionally inside the create branch.
 
 **Per-row pass (for each row read from sheet):**
 
-0. Read `sync_status` from col 10. If `in-sync`, skip. If missing or not one of the 5 known values, log a `warning` (`unknown_sync_status`) and continue — do not call transform, do not write back.
+0. Read `sync_status` from col 14. If `in-sync`, skip. If missing or not one of the 5 known values, log a `warning` (`unknown_sync_status`) and continue — do not call transform, do not write back.
 
 1. Call transform (`transforms/accounts.py`): validate all column-level fields and produce the typed dict. Validation rules:
-   - `account_id` (sheet col `id`): hard error if empty
-   - `account_name` (sheet col `name`): hard error if empty
-   - `account_type` (sheet col `type`): hard error if not in `{'asset', 'investment', 'liability'}`
-   - `account_subtype` (sheet col `sub_type`): hard error if empty
-   - `local_currency` (sheet col `currency`): hard error if empty; normalise to uppercase; hard error if `len != 3` after normalisation
-   - `opening_amount_local_value` (sheet col `opening_value`): parse via `decimal.Decimal(raw_str)` inside `try/except decimal.InvalidOperation` — re-raise as `ValueError` on parse failure; call `.is_finite()` — re-raise as `ValueError` if not finite. Never use `float`.
+   - `id` (sheet col 1): hard error if empty — UUID stamped by GAS on create
+   - `account_name` (sheet col 2): hard error if empty
+   - `account_type` (sheet col 4 `type`): hard error if not in `{'asset', 'investment', 'liability'}`
+   - `account_subtype` (sheet col 5 `sub_type`): hard error if empty
+   - `local_currency` (sheet col 6): hard error if empty; normalise to uppercase; hard error if `len != 3` after normalisation
+   - `legal_entity_name` (sheet col 3): optional; NULL if empty
+   - `local_timezone` (sheet col 7): optional; NULL if empty
+   - `opening_date_local` (sheet col 8): optional str; NULL if empty; stored as-is (no UTC conversion)
+   - `closing_date_local` (sheet col 9): optional; NULL if empty
+   - `opening_amount_local_value` (sheet col 10 `opening_value_local`): parse via `decimal.Decimal(raw_str)` inside `try/except decimal.InvalidOperation` — re-raise as `ValueError` on parse failure; call `.is_finite()` — re-raise as `ValueError` if not finite. Never use `float`.
    - `record_status`: hard error if empty or not in `{'active', 'inactive', 'deleted', 'locked'}`
    - `account_description` (sheet col `description`): NULL if empty
    - On `ValueError` from transform: write back `create-failed` / `update-failed` + `sync_notes` with the message; continue to next row.
@@ -570,22 +580,24 @@ Missing or unrecognised `sync_status` → skip with a `warning` log; do not writ
 
    ```sql
    INSERT INTO account_master (
-       account_id, account_name, account_type, account_subtype,
+       id, account_name, legal_entity_name, account_type, account_subtype,
+       local_timezone, opening_date_local, closing_date_local,
        opening_amount_local_value, opening_amount_base_value,
        local_currency, base_currency,
        currency_rate_ref,
        account_description, record_status, created_at, updated_at
-   ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now(), now())
-   ON CONFLICT (account_id) DO UPDATE SET
+   ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now(), now())
+   ON CONFLICT (id) DO UPDATE SET
        account_name        = EXCLUDED.account_name,
        account_type        = EXCLUDED.account_type,
        account_subtype     = EXCLUDED.account_subtype,
+       closing_date_local  = EXCLUDED.closing_date_local,
        account_description = EXCLUDED.account_description,
        record_status       = EXCLUDED.record_status,
        updated_at          = now()
    RETURNING id
    ```
-   Note: `opening_amount_*` fields, `local_currency`, `base_currency`, `currency_rate_ref`, and `created_at` are intentionally excluded from the DO UPDATE SET clause — they are immutable after the first successful sync (see Q39).
+   Note: `legal_entity_name`, `local_timezone`, `opening_date_local`, `opening_amount_*` fields, `local_currency`, `base_currency`, `currency_rate_ref`, and `created_at` are intentionally excluded from the DO UPDATE SET clause — they are immutable after the first successful sync (see Q39).
 
    **`update-pending` / `update-failed`:**
 
@@ -596,10 +608,11 @@ Missing or unrecognised `sync_status` → skip with a `warning` log; do not writ
        account_name        = %s,
        account_type        = %s,
        account_subtype     = %s,
+       closing_date_local  = %s,
        account_description = %s,
        record_status       = %s,
        updated_at          = now()
-   WHERE account_id = %s
+   WHERE id = %s
    RETURNING id
    ```
    If 0 rows returned (account not yet in DB), fall back to the INSERT path and log `update_fallback_to_insert` at warning. The fallback INSERT applies the same minor unit conversion as the create path — the `_load_decimal_places` dict is already loaded (batch-level). **Rollback difference from create path:** the preceding UPDATE opened an implicit psycopg2 transaction even though it matched 0 rows. Therefore, if currency_master is absent or no rate is found during the fallback, call `conn.rollback()` before writing back `update-failed` and continuing — this closes the open transaction. The create path has no open transaction at that point and does not rollback.
@@ -619,7 +632,7 @@ Missing or unrecognised `sync_status` → skip with a `warning` log; do not writ
 
    | Exception | Human-readable sync_notes |
    |---|---|
-   | `UniqueViolation` | `"Duplicate account_id — already exists in DB"` |
+   | `UniqueViolation` | `"Duplicate account — account with this ID already exists in DB"` |
    | `ForeignKeyViolation` (account type) | `"Unknown account type/subtype combination — check that account_type and account_subtype match a row in account_types"` |
    | `ForeignKeyViolation` (rate ref) | `"Invalid currency rate reference — rate row no longer exists in currency_rates"` |
    | `CheckViolation` (`chk_am_opening_value_sign`) | `"Opening value sign mismatch: liabilities must be ≤ 0, assets/investments must be ≥ 0"` |
@@ -647,21 +660,12 @@ Each row is committed independently. All write-backs for the batch are accumulat
 
 ## What to build
 
-- [x] **Rewrite `migrations/0004_create_accounts.py`** — full replacement required. Dual-currency schema implemented; BIGINT minor unit change now needed:
-  - Change all `_local_value` and `_base_value` columns from `NUMERIC(19,6)` → `BIGINT` on `account_master` and all 7 extension tables
-  - `units_held` in `account_market_investment_details` stays `NUMERIC(19,6)` — it is a quantity, not a monetary amount
-  - All other dual-currency changes (named constraints, FKs, CHECKs) remain as currently implemented
+- [x] **`migrations/0004_create_accounts.py`** — rewritten: removed surrogate UUID + `account_id TEXT` columns; `id UUID NOT NULL` (from sheet) as PK; added `legal_entity_name`, `local_timezone`, `opening_date_local`, `closing_date_local`; BIGINT minor unit storage; named constraints; dual-currency FKs and CHECKs.
 
-- [x] **Rewrite `database/accounts.py`** — add minor unit conversion and `currency_master` lookup:
-  - Add `_load_decimal_places(conn)` helper: `SELECT currency_code, decimal_places FROM currency_master`; returns `{currency_code: decimal_places}`; called once per batch at the top of `upsert_accounts` (before the per-row loop)
-  - In create path: look up `local_decimal_places` from preloaded dict; if absent write back `create-failed` with `"Currency {local_currency} not found in currency_master"` and continue (no rollback — no open transaction)
-  - Compute `local_minor = int((opening_amount_local_value × Decimal(10)**local_decimal_places).to_integral_value(ROUND_HALF_UP))`
-  - If `local_currency == 'XAU'`: `base_minor = local_minor`; else after rate lookup: `base_minor = int((opening_amount_local_value / rate_value × Decimal(10)**9).to_integral_value(ROUND_HALF_UP))`
-  - Pass `local_minor` and `base_minor` (Python `int`) to the INSERT
-  - In update fallback path: apply the same minor unit conversion as the create path. Pre-DB failures (currency_master absent or no rate found) must call `conn.rollback()` before writing back `update-failed` and continuing — the preceding UPDATE opened an implicit psycopg2 transaction even when it returned 0 rows
+- [x] **`database/accounts.py`** — INSERT/UPDATE SQL updated: `id` UUID as PK, new columns added (`legal_entity_name`, `local_timezone`, `opening_date_local`, `closing_date_local`); `closing_date_local` in UPDATE SET (editable); ON CONFLICT on `(id)`; minor unit conversion and `currency_master` lookup in place.
 
-- [x] **`transforms/accounts.py`** — DONE. Returns `local_currency` and `opening_amount_local_value` (major-unit `Decimal`). No change needed — minor unit conversion is the DB layer's responsibility.
+- [x] **`transforms/accounts.py`** — rewritten: reads correct field names (`account_name`, `local_currency`, `opening_value_local`); added optional reads for `legal_entity_name`, `local_timezone`, `opening_date_local`, `closing_date_local`; returns `"id"` key (UUID).
 
-- [x] **`sheets/accounts.py`** — DONE. No changes needed. `_SYNC_STATUS_COL = 10` is correct.
+- [x] **`sheets/accounts.py`** — updated: `_SYNC_STATUS_COL = 14`; parameter renamed `sync_date_time` → `sync_date`.
 
-- [x] **`_runbooks/USAGE-INSTRUCTIONS.md`** — accounts recovery section updated with `local_currency` rename and missing-rate failure cause. Still needs: add `"Currency not found in currency_master"` as a new failure cause bullet: *"Currency not in currency_master — `currency` value has no row in `currency_master`. Add the currency to the master table, then retry."*
+- [ ] **`_runbooks/USAGE-INSTRUCTIONS.md`** — add `"Currency not found in currency_master"` as a new failure cause bullet: *"Currency not in currency_master — `local_currency` value has no row in `currency_master`. Add the currency to the master table, then retry."*

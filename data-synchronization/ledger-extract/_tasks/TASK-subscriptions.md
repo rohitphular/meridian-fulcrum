@@ -11,39 +11,38 @@ All resolved. Decisions recorded inline below.
 
 ---
 
-## Source schema (22 columns)
+## Source schema (21 columns)
 
 | # | Column | Sheet type | DB column | DB type | Notes |
 |---|--------|-----------|-----------|---------|-------|
-| 1 | `id` | string | `subscription_id` | `TEXT NOT NULL` | Natural key |
+| 1 | `id` | string | `subscription_id` | `TEXT NOT NULL` | Natural key (`SUB-YYYYMMDD-NNN`) |
 | 2 | `name` | string | `name` | `TEXT NOT NULL` | |
 | 3 | `counterparty_name` | string | `counterparty_id` | `UUID` | Resolved via `counterparty_master` upsert; nullable (blank = `NULL`) |
-| 4 | `amount` | number string | `amount_local` | `BIGINT NOT NULL` | Stored as minor units using `decimal_places` from `currency_master` |
-| 5 | `currency` | string | `currency` | `CHAR(3) NOT NULL` | ISO 4217 or `XAU`; used to derive `decimal_places` for `amount_local` |
-| 6 | `frequency` | enum string | `frequency` | `TEXT NOT NULL` | `weekly`, `monthly`, `quarterly`, `annual` |
-| 7 | `day_of_month` | number string | `day_of_month` | `INTEGER` | Optional; 1–31 |
-| 8 | `day_of_week` | number string | `day_of_week` | `INTEGER` | Optional; 0 = Sunday, 6 = Saturday |
-| 9 | `source_account` | string | `account_id` | `UUID NOT NULL` | Natural key resolved via `account_map`; not found → `sync-failure` (terminal) |
-| 10 | `tx_type` | enum string | — | not stored | `money-in` or `money-out`; used with `major_category` + `minor_category` to resolve `category_id`; not stored on `subscription_master` |
-| 11 | `major_category` | string | — | not stored | Used for `category_id` lookup only |
-| 12 | `minor_category` | string | — | not stored | Used for `category_id` lookup only |
-| 13 | `tags` | string | `tags` | `TEXT` | Optional; semicolons preserved |
-| 14 | `description` | string | `description` | `TEXT` | Optional |
-| 15 | `record_status` | enum string | `record_status` | `TEXT NOT NULL` | `active`, `inactive`, `deleted`, `locked` |
-| 16 | `created_at` | ISO string | written back | — | Written back by extract on first successful create |
-| 17 | `sync_status` | string | written back | — | Written back by extract |
-| 18 | `sync_date_time` | string | written back | — | Written back by extract |
-| 19 | `sync_notes` | string | written back | — | Written back by extract |
-| 20 | `updated_at` | ISO string | written back | — | Written back by extract on every successful sync |
-| 21 | `subscription_start_date` | date string | `subscription_start_date` | `DATE NOT NULL` | ISO date `YYYY-MM-DD` |
-| 22 | `subscription_end_date` | date string | `subscription_end_date` | `DATE` | Optional; nullable |
+| 4 | `subscription_amount_local` | number string | `amount_local` | `BIGINT NOT NULL` | Stored as minor units using `decimal_places` from `currency_master`; currency derived from source account |
+| 5 | `frequency` | enum string | `frequency` | `TEXT NOT NULL` | `weekly`, `monthly`, `quarterly`, `annual` |
+| 6 | `day_of_month` | number string | `day_of_month` | `INTEGER` | Optional; 1–31 |
+| 7 | `day_of_week` | number string | `day_of_week` | `INTEGER` | Optional; 1=Monday … 7=Sunday |
+| 8 | `source_account` | string | `account_id` | `UUID NOT NULL` | UUID (account's `id`); looked up directly in `account_map`; not found → `create-failed`/`update-failed` |
+| 9 | `tx_type` | enum string | — | not stored | `money-in` or `money-out`; used with `major_category` + `minor_category` to resolve `category_id`; not stored on `subscription_master` |
+| 10 | `major_category` | string | — | not stored | Used for `category_id` lookup only |
+| 11 | `minor_category` | string | — | not stored | Used for `category_id` lookup only |
+| 12 | `tags` | string | `tags` | `TEXT` | Optional; semicolons preserved |
+| 13 | `description` | string | `description` | `TEXT` | Optional |
+| 14 | `record_status` | enum string | `record_status` | `TEXT NOT NULL` | `active`, `inactive`, `deleted`, `locked` |
+| 15 | `created_at` | ISO string | written back | — | Written back by extract on first successful create |
+| 16 | `sync_status` | string | written back | — | `create-pending`, `update-pending`, `in-sync`, `create-failed`, `update-failed`; written back by extract |
+| 17 | `sync_date` | string | written back | — | Written back by extract |
+| 18 | `sync_notes` | string | written back | — | Written back by extract |
+| 19 | `updated_at` | ISO string | written back | — | Written back by extract on every successful sync |
+| 20 | `subscription_start_date` | date string | `subscription_start_date` | `DATE NOT NULL` | ISO date `YYYY-MM-DD` |
+| 21 | `subscription_end_date` | date string | `subscription_end_date` | `DATE` | Optional; nullable |
 
 **Write-back columns** (accumulated per batch, flushed once via `batch_update_rows`):
 
-- Success (5 values): `sync_status` (col 17), `sync_date_time` (col 18), `sync_notes` (col 19), `created_at` (col 16), `updated_at` (col 20)
-- Failure (3 values): `sync_status` (col 17), `sync_date_time` (col 18), `sync_notes` (col 19)
+- Success (5 values): start at col 15 (`created_at`): `[created_at, sync_status, sync_date, sync_notes, updated_at]`
+- Failure (3 values): start at col 16 (`sync_status`): `[sync_status, sync_date, sync_notes]`
 
-`_SYNC_STATUS_COL = 17`
+`_SYNC_STATUS_COL = 16`  (col 16 = `sync_status`; success writes start at col 15 = `created_at`)
 
 ---
 
@@ -54,23 +53,22 @@ Table abbreviation: `sm`
 | # | Column | Type | Nullable | Notes |
 |---|--------|------|----------|-------|
 | 1 | `id` | `UUID NOT NULL DEFAULT gen_random_uuid()` | No | Surrogate PK |
-| 2 | `subscription_id` | `TEXT NOT NULL` | No | Natural key from sheet |
+| 2 | `subscription_id` | `TEXT NOT NULL` | No | Natural key from sheet (`SUB-YYYYMMDD-NNN`) |
 | 3 | `name` | `TEXT NOT NULL` | No | |
 | 4 | `counterparty_id` | `UUID` | Yes | FK → `counterparty_master(id)` |
-| 5 | `amount_local` | `BIGINT NOT NULL` | No | Minor units |
-| 6 | `currency` | `CHAR(3) NOT NULL` | No | ISO 4217 or XAU |
-| 7 | `frequency` | `TEXT NOT NULL` | No | |
-| 8 | `day_of_month` | `INTEGER` | Yes | |
-| 9 | `day_of_week` | `INTEGER` | Yes | |
-| 10 | `account_id` | `UUID NOT NULL` | No | FK → `account_master(id)` |
-| 11 | `category_id` | `UUID NOT NULL` | No | FK → `category_master(id)` |
-| 12 | `tags` | `TEXT` | Yes | |
-| 13 | `description` | `TEXT` | Yes | |
-| 14 | `subscription_start_date` | `DATE NOT NULL` | No | |
-| 15 | `subscription_end_date` | `DATE` | Yes | |
-| 16 | `record_status` | `TEXT NOT NULL` | No | |
-| 17 | `created_at` | `TIMESTAMPTZ NOT NULL` | No | |
-| 18 | `updated_at` | `TIMESTAMPTZ NOT NULL` | No | |
+| 5 | `amount_local` | `BIGINT NOT NULL` | No | Minor units in source account's local currency |
+| 6 | `frequency` | `TEXT NOT NULL` | No | |
+| 7 | `day_of_month` | `INTEGER` | Yes | |
+| 8 | `day_of_week` | `INTEGER` | Yes | |
+| 9 | `account_id` | `UUID NOT NULL` | No | FK → `account_master(id)` |
+| 10 | `category_id` | `UUID NOT NULL` | No | FK → `category_master(id)` |
+| 11 | `tags` | `TEXT` | Yes | |
+| 12 | `description` | `TEXT` | Yes | |
+| 13 | `subscription_start_date` | `DATE NOT NULL` | No | |
+| 14 | `subscription_end_date` | `DATE` | Yes | |
+| 15 | `record_status` | `TEXT NOT NULL` | No | |
+| 16 | `created_at` | `TIMESTAMPTZ NOT NULL` | No | |
+| 17 | `updated_at` | `TIMESTAMPTZ NOT NULL` | No | |
 
 ### Constraints (11)
 
@@ -85,7 +83,7 @@ Table abbreviation: `sm`
 | `chk_sm_record_status` | CHECK | `record_status IN ('active', 'inactive', 'deleted', 'locked')` |
 | `chk_sm_amount_positive` | CHECK | `amount_local > 0` |
 | `chk_sm_day_of_month` | CHECK | `day_of_month IS NULL OR (day_of_month >= 1 AND day_of_month <= 31)` |
-| `chk_sm_day_of_week` | CHECK | `day_of_week IS NULL OR (day_of_week >= 0 AND day_of_week <= 6)` |
+| `chk_sm_day_of_week` | CHECK | `day_of_week IS NULL OR (day_of_week >= 1 AND day_of_week <= 7)` |
 | `chk_sm_date_range` | CHECK | `subscription_end_date IS NULL OR subscription_end_date >= subscription_start_date` |
 
 ---
@@ -101,7 +99,6 @@ Write-back pattern — no hash comparison, no `ledger_data_checksums` involvemen
 | `update-pending` | GAS | UPDATE path |
 | `update-failed` | Extract | UPDATE path (retry) |
 | `in-sync` | Extract | Silent skip |
-| `sync-failure` | Extract | Silent skip — terminal errors only (e.g. `account_not_found`) |
 | blank / unrecognised | — | `logger.warning` + skip, no write-back |
 
 ---
@@ -113,6 +110,8 @@ account_map = load_account_map(conn)                  # dict[str, tuple[Any, str
 currency_decimal_places = _load_decimal_places(conn)  # dict[str, int]
 ```
 
+`load_account_map` uses `SELECT id, local_currency FROM account_master WHERE record_status NOT IN ('deleted', 'locked')` and returns `{str(row[0]): (row[0], row[1])}` — UUID string → (UUID, local_currency). This is the same map used by the transactions module.
+
 `_load_decimal_places` selects only `currency_code, decimal_places` from `currency_master` — no `minor_unit_name`.
 
 ---
@@ -121,11 +120,11 @@ currency_decimal_places = _load_decimal_places(conn)  # dict[str, int]
 
 Executed inside `_run_insert_steps(conn, row, account_map, currency_decimal_places, failed_status)`:
 
-1. **`source_account` → `account_id`**: look up `account_map[source_account]` → `(uuid, _)`. Not found → `write_back_failure(sync-failure, account_not_found)` + `continue` (terminal — account_map is loaded once per batch and cannot self-heal mid-run).
+1. **`source_account` → `account_id`**: look up `account_map[source_account]` → `(account_uuid, local_currency)`. Not found → `write_back_failure(failed_status, account_not_found)` + `continue`.
 
-2. **`currency` → `decimal_places`**: look up `currency_decimal_places[currency]`. Not found → `write_back_failure(failed_status, currency_not_found)` + `continue`.
+2. **`local_currency` → `decimal_places`**: look up `currency_decimal_places[local_currency]` using `local_currency` from step 1. Not found → `write_back_failure(failed_status, currency_not_found)` + `continue`.
 
-3. **`amount` → `amount_local` BIGINT**: `int((amount * Decimal(10)**dp).to_integral_value(ROUND_HALF_UP))`. If `amount_local == 0` after rounding → `write_back_failure(failed_status, amount_rounds_to_zero)` + `continue`. Always use `Decimal(10)**dp`, not `Decimal(10**dp)`.
+3. **`subscription_amount_local` → `amount_local` BIGINT**: `int((amount * Decimal(10)**dp).to_integral_value(ROUND_HALF_UP))`. If `amount_local == 0` after rounding → `write_back_failure(failed_status, amount_rounds_to_zero)` + `continue`. Always use `Decimal(10)**dp`, not `Decimal(10**dp)`.
 
 4. **`tx_type` + `major_category` + `minor_category` → `category_id`**: query `category_master` by `(tx_type_key, major_category_key, minor_category_key)`. Not found → `write_back_failure(failed_status, category_not_found)` + `continue`.
 
@@ -186,7 +185,7 @@ Subscriptions does not run a post-row soft-delete pass. `counterparty_master` so
 ## What to build
 
 - [ ] `migrations/0009_create_subscriptions.py`
-- [ ] `transforms/subscriptions.py` — validates and type-converts all 22 sheet columns; `ValueError` prefix `"subscriptions: "`
-- [ ] `sheets/subscriptions.py` — `write_back_success()` (5 cols), `write_back_failure()` (3 cols), `flush()`; `_SYNC_STATUS_COL = 17`
-- [ ] `database/subscriptions.py` — `upsert_subscriptions(conn, sheets_client, rows, account_map)`
+- [ ] `transforms/subscriptions.py` — validates and type-converts all 21 sheet columns; `ValueError` prefix `"subscriptions: "`; reads `subscription_amount_local` (col 4), `day_of_week` validated as 1–7; no `currency` column (currency derived from account in DB layer)
+- [ ] `sheets/subscriptions.py` — `write_back_success()` (5 cols starting at col 15 = `created_at`: `[created_at, sync_status, sync_date, sync_notes, updated_at]`), `write_back_failure()` (3 cols starting at col 16 = `sync_status`: `[sync_status, sync_date, sync_notes]`), `flush()`; `_SYNC_STATUS_COL = 16`
+- [ ] `database/subscriptions.py` — `upsert_subscriptions(conn, sheets_client, rows, account_map)`; `source_account` UUID looked up directly from `account_map`; `local_currency` taken from account_map result; no `currency` column written to DB; `sync-failure` status is not used — all failures write `create-failed` or `update-failed`; `day_of_week` validated as 1–7 in transform
 - [ ] Wire into `core/extractor.py` — after transactions; pass `account_map` (reuse the one loaded for transactions if both enabled in same run, or load fresh)

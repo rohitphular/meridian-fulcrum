@@ -39,11 +39,11 @@ def _load_decimal_places(conn: Any) -> dict[str, int]:
 
 
 def load_account_map(conn: Any) -> dict[str, tuple[Any, str]]:
-    """Return mapping of account natural key → (surrogate UUID id, local_currency)."""
+    """Return mapping of account UUID string → (account UUID, local_currency)."""
     with conn.cursor() as cursor:
-        cursor.execute("SELECT account_id, id, local_currency FROM account_master WHERE record_status NOT IN ('deleted', 'locked')")
+        cursor.execute("SELECT id, local_currency FROM account_master WHERE record_status NOT IN ('deleted', 'locked')")
         rows = cursor.fetchall()
-    return {row[0]: (row[1], row[2]) for row in rows}
+    return {str(row[0]): (row[0], row[1]) for row in rows}
 
 
 def _lookup_category(conn: Any, tx_type: str, major_category: str, minor_category: str) -> Any | None:
@@ -457,7 +457,7 @@ def _run_insert_steps(
     try:
         tx_amount_local, tx_amount_base, currency_rate_ref = _resolve_amount(
             conn,
-            typed["tx_amount"],
+            typed["tx_amount_local"],
             local_currency,
             typed["tx_date_time_base"].date(),
             currency_decimal_places,
@@ -512,15 +512,16 @@ def _run_insert_steps(
     )
     logger.info(f"_run_insert_steps: tx_inserted entity=transactions transaction_id={transaction_id!r} id={surrogate_id}")
 
-    # Step 8 — resolve beneficiaries
-    try:
-        _resolve_beneficiaries(conn, typed["beneficiaries_raw"], surrogate_id, transaction_id)
-    except ValueError as e:
-        conn.rollback()
-        sync_dt = datetime.now(timezone.utc).isoformat()
-        logger.warning(f"upsert_transactions: beneficiary_error entity=transactions row={sheet_row_num} transaction_id={transaction_id!r} error={e}")
-        write_backs.append(sheets_transactions.write_back_failure(sheet_row_num, failed_status, sync_dt, _to_sync_notes(e)))
-        return None
+    # Step 8 — resolve beneficiaries (optional; skip if not provided)
+    if typed["beneficiaries_raw"] is not None:
+        try:
+            _resolve_beneficiaries(conn, typed["beneficiaries_raw"], surrogate_id, transaction_id)
+        except ValueError as e:
+            conn.rollback()
+            sync_dt = datetime.now(timezone.utc).isoformat()
+            logger.warning(f"upsert_transactions: beneficiary_error entity=transactions row={sheet_row_num} transaction_id={transaction_id!r} error={e}")
+            write_backs.append(sheets_transactions.write_back_failure(sheet_row_num, failed_status, sync_dt, _to_sync_notes(e)))
+            return None
 
     return "ok"
 
@@ -558,7 +559,7 @@ def upsert_transactions(
                 continue
             sync_status = str(raw_sync_status).strip()
 
-            if sync_status in ("in-sync", "sync-failure"):
+            if sync_status == "in-sync":
                 continue
             if sync_status not in _VALID_SYNC_STATUSES:
                 logger.warning(f"upsert_transactions: unknown_sync_status entity=transactions row={sheet_row_num} sync_status={sync_status!r} — skipping")
@@ -576,15 +577,15 @@ def upsert_transactions(
                 failed += 1
                 continue
 
-            account_id_natural_key = typed["account_id_natural_key"]
-            if account_id_natural_key not in account_map:
+            account_id_sheet = typed["account_id_sheet"]
+            if account_id_sheet not in account_map:
                 sync_dt = datetime.now(timezone.utc).isoformat()
-                logger.warning(f"upsert_transactions: account_not_found entity=transactions row={sheet_row_num} transaction_id={transaction_id!r} account_id={account_id_natural_key!r}")
-                write_backs.append(sheets_transactions.write_back_failure(sheet_row_num, "sync-failure", sync_dt, "account_not_found"))
+                logger.warning(f"upsert_transactions: account_not_found entity=transactions row={sheet_row_num} transaction_id={transaction_id!r} account_id={account_id_sheet!r}")
+                write_backs.append(sheets_transactions.write_back_failure(sheet_row_num, failed_status, sync_dt, "account_not_found"))
                 failed += 1
                 continue
 
-            account_surrogate_id, local_currency = account_map[account_id_natural_key]
+            account_surrogate_id, local_currency = account_map[account_id_sheet]
 
             if sync_status in ("create-pending", "create-failed"):
                 try:
@@ -660,7 +661,7 @@ def upsert_transactions(
                     if existing is None:
                         sync_dt = datetime.now(timezone.utc).isoformat()
                         logger.warning(f"upsert_transactions: transaction_not_found entity=transactions row={sheet_row_num} transaction_id={transaction_id!r}")
-                        write_backs.append(sheets_transactions.write_back_failure(sheet_row_num, "sync-failure", sync_dt, "transaction_not_found"))
+                        write_backs.append(sheets_transactions.write_back_failure(sheet_row_num, "update-failed", sync_dt, "transaction_not_found"))
                         failed += 1
                         continue
 
@@ -669,14 +670,14 @@ def upsert_transactions(
                     if existing_record_status == "locked":
                         sync_dt = datetime.now(timezone.utc).isoformat()
                         logger.warning(f"upsert_transactions: transaction_locked entity=transactions row={sheet_row_num} transaction_id={transaction_id!r}")
-                        write_backs.append(sheets_transactions.write_back_failure(sheet_row_num, "sync-failure", sync_dt, "transaction_locked"))
+                        write_backs.append(sheets_transactions.write_back_failure(sheet_row_num, "update-failed", sync_dt, "transaction_locked"))
                         failed += 1
                         continue
 
                     if existing_record_status == "deleted":
                         sync_dt = datetime.now(timezone.utc).isoformat()
                         logger.warning(f"upsert_transactions: transaction_deleted entity=transactions row={sheet_row_num} transaction_id={transaction_id!r}")
-                        write_backs.append(sheets_transactions.write_back_failure(sheet_row_num, "sync-failure", sync_dt, "transaction_deleted"))
+                        write_backs.append(sheets_transactions.write_back_failure(sheet_row_num, "update-failed", sync_dt, "transaction_deleted"))
                         failed += 1
                         continue
 

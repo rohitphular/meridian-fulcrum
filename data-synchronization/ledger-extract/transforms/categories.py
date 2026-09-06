@@ -28,6 +28,12 @@ def transform(row: dict[str, Any]) -> dict[str, Any]:
 
     Raises ValueError with a clear message on any validation failure.
     """
+    # id — UUID stamped by GAS on create; authoritative identifier for this row
+    raw_id = row.get("id")
+    if raw_id is None or str(raw_id).strip() == "":
+        raise ValueError("categories: field=id is required but got empty/None")
+    category_id = str(raw_id).strip()
+
     # tx_type_key
     raw_tx_type_key = row.get("tx_type_key")
     if raw_tx_type_key is None or str(raw_tx_type_key).strip() == "":
@@ -86,6 +92,7 @@ def transform(row: dict[str, Any]) -> dict[str, Any]:
     natural_key = f"{tx_type_key}|{major_category_key}|{minor_category_key}"
 
     return {
+        "id": category_id,
         "tx_type_key": tx_type_key,
         "tx_type_label": tx_type_label,
         "major_category_key": major_category_key,

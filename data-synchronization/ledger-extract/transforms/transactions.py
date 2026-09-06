@@ -20,28 +20,28 @@ def transform(row: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("transactions: field=id is required but got empty/None")
     transaction_id = str(raw_id).strip()
 
-    # Column 2 — tx_date_time
-    raw_tx_date_time = row.get("tx_date_time")
-    if raw_tx_date_time is None or str(raw_tx_date_time).strip() == "":
-        raise ValueError(f"transactions: transaction_id={transaction_id!r} field=tx_date_time is required but got empty/None")
+    # Column 2 — tx_date_local
+    raw_tx_date_local = row.get("tx_date_local")
+    if raw_tx_date_local is None or str(raw_tx_date_local).strip() == "":
+        raise ValueError(f"transactions: transaction_id={transaction_id!r} field=tx_date_local is required but got empty/None")
     try:
-        tx_date_time_naive = datetime.fromisoformat(str(raw_tx_date_time).strip())
+        tx_date_local_naive = datetime.fromisoformat(str(raw_tx_date_local).strip())
     except ValueError:
-        raise ValueError(f"transactions: transaction_id={transaction_id!r} field=tx_date_time value={raw_tx_date_time!r} is not a valid ISO datetime (YYYY-MM-DDTHH:MM)")
+        raise ValueError(f"transactions: transaction_id={transaction_id!r} field=tx_date_local value={raw_tx_date_local!r} is not a valid datetime (YYYY-MM-DD HH:MM:SS)")
 
-    # Column 3 — tx_timezone
-    raw_tx_timezone = row.get("tx_timezone")
-    if raw_tx_timezone is not None and str(raw_tx_timezone).strip() != "":
-        tx_timezone_local = str(raw_tx_timezone).strip()
+    # Column 3 — tx_timezone_local
+    raw_tx_timezone_local = row.get("tx_timezone_local")
+    if raw_tx_timezone_local is not None and str(raw_tx_timezone_local).strip() != "":
+        tx_timezone_local = str(raw_tx_timezone_local).strip()
     else:
         tx_timezone_local = "Europe/London"
     try:
         ZoneInfo(tx_timezone_local)
     except (ZoneInfoNotFoundError, KeyError):
-        raise ValueError(f"transactions: transaction_id={transaction_id!r} field=tx_timezone value={tx_timezone_local!r} is not a recognised IANA timezone name")
+        raise ValueError(f"transactions: transaction_id={transaction_id!r} field=tx_timezone_local value={tx_timezone_local!r} is not a recognised IANA timezone name")
 
     tx_timezone_base = "UTC"
-    tx_date_time_base = tx_date_time_naive.replace(tzinfo=ZoneInfo(tx_timezone_base))
+    tx_date_time_base = tx_date_local_naive.replace(tzinfo=ZoneInfo(tx_timezone_local)).astimezone(ZoneInfo(tx_timezone_base))
 
     # Column 4 — parent_tx_id
     raw_parent_tx_id = row.get("parent_tx_id")
@@ -62,20 +62,20 @@ def transform(row: dict[str, Any]) -> dict[str, Any]:
     raw_account_id = row.get("account_id")
     if raw_account_id is None or str(raw_account_id).strip() == "":
         raise ValueError(f"transactions: transaction_id={transaction_id!r} field=account_id is required but got empty/None")
-    account_id_natural_key = str(raw_account_id).strip()
+    account_id_sheet = str(raw_account_id).strip()
 
-    # Column 7 — tx_amount
-    raw_tx_amount = row.get("tx_amount")
-    if raw_tx_amount is None or str(raw_tx_amount).strip() == "":
-        raise ValueError(f"transactions: transaction_id={transaction_id!r} field=tx_amount is required but got empty/None")
+    # Column 7 — tx_amount_local
+    raw_tx_amount_local = row.get("tx_amount_local")
+    if raw_tx_amount_local is None or str(raw_tx_amount_local).strip() == "":
+        raise ValueError(f"transactions: transaction_id={transaction_id!r} field=tx_amount_local is required but got empty/None")
     try:
-        tx_amount = Decimal(str(raw_tx_amount).strip())
+        tx_amount_local = Decimal(str(raw_tx_amount_local).strip())
     except InvalidOperation:
-        raise ValueError(f"transactions: transaction_id={transaction_id!r} field=tx_amount value={raw_tx_amount!r} is not a valid decimal number")
-    if not tx_amount.is_finite():
-        raise ValueError(f"transactions: transaction_id={transaction_id!r} field=tx_amount value={raw_tx_amount!r} is not finite")
-    if tx_amount <= 0:
-        raise ValueError(f"transactions: transaction_id={transaction_id!r} field=tx_amount value={tx_amount} must be > 0")
+        raise ValueError(f"transactions: transaction_id={transaction_id!r} field=tx_amount_local value={raw_tx_amount_local!r} is not a valid decimal number")
+    if not tx_amount_local.is_finite():
+        raise ValueError(f"transactions: transaction_id={transaction_id!r} field=tx_amount_local value={raw_tx_amount_local!r} is not finite")
+    if tx_amount_local <= 0:
+        raise ValueError(f"transactions: transaction_id={transaction_id!r} field=tx_amount_local value={tx_amount_local} must be > 0")
 
     # Column 8 — major_category
     raw_major_category = row.get("major_category")
@@ -110,11 +110,12 @@ def transform(row: dict[str, Any]) -> dict[str, Any]:
     else:
         tx_tags = None
 
-    # Column 13 — beneficiaries (required)
+    # Column 13 — beneficiaries (optional)
     raw_beneficiaries = row.get("beneficiaries")
-    if raw_beneficiaries is None or str(raw_beneficiaries).strip() == "":
-        raise ValueError("transactions: beneficiary_required")
-    beneficiaries_raw = str(raw_beneficiaries).strip()
+    if raw_beneficiaries is not None and str(raw_beneficiaries).strip() != "":
+        beneficiaries_raw: str | None = str(raw_beneficiaries).strip()
+    else:
+        beneficiaries_raw = None
 
     # Column 14 — user_location_area (optional)
     raw_user_location_area = row.get("user_location_area")
@@ -180,8 +181,8 @@ def transform(row: dict[str, Any]) -> dict[str, Any]:
         "tx_timezone_local": tx_timezone_local,
         "parent_tx_id": parent_tx_id,
         "tx_type": tx_type,
-        "account_id_natural_key": account_id_natural_key,
-        "tx_amount": tx_amount,
+        "account_id_sheet": account_id_sheet,
+        "tx_amount_local": tx_amount_local,
         "major_category": major_category,
         "minor_category": minor_category,
         "tx_description": tx_description,
