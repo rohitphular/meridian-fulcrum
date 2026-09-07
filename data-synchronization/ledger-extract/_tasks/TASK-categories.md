@@ -140,7 +140,7 @@ No cascade defined on the FK — join rows are managed explicitly by the extract
 
 **sync_status routing:**
 
-The extractor does not compute hashes. The sheet's `sync_status` column (col 16) drives all DB operations.
+The extractor does not compute hashes. The sheet's `sync_status` column (col 17) drives all DB operations.
 
 | `sync_status` | Action |
 |---|---|
@@ -196,5 +196,5 @@ Per-row pass (for each row read from sheet):
 - [ ] `transforms/categories.py` — row dict → typed dict
 - [ ] `database/categories.py` — `category_master` upsert + explicit join table deletes/inserts
 - [ ] `database/job_execution_details.py` — Phase 1 bootstrap/read and Phase 3 UPSERT
-- [ ] `sheets/categories.py` — write-back `sync_status`, `sync_date_time`, `sync_notes` to sheet via Sheets API
+- [ ] `sheets/categories.py` — write-back `sync_status`, `sync_date`, `sync_notes` to sheet via Sheets API
 - [ ] Wire into `core/extractor.py`

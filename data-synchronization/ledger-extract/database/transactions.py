@@ -182,7 +182,7 @@ def _resolve_amount(
     tx_date: Any,
     currency_decimal_places: dict[str, int],
 ) -> tuple[int, int, Any | None]:
-    """Compute (tx_amount_local, tx_amount_base, currency_rate_ref)."""
+    """Compute (tx_amount_local, tx_amount_base, currency_rate_id)."""
     if local_currency not in currency_decimal_places:
         raise ValueError(f"transactions: currency {local_currency!r} not found in currency_master")
 
@@ -217,7 +217,7 @@ def _resolve_amount(
     if xau_dp != _XAU_DECIMAL_PLACES:
         raise ValueError(f"currency_master.decimal_places for XAU is {xau_dp}, expected {_XAU_DECIMAL_PLACES}")
     if not isinstance(rate_value, Decimal):
-        raise TypeError(f"_resolve_currency_rate: expected Decimal from psycopg2, got {type(rate_value).__name__}")
+        raise TypeError(f"_resolve_amount: expected Decimal from psycopg2, got {type(rate_value).__name__}")
 
     tx_amount_base = int((Decimal(tx_amount_local) * Decimal(10) ** xau_dp / (rate_value * Decimal(10) ** local_dp)).to_integral_value(ROUND_HALF_UP))
 
@@ -236,7 +236,10 @@ def _to_sync_notes(e: Exception) -> str:
     if isinstance(e, ValueError):
         return str(e).removeprefix("transactions: ")
     if isinstance(e, pg_errors.UniqueViolation):
-        return "Duplicate transaction_id — already exists in DB"
+        constraint = e.diag.constraint_name
+        if constraint == "uq_tm_transaction_id":
+            return "Duplicate transaction_id — already exists in DB"
+        return f"Unique constraint violation: {constraint}"
     if isinstance(e, pg_errors.ForeignKeyViolation):
         constraint = e.diag.constraint_name
         if constraint == "fk_tm_parent_tx":
@@ -265,7 +268,7 @@ def _to_sync_notes(e: Exception) -> str:
         if constraint == "chk_tm_tx_timezone_base":
             return "tx_timezone_base must be UTC — indicates a code bug; file a bug report"
         if constraint == "chk_tm_rate_ref_required":
-            return "currency_rate_ref constraint violated — indicates a code bug in the extract job; file a bug report"
+            return "currency_rate_id constraint violated — indicates a code bug in the extract job; file a bug report"
         return f"DB constraint violation: {constraint}"
     if isinstance(e, pg_errors.NotNullViolation):
         return f"Required field is null: {e.diag.column_name} — indicates a code bug; file a bug report"
@@ -279,7 +282,7 @@ def _do_insert(
     local_currency: str,
     tx_amount_local: int,
     tx_amount_base: int,
-    currency_rate_ref: Any | None,
+    currency_rate_id: Any | None,
     category_id: Any,
     counterparty_id: Any | None,
     tx_date_time_local: Any,
@@ -302,7 +305,7 @@ def _do_insert(
                 category_id, account_id,
                 tx_amount_local, tx_amount_base,
                 local_currency, base_currency,
-                currency_rate_ref,
+                currency_rate_id,
                 tx_description, counterparty_id, tx_tags,
                 user_location_area, user_location_city, user_location_country,
                 user_location_latitude, user_location_longitude,
@@ -340,7 +343,7 @@ def _do_insert(
             tx_amount_base,
             local_currency,
             _BASE_CURRENCY,
-            currency_rate_ref,
+            currency_rate_id,
             typed["tx_description"],
             counterparty_id,
             typed["tx_tags"],
@@ -362,7 +365,7 @@ def _do_insert(
                 category_id, account_id,
                 tx_amount_local, tx_amount_base,
                 local_currency, base_currency,
-                currency_rate_ref,
+                currency_rate_id,
                 tx_description, counterparty_id, tx_tags,
                 user_location_area, user_location_city, user_location_country,
                 user_location_latitude, user_location_longitude,
@@ -400,7 +403,7 @@ def _do_insert(
             tx_amount_base,
             local_currency,
             _BASE_CURRENCY,
-            currency_rate_ref,
+            currency_rate_id,
             typed["tx_description"],
             counterparty_id,
             typed["tx_tags"],
@@ -455,7 +458,7 @@ def _run_insert_steps(
 
     # Step 4 — resolve amounts
     try:
-        tx_amount_local, tx_amount_base, currency_rate_ref = _resolve_amount(
+        tx_amount_local, tx_amount_base, currency_rate_id = _resolve_amount(
             conn,
             typed["tx_amount_local"],
             local_currency,
@@ -471,7 +474,7 @@ def _run_insert_steps(
 
     logger.info(
         f"_run_insert_steps: amount_resolved entity=transactions transaction_id={transaction_id!r}"
-        f" local_currency={local_currency} tx_amount_local={tx_amount_local} tx_amount_base={tx_amount_base} rate_ref={currency_rate_ref}"
+        f" local_currency={local_currency} tx_amount_local={tx_amount_local} tx_amount_base={tx_amount_base} currency_rate_id={currency_rate_id}"
     )
 
     # Step 5 — resolve counterparty
@@ -502,7 +505,7 @@ def _run_insert_steps(
         local_currency=local_currency,
         tx_amount_local=tx_amount_local,
         tx_amount_base=tx_amount_base,
-        currency_rate_ref=currency_rate_ref,
+        currency_rate_id=currency_rate_id,
         category_id=category_id,
         counterparty_id=counterparty_id,
         tx_date_time_local=tx_date_time_local,
@@ -605,9 +608,15 @@ def upsert_transactions(
                             created_at_override=None,
                             failed_status="create-failed",
                         )
-                    except pg_errors.UniqueViolation:
+                    except pg_errors.UniqueViolation as e:
                         with conn.cursor() as cursor:
                             cursor.execute("ROLLBACK TO SAVEPOINT before_tx_insert")
+                        if e.diag.constraint_name != "uq_tm_transaction_id":
+                            sync_dt = datetime.now(timezone.utc).isoformat()
+                            logger.error(f"upsert_transactions: create_failed entity=transactions row={sheet_row_num} transaction_id={transaction_id!r} error={e}")
+                            write_backs.append(sheets_transactions.write_back_failure(sheet_row_num, "create-failed", sync_dt, _to_sync_notes(e)))
+                            failed += 1
+                            continue
                         logger.info(f"upsert_transactions: unique_fallthrough entity=transactions row={sheet_row_num} transaction_id={transaction_id!r} — re-inserting via update path")
                         step_outcome = _run_fallthrough_update(
                             conn=conn,
@@ -645,8 +654,9 @@ def upsert_transactions(
                     logger.error(f"upsert_transactions: create_failed entity=transactions row={sheet_row_num} transaction_id={transaction_id!r} error={e}")
                     write_backs.append(sheets_transactions.write_back_failure(sheet_row_num, "create-failed", sync_dt, _to_sync_notes(e)))
                     failed += 1
-                except Exception:
+                except Exception as e:
                     conn.rollback()
+                    logger.error(f"upsert_transactions: unexpected_error entity=transactions row={sheet_row_num} transaction_id={transaction_id!r} error={e!r}")
                     raise
 
             elif sync_status in ("update-pending", "update-failed"):
@@ -721,12 +731,6 @@ def upsert_transactions(
                     updated += 1
                     logger.info(f"upsert_transactions: updated entity=transactions transaction_id={transaction_id!r}")
 
-                except ValueError as e:
-                    conn.rollback()
-                    sync_dt = datetime.now(timezone.utc).isoformat()
-                    logger.warning(f"upsert_transactions: update_failed entity=transactions row={sheet_row_num} transaction_id={transaction_id!r} error={e}")
-                    write_backs.append(sheets_transactions.write_back_failure(sheet_row_num, "update-failed", sync_dt, _to_sync_notes(e)))
-                    failed += 1
                 except (
                     pg_errors.ForeignKeyViolation,
                     pg_errors.CheckViolation,
@@ -738,8 +742,9 @@ def upsert_transactions(
                     logger.error(f"upsert_transactions: update_failed entity=transactions row={sheet_row_num} transaction_id={transaction_id!r} error={e}")
                     write_backs.append(sheets_transactions.write_back_failure(sheet_row_num, "update-failed", sync_dt, _to_sync_notes(e)))
                     failed += 1
-                except Exception:
+                except Exception as e:
                     conn.rollback()
+                    logger.error(f"upsert_transactions: unexpected_error entity=transactions row={sheet_row_num} transaction_id={transaction_id!r} error={e!r}")
                     raise
 
     finally:
@@ -855,6 +860,7 @@ def _run_fallthrough_update(
         logger.error(f"upsert_transactions: fallthrough_failed entity=transactions row={sheet_row_num} transaction_id={transaction_id!r} error={e}")
         write_backs.append(sheets_transactions.write_back_failure(sheet_row_num, "create-failed", sync_dt, _to_sync_notes(e)))
         return None
-    except Exception:
+    except Exception as e:
         conn.rollback()
+        logger.error(f"_run_fallthrough_update: unexpected_error entity=transactions row={sheet_row_num} transaction_id={transaction_id!r} error={e!r}")
         raise

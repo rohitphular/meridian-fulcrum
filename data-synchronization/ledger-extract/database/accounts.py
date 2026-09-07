@@ -71,7 +71,7 @@ def _to_sync_notes(e: Exception) -> str:
         if constraint == "chk_am_base_currency":
             return "base_currency must be a 3-character uppercase ISO code"
         if constraint == "chk_am_rate_ref_required":
-            return "currency_rate_ref must not be NULL when local_currency differs from base_currency — indicates a code bug in the extract job"
+            return "currency_rate_id must not be NULL when local_currency differs from base_currency — indicates a code bug in the extract job"
         return f"DB constraint violation: {constraint}"
     if isinstance(e, pg_errors.NotNullViolation):
         return f"Required field is null: {e.diag.column_name}"
@@ -90,9 +90,9 @@ def _compute_minor_units(
     local_minor = int((opening_amount_local_value * decimal.Decimal(10) ** local_decimal_places).to_integral_value(decimal.ROUND_HALF_UP))
     if local_currency == _BASE_CURRENCY:
         return local_minor, local_minor, None
-    currency_rate_ref, rate_value = rate_lookup  # type: ignore[misc]
+    currency_rate_id, rate_value = rate_lookup  # type: ignore[misc]
     base_minor = int((opening_amount_local_value / rate_value * decimal.Decimal(10) ** _XAU_DECIMAL_PLACES).to_integral_value(decimal.ROUND_HALF_UP))
-    return local_minor, base_minor, currency_rate_ref
+    return local_minor, base_minor, currency_rate_id
 
 
 def upsert_accounts(conn: Any, sheets_client: SheetsClient, rows: list[dict[str, Any]], row_start: int) -> None:
@@ -166,7 +166,7 @@ def upsert_accounts(conn: Any, sheets_client: SheetsClient, rows: list[dict[str,
                         failed += 1
                         continue
 
-                local_minor, base_minor, currency_rate_ref = _compute_minor_units(opening_amount_local_value, local_currency, local_decimal_places, rate_lookup)
+                local_minor, base_minor, currency_rate_id = _compute_minor_units(opening_amount_local_value, local_currency, local_decimal_places, rate_lookup)
 
                 try:
                     with conn.cursor() as cursor:
@@ -177,7 +177,7 @@ def upsert_accounts(conn: Any, sheets_client: SheetsClient, rows: list[dict[str,
                                 local_timezone, opening_date_local, closing_date_local,
                                 opening_amount_local_value, opening_amount_base_value,
                                 local_currency, base_currency,
-                                currency_rate_ref,
+                                currency_rate_id,
                                 account_description, record_status, created_at, updated_at
                             ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now(), now())
                             ON CONFLICT (id) DO UPDATE SET
@@ -203,7 +203,7 @@ def upsert_accounts(conn: Any, sheets_client: SheetsClient, rows: list[dict[str,
                                 base_minor,
                                 local_currency,
                                 _BASE_CURRENCY,
-                                currency_rate_ref,
+                                currency_rate_id,
                                 typed["account_description"],
                                 typed["record_status"],
                             ),
@@ -227,8 +227,9 @@ def upsert_accounts(conn: Any, sheets_client: SheetsClient, rows: list[dict[str,
                     logger.error(f"upsert_accounts: create_failed entity=accounts natural_key={natural_key} error={e}")
                     write_backs.append(sheets_accounts.write_back(sheet_row_num, "create-failed", sync_dt, _to_sync_notes(e)))
                     failed += 1
-                except Exception:
+                except Exception as e:
                     conn.rollback()
+                    logger.error(f"upsert_accounts: unexpected_error entity=accounts natural_key={natural_key} row={sheet_row_num} error={e!r}")
                     raise
 
             else:
@@ -287,7 +288,7 @@ def upsert_accounts(conn: Any, sheets_client: SheetsClient, rows: list[dict[str,
                                 failed += 1
                                 continue
 
-                        local_minor, base_minor, currency_rate_ref = _compute_minor_units(opening_amount_local_value, local_currency, local_decimal_places, rate_lookup)
+                        local_minor, base_minor, currency_rate_id = _compute_minor_units(opening_amount_local_value, local_currency, local_decimal_places, rate_lookup)
 
                         with conn.cursor() as cursor:
                             cursor.execute(
@@ -297,7 +298,7 @@ def upsert_accounts(conn: Any, sheets_client: SheetsClient, rows: list[dict[str,
                                     local_timezone, opening_date_local, closing_date_local,
                                     opening_amount_local_value, opening_amount_base_value,
                                     local_currency, base_currency,
-                                    currency_rate_ref,
+                                    currency_rate_id,
                                     account_description, record_status, created_at, updated_at
                                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now(), now())
                                 ON CONFLICT (id) DO UPDATE SET
@@ -323,7 +324,7 @@ def upsert_accounts(conn: Any, sheets_client: SheetsClient, rows: list[dict[str,
                                     base_minor,
                                     local_currency,
                                     _BASE_CURRENCY,
-                                    currency_rate_ref,
+                                    currency_rate_id,
                                     typed["account_description"],
                                     typed["record_status"],
                                 ),
@@ -352,8 +353,9 @@ def upsert_accounts(conn: Any, sheets_client: SheetsClient, rows: list[dict[str,
                     logger.error(f"upsert_accounts: update_failed entity=accounts natural_key={natural_key} error={e}")
                     write_backs.append(sheets_accounts.write_back(sheet_row_num, "update-failed", sync_dt, _to_sync_notes(e)))
                     failed += 1
-                except Exception:
+                except Exception as e:
                     conn.rollback()
+                    logger.error(f"upsert_accounts: unexpected_error entity=accounts natural_key={natural_key} row={sheet_row_num} error={e!r}")
                     raise
 
     finally:

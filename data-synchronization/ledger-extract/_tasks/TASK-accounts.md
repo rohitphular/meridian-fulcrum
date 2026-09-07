@@ -48,10 +48,10 @@ None — all design decisions confirmed.
 | Q33 | Entity type constraint | `CHECK (entity_type IN ('transaction'))` on all 7 extension tables — NULL remains valid. Each new entity type introduced in a future phase is added via migration. |
 | Q34 | `local_currency` / `base_currency` format guard | `CHECK (char_length(local_currency) = 3 AND local_currency = upper(local_currency))` and `CHECK (char_length(base_currency) = 3 AND base_currency = upper(base_currency))` on `account_master` — enforces 3-char ISO code and prevents `'gbp'` and `'GBP'` being treated as different currencies. Extension tables carry the same columns and the same CHECKs. |
 | Q35 | Dual-currency monetary fields | All monetary amounts in `account_master` are stored in both local currency (as recorded in the sheet) and base currency (XAU as of extract time). The base value is computed by the extract job using the prevailing rate from `currency_rates`. The `base_currency` column records which base currency was active at creation time so that future changes to the base currency leave historical rows unaffected. Extension tables follow the same dual-currency pattern for all monetary fields (Phase 2). |
-| Q36 | `currency_rate_ref` nullability | NULL when `local_currency = base_currency` (no conversion needed — local IS the base). NOT NULL when they differ. A CHECK enforces: `CHECK (local_currency = base_currency OR currency_rate_ref IS NOT NULL)`. All tables (`account_master` and all 7 extension tables) carry the same nullable `currency_rate_ref`. |
-| Q37 | FX rate lookup strategy | The extract job queries: `SELECT id, rate_value FROM currency_rates WHERE quote_currency_code = %s AND base_currency_code = %s AND rate_date <= CURRENT_DATE ORDER BY rate_date DESC LIMIT 1` (parameters: `local_currency`, `base_currency`). `rate_value` convention: local currency major units per 1 XAU gram (e.g., GBP rate ≈ 76 means 76 GBP per gram of gold). Therefore `local_major / rate_value` yields grams, which are then converted to nanograms by multiplying by `10^9`. The `base_currency_code` filter is explicit even though `chk_cr_base_is_xau` currently guarantees all rows are XAU-based — this makes the FK semantics future-proof. If no row is found on the create path, write back `create-failed` with `sync_notes = "No rate found for {local_currency} — run currency-rates job first"` (no rollback). If the same condition occurs on the update fallback path, call `conn.rollback()` first, then write back `update-failed` — see the pre-DB failure table. If `local_currency = base_currency` (XAU account), skip the lookup entirely — `currency_rate_ref = NULL`, `base_minor = local_minor` (same minor unit value, since both are in nanograms). The lookup happens in `database/accounts.py` inside the create path and the update fallback path (when UPDATE returns 0 rows and falls back to INSERT) — never on the regular update path where immutable fields are excluded from the SET clause. |
+| Q36 | `currency_rate_id` nullability | NULL when `local_currency = base_currency` (no conversion needed — local IS the base). NOT NULL when they differ. A CHECK enforces: `CHECK (local_currency = base_currency OR currency_rate_id IS NOT NULL)`. All tables (`account_master` and all 7 extension tables) carry the same nullable `currency_rate_id`. |
+| Q37 | FX rate lookup strategy | The extract job queries: `SELECT id, rate_value FROM currency_rates WHERE quote_currency_code = %s AND base_currency_code = %s AND rate_date <= CURRENT_DATE ORDER BY rate_date DESC LIMIT 1` (parameters: `local_currency`, `base_currency`). `rate_value` convention: local currency major units per 1 XAU gram (e.g., GBP rate ≈ 76 means 76 GBP per gram of gold). Therefore `local_major / rate_value` yields grams, which are then converted to nanograms by multiplying by `10^9`. The `base_currency_code` filter is explicit even though `chk_cr_base_is_xau` currently guarantees all rows are XAU-based — this makes the FK semantics future-proof. If no row is found on the create path, write back `create-failed` with `sync_notes = "No rate found for {local_currency} — run currency-rates job first"` (no rollback). If the same condition occurs on the update fallback path, call `conn.rollback()` first, then write back `update-failed` — see the pre-DB failure table. If `local_currency = base_currency` (XAU account), skip the lookup entirely — `currency_rate_id = NULL`, `base_minor = local_minor` (same minor unit value, since both are in nanograms). The lookup happens in `database/accounts.py` inside the create path and the update fallback path (when UPDATE returns 0 rows and falls back to INSERT) — never on the regular update path where immutable fields are excluded from the SET clause. |
 | Q38 | `base_currency` column rationale | Explicitly stored on every table so that when the base currency changes in a future release, existing records retain their original base currency. New records written after the change carry the new base currency. Consistent column name across `account_master` and all extension tables — the reporting layer always reads `base_currency` regardless of which table it queries. |
-| Q39 | Immutability of opening amount fields | `opening_amount_local_value`, `opening_amount_base_value`, `local_currency`, `base_currency`, `currency_rate_ref`, and `created_at` are immutable after the first successful sync. The ON CONFLICT DO UPDATE clause must NOT include these columns — if a row already exists in the DB, only `account_name`, `account_type`, `account_subtype`, `account_description`, `record_status`, and `updated_at` are updated. Note: `account_type` is mutable but its sign must be consistent with the immutable `opening_amount_local_value`. Changing `account_type` from `asset` to `liability` (or vice versa) would violate `chk_am_opening_value_sign` at the DB level. GAS must prevent this change in the sheet; the DB constraint is a safety net. |
+| Q39 | Immutability of opening amount fields | `opening_amount_local_value`, `opening_amount_base_value`, `local_currency`, `base_currency`, `currency_rate_id`, and `created_at` are immutable after the first successful sync. The ON CONFLICT DO UPDATE clause must NOT include these columns — if a row already exists in the DB, only `account_name`, `account_type`, `account_subtype`, `account_description`, `record_status`, and `updated_at` are updated. Note: `account_type` is mutable but its sign must be consistent with the immutable `opening_amount_local_value`. Changing `account_type` from `asset` to `liability` (or vice versa) would violate `chk_am_opening_value_sign` at the DB level. GAS must prevent this change in the sheet; the DB constraint is a safety net. |
 | Q40 | Minor unit conversion formula | All `_local_value` and `_base_value` columns store `BIGINT` minor units. The extract job converts sheet major-unit values at write time. `_load_decimal_places(conn)` queries `SELECT currency_code, decimal_places FROM currency_master` once per batch and returns `{currency_code: decimal_places}`. Per row — local: `local_minor = int((local_major × Decimal(10)**local_decimal_places).to_integral_value(ROUND_HALF_UP))`; base (XAU always `decimal_places = 9`): if `local_currency == 'XAU'` then `base_minor = local_minor`; else `base_minor = int((local_major / rate_value × Decimal(10)**9).to_integral_value(ROUND_HALF_UP))`. All arithmetic uses `decimal.Decimal` — never `float`. Sign is preserved (negative integers for liabilities). If `local_currency` is absent from the preloaded dict: write back `create-failed` with `sync_notes = "Currency {local_currency} not found in currency_master"`; continue to next row. On the create path, this is handled outside the psycopg2 except block — do NOT rollback. On the update fallback path, the preceding UPDATE opened an implicit psycopg2 transaction; call `conn.rollback()` first, then write back `update-failed` — see the pre-DB failure table. `units_held` in `account_market_investment_details` is a quantity (not a monetary amount) and remains `NUMERIC(19,6)` — it is not converted. |
 
 ---
@@ -125,7 +125,7 @@ Common columns shared by every account regardless of account subtype.
 | `opening_amount_base_value` | — | `BIGINT NOT NULL` | XAU equivalent of `opening_amount_local_value` in nanograms (`10^9` nanograms = 1 gram); computed by extract job; immutable after create |
 | `local_currency` | 6 (`local_currency`) | `CHAR(3) NOT NULL` | 3-char uppercase ISO code; immutable after create |
 | `base_currency` | — | `CHAR(3) NOT NULL` | Base currency active at create time (currently always `'XAU'`); immutable after create |
-| `currency_rate_ref` | — | `UUID` | FK → `currency_rates(id)`; NULL when `local_currency = base_currency`; immutable after create |
+| `currency_rate_id` | — | `UUID` | FK → `currency_rates(id)`; NULL when `local_currency = base_currency`; immutable after create |
 | `account_description` | 12 (`description`) | `TEXT` | NULL if empty |
 | `record_status` | 13 (`record_status`) | `TEXT NOT NULL` | Mirrors sheet verbatim; hard error if empty or not in `{'active', 'inactive', 'deleted', 'locked'}` |
 | `created_at` | — | `TIMESTAMPTZ NOT NULL` | When first written by the extract job |
@@ -134,14 +134,14 @@ Common columns shared by every account regardless of account subtype.
 Constraints:
 - `CONSTRAINT pk_am PRIMARY KEY (id)`
 - `CONSTRAINT fk_am_account_type_subtype FOREIGN KEY (account_type, account_subtype) REFERENCES account_types(account_type, account_subtype)`
-- `CONSTRAINT fk_am_rate_ref FOREIGN KEY (currency_rate_ref) REFERENCES currency_rates(id)`
+- `CONSTRAINT fk_am_rate_ref FOREIGN KEY (currency_rate_id) REFERENCES currency_rates(id)`
 - `CONSTRAINT chk_am_account_type CHECK (account_type IN ('asset', 'investment', 'liability'))`
 - `CONSTRAINT chk_am_record_status CHECK (record_status IN ('active', 'inactive', 'deleted', 'locked'))`
 - `CONSTRAINT chk_am_local_currency CHECK (char_length(local_currency) = 3 AND local_currency = upper(local_currency))`
 - `CONSTRAINT chk_am_base_currency CHECK (char_length(base_currency) = 3 AND base_currency = upper(base_currency))`
 - `CONSTRAINT chk_am_opening_value_sign CHECK ((account_type IN ('asset', 'investment') AND opening_amount_local_value >= 0) OR (account_type = 'liability' AND opening_amount_local_value <= 0))`
 - `CONSTRAINT chk_am_base_value_sign CHECK ((account_type IN ('asset', 'investment') AND opening_amount_base_value >= 0) OR (account_type = 'liability' AND opening_amount_base_value <= 0))`
-- `CONSTRAINT chk_am_rate_ref_required CHECK (local_currency = base_currency OR currency_rate_ref IS NOT NULL)`
+- `CONSTRAINT chk_am_rate_ref_required CHECK (local_currency = base_currency OR currency_rate_id IS NOT NULL)`
 
 Note: sheet col 11 (`current_value_local`) is virtual and always blank — not stored. Sheet cols 14–16 (`sync_status`, `sync_date`, `sync_notes`) are written back by the extract job. Sheet cols 17–18 (`created_at`, `updated_at`) are not stored in the DB. `local_currency` and `base_currency` are table-level columns shared by all monetary fields in the row — consistent naming with all extension tables.
 
@@ -153,7 +153,7 @@ Note: sheet col 11 (`current_value_local`) is virtual and always blank — not s
 
 Extension table monetary fields use positive magnitudes. Liability nature is implied by `account_type`. Net-worth at the reporting layer: `sum(asset/investment values) − sum(liability balances)`.
 
-**Currency columns — consistent across all tables:** `account_master` and all 7 extension tables carry the same three currency columns: `local_currency CHAR(3) NOT NULL`, `base_currency CHAR(3) NOT NULL`, and `currency_rate_ref UUID` (nullable when local = base). These apply to ALL monetary fields in a given row. Per monetary field: `_{field}_local_value` (in local currency) and `_{field}_base_value` (in base currency / XAU). `local_currency` is technically derivable from `account_master` via JOIN but is kept on extension rows for readability.
+**Currency columns — consistent across all tables:** `account_master` and all 7 extension tables carry the same three currency columns: `local_currency CHAR(3) NOT NULL`, `base_currency CHAR(3) NOT NULL`, and `currency_rate_id UUID` (nullable when local = base). These apply to ALL monetary fields in a given row. Per monetary field: `_{field}_local_value` (in local currency) and `_{field}_base_value` (in base currency / XAU). `local_currency` is technically derivable from `account_master` via JOIN but is kept on extension rows for readability.
 
 ---
 
@@ -179,7 +179,7 @@ account_subtype values: `current`, `savings`, `cash`. Extension table routing is
 | `current_balance_base_value` | `BIGINT NOT NULL` | Balance as of this record in base currency (XAU) |
 | `local_currency` | `CHAR(3) NOT NULL` | Local currency for all monetary fields in this row |
 | `base_currency` | `CHAR(3) NOT NULL` | Base currency for all monetary fields in this row |
-| `currency_rate_ref` | `UUID` | FK → `currency_rates(id)`; NULL when `local_currency = base_currency` |
+| `currency_rate_id` | `UUID` | FK → `currency_rates(id)`; NULL when `local_currency = base_currency` |
 | `interest_rate` | `NUMERIC(8,4)` | Annual rate — NULL for current/cash accounts |
 | `rate_type` | `TEXT` | `fixed`, `variable`, `tracker` — NULL if not applicable |
 | `interest_payment_frequency` | `TEXT` | `monthly`, `quarterly`, `semi_annual`, `annual` — NULL for current/cash |
@@ -189,7 +189,7 @@ account_subtype values: `current`, `savings`, `cash`. Extension table routing is
 Constraints:
 - `PRIMARY KEY (id)`
 - `FOREIGN KEY (account_master_id) REFERENCES account_master(id)`
-- `FOREIGN KEY (currency_rate_ref) REFERENCES currency_rates(id)`
+- `FOREIGN KEY (currency_rate_id) REFERENCES currency_rates(id)`
 - `UNIQUE (account_master_id, effective_from_dt)`
 - `CREATE UNIQUE INDEX idx_account_deposit_details_current ON account_deposit_details (account_master_id) WHERE effective_to_dt IS NULL`
 - `CHECK ((entity_type IS NULL AND entity_id IS NULL) OR (entity_type IS NOT NULL AND entity_id IS NOT NULL))`
@@ -203,7 +203,7 @@ Constraints:
 - `CHECK (char_length(base_currency) = 3 AND base_currency = upper(base_currency))`
 - `CHECK (current_balance_local_value >= 0)`
 - `CHECK (current_balance_base_value >= 0)`
-- `CHECK (local_currency = base_currency OR currency_rate_ref IS NOT NULL)`
+- `CHECK (local_currency = base_currency OR currency_rate_id IS NOT NULL)`
 - `CHECK (effective_to_dt IS NULL OR effective_to_dt > effective_from_dt)`
 
 ---
@@ -228,14 +228,14 @@ account_subtype values: `stocks_shares`, `isa`, `pension_sipp`, `crypto`, `commo
 | `unit_type` | `TEXT` | e.g. `shares`, `BTC` — NULL for fund-based accounts |
 | `local_currency` | `CHAR(3) NOT NULL` | Local currency for all monetary fields in this row |
 | `base_currency` | `CHAR(3) NOT NULL` | Base currency for all monetary fields in this row |
-| `currency_rate_ref` | `UUID` | FK → `currency_rates(id)`; NULL when `local_currency = base_currency` |
+| `currency_rate_id` | `UUID` | FK → `currency_rates(id)`; NULL when `local_currency = base_currency` |
 | `effective_from_dt` | `TIMESTAMPTZ NOT NULL` | When this state became active |
 | `effective_to_dt` | `TIMESTAMPTZ` | When this state ended — NULL = current record |
 
 Constraints:
 - `PRIMARY KEY (id)`
 - `FOREIGN KEY (account_master_id) REFERENCES account_master(id)`
-- `FOREIGN KEY (currency_rate_ref) REFERENCES currency_rates(id)`
+- `FOREIGN KEY (currency_rate_id) REFERENCES currency_rates(id)`
 - `UNIQUE (account_master_id, effective_from_dt)`
 - `CREATE UNIQUE INDEX idx_account_market_investment_details_current ON account_market_investment_details (account_master_id) WHERE effective_to_dt IS NULL`
 - `CHECK ((entity_type IS NULL AND entity_id IS NULL) OR (entity_type IS NOT NULL AND entity_id IS NOT NULL))`
@@ -252,7 +252,7 @@ Constraints:
 - `CHECK (char_length(base_currency) = 3 AND base_currency = upper(base_currency))`
 - `CHECK (cost_basis_local_value >= 0)`
 - `CHECK (cost_basis_base_value >= 0)`
-- `CHECK (local_currency = base_currency OR currency_rate_ref IS NOT NULL)`
+- `CHECK (local_currency = base_currency OR currency_rate_id IS NOT NULL)`
 - `CHECK (effective_to_dt IS NULL OR effective_to_dt > effective_from_dt)`
 
 ---
@@ -275,7 +275,7 @@ account_subtype values: `fixed_deposit`, `bonds`. Extension table routing deferr
 | `current_value_base_value` | `BIGINT NOT NULL` | Current value in base currency (XAU) |
 | `local_currency` | `CHAR(3) NOT NULL` | Local currency for all monetary fields in this row |
 | `base_currency` | `CHAR(3) NOT NULL` | Base currency for all monetary fields in this row |
-| `currency_rate_ref` | `UUID` | FK → `currency_rates(id)`; NULL when `local_currency = base_currency` |
+| `currency_rate_id` | `UUID` | FK → `currency_rates(id)`; NULL when `local_currency = base_currency` |
 | `interest_rate` | `NUMERIC(8,4) NOT NULL` | Annual coupon or deposit rate |
 | `rate_type` | `TEXT NOT NULL` | `fixed`, `variable`, `tracker` |
 | `interest_payment_frequency` | `TEXT` | `monthly`, `quarterly`, `semi_annual`, `annual` — NULL for zero-coupon |
@@ -287,7 +287,7 @@ account_subtype values: `fixed_deposit`, `bonds`. Extension table routing deferr
 Constraints:
 - `PRIMARY KEY (id)`
 - `FOREIGN KEY (account_master_id) REFERENCES account_master(id)`
-- `FOREIGN KEY (currency_rate_ref) REFERENCES currency_rates(id)`
+- `FOREIGN KEY (currency_rate_id) REFERENCES currency_rates(id)`
 - `UNIQUE (account_master_id, effective_from_dt)`
 - `CREATE UNIQUE INDEX idx_account_fixed_income_details_current ON account_fixed_income_details (account_master_id) WHERE effective_to_dt IS NULL`
 - `CHECK ((entity_type IS NULL AND entity_id IS NULL) OR (entity_type IS NOT NULL AND entity_id IS NOT NULL))`
@@ -305,7 +305,7 @@ Constraints:
 - `CHECK (current_value_local_value >= 0)`
 - `CHECK (current_value_base_value >= 0)`
 - `CHECK (interest_rate = 0 OR interest_payment_frequency IS NOT NULL)`
-- `CHECK (local_currency = base_currency OR currency_rate_ref IS NOT NULL)`
+- `CHECK (local_currency = base_currency OR currency_rate_id IS NOT NULL)`
 - `CHECK (effective_to_dt IS NULL OR effective_to_dt > effective_from_dt)`
 
 ---
@@ -328,7 +328,7 @@ account_subtype values: `property`. Extension table routing deferred to Phase 2 
 | `monthly_rental_income_base_value` | `BIGINT` | NULL if not a rental property; in base currency (XAU) |
 | `local_currency` | `CHAR(3) NOT NULL` | Local currency for all monetary fields in this row |
 | `base_currency` | `CHAR(3) NOT NULL` | Base currency for all monetary fields in this row |
-| `currency_rate_ref` | `UUID` | FK → `currency_rates(id)`; NULL when `local_currency = base_currency` |
+| `currency_rate_id` | `UUID` | FK → `currency_rates(id)`; NULL when `local_currency = base_currency` |
 | `purchase_date` | `DATE` | NULL for inherited or undocumented acquisition |
 | `property_address` | `TEXT` | |
 | `is_rental` | `BOOLEAN NOT NULL DEFAULT FALSE` | |
@@ -338,7 +338,7 @@ account_subtype values: `property`. Extension table routing deferred to Phase 2 
 Constraints:
 - `PRIMARY KEY (id)`
 - `FOREIGN KEY (account_master_id) REFERENCES account_master(id)`
-- `FOREIGN KEY (currency_rate_ref) REFERENCES currency_rates(id)`
+- `FOREIGN KEY (currency_rate_id) REFERENCES currency_rates(id)`
 - `UNIQUE (account_master_id, effective_from_dt)`
 - `CREATE UNIQUE INDEX idx_account_property_details_current ON account_property_details (account_master_id) WHERE effective_to_dt IS NULL`
 - `CHECK ((entity_type IS NULL AND entity_id IS NULL) OR (entity_type IS NOT NULL AND entity_id IS NOT NULL))`
@@ -353,7 +353,7 @@ Constraints:
 - `CHECK (char_length(base_currency) = 3 AND base_currency = upper(base_currency))`
 - `CHECK (current_value_local_value > 0)`
 - `CHECK (current_value_base_value > 0)`
-- `CHECK (local_currency = base_currency OR currency_rate_ref IS NOT NULL)`
+- `CHECK (local_currency = base_currency OR currency_rate_id IS NOT NULL)`
 - `CHECK (effective_to_dt IS NULL OR effective_to_dt > effective_from_dt)`
 
 ---
@@ -374,7 +374,7 @@ account_subtype values: `p2p_lending`. Extension table routing deferred to Phase
 | `current_value_base_value` | `BIGINT NOT NULL` | Outstanding principal + accrued interest in base currency (XAU) |
 | `local_currency` | `CHAR(3) NOT NULL` | Local currency for all monetary fields in this row |
 | `base_currency` | `CHAR(3) NOT NULL` | Base currency for all monetary fields in this row |
-| `currency_rate_ref` | `UUID` | FK → `currency_rates(id)`; NULL when `local_currency = base_currency` |
+| `currency_rate_id` | `UUID` | FK → `currency_rates(id)`; NULL when `local_currency = base_currency` |
 | `interest_rate` | `NUMERIC(8,4)` | Expected or realised annual rate |
 | `rate_type` | `TEXT` | `fixed`, `variable`, `tracker` |
 | `effective_from_dt` | `TIMESTAMPTZ NOT NULL` | When this state became active |
@@ -383,7 +383,7 @@ account_subtype values: `p2p_lending`. Extension table routing deferred to Phase
 Constraints:
 - `PRIMARY KEY (id)`
 - `FOREIGN KEY (account_master_id) REFERENCES account_master(id)`
-- `FOREIGN KEY (currency_rate_ref) REFERENCES currency_rates(id)`
+- `FOREIGN KEY (currency_rate_id) REFERENCES currency_rates(id)`
 - `UNIQUE (account_master_id, effective_from_dt)`
 - `CREATE UNIQUE INDEX idx_account_p2p_lending_details_current ON account_p2p_lending_details (account_master_id) WHERE effective_to_dt IS NULL`
 - `CHECK ((entity_type IS NULL AND entity_id IS NULL) OR (entity_type IS NOT NULL AND entity_id IS NOT NULL))`
@@ -397,7 +397,7 @@ Constraints:
 - `CHECK (current_value_local_value >= 0)`
 - `CHECK (current_value_base_value >= 0)`
 - `CHECK (interest_rate >= 0)`
-- `CHECK (local_currency = base_currency OR currency_rate_ref IS NOT NULL)`
+- `CHECK (local_currency = base_currency OR currency_rate_id IS NOT NULL)`
 - `CHECK (effective_to_dt IS NULL OR effective_to_dt > effective_from_dt)`
 
 ---
@@ -420,7 +420,7 @@ account_subtype values: `credit_card`, `heloc`, `overdraft`. Extension table rou
 | `minimum_payment_base_value` | `BIGINT` | Minimum monthly payment in base currency (XAU) |
 | `local_currency` | `CHAR(3) NOT NULL` | Local currency for all monetary fields in this row |
 | `base_currency` | `CHAR(3) NOT NULL` | Base currency for all monetary fields in this row |
-| `currency_rate_ref` | `UUID` | FK → `currency_rates(id)`; NULL when `local_currency = base_currency` |
+| `currency_rate_id` | `UUID` | FK → `currency_rates(id)`; NULL when `local_currency = base_currency` |
 | `annual_percentage_rate` | `NUMERIC(8,4)` | Annual percentage rate |
 | `rate_type` | `TEXT` | `fixed`, `variable`, `tracker` |
 | `payment_due_day` | `INTEGER` | Day of month payment is due (1–31) |
@@ -431,7 +431,7 @@ account_subtype values: `credit_card`, `heloc`, `overdraft`. Extension table rou
 Constraints:
 - `PRIMARY KEY (id)`
 - `FOREIGN KEY (account_master_id) REFERENCES account_master(id)`
-- `FOREIGN KEY (currency_rate_ref) REFERENCES currency_rates(id)`
+- `FOREIGN KEY (currency_rate_id) REFERENCES currency_rates(id)`
 - `UNIQUE (account_master_id, effective_from_dt)`
 - `CREATE UNIQUE INDEX idx_account_revolving_credit_details_current ON account_revolving_credit_details (account_master_id) WHERE effective_to_dt IS NULL`
 - `CHECK ((entity_type IS NULL AND entity_id IS NULL) OR (entity_type IS NOT NULL AND entity_id IS NOT NULL))`
@@ -450,7 +450,7 @@ Constraints:
 - `CHECK (char_length(base_currency) = 3 AND base_currency = upper(base_currency))`
 - `CHECK (minimum_payment_local_value >= 0)`
 - `CHECK (minimum_payment_base_value >= 0)`
-- `CHECK (local_currency = base_currency OR currency_rate_ref IS NOT NULL)`
+- `CHECK (local_currency = base_currency OR currency_rate_id IS NOT NULL)`
 - `CHECK (effective_to_dt IS NULL OR effective_to_dt > effective_from_dt)`
 
 Note: No `CHECK (current_balance_local_value <= credit_limit_local_value)` — over-limit balances (penalty fees, rounding) are valid in practice and accepted by this schema.
@@ -477,7 +477,7 @@ All columns are time-varying — extra payments can reduce principal or tenure; 
 | `monthly_payment_base_value` | `BIGINT NOT NULL` | Current scheduled monthly payment in base currency (XAU) |
 | `local_currency` | `CHAR(3) NOT NULL` | Local currency for all monetary fields in this row |
 | `base_currency` | `CHAR(3) NOT NULL` | Base currency for all monetary fields in this row |
-| `currency_rate_ref` | `UUID` | FK → `currency_rates(id)`; NULL when `local_currency = base_currency` |
+| `currency_rate_id` | `UUID` | FK → `currency_rates(id)`; NULL when `local_currency = base_currency` |
 | `interest_rate` | `NUMERIC(8,4) NOT NULL` | Annual rate |
 | `rate_type` | `TEXT NOT NULL` | `fixed`, `variable`, `tracker` |
 | `term_months` | `INTEGER NOT NULL` | Remaining term as of `effective_from_dt` |
@@ -489,7 +489,7 @@ All columns are time-varying — extra payments can reduce principal or tenure; 
 Constraints:
 - `PRIMARY KEY (id)`
 - `FOREIGN KEY (account_master_id) REFERENCES account_master(id)`
-- `FOREIGN KEY (currency_rate_ref) REFERENCES currency_rates(id)`
+- `FOREIGN KEY (currency_rate_id) REFERENCES currency_rates(id)`
 - `UNIQUE (account_master_id, effective_from_dt)`
 - `CREATE UNIQUE INDEX idx_account_installment_loan_details_current ON account_installment_loan_details (account_master_id) WHERE effective_to_dt IS NULL`
 - `CHECK ((entity_type IS NULL AND entity_id IS NULL) OR (entity_type IS NOT NULL AND entity_id IS NOT NULL))`
@@ -506,7 +506,7 @@ Constraints:
 - `CHECK (char_length(base_currency) = 3 AND base_currency = upper(base_currency))`
 - `CHECK (term_months > 0)`
 - `CHECK (interest_rate >= 0)`
-- `CHECK (local_currency = base_currency OR currency_rate_ref IS NOT NULL)`
+- `CHECK (local_currency = base_currency OR currency_rate_id IS NOT NULL)`
 - `CHECK (effective_to_dt IS NULL OR effective_to_dt > effective_from_dt)`
 
 ---
@@ -571,10 +571,10 @@ Missing or unrecognised `sync_status` → skip with a `warning` log; do not writ
    - Set `base_currency = 'XAU'`.
    - Look up `local_decimal_places` for `local_currency` from the preloaded dict. If absent: write back `create-failed` with `sync_notes = "Currency {local_currency} not found in currency_master"`; continue to next row. Not a DB integrity error — do NOT rollback.
    - Compute: `local_minor = int((opening_amount_local_value × Decimal(10)**local_decimal_places).to_integral_value(ROUND_HALF_UP))`. All arithmetic uses `decimal.Decimal` — never `float`. Sign is preserved (negative for liabilities).
-   - If `local_currency == 'XAU'`: `base_minor = local_minor`, `currency_rate_ref = None` — skip rate lookup.
+   - If `local_currency == 'XAU'`: `base_minor = local_minor`, `currency_rate_id = None` — skip rate lookup.
    - Otherwise: query `SELECT id, rate_value FROM currency_rates WHERE quote_currency_code = %s AND base_currency_code = %s AND rate_date <= CURRENT_DATE ORDER BY rate_date DESC LIMIT 1` (parameters: `local_currency`, `base_currency`).
      - If 0 rows returned: write back `create-failed` with `sync_notes = "No rate found for {local_currency} — run currency-rates job first"`; continue to next row. Not a DB integrity error — do NOT rollback, do NOT enter the psycopg2 except block.
-     - If row found: `base_minor = int((opening_amount_local_value / rate_value × Decimal(10)**9).to_integral_value(ROUND_HALF_UP))`; `currency_rate_ref = rate_id`. XAU always has `decimal_places = 9` (nanogram).
+     - If row found: `base_minor = int((opening_amount_local_value / rate_value × Decimal(10)**9).to_integral_value(ROUND_HALF_UP))`; `currency_rate_id = rate_id`. XAU always has `decimal_places = 9` (nanogram).
    - The INSERT receives `local_minor` for `opening_amount_local_value` and `base_minor` for `opening_amount_base_value` (both Python `int`).
    - If ON CONFLICT fires on the subsequent INSERT (row already exists), the computed values are silently discarded — the DB retains the original immutable values. This is correct behaviour.
 
@@ -584,7 +584,7 @@ Missing or unrecognised `sync_status` → skip with a `warning` log; do not writ
        local_timezone, opening_date_local, closing_date_local,
        opening_amount_local_value, opening_amount_base_value,
        local_currency, base_currency,
-       currency_rate_ref,
+       currency_rate_id,
        account_description, record_status, created_at, updated_at
    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now(), now())
    ON CONFLICT (id) DO UPDATE SET
@@ -597,11 +597,11 @@ Missing or unrecognised `sync_status` → skip with a `warning` log; do not writ
        updated_at          = now()
    RETURNING id
    ```
-   Note: `legal_entity_name`, `local_timezone`, `opening_date_local`, `opening_amount_*` fields, `local_currency`, `base_currency`, `currency_rate_ref`, and `created_at` are intentionally excluded from the DO UPDATE SET clause — they are immutable after the first successful sync (see Q39).
+   Note: `legal_entity_name`, `local_timezone`, `opening_date_local`, `opening_amount_*` fields, `local_currency`, `base_currency`, `currency_rate_id`, and `created_at` are intentionally excluded from the DO UPDATE SET clause — they are immutable after the first successful sync (see Q39).
 
    **`update-pending` / `update-failed`:**
 
-   No FX rate lookup — `opening_amount_base_value` and `currency_rate_ref` are immutable and excluded from the UPDATE SET clause (see Q39).
+   No FX rate lookup — `opening_amount_base_value` and `currency_rate_id` are immutable and excluded from the UPDATE SET clause (see Q39).
 
    ```sql
    UPDATE account_master SET
@@ -640,7 +640,7 @@ Missing or unrecognised `sync_status` → skip with a `warning` log; do not writ
    | `CheckViolation` (`chk_am_record_status`) | `"Invalid record_status — must be active, inactive, deleted, or locked"` |
    | `CheckViolation` (`chk_am_local_currency`) | `"local_currency must be a 3-character uppercase ISO code"` |
    | `CheckViolation` (`chk_am_base_currency`) | `"base_currency must be a 3-character uppercase ISO code"` |
-   | `CheckViolation` (`chk_am_rate_ref_required`) | `"currency_rate_ref must not be NULL when local_currency differs from base_currency — indicates a code bug in the extract job"` |
+   | `CheckViolation` (`chk_am_rate_ref_required`) | `"currency_rate_id must not be NULL when local_currency differs from base_currency — indicates a code bug in the extract job"` |
    | `CheckViolation` (other) | `"DB constraint violation: {constraint_name}"` where `constraint_name = e.diag.constraint_name` (no fallback) |
    | `NotNullViolation` | `"Required field is null: {e.diag.column_name}"` |
 
@@ -652,7 +652,7 @@ Missing or unrecognised `sync_status` → skip with a `warning` log; do not writ
 
 Each row is committed independently. All write-backs for the batch are accumulated in a `list[WriteBack]` and flushed in a single `batch_update_rows` call at the end of the batch.
 
-**Note on immutability:** `opening_amount_*` fields, `local_currency`, `base_currency`, `currency_rate_ref`, and `created_at` cannot be changed after the first successful sync. GAS prevents changes to `opening_amount_local_value` in the sheet; the extract job enforces this at the DB layer by excluding these columns from the ON CONFLICT DO UPDATE and from the UPDATE path SET clause.
+**Note on immutability:** `opening_amount_*` fields, `local_currency`, `base_currency`, `currency_rate_id`, and `created_at` cannot be changed after the first successful sync. GAS prevents changes to `opening_amount_local_value` in the sheet; the extract job enforces this at the DB layer by excluding these columns from the ON CONFLICT DO UPDATE and from the UPDATE path SET clause.
 
 **Phase 1 scope:** The extract job writes `account_master` only. Extension table seeding requires data unavailable from the sheet and is deferred to Phase 2.
 
@@ -668,4 +668,4 @@ Each row is committed independently. All write-backs for the batch are accumulat
 
 - [x] **`sheets/accounts.py`** — updated: `_SYNC_STATUS_COL = 14`; parameter renamed `sync_date_time` → `sync_date`.
 
-- [ ] **`_runbooks/USAGE-INSTRUCTIONS.md`** — add `"Currency not found in currency_master"` as a new failure cause bullet: *"Currency not in currency_master — `local_currency` value has no row in `currency_master`. Add the currency to the master table, then retry."*
+- [x] **`_runbooks/USAGE-INSTRUCTIONS.md`** — add `"Currency not found in currency_master"` as a new failure cause bullet: *"Currency not in currency_master — `local_currency` value has no row in `currency_master`. Add the currency to the master table, then retry."*

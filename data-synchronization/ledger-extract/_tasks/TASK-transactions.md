@@ -1,6 +1,6 @@
 # TASK — transactions
 
-**Status:** IN PROGRESS — schema and extract behaviour confirmed; implementation not yet started
+**Status:** COMPLETE
 **Build order:** 3 of 4 — depends on categories (category_id FK), accounts (account_id FK), and counterparty_master (counterparty_id FK)
 **External dependency:** `currency-rates` TASK-currency-schema-enhancements.md must be applied first — migrations 0003 (XAU `decimal_places = 9`), 0004 (`minor_unit_name` column), and 0005 (`rate_value NUMERIC(19,8)`) must all be applied before this job runs
 
@@ -21,13 +21,13 @@ None — all design decisions confirmed.
 | Q3 | `tx_date_local` format | `YYYY-MM-DD HH:MM:SS` (local time, no timezone suffix). Sheet stores LOCAL time — not UTC. Parsed as a naive datetime with `datetime.fromisoformat()`, then converted to UTC via `.replace(tzinfo=ZoneInfo(tx_timezone_local)).astimezone(ZoneInfo("UTC"))` to produce `tx_date_time_base TIMESTAMPTZ`. `tx_date_time_local` is derived by converting `tx_date_time_base` back to `tx_timezone_local` and stripping tzinfo. |
 | Q4 | `day_of_week` derived column | YES — PostgreSQL ENUM `day_of_week_enum` (MONDAY … SUNDAY), computed at extract time from `tx_date_time_base` (UTC) and `tx_date_time_local` (local) using `_DAY_NAMES[weekday()]`. |
 | Q5 | FK on `account_id` | `account_id UUID NOT NULL FK → account_master(id)`. Sheet column `account_id` carries a UUID (the same UUID that is the PK in `account_master` — stamped by GAS on account creation). Extract looks up the UUID string directly in the preloaded `account_map`. If blank or not found → `create-failed`/`update-failed: account_not_found`; does not proceed. Replaces the old `source_account` / `target_account` two-column model. A transfer is two rows: `money-out` row on the source account + `money-in` row on the target account, linked by `parent_tx_id`. |
-| Q6 | Currency / FX columns | `local_currency` (DB column) is **derived from the resolved account's `local_currency`** — there is no `currency` sheet column. `tx_amount_local` (from sheet column `tx_amount_local`), `tx_amount_base` / `base_currency` / `currency_rate_ref` — XAU equivalent computed at extract time from `currency_rates` using the account's currency. No `fx_rate` sheet column. When `local_currency = 'XAU'` (XAU account): `tx_amount_base = tx_amount_local` (nanograms), no rate lookup, `currency_rate_ref = NULL`. For all other currencies: rate lookup on `rate_date = tx_date_time_base.date()`; if no rate found → `create-failed`/`update-failed`. |
+| Q6 | Currency / FX columns | `local_currency` (DB column) is **derived from the resolved account's `local_currency`** — there is no `currency` sheet column. `tx_amount_local` (from sheet column `tx_amount_local`), `tx_amount_base` / `base_currency` / `currency_rate_id` — XAU equivalent computed at extract time from `currency_rates` using the account's currency. No `fx_rate` sheet column. When `local_currency = 'XAU'` (XAU account): `tx_amount_base = tx_amount_local` (nanograms), no rate lookup, `currency_rate_id = NULL`. For all other currencies: rate lookup on `rate_date = tx_date_time_base.date()`; if no rate found → `create-failed`/`update-failed`. |
 | Q7 | `tx_description` naming | `description` renamed to `tx_description` to make scope explicit. |
 | Q8 | `tx_amount` sign convention | `tx_amount_local > 0` enforced by CHECK — direction (money-in vs money-out) is encoded in `category_master.tx_type` via the mandatory `category_id`; no separate `tx_type` column on `transaction_master`. |
 | Q9 | Soft-delete pattern | All primary entity tables — `transaction_master`, `counterparty_master`, `beneficiaries_master` — use `record_status TEXT NOT NULL DEFAULT 'active'` for lifecycle management, consistent with `account_master`. No `is_deleted` / `deleted_at` columns on any of them. The post-row soft-delete passes set `record_status = 'deleted'` on orphaned counterparties and beneficiaries. `transaction_beneficiaries` (junction) remains hard-delete only — rows are deleted and re-inserted on `update-pending`. |
 | Q10 | Location columns | `user_location_area/city/country` (where user physically is) stays on `transaction_master`. `user_location_latitude` and `user_location_longitude` are **sheet columns** — the extract writes them when non-blank in the sheet row, and stores NULL when blank (user manually enriches in the sheet). Counterparty location moves to `counterparty_master` — see Q14. |
 | Q11 | Timezone handling | User travels, so local timezone changes per transaction. Sheet column `tx_timezone_local` holds an IANA timezone name (e.g. `Asia/Kolkata`, `America/New_York`); optional, defaults to `Europe/London` when blank. `tx_timezone_local TEXT NOT NULL` stores the resolved IANA name. `tx_date_time_local TIMESTAMP` is derived by converting `tx_date_time_base` (UTC) to `tx_timezone_local` — it is not a sheet column. `tx_timezone_base TEXT NOT NULL` is always `'UTC'`. |
-| Q12 | Currency rate sourcing | `tx_amount_base` / `base_currency` / `currency_rate_ref` resolved via `_resolve_currency_rate`: looks up the local currency row in `currency_rates` on `rate_date = tx_date_time_base.date()` (exact date match — not a range scan). Exact date is required for historical accuracy: a transaction recorded on a past date must be valued using the rate prevailing on that date, not today's rate. This differs from the accounts module, which uses `rate_date <= CURRENT_DATE ORDER BY rate_date DESC LIMIT 1` (most-recent-available) because opening values are locked at first sync and there is no meaningful historical-rate concept for them. `tx_amount_base` is computed as integer nanograms — `tx_amount_local` (local minor units) × `10^9` (XAU factor) ÷ (`rate_value` × local minor unit factor), rounded `ROUND_HALF_UP` to the nearest integer. `base_currency = 'XAU'` always. For XAU accounts: `tx_amount_base = tx_amount_local`, `currency_rate_ref = NULL` (no rate needed). For all other currencies: `currency_rate_ref = cr_local.id` (NOT NULL); if no rate found → `create-failed`/`update-failed`. All currencies except XAU go through the rate lookup — no other shortcuts. |
+| Q12 | Currency rate sourcing | `tx_amount_base` / `base_currency` / `currency_rate_id` resolved via `_resolve_currency_rate`: looks up the local currency row in `currency_rates` on `rate_date = tx_date_time_base.date()` (exact date match — not a range scan). Exact date is required for historical accuracy: a transaction recorded on a past date must be valued using the rate prevailing on that date, not today's rate. This differs from the accounts module, which uses `rate_date <= CURRENT_DATE ORDER BY rate_date DESC LIMIT 1` (most-recent-available) because opening values are locked at first sync and there is no meaningful historical-rate concept for them. `tx_amount_base` is computed as integer nanograms — `tx_amount_local` (local minor units) × `10^9` (XAU factor) ÷ (`rate_value` × local minor unit factor), rounded `ROUND_HALF_UP` to the nearest integer. `base_currency = 'XAU'` always. For XAU accounts: `tx_amount_base = tx_amount_local`, `currency_rate_id = NULL` (no rate needed). For all other currencies: `currency_rate_id = cr_local.id` (NOT NULL); if no rate found → `create-failed`/`update-failed`. All currencies except XAU go through the rate lookup — no other shortcuts. |
 | Q13 | Beneficiaries | Tracked via two new tables: `beneficiaries_master` (person registry, soft-deleteable) and `transaction_beneficiaries` (junction, hard-deleted and re-inserted on `update-pending`). Sheet column `beneficiaries` supports optional percentages: `"Alice:60;Bob:40"` or equal-split shorthand `"Alice;Bob"`. `split_percentage NUMERIC(7,4)` stored per junction row — extract computes equal shares when not specified. Split amount = `tx_amount_base * (split_percentage / 100)` at query time. Percentages must sum to 100 — validated in extract, not SQL. |
 | Q14 | Counterparty normalisation | Counterparties extracted to `counterparty_master`. `counterparty_key` is derived from `counterparty_name` only (no location fields — those are manually enriched in the DB and never written by the extract). Key derivation: strip non-alphanumeric characters (except spaces), trim, uppercase, replace spaces with underscores, collapse consecutive underscores. If `counterparty_name` is blank → `counterparty_id = NULL`. If provided, a `counterparty_master` record is always created or reactivated via upsert — never left unresolved. `counterparty_label` updated to latest value on every upsert. `transaction_master` stores `counterparty_id UUID FK → counterparty_master(id)`. |
 | Q15 | Change detection and sync | Sheet carries `sync_status` column with values `create-pending`, `update-pending`, `in-sync`, `create-failed`, `update-failed`. Extract processes `create-pending`, `create-failed`, `update-pending`, and `update-failed`; silently skips `in-sync`; logs a warning and skips unrecognised values. On success: writes `in-sync` to `sync_status`, sets `sync_date`, clears `sync_notes`, and writes `created_at` / `updated_at`. On failure: writes `create-failed` or `update-failed` to `sync_status` (matching the status group of the row), sets `sync_date`, writes failure reason to `sync_notes`; does not write `created_at` / `updated_at`. Failed rows are retried automatically on subsequent runs. Row index tracking is required during the sheet read. No row hashing; no checksums table. |
@@ -95,7 +95,7 @@ Prerequisites: `day_of_week_enum` type created in migration before the table. Co
 | `tx_amount_base` | `BIGINT NOT NULL` | `CHECK (tx_amount_base > 0)` | — | XAU nanograms (dp=9); equals `tx_amount_local` for XAU accounts; computed via `currency_rates` for all others |
 | `local_currency` | `TEXT NOT NULL` | `CHECK (char_length(local_currency) = 3 AND local_currency = upper(local_currency))` | — | Derived from `account_id → account_master.local_currency`; not a direct sheet column |
 | `base_currency` | `TEXT NOT NULL` | `CHECK (base_currency = 'XAU')` | — | Always `'XAU'` |
-| `currency_rate_ref` | `UUID` | FK → `currency_rates(id)` | — | NULL for XAU accounts (no rate needed); NOT NULL for all other currencies — constraint `chk_tm_rate_ref_required` enforces this |
+| `currency_rate_id` | `UUID` | FK → `currency_rates(id)` | — | NULL for XAU accounts (no rate needed); NOT NULL for all other currencies — constraint `chk_tm_rate_ref_required` enforces this |
 | `tx_description` | `TEXT` | | `description` | Optional |
 | `counterparty_id` | `UUID` | FK → `counterparty_master(id)` (added in migration 0006) | `counterparty_name` | Resolved via upsert; NULL only when `counterparty_name` is blank or normalises to empty |
 | `tx_tags` | `TEXT` | | `tx_tags` | Semicolon-separated raw string |
@@ -115,7 +115,7 @@ pk_tm                    PRIMARY KEY (id)
 uq_tm_transaction_id     UNIQUE (transaction_id)
 fk_tm_parent_tx          FOREIGN KEY (parent_tx_id) REFERENCES transaction_master(transaction_id)
 fk_tm_account            FOREIGN KEY (account_id) REFERENCES account_master(id)
-fk_tm_rate_ref           FOREIGN KEY (currency_rate_ref) REFERENCES currency_rates(id)
+fk_tm_rate_ref           FOREIGN KEY (currency_rate_id) REFERENCES currency_rates(id)
 fk_tm_counterparty       FOREIGN KEY (counterparty_id) REFERENCES counterparty_master(id)  -- added in migration 0006
 fk_tm_category           FOREIGN KEY (category_id) REFERENCES category_master(id)
 chk_tm_record_status     CHECK (record_status IN ('active', 'inactive', 'deleted', 'locked'))
@@ -124,7 +124,7 @@ chk_tm_tx_amount_local   CHECK (tx_amount_local > 0)
 chk_tm_base_currency  CHECK (base_currency = 'XAU')
 chk_tm_local_currency CHECK (char_length(local_currency) = 3 AND local_currency = upper(local_currency))
 chk_tm_tx_timezone_base  CHECK (tx_timezone_base = 'UTC')
-chk_tm_rate_ref_required CHECK ((local_currency = 'XAU' AND currency_rate_ref IS NULL) OR (local_currency != 'XAU' AND currency_rate_ref IS NOT NULL))
+chk_tm_rate_ref_required CHECK ((local_currency = 'XAU' AND currency_rate_id IS NULL) OR (local_currency != 'XAU' AND currency_rate_id IS NOT NULL))
 chk_tm_location_pair     CHECK ((user_location_latitude IS NULL AND user_location_longitude IS NULL) OR (user_location_latitude IS NOT NULL AND user_location_longitude IS NOT NULL))
 chk_tm_location_lat      CHECK (user_location_latitude BETWEEN -90 AND 90)
 chk_tm_location_lon      CHECK (user_location_longitude BETWEEN -180 AND 180)
@@ -258,7 +258,7 @@ Iterate rows in sheet order. For each row:
 1. Validate and transform the row (datetime, timezone, tx_amount_local, tx_type, record_status)
 2. Resolve `account_id` from preloaded `account_map` — if blank or not found → `create-failed: account_not_found`; `local_currency` is taken from the matched account's `local_currency`
 3. If `parent_tx_id` is non-blank, verify it exists in `transaction_master.transaction_id` via a DB lookup — if not found → `create-failed: parent_tx_not_found`; do not proceed
-4. Resolve `tx_amount_base` / `base_currency` / `currency_rate_ref` using `local_currency` from step 2 — on failure write `create-failed` and skip; do not write to DB
+4. Resolve `tx_amount_base` / `base_currency` / `currency_rate_id` using `local_currency` from step 2 — on failure write `create-failed` and skip; do not write to DB
 5. Resolve `counterparty_id` (see counterparty resolution below)
 6. Resolve `category_id`: look up `(tx_type, major_category, minor_category)` in `category_master`; if no match → `create-failed: category_not_found`; do not proceed
 
@@ -307,7 +307,7 @@ RETURNING id
 
 All location fields on `counterparty_master` (`location_area`, `location_city`, `location_country`, `location_latitude`, `location_longitude`) are manually enriched — the extract never writes them.
 
-**`tx_amount_base` / `base_currency` / `currency_rate_ref` resolution:**
+**`tx_amount_base` / `base_currency` / `currency_rate_id` resolution:**
 
 `local_currency` is derived from the account lookup (create-pending step 2) — it is not read from the sheet. Amounts are stored as integers in currency minor units. Minor unit factor for any currency = `10 ^ decimal_places` from the preloaded `currency_decimal_places` map.
 
@@ -333,7 +333,7 @@ Bind values: `(local_currency, tx_date_time_base.date())`. `rate_value` = how ma
 
 Step 3 — compute XAU nanograms:
 
-For XAU accounts (`local_currency = 'XAU'`): `tx_amount_base = tx_amount_local`; `currency_rate_ref = None`. No rate lookup needed.
+For XAU accounts (`local_currency = 'XAU'`): `tx_amount_base = tx_amount_local`; `currency_rate_id = None`. No rate lookup needed.
 
 For all other currencies:
 ```python
@@ -341,12 +341,12 @@ xau_dp = currency_decimal_places["XAU"]
 if xau_dp != 9:
     raise ValueError(f"currency_master.decimal_places for XAU is {xau_dp}, expected 9")
 if not isinstance(rate_value, Decimal):
-    raise TypeError(f"_resolve_currency_rate: expected Decimal from psycopg2, got {type(rate_value).__name__}")
+    raise TypeError(f"_resolve_amount: expected Decimal from psycopg2, got {type(rate_value).__name__}")
 tx_amount_base = int((Decimal(tx_amount_local) * Decimal(10) ** xau_dp / (rate_value * Decimal(10) ** local_dp)).to_integral_value(ROUND_HALF_UP))
 # e.g. 1050 pence at 76 GBP/XAU → 138_157_895 nanograms
 ```
 
-`base_currency = 'XAU'`; `currency_rate_ref = rate_id`. All currencies except XAU go through this lookup — no other shortcuts.
+`base_currency = 'XAU'`; `currency_rate_id = rate_id`. All currencies except XAU go through this lookup — no other shortcuts.
 
 **Beneficiary resolution:**
 Parse `raw_beneficiaries` by splitting on `';'` and stripping whitespace. Names are stored as-is (strip only, no case normalisation) — `"Alice"` and `"alice"` are distinct records. Each entry is either `"Name"` or `"Name:percentage"`. All entries must follow the same form — mixing is not allowed:
@@ -472,7 +472,7 @@ WriteBack = tuple[int, int, list[str]]
 | `CheckViolation` on `chk_tm_base_currency` | `"base_currency must be XAU — indicates a code bug; file a bug report"` |
 | `CheckViolation` on `chk_tm_local_currency` | `"local_currency must be a 3-character uppercase ISO code — indicates a code bug; file a bug report"` |
 | `CheckViolation` on `chk_tm_tx_timezone_base` | `"tx_timezone_base must be UTC — indicates a code bug; file a bug report"` |
-| `CheckViolation` on `chk_tm_rate_ref_required` | `"currency_rate_ref constraint violated — indicates a code bug in the extract job; file a bug report"` |
+| `CheckViolation` on `chk_tm_rate_ref_required` | `"currency_rate_id constraint violated — indicates a code bug in the extract job; file a bug report"` |
 | `CheckViolation` — other | `f"DB constraint violation: {constraint}"` |
 | `NotNullViolation` | `f"Required field is null: {e.diag.column_name} — indicates a code bug; file a bug report"` |
 | Unknown type | `raise TypeError(f"_to_sync_notes: unhandled exception type {type(e).__name__}")` |
@@ -483,7 +483,7 @@ WriteBack = tuple[int, int, list[str]]
 
 **New migrations (not yet created):**
 
-- [ ] `migrations/0006_create_counterparty_master.py`
+- [x] `migrations/0006_create_counterparty_master.py`
 
 ```sql
 CREATE TABLE IF NOT EXISTS counterparty_master (
@@ -513,7 +513,7 @@ ALTER TABLE transaction_master
     FOREIGN KEY (counterparty_id) REFERENCES counterparty_master(id);
 ```
 
-- [ ] `migrations/0007_create_beneficiaries_master.py`
+- [x] `migrations/0007_create_beneficiaries_master.py`
 
 ```sql
 CREATE TABLE IF NOT EXISTS beneficiaries_master (
@@ -530,7 +530,7 @@ CREATE TABLE IF NOT EXISTS beneficiaries_master (
 );
 ```
 
-- [ ] `migrations/0008_create_transaction_beneficiaries.py` — depends on `transaction_master` (0005) and `beneficiaries_master` (0007)
+- [x] `migrations/0008_create_transaction_beneficiaries.py` — depends on `transaction_master` (0005) and `beneficiaries_master` (0007)
 
 ```sql
 CREATE TABLE IF NOT EXISTS transaction_beneficiaries (
@@ -549,7 +549,7 @@ CREATE TABLE IF NOT EXISTS transaction_beneficiaries (
 ```
 
 **Updates to existing files:**
-- [ ] `migrations/0005_create_transactions.py` — **Approach: rewrite from scratch.** Name all constraints using the `tm` abbreviation — see constraint names block in the DB schema section above. Add `DROP TABLE IF EXISTS transactions` at the top (handles the case where the old migration already ran), then rewrite to `CREATE TABLE IF NOT EXISTS transaction_master` with all correct columns in the sheet-mirrored order (see DB schema section). Preserve the existing `day_of_week_enum` DO block unchanged. Do not layer ALTER statements on top. Changes vs the current table definition: rename table to `transaction_master`; drop `row_hash`, `is_deleted`, `deleted_at`, `source_account_id`, `target_account_id`; add `account_id UUID NOT NULL` FK → `account_master(id)`; add `parent_tx_id TEXT` nullable self-referential FK → `transaction_master(transaction_id)`; replace flat counterparty columns with `counterparty_id UUID` nullable — **no FK constraint here** (FK added in migration 0006 after `counterparty_master` exists); add `tx_timezone_base TEXT NOT NULL CHECK (tx_timezone_base = 'UTC')`; add `tx_timezone_local TEXT NOT NULL`; add `user_location_latitude/longitude NUMERIC(10,6)` nullable with range CHECKs and pair consistency constraint; change `tx_amount_local` and `tx_amount_base` from `NUMERIC(19,6)` to `BIGINT NOT NULL`; rename `tx_currency_local` → `local_currency`, `tx_currency_base` → `base_currency`, `local_to_base_currency_rate_ref` → `currency_rate_ref`; `currency_rate_ref UUID` is now nullable (NULL for XAU accounts); add `chk_tm_rate_ref_required` to enforce nullability rules; no `tx_type` column — direction is encoded in the category; add `category_id UUID NOT NULL` FK → `category_master(id)` in the position `tx_type` occupied (after `tx_day_of_week_local`, before `account_id`); add `record_status TEXT NOT NULL DEFAULT 'active' CHECK (record_status IN ('active', 'inactive', 'deleted', 'locked'))` replacing the old `tx_status` column
-- [ ] `transforms/transactions.py` — full rewrite: read all 24 sheet columns — `id`, `tx_date_local`, `tx_timezone_local`, `parent_tx_id`, `tx_type`, `account_id`, `tx_amount_local`, `major_category`, `minor_category`, `description`, `counterparty_name`, `tx_tags`, `beneficiaries` (optional), `user_location_area/city/country/latitude/longitude`, `record_status`; no `currency`, `fx_rate`, `source_account`, `target_account`; no hash computation; parse `tx_date_local` as naive local datetime, convert to UTC via `tx_timezone_local` to produce `tx_date_time_base`; validate timezone via `ZoneInfo`; pass all fields through for DB layer
-- [ ] `database/transactions.py` — full rewrite: sync_status model (`create-pending` / `update-pending`); preload `account_map: dict[str, tuple[UUID, str]]` (UUID string → (UUID, local_currency), SQL: `SELECT id, local_currency FROM account_master WHERE record_status NOT IN ('deleted', 'locked')`); add `_resolve_counterparty` (name-only key, always upsert with `record_status = 'active'`; never write location fields); add `_resolve_beneficiaries` (parse, validate, equal-split rounding, upsert with `record_status = 'active'`; called only when `beneficiaries_raw is not None`); rewrite `_resolve_currency_rate` for XAU using integer minor-unit arithmetic — XAU shortcut: `tx_amount_base = tx_amount_local`, `currency_rate_ref = None`; non-XAU: rate lookup on `rate_date = tx_date_time_base.date()`, `create-failed`/`update-failed` on miss; `local_currency` derived from account map, not from sheet; `category_id` is NOT NULL — category lookup on `(tx_type, major_category, minor_category)` must succeed; no match → `create-failed`/`update-failed: category_not_found`; write `user_location_latitude/longitude` when non-blank; soft-delete passes set `record_status = 'deleted'` (not `is_deleted = TRUE`) filtered on `record_status = 'active'`; use `transaction_master` table name throughout; write-back success: 5 columns (`sync_status`, `sync_date`, `sync_notes`, `created_at`, `updated_at`); write-back failure: 3 columns (`sync_status`, `sync_date`, `sync_notes`); follow all accounts module implementation patterns from the "Implementation patterns" section above — no `assert`, `fetchone` guard on every `RETURNING id`, bare `except Exception: conn.rollback(); raise` at end of every except chain, `try/finally` around the per-row loop to guarantee `flush()`, `WriteBack = tuple[int, int, list[str]]`, `_to_sync_notes` using the constraint → message table above
-- [ ] `core/extractor.py` — rename `account_name_map` → `account_map`; pass `sheets_client` into `upsert_transactions` so the DB layer can write sync results back to the sheet
+- [x] `migrations/0005_create_transactions.py` — **Approach: rewrite from scratch.** Name all constraints using the `tm` abbreviation — see constraint names block in the DB schema section above. Add `DROP TABLE IF EXISTS transactions` at the top (handles the case where the old migration already ran), then rewrite to `CREATE TABLE IF NOT EXISTS transaction_master` with all correct columns in the sheet-mirrored order (see DB schema section). Preserve the existing `day_of_week_enum` DO block unchanged. Do not layer ALTER statements on top. Changes vs the current table definition: rename table to `transaction_master`; drop `row_hash`, `is_deleted`, `deleted_at`, `source_account_id`, `target_account_id`; add `account_id UUID NOT NULL` FK → `account_master(id)`; add `parent_tx_id TEXT` nullable self-referential FK → `transaction_master(transaction_id)`; replace flat counterparty columns with `counterparty_id UUID` nullable — **no FK constraint here** (FK added in migration 0006 after `counterparty_master` exists); add `tx_timezone_base TEXT NOT NULL CHECK (tx_timezone_base = 'UTC')`; add `tx_timezone_local TEXT NOT NULL`; add `user_location_latitude/longitude NUMERIC(10,6)` nullable with range CHECKs and pair consistency constraint; change `tx_amount_local` and `tx_amount_base` from `NUMERIC(19,6)` to `BIGINT NOT NULL`; rename `tx_currency_local` → `local_currency`, `tx_currency_base` → `base_currency`, `local_to_base_currency_rate_id` → `currency_rate_id`; `currency_rate_id UUID` is now nullable (NULL for XAU accounts); add `chk_tm_rate_ref_required` to enforce nullability rules; no `tx_type` column — direction is encoded in the category; add `category_id UUID NOT NULL` FK → `category_master(id)` in the position `tx_type` occupied (after `tx_day_of_week_local`, before `account_id`); add `record_status TEXT NOT NULL DEFAULT 'active' CHECK (record_status IN ('active', 'inactive', 'deleted', 'locked'))` replacing the old `tx_status` column
+- [x] `transforms/transactions.py` — full rewrite: read all 24 sheet columns — `id`, `tx_date_local`, `tx_timezone_local`, `parent_tx_id`, `tx_type`, `account_id`, `tx_amount_local`, `major_category`, `minor_category`, `description`, `counterparty_name`, `tx_tags`, `beneficiaries` (optional), `user_location_area/city/country/latitude/longitude`, `record_status`; no `currency`, `fx_rate`, `source_account`, `target_account`; no hash computation; parse `tx_date_local` as naive local datetime, convert to UTC via `tx_timezone_local` to produce `tx_date_time_base`; validate timezone via `ZoneInfo`; pass all fields through for DB layer
+- [x] `database/transactions.py` — full rewrite: sync_status model (`create-pending` / `update-pending`); preload `account_map: dict[str, tuple[UUID, str]]` (UUID string → (UUID, local_currency), SQL: `SELECT id, local_currency FROM account_master WHERE record_status NOT IN ('deleted', 'locked')`); add `_resolve_counterparty` (name-only key, always upsert with `record_status = 'active'`; never write location fields); add `_resolve_beneficiaries` (parse, validate, equal-split rounding, upsert with `record_status = 'active'`; called only when `beneficiaries_raw is not None`); rewrite `_resolve_currency_rate` for XAU using integer minor-unit arithmetic — XAU shortcut: `tx_amount_base = tx_amount_local`, `currency_rate_id = None`; non-XAU: rate lookup on `rate_date = tx_date_time_base.date()`, `create-failed`/`update-failed` on miss; `local_currency` derived from account map, not from sheet; `category_id` is NOT NULL — category lookup on `(tx_type, major_category, minor_category)` must succeed; no match → `create-failed`/`update-failed: category_not_found`; write `user_location_latitude/longitude` when non-blank; soft-delete passes set `record_status = 'deleted'` (not `is_deleted = TRUE`) filtered on `record_status = 'active'`; use `transaction_master` table name throughout; write-back success: 5 columns (`sync_status`, `sync_date`, `sync_notes`, `created_at`, `updated_at`); write-back failure: 3 columns (`sync_status`, `sync_date`, `sync_notes`); follow all accounts module implementation patterns from the "Implementation patterns" section above — no `assert`, `fetchone` guard on every `RETURNING id`, bare `except Exception: conn.rollback(); raise` at end of every except chain, `try/finally` around the per-row loop to guarantee `flush()`, `WriteBack = tuple[int, int, list[str]]`, `_to_sync_notes` using the constraint → message table above
+- [x] `core/extractor.py` — rename `account_name_map` → `account_map`; pass `sheets_client` into `upsert_transactions` so the DB layer can write sync results back to the sheet

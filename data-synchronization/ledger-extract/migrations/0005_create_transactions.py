@@ -34,7 +34,7 @@ def upgrade(client: Any) -> None:
                 tx_amount_base          BIGINT           NOT NULL,
                 local_currency          TEXT             NOT NULL,
                 base_currency           TEXT             NOT NULL,
-                currency_rate_ref       UUID,
+                currency_rate_id       UUID,
                 tx_description          TEXT,
                 counterparty_id         UUID,
                 tx_tags                 TEXT,
@@ -51,7 +51,7 @@ def upgrade(client: Any) -> None:
                 CONSTRAINT uq_tm_transaction_id     UNIQUE (transaction_id),
                 CONSTRAINT fk_tm_parent_tx          FOREIGN KEY (parent_tx_id) REFERENCES transaction_master(transaction_id),
                 CONSTRAINT fk_tm_account            FOREIGN KEY (account_id) REFERENCES account_master(id),
-                CONSTRAINT fk_tm_rate_ref           FOREIGN KEY (currency_rate_ref) REFERENCES currency_rates(id),
+                CONSTRAINT fk_tm_rate_ref           FOREIGN KEY (currency_rate_id) REFERENCES currency_rates(id),
                 CONSTRAINT fk_tm_category           FOREIGN KEY (category_id) REFERENCES category_master(id),
                 CONSTRAINT chk_tm_record_status     CHECK (record_status IN ('active', 'inactive', 'deleted', 'locked')),
                 CONSTRAINT chk_tm_tx_amount_base    CHECK (tx_amount_base > 0),
@@ -60,8 +60,8 @@ def upgrade(client: Any) -> None:
                 CONSTRAINT chk_tm_local_currency    CHECK (char_length(local_currency) = 3 AND local_currency = upper(local_currency)),
                 CONSTRAINT chk_tm_tx_timezone_base  CHECK (tx_timezone_base = 'UTC'),
                 CONSTRAINT chk_tm_rate_ref_required CHECK (
-                    (local_currency = 'XAU' AND currency_rate_ref IS NULL) OR
-                    (local_currency != 'XAU' AND currency_rate_ref IS NOT NULL)
+                    (local_currency = 'XAU' AND currency_rate_id IS NULL) OR
+                    (local_currency != 'XAU' AND currency_rate_id IS NOT NULL)
                 ),
                 CONSTRAINT chk_tm_location_pair     CHECK (
                     (user_location_latitude IS NULL AND user_location_longitude IS NULL) OR

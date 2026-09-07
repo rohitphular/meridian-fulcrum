@@ -17,7 +17,7 @@ def upgrade(client: Any) -> None:
                 opening_amount_base_value  BIGINT      NOT NULL,
                 local_currency             CHAR(3)     NOT NULL,
                 base_currency              CHAR(3)     NOT NULL,
-                currency_rate_ref          UUID,
+                currency_rate_id          UUID,
                 account_description        TEXT,
                 record_status              TEXT        NOT NULL,
                 created_at                 TIMESTAMPTZ NOT NULL,
@@ -25,7 +25,7 @@ def upgrade(client: Any) -> None:
 
                 CONSTRAINT pk_am                      PRIMARY KEY (id),
                 CONSTRAINT fk_am_account_type_subtype FOREIGN KEY (account_type, account_subtype) REFERENCES account_types(account_type, account_subtype),
-                CONSTRAINT fk_am_rate_ref             FOREIGN KEY (currency_rate_ref) REFERENCES currency_rates(id),
+                CONSTRAINT fk_am_rate_ref             FOREIGN KEY (currency_rate_id) REFERENCES currency_rates(id),
                 CONSTRAINT chk_am_account_type        CHECK (account_type IN ('asset', 'investment', 'liability')),
                 CONSTRAINT chk_am_record_status       CHECK (record_status IN ('active', 'inactive', 'deleted', 'locked')),
                 CONSTRAINT chk_am_local_currency      CHECK (char_length(local_currency) = 3 AND local_currency = upper(local_currency)),
@@ -38,7 +38,7 @@ def upgrade(client: Any) -> None:
                     (account_type IN ('asset', 'investment') AND opening_amount_base_value >= 0) OR
                     (account_type = 'liability' AND opening_amount_base_value <= 0)
                 ),
-                CONSTRAINT chk_am_rate_ref_required   CHECK (local_currency = base_currency OR currency_rate_ref IS NOT NULL)
+                CONSTRAINT chk_am_rate_ref_required   CHECK (local_currency = base_currency OR currency_rate_id IS NOT NULL)
             );
         """)
 
@@ -52,7 +52,7 @@ def upgrade(client: Any) -> None:
                 current_balance_base_value  BIGINT      NOT NULL,
                 local_currency              CHAR(3)     NOT NULL,
                 base_currency               CHAR(3)     NOT NULL,
-                currency_rate_ref           UUID,
+                currency_rate_id           UUID,
                 interest_rate               NUMERIC(8,4),
                 rate_type                   TEXT,
                 interest_payment_frequency  TEXT,
@@ -61,7 +61,7 @@ def upgrade(client: Any) -> None:
 
                 CONSTRAINT pk_account_deposit_details      PRIMARY KEY (id),
                 CONSTRAINT fk_add_account_master           FOREIGN KEY (account_master_id) REFERENCES account_master(id),
-                CONSTRAINT fk_add_rate_ref                 FOREIGN KEY (currency_rate_ref) REFERENCES currency_rates(id),
+                CONSTRAINT fk_add_rate_ref                 FOREIGN KEY (currency_rate_id) REFERENCES currency_rates(id),
                 CONSTRAINT uq_add_account_effective_from   UNIQUE (account_master_id, effective_from_dt),
                 CONSTRAINT chk_add_entity_consistency      CHECK (
                     (entity_type IS NULL AND entity_id IS NULL) OR
@@ -80,7 +80,7 @@ def upgrade(client: Any) -> None:
                 CONSTRAINT chk_add_interest_rate           CHECK (interest_rate >= 0),
                 CONSTRAINT chk_add_current_balance_local   CHECK (current_balance_local_value >= 0),
                 CONSTRAINT chk_add_current_balance_base    CHECK (current_balance_base_value >= 0),
-                CONSTRAINT chk_add_rate_ref_required       CHECK (local_currency = base_currency OR currency_rate_ref IS NOT NULL),
+                CONSTRAINT chk_add_rate_ref_required       CHECK (local_currency = base_currency OR currency_rate_id IS NOT NULL),
                 CONSTRAINT chk_add_effective_dt_order      CHECK (effective_to_dt IS NULL OR effective_to_dt > effective_from_dt)
             );
         """)
@@ -106,13 +106,13 @@ def upgrade(client: Any) -> None:
                 unit_type                 TEXT,
                 local_currency            CHAR(3)     NOT NULL,
                 base_currency             CHAR(3)     NOT NULL,
-                currency_rate_ref         UUID,
+                currency_rate_id         UUID,
                 effective_from_dt         TIMESTAMPTZ NOT NULL,
                 effective_to_dt           TIMESTAMPTZ,
 
                 CONSTRAINT pk_account_market_investment_details  PRIMARY KEY (id),
                 CONSTRAINT fk_amid_account_master                FOREIGN KEY (account_master_id) REFERENCES account_master(id),
-                CONSTRAINT fk_amid_rate_ref                      FOREIGN KEY (currency_rate_ref) REFERENCES currency_rates(id),
+                CONSTRAINT fk_amid_rate_ref                      FOREIGN KEY (currency_rate_id) REFERENCES currency_rates(id),
                 CONSTRAINT uq_amid_account_effective_from        UNIQUE (account_master_id, effective_from_dt),
                 CONSTRAINT chk_amid_entity_consistency           CHECK (
                     (entity_type IS NULL AND entity_id IS NULL) OR
@@ -140,7 +140,7 @@ def upgrade(client: Any) -> None:
                 CONSTRAINT chk_amid_current_value_base           CHECK (current_value_base_value >= 0),
                 CONSTRAINT chk_amid_cost_basis_local             CHECK (cost_basis_local_value >= 0),
                 CONSTRAINT chk_amid_cost_basis_base              CHECK (cost_basis_base_value >= 0),
-                CONSTRAINT chk_amid_rate_ref_required            CHECK (local_currency = base_currency OR currency_rate_ref IS NOT NULL),
+                CONSTRAINT chk_amid_rate_ref_required            CHECK (local_currency = base_currency OR currency_rate_id IS NOT NULL),
                 CONSTRAINT chk_amid_effective_dt_order           CHECK (effective_to_dt IS NULL OR effective_to_dt > effective_from_dt)
             );
         """)
@@ -164,7 +164,7 @@ def upgrade(client: Any) -> None:
                 current_value_base_value   BIGINT      NOT NULL,
                 local_currency             CHAR(3)     NOT NULL,
                 base_currency              CHAR(3)     NOT NULL,
-                currency_rate_ref          UUID,
+                currency_rate_id          UUID,
                 interest_rate              NUMERIC(8,4) NOT NULL,
                 rate_type                  TEXT         NOT NULL,
                 interest_payment_frequency TEXT,
@@ -175,7 +175,7 @@ def upgrade(client: Any) -> None:
 
                 CONSTRAINT pk_account_fixed_income_details    PRIMARY KEY (id),
                 CONSTRAINT fk_afid_account_master             FOREIGN KEY (account_master_id) REFERENCES account_master(id),
-                CONSTRAINT fk_afid_rate_ref                   FOREIGN KEY (currency_rate_ref) REFERENCES currency_rates(id),
+                CONSTRAINT fk_afid_rate_ref                   FOREIGN KEY (currency_rate_id) REFERENCES currency_rates(id),
                 CONSTRAINT uq_afid_account_effective_from     UNIQUE (account_master_id, effective_from_dt),
                 CONSTRAINT chk_afid_entity_consistency        CHECK (
                     (entity_type IS NULL AND entity_id IS NULL) OR
@@ -195,7 +195,7 @@ def upgrade(client: Any) -> None:
                 CONSTRAINT chk_afid_current_value_local       CHECK (current_value_local_value >= 0),
                 CONSTRAINT chk_afid_current_value_base        CHECK (current_value_base_value >= 0),
                 CONSTRAINT chk_afid_coupon_frequency          CHECK (interest_rate = 0 OR interest_payment_frequency IS NOT NULL),
-                CONSTRAINT chk_afid_rate_ref_required         CHECK (local_currency = base_currency OR currency_rate_ref IS NOT NULL),
+                CONSTRAINT chk_afid_rate_ref_required         CHECK (local_currency = base_currency OR currency_rate_id IS NOT NULL),
                 CONSTRAINT chk_afid_effective_dt_order        CHECK (effective_to_dt IS NULL OR effective_to_dt > effective_from_dt)
             );
         """)
@@ -219,7 +219,7 @@ def upgrade(client: Any) -> None:
                 monthly_rental_income_base_value  BIGINT,
                 local_currency                    CHAR(3)     NOT NULL,
                 base_currency                     CHAR(3)     NOT NULL,
-                currency_rate_ref                 UUID,
+                currency_rate_id                 UUID,
                 purchase_date                     DATE,
                 property_address                  TEXT,
                 is_rental                         BOOLEAN     NOT NULL DEFAULT FALSE,
@@ -228,7 +228,7 @@ def upgrade(client: Any) -> None:
 
                 CONSTRAINT pk_account_property_details           PRIMARY KEY (id),
                 CONSTRAINT fk_apd_account_master                 FOREIGN KEY (account_master_id) REFERENCES account_master(id),
-                CONSTRAINT fk_apd_rate_ref                       FOREIGN KEY (currency_rate_ref) REFERENCES currency_rates(id),
+                CONSTRAINT fk_apd_rate_ref                       FOREIGN KEY (currency_rate_id) REFERENCES currency_rates(id),
                 CONSTRAINT uq_apd_account_effective_from         UNIQUE (account_master_id, effective_from_dt),
                 CONSTRAINT chk_apd_entity_consistency            CHECK (
                     (entity_type IS NULL AND entity_id IS NULL) OR
@@ -248,7 +248,7 @@ def upgrade(client: Any) -> None:
                 CONSTRAINT chk_apd_purchase_price_base           CHECK (purchase_price_base_value > 0),
                 CONSTRAINT chk_apd_current_value_local           CHECK (current_value_local_value > 0),
                 CONSTRAINT chk_apd_current_value_base            CHECK (current_value_base_value > 0),
-                CONSTRAINT chk_apd_rate_ref_required             CHECK (local_currency = base_currency OR currency_rate_ref IS NOT NULL),
+                CONSTRAINT chk_apd_rate_ref_required             CHECK (local_currency = base_currency OR currency_rate_id IS NOT NULL),
                 CONSTRAINT chk_apd_effective_dt_order            CHECK (effective_to_dt IS NULL OR effective_to_dt > effective_from_dt)
             );
         """)
@@ -270,7 +270,7 @@ def upgrade(client: Any) -> None:
                 current_value_base_value   BIGINT      NOT NULL,
                 local_currency             CHAR(3)     NOT NULL,
                 base_currency              CHAR(3)     NOT NULL,
-                currency_rate_ref          UUID,
+                currency_rate_id          UUID,
                 interest_rate              NUMERIC(8,4),
                 rate_type                  TEXT,
                 effective_from_dt          TIMESTAMPTZ NOT NULL,
@@ -278,7 +278,7 @@ def upgrade(client: Any) -> None:
 
                 CONSTRAINT pk_account_p2p_lending_details    PRIMARY KEY (id),
                 CONSTRAINT fk_apld_account_master            FOREIGN KEY (account_master_id) REFERENCES account_master(id),
-                CONSTRAINT fk_apld_rate_ref                  FOREIGN KEY (currency_rate_ref) REFERENCES currency_rates(id),
+                CONSTRAINT fk_apld_rate_ref                  FOREIGN KEY (currency_rate_id) REFERENCES currency_rates(id),
                 CONSTRAINT uq_apld_account_effective_from    UNIQUE (account_master_id, effective_from_dt),
                 CONSTRAINT chk_apld_entity_consistency       CHECK (
                     (entity_type IS NULL AND entity_id IS NULL) OR
@@ -297,7 +297,7 @@ def upgrade(client: Any) -> None:
                 CONSTRAINT chk_apld_current_value_local      CHECK (current_value_local_value >= 0),
                 CONSTRAINT chk_apld_current_value_base       CHECK (current_value_base_value >= 0),
                 CONSTRAINT chk_apld_interest_rate            CHECK (interest_rate >= 0),
-                CONSTRAINT chk_apld_rate_ref_required        CHECK (local_currency = base_currency OR currency_rate_ref IS NOT NULL),
+                CONSTRAINT chk_apld_rate_ref_required        CHECK (local_currency = base_currency OR currency_rate_id IS NOT NULL),
                 CONSTRAINT chk_apld_effective_dt_order       CHECK (effective_to_dt IS NULL OR effective_to_dt > effective_from_dt)
             );
         """)
@@ -321,7 +321,7 @@ def upgrade(client: Any) -> None:
                 minimum_payment_base_value  BIGINT,
                 local_currency              CHAR(3)     NOT NULL,
                 base_currency               CHAR(3)     NOT NULL,
-                currency_rate_ref           UUID,
+                currency_rate_id           UUID,
                 annual_percentage_rate      NUMERIC(8,4),
                 rate_type                   TEXT,
                 payment_due_day             INTEGER,
@@ -331,7 +331,7 @@ def upgrade(client: Any) -> None:
 
                 CONSTRAINT pk_account_revolving_credit_details   PRIMARY KEY (id),
                 CONSTRAINT fk_arcd_account_master                FOREIGN KEY (account_master_id) REFERENCES account_master(id),
-                CONSTRAINT fk_arcd_rate_ref                      FOREIGN KEY (currency_rate_ref) REFERENCES currency_rates(id),
+                CONSTRAINT fk_arcd_rate_ref                      FOREIGN KEY (currency_rate_id) REFERENCES currency_rates(id),
                 CONSTRAINT uq_arcd_account_effective_from        UNIQUE (account_master_id, effective_from_dt),
                 CONSTRAINT chk_arcd_entity_consistency           CHECK (
                     (entity_type IS NULL AND entity_id IS NULL) OR
@@ -358,7 +358,7 @@ def upgrade(client: Any) -> None:
                 CONSTRAINT chk_arcd_apr                          CHECK (annual_percentage_rate >= 0),
                 CONSTRAINT chk_arcd_minimum_payment_local        CHECK (minimum_payment_local_value >= 0),
                 CONSTRAINT chk_arcd_minimum_payment_base         CHECK (minimum_payment_base_value >= 0),
-                CONSTRAINT chk_arcd_rate_ref_required            CHECK (local_currency = base_currency OR currency_rate_ref IS NOT NULL),
+                CONSTRAINT chk_arcd_rate_ref_required            CHECK (local_currency = base_currency OR currency_rate_id IS NOT NULL),
                 CONSTRAINT chk_arcd_effective_dt_order           CHECK (effective_to_dt IS NULL OR effective_to_dt > effective_from_dt)
             );
         """)
@@ -382,7 +382,7 @@ def upgrade(client: Any) -> None:
                 monthly_payment_base_value            BIGINT      NOT NULL,
                 local_currency                        CHAR(3)     NOT NULL,
                 base_currency                         CHAR(3)     NOT NULL,
-                currency_rate_ref                     UUID,
+                currency_rate_id                     UUID,
                 interest_rate                         NUMERIC(8,4) NOT NULL,
                 rate_type                             TEXT         NOT NULL,
                 term_months                           INTEGER      NOT NULL,
@@ -393,7 +393,7 @@ def upgrade(client: Any) -> None:
 
                 CONSTRAINT pk_account_installment_loan_details  PRIMARY KEY (id),
                 CONSTRAINT fk_aild_account_master               FOREIGN KEY (account_master_id) REFERENCES account_master(id),
-                CONSTRAINT fk_aild_rate_ref                     FOREIGN KEY (currency_rate_ref) REFERENCES currency_rates(id),
+                CONSTRAINT fk_aild_rate_ref                     FOREIGN KEY (currency_rate_id) REFERENCES currency_rates(id),
                 CONSTRAINT uq_aild_account_effective_from       UNIQUE (account_master_id, effective_from_dt),
                 CONSTRAINT chk_aild_entity_consistency          CHECK (
                     (entity_type IS NULL AND entity_id IS NULL) OR
@@ -412,7 +412,7 @@ def upgrade(client: Any) -> None:
                 CONSTRAINT chk_aild_monthly_payment_base        CHECK (monthly_payment_base_value > 0),
                 CONSTRAINT chk_aild_term_months                 CHECK (term_months > 0),
                 CONSTRAINT chk_aild_interest_rate               CHECK (interest_rate >= 0),
-                CONSTRAINT chk_aild_rate_ref_required           CHECK (local_currency = base_currency OR currency_rate_ref IS NOT NULL),
+                CONSTRAINT chk_aild_rate_ref_required           CHECK (local_currency = base_currency OR currency_rate_id IS NOT NULL),
                 CONSTRAINT chk_aild_effective_dt_order          CHECK (effective_to_dt IS NULL OR effective_to_dt > effective_from_dt)
             );
         """)

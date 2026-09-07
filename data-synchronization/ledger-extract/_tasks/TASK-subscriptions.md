@@ -106,7 +106,7 @@ Write-back pattern — no hash comparison, no `ledger_data_checksums` involvemen
 ## Preload (once per batch)
 
 ```python
-account_map = load_account_map(conn)                  # dict[str, tuple[Any, str]]
+account_map = load_account_map(conn)  # dict[str, tuple[Any, str]]
 currency_decimal_places = _load_decimal_places(conn)  # dict[str, int]
 ```
 
@@ -184,7 +184,7 @@ Subscriptions does not run a post-row soft-delete pass. `counterparty_master` so
 
 ## What to build
 
-- [ ] `migrations/0009_create_subscriptions.py`
+- [ ] `migrations/0010_create_subscriptions.py`
 - [ ] `transforms/subscriptions.py` — validates and type-converts all 21 sheet columns; `ValueError` prefix `"subscriptions: "`; reads `subscription_amount_local` (col 4), `day_of_week` validated as 1–7; no `currency` column (currency derived from account in DB layer)
 - [ ] `sheets/subscriptions.py` — `write_back_success()` (5 cols starting at col 15 = `created_at`: `[created_at, sync_status, sync_date, sync_notes, updated_at]`), `write_back_failure()` (3 cols starting at col 16 = `sync_status`: `[sync_status, sync_date, sync_notes]`), `flush()`; `_SYNC_STATUS_COL = 16`
 - [ ] `database/subscriptions.py` — `upsert_subscriptions(conn, sheets_client, rows, account_map)`; `source_account` UUID looked up directly from `account_map`; `local_currency` taken from account_map result; no `currency` column written to DB; `sync-failure` status is not used — all failures write `create-failed` or `update-failed`; `day_of_week` validated as 1–7 in transform
