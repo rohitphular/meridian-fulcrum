@@ -19,9 +19,7 @@ function listSubscriptions() {
   })();
 
   const nowLocal        = new Date();
-  const today           = nowLocal.getFullYear() + '-' +
-    String(nowLocal.getMonth() + 1).padStart(2, '0') + '-' +
-    String(nowLocal.getDate()).padStart(2, '0');
+  const todayMidnight   = new Date(nowLocal.getFullYear(), nowLocal.getMonth(), nowLocal.getDate());
   const nowStr          = nowLocal.toISOString();
   const recordStatusPos = getSubscriptionSchemaField('record_status').sheet_column_position;
   const updatedAtPos    = getSubscriptionSchemaField('updated_at').sheet_column_position;
@@ -35,11 +33,10 @@ function listSubscriptions() {
 
   visible.forEach(function(row) {
     // Lazy expiry: if end_date is past and subscription is still active, mark inactive
+    const endDateObj = sheetDateTimeToDate(row.subscription_end_date_local);
     if (String(row.record_status) === 'active'
-        && row.subscription_end_date !== undefined
-        && row.subscription_end_date !== null
-        && String(row.subscription_end_date).trim() !== ''
-        && String(row.subscription_end_date).trim() < today) {
+        && endDateObj !== null
+        && new Date(endDateObj.getFullYear(), endDateObj.getMonth(), endDateObj.getDate()) < todayMidnight) {
       const newSyncStatus = computeSyncStatus(String(row.sync_status));
       const updatedRow    = rawData[row._row - 1].slice();
       updatedRow[recordStatusPos - 1] = 'inactive';
@@ -80,10 +77,10 @@ function createSubscription(body) {
   const sheet = getOrCreateSheet(SUBSCRIPTIONS_SHEET, cols);
 
   // Duplicate guard — reject if an active subscription with the same name already exists
-  const nameColIdx   = subColIndex('name');
+  const nameColIdx   = subColIndex('subscription_name');
   const statusColIdx = subColIndex('record_status');
   const existingRows = sheet.getDataRange().getValues();
-  const normName     = String(body.name).trim().toLowerCase();
+  const normName     = String(body.subscription_name).trim().toLowerCase();
   for (let i = 1; i < existingRows.length; i++) {
     if (String(existingRows[i][statusColIdx]) === 'deleted') continue;
     if (String(existingRows[i][nameColIdx]).trim().toLowerCase() === normName) {
@@ -91,16 +88,15 @@ function createSubscription(body) {
     }
   }
 
-  const id      = generateSubscriptionId(sheet, existingRows);
-  const nowObj  = new Date();
-  const now     = nowObj.toISOString();
-  const today   = nowObj.getFullYear() + '-' +
-    String(nowObj.getMonth() + 1).padStart(2, '0') + '-' +
-    String(nowObj.getDate()).padStart(2, '0');
+  const id      = generateSubscriptionId();
+  const nowObj         = new Date();
+  const now            = nowObj.toISOString();
+  const todayMidnight  = new Date(nowObj.getFullYear(), nowObj.getMonth(), nowObj.getDate());
 
   // Derive initial record_status: inactive if end_date is already past
-  const endDate     = body.subscription_end_date !== undefined && body.subscription_end_date !== null ? String(body.subscription_end_date).trim() : '';
-  const initStatus  = (endDate !== '' && endDate < today) ? 'inactive' : 'active';
+  const endDateObj  = sheetDateTimeToDate(body.subscription_end_date_local);
+  const endMidnight = endDateObj ? new Date(endDateObj.getFullYear(), endDateObj.getMonth(), endDateObj.getDate()) : null;
+  const initStatus  = (endMidnight !== null && endMidnight < todayMidnight) ? 'inactive' : 'active';
 
   const row = new Array(cols.length).fill('');
 
@@ -110,7 +106,7 @@ function createSubscription(body) {
   }
 
   setCol('id',               id);
-  setCol('name',             String(body.name).trim());
+  setCol('subscription_name', String(body.subscription_name).trim());
   setCol('counterparty_name', body.counterparty_name !== undefined && body.counterparty_name !== null ? String(body.counterparty_name).trim() : '');
   setCol('subscription_amount_local', Number(body.subscription_amount_local));
   setCol('frequency',        String(body.frequency).trim());
@@ -119,7 +115,6 @@ function createSubscription(body) {
   setCol('source_account',   String(body.source_account).trim());
   setCol('major_category',   body.major_category !== undefined && body.major_category !== null ? String(body.major_category).trim() : '');
   setCol('minor_category',   body.minor_category !== undefined && body.minor_category !== null ? String(body.minor_category).trim() : '');
-  setCol('tags',             normaliseTags(body.tags !== undefined && body.tags !== null ? body.tags : ''));
   setCol('description',      body.description !== undefined && body.description !== null ? String(body.description).trim() : '');
   setCol('created_at',       now);
   setCol('tx_type',          body.tx_type !== undefined && body.tx_type !== null ? String(body.tx_type).trim() : '');
@@ -128,8 +123,9 @@ function createSubscription(body) {
   setCol('sync_date',   '');
   setCol('sync_notes',       '');
   setCol('updated_at',       now);
-  setCol('subscription_start_date', body.subscription_start_date !== undefined && body.subscription_start_date !== null ? String(body.subscription_start_date).trim() : '');
-  setCol('subscription_end_date',   endDate);
+  setCol('subscription_start_date_local', body.subscription_start_date_local !== undefined && body.subscription_start_date_local !== null ? String(body.subscription_start_date_local).trim() : '');
+  setCol('subscription_end_date_local',   endDate);
+  setCol('subscription_timezone_local',   body.subscription_timezone_local !== undefined && body.subscription_timezone_local !== null ? String(body.subscription_timezone_local).trim() : '');
 
   sheet.appendRow(row);
   return { ok: true, id: id };
@@ -142,15 +138,12 @@ function createSubscriptionsBulk(body) {
   const cols    = getSubscriptionSheetColumns();
   const sheet   = getOrCreateSheet(SUBSCRIPTIONS_SHEET, cols);
   const numCols = cols.length;
-  const nowObj  = new Date();
-  const now     = nowObj.toISOString();
-  const today   = nowObj.getFullYear() + '-' +
-    String(nowObj.getMonth() + 1).padStart(2, '0') + '-' +
-    String(nowObj.getDate()).padStart(2, '0');
+  const nowObj        = new Date();
+  const now           = nowObj.toISOString();
+  const todayMidnight = new Date(nowObj.getFullYear(), nowObj.getMonth(), nowObj.getDate());
 
   // Build the duplicate-name set once from existing sheet rows.
-  // Also capture the ID base so we can generate sequential IDs without re-reading the sheet.
-  const nameColIdx   = subColIndex('name');
+  const nameColIdx   = subColIndex('subscription_name');
   const statusColIdx = subColIndex('record_status');
   const existingData = sheet.getDataRange().getValues();
   const dupNameSet   = new Set();
@@ -158,8 +151,6 @@ function createSubscriptionsBulk(body) {
     if (String(existingData[i][statusColIdx]) === 'deleted') continue;
     dupNameSet.add(String(existingData[i][nameColIdx]).trim().toLowerCase());
   }
-  const idBase    = _subscriptionIdBase(existingData);
-  let   idCounter = idBase.max;
 
   // Build one sheet-row array in memory without touching the sheet.
   function buildRow(b, id, initStatus) {
@@ -168,9 +159,9 @@ function createSubscriptionsBulk(body) {
       const f = getSubscriptionSchemaField(key);
       if (f) row[f.sheet_column_position - 1] = (value === undefined || value === null) ? '' : value;
     }
-    const endDate = b.subscription_end_date !== undefined && b.subscription_end_date !== null ? String(b.subscription_end_date).trim() : '';
+    const endDate = b.subscription_end_date_local !== undefined && b.subscription_end_date_local !== null ? String(b.subscription_end_date_local).trim() : '';
     setC('id',               id);
-    setC('name',             String(b.name).trim());
+    setC('subscription_name', String(b.subscription_name).trim());
     setC('counterparty_name', b.counterparty_name !== undefined && b.counterparty_name !== null ? String(b.counterparty_name).trim() : '');
     setC('subscription_amount_local', Number(b.subscription_amount_local));
     setC('frequency',        String(b.frequency).trim());
@@ -179,7 +170,6 @@ function createSubscriptionsBulk(body) {
     setC('source_account',   String(b.source_account).trim());
     setC('major_category',   b.major_category !== undefined && b.major_category !== null ? String(b.major_category).trim() : '');
     setC('minor_category',   b.minor_category !== undefined && b.minor_category !== null ? String(b.minor_category).trim() : '');
-    setC('tags',             normaliseTags(b.tags !== undefined && b.tags !== null ? b.tags : ''));
     setC('description',      b.description !== undefined && b.description !== null ? String(b.description).trim() : '');
     setC('created_at',       now);
     setC('tx_type',          b.tx_type !== undefined && b.tx_type !== null ? String(b.tx_type).trim() : '');
@@ -188,8 +178,9 @@ function createSubscriptionsBulk(body) {
     setC('sync_date',   '');
     setC('sync_notes',       '');
     setC('updated_at',       now);
-    setC('subscription_start_date', b.subscription_start_date !== undefined && b.subscription_start_date !== null ? String(b.subscription_start_date).trim() : '');
-    setC('subscription_end_date',   endDate);
+    setC('subscription_start_date_local', b.subscription_start_date_local !== undefined && b.subscription_start_date_local !== null ? String(b.subscription_start_date_local).trim() : '');
+    setC('subscription_end_date_local',   endDate);
+    setC('subscription_timezone_local',   b.subscription_timezone_local !== undefined && b.subscription_timezone_local !== null ? String(b.subscription_timezone_local).trim() : '');
     return row;
   }
 
@@ -199,7 +190,7 @@ function createSubscriptionsBulk(body) {
 
   body.subscriptions.forEach(function(sub) {
     const subBody = Object.assign({}, sub);
-    const label   = sub.name !== undefined && sub.name !== null ? String(sub.name) : '';
+    const label   = sub.subscription_name !== undefined && sub.subscription_name !== null ? String(sub.subscription_name) : '';
 
     const val = validateSubscriptionCreate(subBody);
     if (!val.ok) {
@@ -207,16 +198,16 @@ function createSubscriptionsBulk(body) {
       return;
     }
 
-    const normName = String(subBody.name).trim().toLowerCase();
+    const normName = String(subBody.subscription_name).trim().toLowerCase();
     if (dupNameSet.has(normName)) {
       results.push({ name: label, ok: false, error: 'duplicate_subscription', id: null });
       return;
     }
 
-    idCounter++;
-    const id         = idBase.prefix + String(idCounter).padStart(3, '0');
-    const endDate    = subBody.subscription_end_date !== undefined && subBody.subscription_end_date !== null ? String(subBody.subscription_end_date).trim() : '';
-    const initStatus = (endDate !== '' && endDate < today) ? 'inactive' : 'active';
+    const id         = generateSubscriptionId();
+    const endDateObj  = sheetDateTimeToDate(subBody.subscription_end_date_local);
+    const endMidnight = endDateObj ? new Date(endDateObj.getFullYear(), endDateObj.getMonth(), endDateObj.getDate()) : null;
+    const initStatus  = (endMidnight !== null && endMidnight < todayMidnight) ? 'inactive' : 'active';
 
     // Add name to dup set so within-batch duplicates are also caught.
     dupNameSet.add(normName);
@@ -274,7 +265,7 @@ function updateSubscription(body) {
     updatedRow[getSubscriptionSchemaField('record_status').sheet_column_position - 1] = rs;
   }
 
-  setField('name',             String(body.name).trim());
+  setField('subscription_name', String(body.subscription_name).trim());
   setField('counterparty_name', body.counterparty_name !== undefined && body.counterparty_name !== null ? String(body.counterparty_name).trim() : '');
   if (body.subscription_amount_local !== undefined && body.subscription_amount_local !== null) setField('subscription_amount_local', Number(body.subscription_amount_local));
   setField('frequency',        String(body.frequency).trim());
@@ -283,11 +274,11 @@ function updateSubscription(body) {
   setField('source_account',   body.source_account !== undefined && body.source_account !== null ? String(body.source_account).trim() : '');
   setField('major_category',   body.major_category !== undefined && body.major_category !== null ? String(body.major_category).trim() : '');
   setField('minor_category',   body.minor_category !== undefined && body.minor_category !== null ? String(body.minor_category).trim() : '');
-  setField('tags',             normaliseTags(body.tags !== undefined && body.tags !== null ? body.tags : ''));
   setField('description',      body.description !== undefined && body.description !== null ? String(body.description).trim() : '');
   setField('tx_type',          body.tx_type !== undefined && body.tx_type !== null ? String(body.tx_type).trim() : '');
-  setField('subscription_start_date', body.subscription_start_date !== undefined && body.subscription_start_date !== null ? String(body.subscription_start_date).trim() : '');
-  setField('subscription_end_date',   body.subscription_end_date   !== undefined && body.subscription_end_date   !== null ? String(body.subscription_end_date).trim()   : '');
+  setField('subscription_start_date_local', body.subscription_start_date_local !== undefined && body.subscription_start_date_local !== null ? String(body.subscription_start_date_local).trim() : '');
+  setField('subscription_end_date_local',   body.subscription_end_date_local   !== undefined && body.subscription_end_date_local   !== null ? String(body.subscription_end_date_local).trim()   : '');
+  setField('subscription_timezone_local',   body.subscription_timezone_local   !== undefined && body.subscription_timezone_local   !== null ? String(body.subscription_timezone_local).trim()   : '');
 
   updatedRow[getSubscriptionSchemaField('sync_status').sheet_column_position - 1] = computeSyncStatus(currentSyncStatus);
   updatedRow[getSubscriptionSchemaField('sync_notes').sheet_column_position  - 1] = '';
@@ -310,7 +301,7 @@ function restoreSubscription(body) {
   if (rowNum < 2 || rowNum > lastRow) return { ok: false, error: 'invalid_row' };
 
   const rstatCol       = getSubscriptionSchemaField('record_status').sheet_column_position;
-  const nameColIdx     = getSubscriptionSchemaField('name').sheet_column_position;
+  const nameColIdx     = getSubscriptionSchemaField('subscription_name').sheet_column_position;
   const syncStatusCol  = getSubscriptionSchemaField('sync_status').sheet_column_position;
   const syncNotesCol   = getSubscriptionSchemaField('sync_notes').sheet_column_position;
   const updatedAtCol   = getSubscriptionSchemaField('updated_at').sheet_column_position;

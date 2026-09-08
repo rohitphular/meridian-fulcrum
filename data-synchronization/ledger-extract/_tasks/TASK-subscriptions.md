@@ -15,34 +15,34 @@ All resolved. Decisions recorded inline below.
 
 | # | Column | Sheet type | DB column | DB type | Notes |
 |---|--------|-----------|-----------|---------|-------|
-| 1 | `id` | string | `subscription_id` | `TEXT NOT NULL` | Natural key (`SUB-YYYYMMDD-NNN`) |
-| 2 | `name` | string | `name` | `TEXT NOT NULL` | |
+| 1 | `id` | string | `subscription_id` | `TEXT NOT NULL` | Natural key (UUID stamped by GAS); blank → `id_required` (transform fail) |
+| 2 | `subscription_name` | string | `name` | `TEXT NOT NULL` | Required; blank → `name_required` (transform fail; `TEXT NOT NULL` does not catch empty string) |
 | 3 | `counterparty_name` | string | `counterparty_id` | `UUID` | Resolved via `counterparty_master` upsert; nullable (blank = `NULL`) |
 | 4 | `subscription_amount_local` | number string | `amount_local` | `BIGINT NOT NULL` | Stored as minor units using `decimal_places` from `currency_master`; currency derived from source account |
 | 5 | `frequency` | enum string | `frequency` | `TEXT NOT NULL` | `weekly`, `monthly`, `quarterly`, `annual` |
-| 6 | `day_of_month` | number string | `day_of_month` | `INTEGER` | Optional; 1–31 |
-| 7 | `day_of_week` | number string | `day_of_week` | `INTEGER` | Optional; 1=Monday … 7=Sunday |
+| 6 | `day_of_month` | number string | `day_of_month` | `INTEGER` | Required when `frequency` is `monthly`, `quarterly`, or `annual` (`missing_day_of_month`); otherwise optional; 1–31 (`invalid_day_of_month`) |
+| 7 | `day_of_week` | number string | `day_of_week` | `INTEGER` | Required when `frequency` is `weekly` (`missing_day_of_week`); otherwise optional; 1=Monday … 7=Sunday (`invalid_day_of_week`) |
 | 8 | `source_account` | string | `account_id` | `UUID NOT NULL` | UUID (account's `id`); looked up directly in `account_map`; not found → `create-failed`/`update-failed` |
-| 9 | `tx_type` | enum string | — | not stored | `money-in` or `money-out`; used with `major_category` + `minor_category` to resolve `category_id`; not stored on `subscription_master` |
-| 10 | `major_category` | string | — | not stored | Used for `category_id` lookup only |
-| 11 | `minor_category` | string | — | not stored | Used for `category_id` lookup only |
-| 12 | `tags` | string | `tags` | `TEXT` | Optional; semicolons preserved |
-| 13 | `description` | string | `description` | `TEXT` | Optional |
-| 14 | `record_status` | enum string | `record_status` | `TEXT NOT NULL` | `active`, `inactive`, `deleted`, `locked` |
-| 15 | `created_at` | ISO string | written back | — | Written back by extract on first successful create |
-| 16 | `sync_status` | string | written back | — | `create-pending`, `update-pending`, `in-sync`, `create-failed`, `update-failed`; written back by extract |
-| 17 | `sync_date` | string | written back | — | Written back by extract |
-| 18 | `sync_notes` | string | written back | — | Written back by extract |
-| 19 | `updated_at` | ISO string | written back | — | Written back by extract on every successful sync |
-| 20 | `subscription_start_date` | date string | `subscription_start_date` | `DATE NOT NULL` | ISO date `YYYY-MM-DD` |
-| 21 | `subscription_end_date` | date string | `subscription_end_date` | `DATE` | Optional; nullable |
+| 9 | `tx_type` | enum string | — | not stored | Required for extract (category_id NOT NULL); `money-in` or `money-out`; blank → `tx_type_required`; invalid value → `invalid_tx_type`; used with `major_category` + `minor_category` to resolve `category_id`; not stored on `subscription_master` |
+| 10 | `major_category` | string | — | not stored | Required for extract (category_id NOT NULL); blank → `major_category_required`; used for `category_id` lookup only |
+| 11 | `minor_category` | string | — | not stored | Required for extract (category_id NOT NULL); blank → `minor_category_required`; used for `category_id` lookup only |
+| 12 | `description` | string | `description` | `TEXT` | Optional |
+| 13 | `record_status` | enum string | `record_status` | `TEXT NOT NULL` | `active`, `inactive`, `deleted`, `locked` |
+| 14 | `created_at` | ISO string | written back | — | Written back by extract on first successful create |
+| 15 | `sync_status` | string | written back | — | `create-pending`, `update-pending`, `in-sync`, `create-failed`, `update-failed`; written back by extract |
+| 16 | `sync_date` | string | written back | — | Written back by extract |
+| 17 | `sync_notes` | string | written back | — | Written back by extract |
+| 18 | `updated_at` | ISO string | written back | — | Written back by extract on every successful sync |
+| 19 | `subscription_start_date_local` | datetime string | `subscription_start_date_local` | `TIMESTAMPTZ NOT NULL` | Required; ISO datetime `YYYY-MM-DD HH:MM:SS`; blank → `subscription_start_date_required`; invalid format → `invalid_subscription_start_date` |
+| 20 | `subscription_end_date_local` | datetime string | `subscription_end_date_local` | `TIMESTAMPTZ` | Optional; nullable; invalid format → `invalid_subscription_end_date` |
+| 21 | `subscription_timezone_local` | string | `subscription_timezone_local` | `TEXT` | Optional; IANA timezone identifier (e.g. `Europe/London`); nullable (blank = `NULL`) |
 
 **Write-back columns** (accumulated per batch, flushed once via `batch_update_rows`):
 
-- Success (5 values): start at col 15 (`created_at`): `[created_at, sync_status, sync_date, sync_notes, updated_at]`
-- Failure (3 values): start at col 16 (`sync_status`): `[sync_status, sync_date, sync_notes]`
+- Success (5 values): start at col 14 (`created_at`): `[created_at, sync_status, sync_date, sync_notes, updated_at]`
+- Failure (3 values): start at col 15 (`sync_status`): `[sync_status, sync_date, sync_notes]`
 
-`_SYNC_STATUS_COL = 16`  (col 16 = `sync_status`; success writes start at col 15 = `created_at`)
+`_SYNC_STATUS_COL = 15`  (col 15 = `sync_status`; success writes start at col 14 = `created_at`)
 
 ---
 
@@ -53,8 +53,8 @@ Table abbreviation: `sm`
 | # | Column | Type | Nullable | Notes |
 |---|--------|------|----------|-------|
 | 1 | `id` | `UUID NOT NULL DEFAULT gen_random_uuid()` | No | Surrogate PK |
-| 2 | `subscription_id` | `TEXT NOT NULL` | No | Natural key from sheet (`SUB-YYYYMMDD-NNN`) |
-| 3 | `name` | `TEXT NOT NULL` | No | |
+| 2 | `subscription_id` | `TEXT NOT NULL` | No | Natural key from sheet (UUID) |
+| 3 | `name` | `TEXT NOT NULL` | No | Mapped from sheet column `subscription_name` |
 | 4 | `counterparty_id` | `UUID` | Yes | FK → `counterparty_master(id)` |
 | 5 | `amount_local` | `BIGINT NOT NULL` | No | Minor units in source account's local currency |
 | 6 | `frequency` | `TEXT NOT NULL` | No | |
@@ -62,10 +62,10 @@ Table abbreviation: `sm`
 | 8 | `day_of_week` | `INTEGER` | Yes | |
 | 9 | `account_id` | `UUID NOT NULL` | No | FK → `account_master(id)` |
 | 10 | `category_id` | `UUID NOT NULL` | No | FK → `category_master(id)` |
-| 11 | `tags` | `TEXT` | Yes | |
-| 12 | `description` | `TEXT` | Yes | |
-| 13 | `subscription_start_date` | `DATE NOT NULL` | No | |
-| 14 | `subscription_end_date` | `DATE` | Yes | |
+| 11 | `description` | `TEXT` | Yes | |
+| 12 | `subscription_start_date_local` | `TIMESTAMPTZ NOT NULL` | No | |
+| 13 | `subscription_end_date_local` | `TIMESTAMPTZ` | Yes | |
+| 14 | `subscription_timezone_local` | `TEXT` | Yes | IANA timezone identifier; NULL when not set |
 | 15 | `record_status` | `TEXT NOT NULL` | No | |
 | 16 | `created_at` | `TIMESTAMPTZ NOT NULL` | No | |
 | 17 | `updated_at` | `TIMESTAMPTZ NOT NULL` | No | |
@@ -84,7 +84,7 @@ Table abbreviation: `sm`
 | `chk_sm_amount_positive` | CHECK | `amount_local > 0` |
 | `chk_sm_day_of_month` | CHECK | `day_of_month IS NULL OR (day_of_month >= 1 AND day_of_month <= 31)` |
 | `chk_sm_day_of_week` | CHECK | `day_of_week IS NULL OR (day_of_week >= 1 AND day_of_week <= 7)` |
-| `chk_sm_date_range` | CHECK | `subscription_end_date IS NULL OR subscription_end_date >= subscription_start_date` |
+| `chk_sm_date_range` | CHECK | `subscription_end_date_local IS NULL OR subscription_end_date_local >= subscription_start_date_local` |
 
 ---
 
@@ -128,7 +128,7 @@ Executed inside `_run_insert_steps(conn, row, account_map, currency_decimal_plac
 
 4. **`tx_type` + `major_category` + `minor_category` → `category_id`**: query `category_master` by `(tx_type_key, major_category_key, minor_category_key)`. Not found → `write_back_failure(failed_status, category_not_found)` + `continue`.
 
-5. **`counterparty_name` → `counterparty_id`**: if `counterparty_name` is present, upsert into `counterparty_master` using the natural key derived from name (same derivation as transactions module). Failure → `write_back_failure(failed_status, counterparty_error)` + `continue`. If `counterparty_name` is blank, `counterparty_id = None`.
+5. **`counterparty_name` → `counterparty_id`**: if `counterparty_name` is blank, `counterparty_id = None`. Otherwise, derive `counterparty_key`: strip non-alphanumeric-non-space characters, strip and uppercase, replace runs of spaces with `_`, collapse consecutive `_`. If the resulting key is empty string, log a warning and set `counterparty_id = None` (do not fail). Otherwise upsert into `counterparty_master` on `counterparty_key`. Failure → `write_back_failure(failed_status, counterparty_error)` + `continue`.
 
 6. **INSERT `subscription_master`**: `INSERT ... ON CONFLICT (subscription_id) DO UPDATE SET ... RETURNING id`. Integrity error → rollback + `write_back_failure(failed_status, <sync_notes from _to_sync_notes>)` + `continue`.
 
@@ -136,7 +136,12 @@ Executed inside `_run_insert_steps(conn, row, account_map, currency_decimal_plac
 
 **UPDATE path** (for `update-pending` / `update-failed`):
 
-Same steps 1–5, then `UPDATE subscription_master SET ... WHERE subscription_id = $1 RETURNING id`. If 0 rows returned → fall through to INSERT path (step 6).
+Same steps 1–5, then:
+
+- `SELECT record_status FROM subscription_master WHERE subscription_id = $1`. If 0 rows → fall through to INSERT path (step 6).
+- If `record_status = 'locked'` → write `update-failed` with `subscription_locked` + `continue`.
+- If `record_status = 'deleted'` → write `update-failed` with `subscription_deleted` + `continue`.
+- Otherwise → `UPDATE subscription_master SET ... WHERE subscription_id = $1`; then commit + write back `in-sync` (5 values).
 
 ---
 
@@ -154,6 +159,8 @@ LIMIT 1
 
 Parameters: `(tx_type, major_category, minor_category)` — values read from transform output.
 
+The lookup does not filter on `is_subscription_eligible` — that gate is enforced at the GAS UI layer. The extract trusts that categories assigned to subscriptions are eligible.
+
 ---
 
 ## `_to_sync_notes` — error code mapping
@@ -161,7 +168,7 @@ Parameters: `(tx_type, major_category, minor_category)` — values read from tra
 | Exception | `sync_notes` value |
 |-----------|-------------------|
 | `ValueError` | `str(e).removeprefix("subscriptions: ")` |
-| `UniqueViolation` (`uq_sm_subscription_id`) | `duplicate_subscription_id` |
+| `UniqueViolation` (`uq_sm_subscription_id`) | `duplicate_subscription_id` — defensive; unreachable in normal operation because INSERT uses `ON CONFLICT (subscription_id) DO UPDATE` |
 | `ForeignKeyViolation` (`fk_sm_account`) | `account_fk_violation` |
 | `ForeignKeyViolation` (`fk_sm_category`) | `category_fk_violation` |
 | `ForeignKeyViolation` (`fk_sm_counterparty`) | `counterparty_fk_violation` |
@@ -185,7 +192,7 @@ Subscriptions does not run a post-row soft-delete pass. `counterparty_master` so
 ## What to build
 
 - [ ] `migrations/0010_create_subscriptions.py`
-- [ ] `transforms/subscriptions.py` — validates and type-converts all 21 sheet columns; `ValueError` prefix `"subscriptions: "`; reads `subscription_amount_local` (col 4), `day_of_week` validated as 1–7; no `currency` column (currency derived from account in DB layer)
-- [ ] `sheets/subscriptions.py` — `write_back_success()` (5 cols starting at col 15 = `created_at`: `[created_at, sync_status, sync_date, sync_notes, updated_at]`), `write_back_failure()` (3 cols starting at col 16 = `sync_status`: `[sync_status, sync_date, sync_notes]`), `flush()`; `_SYNC_STATUS_COL = 16`
+- [ ] `transforms/subscriptions.py` — validates and type-converts all 21 sheet columns; `ValueError` prefix `"subscriptions: "`; `id` (subscription_id) required — blank → `id_required`; `subscription_name` (col 2) required — blank → `name_required`; reads `subscription_amount_local` (col 4); `subscription_start_date_local` (col 19) required — blank → `subscription_start_date_required`, invalid `YYYY-MM-DD HH:MM:SS` format → `invalid_subscription_start_date`; non-blank `subscription_end_date_local` (col 20) must be valid `YYYY-MM-DD HH:MM:SS` — invalid format → `invalid_subscription_end_date`; `subscription_timezone_local` (col 21) optional — passed through as-is when non-blank, `None` when blank; `tx_type` required — blank → `tx_type_required`, invalid value → `invalid_tx_type`; `major_category` required — blank → `major_category_required`; `minor_category` required — blank → `minor_category_required`; cross-field frequency anchor: `weekly` requires non-blank `day_of_week` (`missing_day_of_week`), `monthly`/`quarterly`/`annual` require non-blank `day_of_month` (`missing_day_of_month`); `day_of_week` validated as 1–7 (`invalid_day_of_week`); `day_of_month` validated as 1–31 (`invalid_day_of_month`); no `currency` column (currency derived from account in DB layer)
+- [ ] `sheets/subscriptions.py` — `write_back_success()` (5 cols starting at col 14 = `created_at`: `[created_at, sync_status, sync_date, sync_notes, updated_at]`), `write_back_failure()` (3 cols starting at col 15 = `sync_status`: `[sync_status, sync_date, sync_notes]`), `flush()`; `_SYNC_STATUS_COL = 15`
 - [ ] `database/subscriptions.py` — `upsert_subscriptions(conn, sheets_client, rows, account_map)`; `source_account` UUID looked up directly from `account_map`; `local_currency` taken from account_map result; no `currency` column written to DB; `sync-failure` status is not used — all failures write `create-failed` or `update-failed`; `day_of_week` validated as 1–7 in transform
 - [ ] Wire into `core/extractor.py` — after transactions; pass `account_map` (reuse the one loaded for transactions if both enabled in same run, or load fresh)

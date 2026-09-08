@@ -27,8 +27,8 @@ const SUBSCRIPTION_SCHEMA = {
     editable: false,
     default_value: null,
   },
-  name: {
-    sheet_column_name: 'name',
+  subscription_name: {
+    sheet_column_name: 'subscription_name',
     sheet_column_position: 2,
     ui_label: 'Name',
     type: 'string',
@@ -147,21 +147,9 @@ const SUBSCRIPTION_SCHEMA = {
     editable: true,
     default_value: '',
   },
-  tags: {
-    sheet_column_name: 'tags',
-    sheet_column_position: 12,
-    ui_label: 'Tags',
-    type: 'string',
-    enum_values: null,
-    group: 'core',
-    applies_to: null,
-    required_for: [],
-    editable: true,
-    default_value: '',
-  },
   description: {
     sheet_column_name: 'description',
-    sheet_column_position: 13,
+    sheet_column_position: 12,
     ui_label: 'Notes',
     type: 'string',
     enum_values: null,
@@ -173,7 +161,7 @@ const SUBSCRIPTION_SCHEMA = {
   },
   record_status: {
     sheet_column_name: 'record_status',
-    sheet_column_position: 14,
+    sheet_column_position: 13,
     ui_label: 'Record Status',
     type: 'enum',
     enum_values: ['active', 'inactive', 'deleted', 'locked'],
@@ -185,7 +173,7 @@ const SUBSCRIPTION_SCHEMA = {
   },
   created_at: {
     sheet_column_name: 'created_at',
-    sheet_column_position: 15,
+    sheet_column_position: 14,
     ui_label: 'Created At',
     type: 'string',
     enum_values: null,
@@ -197,7 +185,7 @@ const SUBSCRIPTION_SCHEMA = {
   },
   sync_status: {
     sheet_column_name: 'sync_status',
-    sheet_column_position: 16,
+    sheet_column_position: 15,
     ui_label: 'Sync Status',
     type: 'enum',
     enum_values: ['create-pending', 'update-pending', 'in-sync', 'create-failed', 'update-failed'],
@@ -209,7 +197,7 @@ const SUBSCRIPTION_SCHEMA = {
   },
   sync_date: {
     sheet_column_name: 'sync_date',
-    sheet_column_position: 17,
+    sheet_column_position: 16,
     ui_label: 'Sync date',
     type: 'string',
     enum_values: null,
@@ -221,7 +209,7 @@ const SUBSCRIPTION_SCHEMA = {
   },
   sync_notes: {
     sheet_column_name: 'sync_notes',
-    sheet_column_position: 18,
+    sheet_column_position: 17,
     ui_label: 'Sync Notes',
     type: 'string',
     enum_values: null,
@@ -233,7 +221,7 @@ const SUBSCRIPTION_SCHEMA = {
   },
   updated_at: {
     sheet_column_name: 'updated_at',
-    sheet_column_position: 19,
+    sheet_column_position: 18,
     ui_label: 'Updated At',
     type: 'string',
     enum_values: null,
@@ -243,9 +231,9 @@ const SUBSCRIPTION_SCHEMA = {
     editable: false,
     default_value: null,
   },
-  subscription_start_date: {
-    sheet_column_name: 'subscription_start_date',
-    sheet_column_position: 20,
+  subscription_start_date_local: {
+    sheet_column_name: 'subscription_start_date_local',
+    sheet_column_position: 19,
     ui_label: 'Start Date',
     type: 'string',
     enum_values: null,
@@ -255,10 +243,22 @@ const SUBSCRIPTION_SCHEMA = {
     editable: true,
     default_value: '',
   },
-  subscription_end_date: {
-    sheet_column_name: 'subscription_end_date',
-    sheet_column_position: 21,
+  subscription_end_date_local: {
+    sheet_column_name: 'subscription_end_date_local',
+    sheet_column_position: 20,
     ui_label: 'End Date',
+    type: 'string',
+    enum_values: null,
+    group: 'core',
+    applies_to: null,
+    required_for: [],
+    editable: true,
+    default_value: '',
+  },
+  subscription_timezone_local: {
+    sheet_column_name: 'subscription_timezone_local',
+    sheet_column_position: 21,
+    ui_label: 'Timezone',
     type: 'string',
     enum_values: null,
     group: 'core',

@@ -3,24 +3,8 @@
 // Shared across all transaction .gs files via GAS global scope.
 // =============================================================================
 
-function generateTransactionId(sheet, date) {
-  const dateStr    = String(date).slice(0, 10);
-  const SEQ_PATTERN = new RegExp('^\\d{4}-\\d{2}-\\d{2}-\\d{3}$');
-  const values     = sheet.getDataRange().getValues();
-  let max = 0;
-
-  for (let i = 1; i < values.length; i++) {
-    const rowId = String(values[i][0]);
-    // T-H5: only consider sequential-format IDs (YYYY-MM-DD-NNN).
-    // Bulk IDs (YYYY-MM-DD-XXXXXXXX) are hex and must not feed the sequence counter.
-    if (!SEQ_PATTERN.test(rowId)) continue;
-    if (rowId.startsWith(dateStr + '-')) {
-      const n = parseInt(rowId.slice(dateStr.length + 1), 10);
-      if (Number.isFinite(n) && n > max) max = n;
-    }
-  }
-
-  return dateStr + '-' + String(max + 1).padStart(3, '0');
+function generateTransactionId() {
+  return Utilities.getUuid();
 }
 
 function getTransactionMetadata() {

@@ -133,7 +133,7 @@ function _writeSingleTransaction(body, opts) {
     if (dupCheck) return dupCheck;
   }
 
-  const id  = generateTransactionId(sheet, body.tx_date_local);
+  const id  = generateTransactionId();
   const row = new Array(cols.length).fill('');
 
   function setCol(key, value) {
@@ -363,9 +363,8 @@ function createTransactionsBulk(body) {
     }
   })();
 
-  // ID = YYYY-MM-DD-{8 hex chars from UUID} — globally unique, no scan needed.
-  function nextId(dateStr) {
-    return String(dateStr).slice(0, 10) + '-' + Utilities.getUuid().slice(0, 8);
+  function nextId() {
+    return Utilities.getUuid();
   }
 
   function dupKey(dateTime, type, acct, amt) {
@@ -455,8 +454,8 @@ function createTransactionsBulk(body) {
         return;
       }
 
-      const parentId = nextId(txBody.tx_date_local);
-      const childId  = nextId(txBody.tx_date_local);
+      const parentId = nextId();
+      const childId  = nextId();
       dupSet.add(pKey);
       dupSet.add(cKey);
 
@@ -477,7 +476,7 @@ function createTransactionsBulk(body) {
       return;
     }
 
-    const id = nextId(txBody.tx_date_local);
+    const id = nextId();
     dupSet.add(dKey);
     batchRows.push(buildRow(Object.assign(_txSharedFields(txBody), {
       tx_type: txBody.tx_type, account_id: acct, tx_amount_local: amt, parent_tx_id: '',

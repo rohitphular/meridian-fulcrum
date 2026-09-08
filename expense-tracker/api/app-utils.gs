@@ -104,3 +104,18 @@ function getColIndex(schema, name) {
 function toBool(v) {
   return v === true || String(v).toLowerCase() === 'true';
 }
+
+// Converts a sheet datetime string ('YYYY-MM-DD HH:MM:SS') to a Date object.
+// Returns null if the value is blank, null, undefined, or unparseable.
+function sheetDateTimeToDate(str) {
+  if (str === undefined || str === null || String(str).trim() === '') return null;
+  const d = new Date(String(str).trim().replace(' ', 'T'));
+  return isNaN(d.getTime()) ? null : d;
+}
+
+// Converts a Date object to a sheet datetime string ('YYYY-MM-DD HH:MM:SS').
+function dateToSheetDateTime(date) {
+  const pad = function(n) { return String(n).padStart(2, '0'); };
+  return date.getFullYear() + '-' + pad(date.getMonth() + 1) + '-' + pad(date.getDate())
+    + ' ' + pad(date.getHours()) + ':' + pad(date.getMinutes()) + ':' + pad(date.getSeconds());
+}

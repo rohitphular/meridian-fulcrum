@@ -4,7 +4,7 @@
 // =============================================================================
 
 function validateSubscriptionCreate(body) {
-  if (body.name === undefined || body.name === null || String(body.name).trim() === '')
+  if (body.subscription_name === undefined || body.subscription_name === null || String(body.subscription_name).trim() === '')
     return { ok: false, error: 'missing_name' };
 
   if (body.subscription_amount_local === undefined || body.subscription_amount_local === null) return { ok: false, error: 'missing_subscription_amount_local' };
@@ -31,7 +31,7 @@ function validateSubscriptionUpdate(body) {
     return { ok: false, error: 'missing_row_num' };
   if (!Number.isInteger(Number(body.row_num)) || Number(body.row_num) < 2)
     return { ok: false, error: 'invalid_row' };
-  if (body.name === undefined || body.name === null || String(body.name).trim() === '')
+  if (body.subscription_name === undefined || body.subscription_name === null || String(body.subscription_name).trim() === '')
     return { ok: false, error: 'missing_name' };
   if (body.source_account === undefined || body.source_account === null || String(body.source_account).trim() === '')
     return { ok: false, error: 'missing_source_account' };
