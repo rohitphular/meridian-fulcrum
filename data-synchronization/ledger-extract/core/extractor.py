@@ -9,6 +9,7 @@ from py_logging import get_logger
 
 import database.accounts as accounts_db
 import database.categories as categories_db
+import database.subscriptions as subscriptions_db
 import database.transactions as transactions_db
 from database.job_execution_details import bootstrap_job_execution_details, read_last_sheet_modified_at, update_ran_at, upsert_job_execution_details
 
@@ -61,10 +62,13 @@ class LedgerExtractJob:
             if entity_enabled("accounts", config):
                 self._extract_accounts(sheets_client)
 
-            if entity_enabled("transactions", config):
-                self._extract_transactions(sheets_client)
+            account_map: dict[str, Any] | None = None
 
-            # TODO: subscriptions
+            if entity_enabled("transactions", config):
+                account_map = self._extract_transactions(sheets_client)
+
+            if entity_enabled("subscriptions", config):
+                self._extract_subscriptions(sheets_client, account_map)
 
             # --- Phase 3: Finalise ---
             upsert_job_execution_details(self._conn, current_sheet_modified_at)
@@ -103,7 +107,7 @@ class LedgerExtractJob:
                 break
             row_start += _BATCH_SIZE
 
-    def _extract_transactions(self, sheets_client: SheetsClient) -> None:
+    def _extract_transactions(self, sheets_client: SheetsClient) -> dict[str, Any]:
         row_start = 1
         all_rows: list[dict[str, Any]] = []
         while True:
@@ -118,3 +122,23 @@ class LedgerExtractJob:
         account_map = transactions_db.load_account_map(self._conn)
         logger.info(f"_extract_transactions: account_map_loaded entity=transactions account_count={len(account_map)}")
         transactions_db.upsert_transactions(self._conn, sheets_client, all_rows, account_map)
+        return account_map
+
+    def _extract_subscriptions(self, sheets_client: SheetsClient, account_map: dict[str, Any] | None) -> None:
+        row_start = 1
+        all_rows: list[dict[str, Any]] = []
+        while True:
+            rows = sheets_client.read_sheet("subscriptions", row_start, row_start + _BATCH_SIZE - 1)
+            if row_start == 1 and len(rows) == 0:
+                raise RuntimeError("subscriptions: zero rows returned from sheet — aborting to prevent full wipe")
+            all_rows.extend(rows)
+            if len(rows) < _BATCH_SIZE:
+                break
+            row_start += _BATCH_SIZE
+        logger.info(f"_extract_subscriptions: sheet_read entity=subscriptions total_rows={len(all_rows)}")
+        if account_map is None:
+            account_map = transactions_db.load_account_map(self._conn)
+            logger.info(f"_extract_subscriptions: account_map_loaded entity=subscriptions account_count={len(account_map)}")
+        else:
+            logger.info(f"_extract_subscriptions: account_map_reused entity=subscriptions account_count={len(account_map)}")
+        subscriptions_db.upsert_subscriptions(self._conn, sheets_client, all_rows, account_map)
