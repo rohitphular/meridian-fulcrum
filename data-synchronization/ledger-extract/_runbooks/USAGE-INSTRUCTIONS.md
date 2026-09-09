@@ -84,6 +84,8 @@ entities:
     enabled: true
   transactions:
     enabled: true
+  subscriptions:
+    enabled: true
 ```
 
 When an entity is disabled, both its extraction and write-back pass are skipped.

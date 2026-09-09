@@ -1,6 +1,6 @@
 # TASK — subscriptions
 
-**Status:** OPEN
+**Status:** DONE
 **Build order:** 4 of 4 — depends on accounts (`account_id` FK) and categories (`category_id` FK)
 
 ---
@@ -118,7 +118,7 @@ currency_decimal_places = _load_decimal_places(conn)  # dict[str, int]
 
 ## Resolution steps
 
-Executed inside `_run_insert_steps(conn, row, account_map, currency_decimal_places, failed_status)`:
+Steps 1–5 are executed inside `_resolve_dependencies(conn, typed, subscription_id, sheet_row_num, account_map, currency_decimal_places, write_backs, failed_status)`. Step 6 is executed inside `_do_upsert(conn, typed, deps)`.
 
 1. **`source_account` → `account_id`**: look up `account_map[source_account]` → `(account_uuid, local_currency)`. Not found → `write_back_failure(failed_status, account_not_found)` + `continue`.
 
@@ -130,18 +130,18 @@ Executed inside `_run_insert_steps(conn, row, account_map, currency_decimal_plac
 
 5. **`counterparty_name` → `counterparty_id`**: if `counterparty_name` is blank, `counterparty_id = None`. Otherwise, derive `counterparty_key`: strip non-alphanumeric-non-space characters, strip and uppercase, replace runs of spaces with `_`, collapse consecutive `_`. If the resulting key is empty string, log a warning and set `counterparty_id = None` (do not fail). Otherwise upsert into `counterparty_master` on `counterparty_key`. Failure → `write_back_failure(failed_status, counterparty_error)` + `continue`.
 
-6. **INSERT `subscription_master`**: `INSERT ... ON CONFLICT (subscription_id) DO UPDATE SET ... RETURNING id`. Integrity error → rollback + `write_back_failure(failed_status, <sync_notes from _to_sync_notes>)` + `continue`.
+6. **INSERT `subscription_master`**: `INSERT ... ON CONFLICT (subscription_id) DO UPDATE SET ... RETURNING id, created_at`. `created_at` is excluded from `DO UPDATE SET` — it is preserved on conflict. Integrity error → rollback + `write_back_failure(failed_status, <sync_notes from _to_sync_notes>)` + `continue`.
 
-7. **Commit + write back `in-sync`**: `conn.commit()` then accumulate success write-back (5 values).
+7. **Commit + write back `in-sync`**: `conn.commit()` then accumulate success write-back (5 values); `created_at` taken from `RETURNING`.
 
 **UPDATE path** (for `update-pending` / `update-failed`):
 
 Same steps 1–5, then:
 
-- `SELECT record_status FROM subscription_master WHERE subscription_id = $1`. If 0 rows → fall through to INSERT path (step 6).
+- `SELECT record_status, created_at FROM subscription_master WHERE subscription_id = $1`. If 0 rows → fall through to INSERT path (step 6); `created_at` taken from `RETURNING`.
 - If `record_status = 'locked'` → write `update-failed` with `subscription_locked` + `continue`.
 - If `record_status = 'deleted'` → write `update-failed` with `subscription_deleted` + `continue`.
-- Otherwise → `UPDATE subscription_master SET ... WHERE subscription_id = $1`; then commit + write back `in-sync` (5 values).
+- Otherwise → `UPDATE subscription_master SET ... WHERE subscription_id = $1`; then commit + write back `in-sync` (5 values); `created_at` taken from the `SELECT`.
 
 ---
 
@@ -191,8 +191,8 @@ Subscriptions does not run a post-row soft-delete pass. `counterparty_master` so
 
 ## What to build
 
-- [ ] `migrations/0010_create_subscriptions.py`
-- [ ] `transforms/subscriptions.py` — validates and type-converts all 21 sheet columns; `ValueError` prefix `"subscriptions: "`; `id` (subscription_id) required — blank → `id_required`; `subscription_name` (col 2) required — blank → `name_required`; reads `subscription_amount_local` (col 4); `subscription_start_date_local` (col 19) required — blank → `subscription_start_date_required`, must parse with `datetime.strptime(val, '%Y-%m-%d %H:%M:%S')` (sheet format uses space separator, not `T`) — invalid format → `invalid_subscription_start_date`; non-blank `subscription_end_date_local` (col 20) must parse with the same format — invalid format → `invalid_subscription_end_date`; blank `subscription_end_date_local` → `None`; `subscription_timezone_local` (col 21) optional — passed through as-is when non-blank, `None` when blank; `tx_type` required — blank → `tx_type_required`, invalid value → `invalid_tx_type`; `major_category` required — blank → `major_category_required`; `minor_category` required — blank → `minor_category_required`; cross-field frequency anchor: `weekly` requires non-blank `day_of_week` (`missing_day_of_week`), `monthly`/`quarterly`/`annual` require non-blank `day_of_month` (`missing_day_of_month`); `day_of_week` validated as 1–7 (`invalid_day_of_week`); `day_of_month` validated as 1–31 (`invalid_day_of_month`); no `currency` column (currency derived from account in DB layer); GAS canonical format reference: `sheetDateTimeToDate` / `dateToSheetDateTime` in `expense-tracker/api/app-utils.gs`
-- [ ] `sheets/subscriptions.py` — `write_back_success()` (5 cols starting at col 14 = `created_at`: `[created_at, sync_status, sync_date, sync_notes, updated_at]`), `write_back_failure()` (3 cols starting at col 15 = `sync_status`: `[sync_status, sync_date, sync_notes]`), `flush()`; `_SYNC_STATUS_COL = 15`
-- [ ] `database/subscriptions.py` — `upsert_subscriptions(conn, sheets_client, rows, account_map)`; `source_account` UUID looked up directly from `account_map`; `local_currency` taken from account_map result; no `currency` column written to DB; `sync-failure` status is not used — all failures write `create-failed` or `update-failed`; `day_of_week` validated as 1–7 in transform
+- [x] `migrations/0010_create_subscriptions.py`
+- [x] `transforms/subscriptions.py` — validates and type-converts all 21 sheet columns; `ValueError` prefix `"subscriptions: "`; `id` (subscription_id) required — blank → `id_required`; `subscription_name` (col 2) required — blank → `name_required`; reads `subscription_amount_local` (col 4); `subscription_start_date_local` (col 19) required — blank → `subscription_start_date_required`, must parse with `datetime.strptime(val, '%Y-%m-%d %H:%M:%S')` (sheet format uses space separator, not `T`) — invalid format → `invalid_subscription_start_date`; non-blank `subscription_end_date_local` (col 20) must parse with the same format — invalid format → `invalid_subscription_end_date`; blank `subscription_end_date_local` → `None`; `subscription_timezone_local` (col 21) optional — passed through as-is when non-blank, `None` when blank; `tx_type` required — blank → `tx_type_required`, invalid value → `invalid_tx_type`; `major_category` required — blank → `major_category_required`; `minor_category` required — blank → `minor_category_required`; cross-field frequency anchor: `weekly` requires non-blank `day_of_week` (`missing_day_of_week`), `monthly`/`quarterly`/`annual` require non-blank `day_of_month` (`missing_day_of_month`); `day_of_week` validated as 1–7 (`invalid_day_of_week`); `day_of_month` validated as 1–31 (`invalid_day_of_month`); no `currency` column (currency derived from account in DB layer); GAS canonical format reference: `sheetDateTimeToDate` / `dateToSheetDateTime` in `expense-tracker/api/app-utils.gs`
+- [x] `sheets/subscriptions.py` — `write_back_success()` (5 cols starting at col 14 = `created_at`: `[created_at, sync_status, sync_date, sync_notes, updated_at]`), `write_back_failure()` (3 cols starting at col 15 = `sync_status`: `[sync_status, sync_date, sync_notes]`), `flush()`; `_SYNC_STATUS_COL = 15`
+- [x] `database/subscriptions.py` — `upsert_subscriptions(conn, sheets_client, rows, account_map)`; `source_account` UUID looked up directly from `account_map`; `local_currency` taken from account_map result; no `currency` column written to DB; `sync-failure` status is not used — all failures write `create-failed` or `update-failed`; `day_of_week` validated as 1–7 in transform
 - [ ] Wire into `core/extractor.py` — after transactions; pass `account_map` (reuse the one loaded for transactions if both enabled in same run, or load fresh)

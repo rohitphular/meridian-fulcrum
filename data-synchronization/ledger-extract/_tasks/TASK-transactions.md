@@ -232,7 +232,7 @@ JOIN beneficiaries_master bm ON bm.id = tb.beneficiary_id
 Iterate rows in sheet order. For each row:
 
 - If `id` is blank → log a warning and skip; no write-back
-- If `sync_status` not in `{create-pending, update-pending}` → skip
+- If `sync_status` not in `{create-pending, create-failed, update-pending, update-failed}` → skip (`in-sync` silently; unrecognised → log warning)
 
 **Validation (both statuses before processing):**
 - `tx_date_local` required; must parse as datetime (`YYYY-MM-DD HH:MM:SS`) → on failure: `create-failed`/`update-failed`

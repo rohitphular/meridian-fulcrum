@@ -59,17 +59,20 @@ ledger-extract/
 ├── transforms/
 │   ├── categories.py
 │   ├── accounts.py
-│   └── transactions.py
+│   ├── transactions.py
+│   └── subscriptions.py
 ├── sheets/
 │   ├── categories.py
 │   ├── accounts.py
-│   └── transactions.py
+│   ├── transactions.py
+│   └── subscriptions.py
 ├── database/
 │   ├── models/
 │   ├── job_execution_details.py
 │   ├── categories.py
 │   ├── accounts.py
-│   └── transactions.py
+│   ├── transactions.py
+│   └── subscriptions.py
 └── migrations/
     ├── 0001_create_shared_infrastructure.py
     ├── 0002_create_account_types.py
@@ -79,7 +82,8 @@ ledger-extract/
     ├── 0006_create_counterparty_master.py
     ├── 0007_create_beneficiaries_master.py
     ├── 0008_create_transaction_beneficiaries.py
-    └── 0009_rename_currency_rate_ref_to_currency_rate_id.py
+    ├── 0009_rename_currency_rate_ref_to_currency_rate_id.py
+    └── 0010_create_subscriptions.py
 ```
 
 Exclude from this check: `.venv/`, `uv.lock`, `__pycache__/`, `.ruff_cache/`, `database/models/`

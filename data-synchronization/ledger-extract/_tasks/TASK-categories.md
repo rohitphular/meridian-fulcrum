@@ -1,6 +1,6 @@
 # TASK — categories
 
-**Status:** READY TO BUILD
+**Status:** DONE
 **Build order:** 1 of 4 — no dependencies on other entities
 
 ---
@@ -190,11 +190,11 @@ Per-row pass (for each row read from sheet):
 
 ## What to build
 
-- [ ] `migrations/0001_create_shared_infrastructure.py` — `job_execution_details`
-- [ ] `migrations/0002_create_account_types.py` — `account_types` reference table + seed data
-- [ ] `migrations/0003_create_categories.py` — `category_master` + join tables
-- [ ] `transforms/categories.py` — row dict → typed dict
-- [ ] `database/categories.py` — `category_master` upsert + explicit join table deletes/inserts
-- [ ] `database/job_execution_details.py` — Phase 1 bootstrap/read and Phase 3 UPSERT
-- [ ] `sheets/categories.py` — write-back `sync_status`, `sync_date`, `sync_notes` to sheet via Sheets API
-- [ ] Wire into `core/extractor.py`
+- [x] `migrations/0001_create_shared_infrastructure.py` — `job_execution_details`
+- [x] `migrations/0002_create_account_types.py` — `account_types` reference table + seed data
+- [x] `migrations/0003_create_categories.py` — `category_master` + join tables
+- [x] `transforms/categories.py` — row dict → typed dict
+- [x] `database/categories.py` — `category_master` upsert + explicit join table deletes/inserts
+- [x] `database/job_execution_details.py` — Phase 1 bootstrap/read and Phase 3 UPSERT
+- [x] `sheets/categories.py` — write-back `sync_status`, `sync_date`, `sync_notes` to sheet via Sheets API
+- [x] Wire into `core/extractor.py`

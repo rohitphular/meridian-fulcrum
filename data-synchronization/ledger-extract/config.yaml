@@ -5,3 +5,5 @@ entities:
     enabled: true
   transactions:
     enabled: true
+  subscriptions:
+    enabled: true
