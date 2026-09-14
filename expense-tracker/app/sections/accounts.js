@@ -528,7 +528,7 @@ function _renderAccountRow(a) {
       const n    = state.accDeleteBlocked.referenced_count;
       const noun = n === 1 ? 'transaction refers' : 'transactions refer';
       return `<tr${rowStyle}>
-        <td colspan="5">
+        <td colspan="4">
           <span class="confirm-text">Cannot delete <strong>${esc(a.account_name)}</strong> — <strong>${n}</strong> ${noun} to this account.</span>
           <div style="color:var(--muted);font-size:var(--text-sm);margin-top:4px">
             Delete or reassign those transactions first, or deactivate the account instead.
@@ -541,7 +541,7 @@ function _renderAccountRow(a) {
       </tr>`;
     }
     return `<tr${rowStyle}>
-      <td colspan="5"><span class="confirm-text">Delete <strong>${esc(a.account_name)}</strong>? This marks the account as deleted.</span></td>
+      <td colspan="4"><span class="confirm-text">Delete <strong>${esc(a.account_name)}</strong>? This marks the account as deleted.</span></td>
       <td><div class="row-actions">
         <button class="btn-link danger" data-action="acc-confirm-delete" data-row="${a._row}">Yes, delete</button>
         <button class="btn-link" data-action="acc-cancel-delete">Cancel</button>
@@ -550,7 +550,6 @@ function _renderAccountRow(a) {
   }
 
   return `<tr${rowStyle}>
-    <td class="td-mono" style="color:var(--muted);font-size:11px">${esc(a.id)}</td>
     <td>${esc(a.account_name)}${(a.description !== undefined && a.description !== null && a.description !== '') ? `<span class="info-icon-wrap"><span style="cursor:help;color:var(--teal);font-size:13px">ⓘ</span><span class="info-tooltip">${esc(a.description)}</span></span>` : ''}</td>
     <td style="color:var(--muted);font-size:12px">${esc(_subTypeLabel(a.sub_type))}</td>
     <td>${esc(a.local_currency)}</td>
@@ -565,7 +564,7 @@ function _renderAccountRow(a) {
 function _groupHeader(label, total, sym, isLiab) {
   const sign = isLiab ? '−' : '';
   return `<tr class="acc-group-header">
-    <td colspan="6" style="background:var(--canvas);padding:10px 12px 4px;font-size:11px;font-family:var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--muted);border-bottom:none">
+    <td colspan="5" style="background:var(--canvas);padding:10px 12px 4px;font-size:11px;font-family:var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--muted);border-bottom:none">
       ${label}
       <span style="float:right;font-weight:600;color:${isLiab ? 'var(--ember)' : 'var(--teal)'}">${sign}${sym}${Math.abs(total).toLocaleString('en-GB', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</span>
     </td>
@@ -632,7 +631,6 @@ function _renderTable(accounts) {
     <div class="table-wrap acc-table-wrap${hasActiveAccRow ? ' acc-has-active' : ''}">
       <table class="acc-table">
         <thead><tr>
-          <th style="width:90px">ID</th>
           <th style="width:160px">Name</th>
           <th style="width:160px">Sub-type</th>
           <th style="width:70px">CCY</th>

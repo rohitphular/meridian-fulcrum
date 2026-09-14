@@ -122,7 +122,7 @@ def _resolve_dependencies(
     typed: dict[str, Any],
     subscription_id: str,
     sheet_row_num: int,
-    account_map: dict[str, tuple[Any, str]],
+    account_map: dict[str, tuple[Any, str, str]],
     currency_decimal_places: dict[str, int],
     write_backs: list[sheets_subscriptions.WriteBack],
     failed_status: str,
@@ -139,7 +139,7 @@ def _resolve_dependencies(
         write_backs.append(sheets_subscriptions.write_back_failure(sheet_row_num, failed_status, sync_dt, "account_not_found"))
         return None
 
-    account_surrogate_id, local_currency = account_map[account_id_sheet]
+    account_surrogate_id, local_currency, _account_subtype = account_map[account_id_sheet]
 
     # Step 2 — local_currency → decimal_places
     if local_currency not in currency_decimal_places:
@@ -239,7 +239,7 @@ def upsert_subscriptions(
     conn: Any,
     sheets_client: SheetsClient,
     rows: list[dict[str, Any]],
-    account_map: dict[str, tuple[Any, str]],
+    account_map: dict[str, tuple[Any, str, str]],
 ) -> None:
     """Process all subscription rows and write sync results back to the sheet."""
     in_sync_count = sum(1 for row in rows if row.get("sync_status") == "in-sync")

@@ -18,6 +18,13 @@ _VALID_SYNC_STATUSES = {"create-pending", "create-failed", "update-pending", "up
 _ACTIONABLE = {"create-pending", "create-failed", "update-pending", "update-failed"}
 _BASE_CURRENCY = "XAU"
 _XAU_DECIMAL_PLACES = 9
+_DEPOSIT_SUBTYPES = {"current", "savings", "cash"}
+_MARKET_INVESTMENT_SUBTYPES = {"stocks_shares", "isa", "pension_sipp", "crypto", "commodities", "other"}
+_P2P_LENDING_SUBTYPES = {"p2p_lending"}
+_PROPERTY_SUBTYPES = {"property"}
+_REVOLVING_CREDIT_SUBTYPES = {"credit_card", "heloc", "overdraft"}
+_INSTALLMENT_LOAN_SUBTYPES = {"personal_loan", "auto_loan", "mortgage", "student_loan", "medical_loan", "debt_consolidation"}
+_FIXED_INCOME_SUBTYPES = {"fixed_deposit", "bonds"}
 
 
 def _load_decimal_places(conn: Any) -> dict[str, int]:
@@ -93,6 +100,170 @@ def _compute_minor_units(
     currency_rate_id, rate_value = rate_lookup  # type: ignore[misc]
     base_minor = int((opening_amount_local_value / rate_value * decimal.Decimal(10) ** _XAU_DECIMAL_PLACES).to_integral_value(decimal.ROUND_HALF_UP))
     return local_minor, base_minor, currency_rate_id
+
+
+def _seed_deposit_details(conn: Any, account_id: str) -> bool:
+    """Insert the opening row into account_deposit_details for a deposit account.
+
+    Uses a NOT EXISTS guard so it is safe to call even when a row already exists.
+    Returns True if a row was inserted.
+    """
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            INSERT INTO account_deposit_details (
+                account_master_id, entity_type, entity_id,
+                current_balance_local_value, current_balance_base_value,
+                local_currency, base_currency, currency_rate_id,
+                interest_rate, rate_type, interest_payment_frequency,
+                effective_from_dt, effective_to_dt
+            )
+            SELECT
+                %s, NULL, NULL,
+                opening_amount_local_value, opening_amount_base_value,
+                local_currency, base_currency, currency_rate_id,
+                NULL, NULL, NULL,
+                now(), NULL
+            FROM account_master
+            WHERE id = %s
+              AND NOT EXISTS (
+                SELECT 1 FROM account_deposit_details
+                WHERE account_master_id = %s AND effective_to_dt IS NULL
+              )
+            """,
+            (account_id, account_id, account_id),
+        )
+        return cursor.rowcount == 1
+
+
+def _seed_market_investment_details(conn: Any, account_id: str) -> bool:
+    """Insert the opening row into account_market_investment_details.
+
+    Uses opening_amount as the initial current_value. All unit/cost fields are nullable
+    and default to NULL — they are populated by a future enrichment pass.
+    Uses a NOT EXISTS guard; safe to call on already-seeded accounts.
+    Returns True if a row was inserted.
+    """
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            INSERT INTO account_market_investment_details (
+                account_master_id, entity_type, entity_id,
+                current_value_local_value, current_value_base_value,
+                local_currency, base_currency, currency_rate_id,
+                effective_from_dt, effective_to_dt
+            )
+            SELECT
+                %s, NULL, NULL,
+                opening_amount_local_value, opening_amount_base_value,
+                local_currency, base_currency, currency_rate_id,
+                now(), NULL
+            FROM account_master
+            WHERE id = %s
+              AND NOT EXISTS (
+                SELECT 1 FROM account_market_investment_details
+                WHERE account_master_id = %s AND effective_to_dt IS NULL
+              )
+            """,
+            (account_id, account_id, account_id),
+        )
+        return cursor.rowcount == 1
+
+
+def _seed_p2p_lending_details(conn: Any, account_id: str) -> bool:
+    """Insert the opening row into account_p2p_lending_details.
+
+    Uses opening_amount as both principal_lent (total deployed) and current_value
+    (outstanding principal + accrued interest at opening). Rate fields are nullable
+    and default to NULL.
+    Uses a NOT EXISTS guard; safe to call on already-seeded accounts.
+    Returns True if a row was inserted.
+    """
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            INSERT INTO account_p2p_lending_details (
+                account_master_id, entity_type, entity_id,
+                principal_lent_local_value, principal_lent_base_value,
+                current_value_local_value, current_value_base_value,
+                local_currency, base_currency, currency_rate_id,
+                effective_from_dt, effective_to_dt
+            )
+            SELECT
+                %s, NULL, NULL,
+                opening_amount_local_value, opening_amount_base_value,
+                opening_amount_local_value, opening_amount_base_value,
+                local_currency, base_currency, currency_rate_id,
+                now(), NULL
+            FROM account_master
+            WHERE id = %s
+              AND NOT EXISTS (
+                SELECT 1 FROM account_p2p_lending_details
+                WHERE account_master_id = %s AND effective_to_dt IS NULL
+              )
+            """,
+            (account_id, account_id, account_id),
+        )
+        return cursor.rowcount == 1
+
+
+def _seed_property_details(conn: Any, account_id: str) -> bool:
+    """Insert the opening row into account_property_details.
+
+    Uses opening_amount as both purchase_price (acquisition cost) and current_value
+    (estimated market value at opening). is_rental defaults to FALSE. Address and
+    rental income fields are nullable.
+    Uses a NOT EXISTS guard; safe to call on already-seeded accounts.
+    Returns True if a row was inserted.
+    """
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            INSERT INTO account_property_details (
+                account_master_id, entity_type, entity_id,
+                purchase_price_local_value, purchase_price_base_value,
+                current_value_local_value, current_value_base_value,
+                local_currency, base_currency, currency_rate_id,
+                is_rental,
+                effective_from_dt, effective_to_dt
+            )
+            SELECT
+                %s, NULL, NULL,
+                opening_amount_local_value, opening_amount_base_value,
+                opening_amount_local_value, opening_amount_base_value,
+                local_currency, base_currency, currency_rate_id,
+                FALSE,
+                now(), NULL
+            FROM account_master
+            WHERE id = %s
+              AND NOT EXISTS (
+                SELECT 1 FROM account_property_details
+                WHERE account_master_id = %s AND effective_to_dt IS NULL
+              )
+            """,
+            (account_id, account_id, account_id),
+        )
+        return cursor.rowcount == 1
+
+
+def _seed_extension_if_applicable(conn: Any, natural_key: str, account_id: str, account_subtype: str) -> None:
+    """Seed the appropriate extension table opening row for a newly created account.
+
+    Only seedable tables are handled here — revolving_credit, installment_loan, and
+    fixed_income require fields not available from account_master and are skipped.
+    """
+    if account_subtype in _DEPOSIT_SUBTYPES:
+        if _seed_deposit_details(conn, account_id):
+            logger.info(f"upsert_accounts: deposit_seeded entity=accounts natural_key={natural_key}")
+    elif account_subtype in _MARKET_INVESTMENT_SUBTYPES:
+        if _seed_market_investment_details(conn, account_id):
+            logger.info(f"upsert_accounts: market_investment_seeded entity=accounts natural_key={natural_key}")
+    elif account_subtype in _P2P_LENDING_SUBTYPES:
+        if _seed_p2p_lending_details(conn, account_id):
+            logger.info(f"upsert_accounts: p2p_lending_seeded entity=accounts natural_key={natural_key}")
+    elif account_subtype in _PROPERTY_SUBTYPES:
+        if _seed_property_details(conn, account_id):
+            logger.info(f"upsert_accounts: property_seeded entity=accounts natural_key={natural_key}")
 
 
 def upsert_accounts(conn: Any, sheets_client: SheetsClient, rows: list[dict[str, Any]], row_start: int) -> None:
@@ -211,6 +382,7 @@ def upsert_accounts(conn: Any, sheets_client: SheetsClient, rows: list[dict[str,
                         pk_row = cursor.fetchone()
                     if pk_row is None:
                         raise RuntimeError(f"INSERT returned no id for id={natural_key}")
+                    _seed_extension_if_applicable(conn, natural_key, typed["id"], typed["account_subtype"])
                     conn.commit()
                     sync_dt = datetime.now(timezone.utc).isoformat()
                     write_backs.append(sheets_accounts.write_back(sheet_row_num, "in-sync", sync_dt, ""))
@@ -332,6 +504,7 @@ def upsert_accounts(conn: Any, sheets_client: SheetsClient, rows: list[dict[str,
                             fallback_pk_row = cursor.fetchone()
                         if fallback_pk_row is None:
                             raise RuntimeError(f"fallback INSERT returned no id for id={natural_key}")
+                        _seed_extension_if_applicable(conn, natural_key, typed["id"], typed["account_subtype"])
 
                     conn.commit()
                     sync_dt = datetime.now(timezone.utc).isoformat()

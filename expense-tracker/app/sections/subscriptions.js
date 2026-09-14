@@ -99,7 +99,7 @@ function _renderForm(sub = null) {
   const p      = state.subPrefill;   // null when opening a fresh form; non-null when subscribing from a tx
   const isEdit = sub !== null;
 
-  const nameVal        = isEdit ? sub.name             : (p !== null && p !== undefined && p.name !== undefined && p.name !== null ? p.name : '');
+  const nameVal        = isEdit ? sub.subscription_name : (p !== null && p !== undefined && p.name !== undefined && p.name !== null ? p.name : '');
   const cpVal          = isEdit ? sub.counterparty_name : (p !== null && p !== undefined && p.counterparty_name !== undefined && p.counterparty_name !== null ? p.counterparty_name : '');
   const amountVal      = isEdit ? sub.subscription_amount_local : (p !== null && p !== undefined && p.amount !== undefined && p.amount !== null ? p.amount : '');
   const freqVal        = isEdit ? sub.frequency         : (p !== null && p !== undefined && p.frequency !== undefined && p.frequency !== null && p.frequency !== '' ? p.frequency : 'monthly');
@@ -110,8 +110,8 @@ function _renderForm(sub = null) {
   const tagsVal        = isEdit ? String(sub.tags).replace(/;/g, ', ') : (p !== null && p !== undefined && p.tx_tags !== undefined && p.tx_tags !== null ? String(p.tx_tags).replace(/;/g, ', ') : '');
   const descriptionVal = isEdit ? sub.description       : '';
   const dayVal         = isEdit ? (sub.frequency === 'weekly' ? sub.day_of_week : sub.day_of_month) : '';
-  const startDateVal   = isEdit ? sub.subscription_start_date : '';
-  const endDateVal     = isEdit ? sub.subscription_end_date   : '';
+  const startDateVal   = isEdit ? sub.subscription_start_date_local : '';
+  const endDateVal     = isEdit ? sub.subscription_end_date_local   : '';
 
   const freqOpts = FREQUENCIES.map(f =>
     `<option value="${esc(f.value)}" ${freqVal === f.value ? 'selected' : ''}>${esc(f.label)}</option>`
@@ -124,7 +124,7 @@ function _renderForm(sub = null) {
       `<option value="${esc(a.id)}" ${a.id === srcAccVal ? 'selected' : ''}>${esc(a.account_name)} (${esc(a.local_currency)})</option>`
     ).join('');
 
-  const header = isEdit ? `Editing: ${esc(sub.name)}` : 'New subscription';
+  const header = isEdit ? `Editing: ${esc(sub.subscription_name)}` : 'New subscription';
 
   return `
   <div class="card" style="margin-bottom:20px">
@@ -217,7 +217,7 @@ function _applySubFilters(subs) {
     if (f.frequency !== 'all' && s.frequency !== f.frequency) return false;
     if (f.search !== undefined && f.search !== null && f.search !== '') {
       const q   = f.search.toLowerCase();
-      const hay = (s.name + ' ' + (s.counterparty_name !== undefined && s.counterparty_name !== null ? s.counterparty_name : '') + ' ' + (s.description !== undefined && s.description !== null ? s.description : '')).toLowerCase();
+      const hay = ((s.subscription_name !== undefined && s.subscription_name !== null ? s.subscription_name : '') + ' ' + (s.counterparty_name !== undefined && s.counterparty_name !== null ? s.counterparty_name : '') + ' ' + (s.description !== undefined && s.description !== null ? s.description : '')).toLowerCase();
       if (!hay.includes(q)) return false;
     }
     return true;
@@ -305,7 +305,7 @@ function _renderSubRow(sub, sym) {
   if (state.subDeleteRow === row) {
     return `<tr>
       <td colspan="5">
-        <span class="confirm-text">Delete <strong>${esc(sub.name)}</strong>?</span>
+        <span class="confirm-text">Delete <strong>${esc(sub.subscription_name)}</strong>?</span>
         <span style="display:inline-flex;gap:8px;margin-left:16px">
           <button class="btn-link danger" data-action="sub-confirm-delete" data-row="${row}">Yes, delete</button>
           <button class="btn-link" data-action="sub-cancel-delete">Cancel</button>
@@ -315,7 +315,6 @@ function _renderSubRow(sub, sym) {
   }
 
   const isActive    = sub.record_status === 'active';
-  const dotCls      = isActive ? 'sub-status-active' : 'sub-status-paused';
   const subCcy      = (state.accountMap[sub.source_account] !== undefined && state.accountMap[sub.source_account] !== null) ? state.accountMap[sub.source_account].local_currency : '';
   const amtFmt      = `${getSymbol(subCcy)}${parseFloat(sub.subscription_amount_local).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}/${_freqShort(sub.frequency)}`;
   const isForeign   = subCcy !== '' && subCcy !== state.quoteCurrency;
@@ -342,7 +341,7 @@ function _renderSubRow(sub, sym) {
   const accName   = (_accEntry !== undefined && _accEntry !== null && _accEntry.account_name !== undefined && _accEntry.account_name !== null) ? _accEntry.account_name : '—';
 
   return `<tr${isActive ? '' : ' style="opacity:0.6"'}>
-    <td><span class="sub-status-dot ${dotCls}">●</span> ${esc(sub.name)}</td>
+    <td>${esc(sub.subscription_name)}</td>
     <td class="td-truncate" title="${esc(accName)}">${esc(accName)}</td>
     <td class="td-nowrap">${nextCell}</td>
     <td class="td-mono td-nowrap">${esc(amtFmt)}${baseAmt}</td>
@@ -392,7 +391,7 @@ function _renderTable(subs) {
     <div class="table-wrap acc-table-wrap${state.subDeleteRow !== null ? ' acc-has-active' : ''}">
       <table class="acc-table">
         <thead><tr>
-          ${thSort('name', 'Name')}
+          ${thSort('subscription_name', 'Name')}
           <th>Account</th>
           ${thSort('next_payment_date', 'Next payment')}
           ${thSort('amount_base', 'Amount')}
@@ -453,20 +452,19 @@ function _parseSubscriptionsCsv(text) {
     }
 
     subscriptions.push({
-      name:              row.subscription_name,
-      counterparty_name: row.counterparty_name,
+      subscription_name:             row.subscription_name,
+      counterparty_name:             row.counterparty_name,
       subscription_amount_local,
-      frequency:         row.frequency,
-      day_of_month:      row.day_of_month,
-      day_of_week:       row.day_of_week,
-      source_account:    row.source_account,
-      tx_type:           row.tx_type,
-      major_category:    row.major_category,
-      minor_category:    row.minor_category,
-      tags:                    row.tags,
-      description:             row.description,
-      subscription_start_date: row.subscription_start_date,
-      subscription_end_date:   row.subscription_end_date,
+      frequency:                     row.frequency,
+      day_of_month:                  row.day_of_month,
+      day_of_week:                   row.day_of_week,
+      source_account:                row.source_account,
+      tx_type:                       row.tx_type,
+      major_category:                row.major_category,
+      minor_category:                row.minor_category,
+      description:                   row.description,
+      subscription_start_date_local: row.subscription_start_date_local,
+      subscription_end_date_local:   row.subscription_end_date_local,
     });
   }
 
@@ -723,7 +721,7 @@ function _attachEvents() {
         }
         if (key === 'txs') {
           const searchTerm = (sub !== null && sub !== undefined)
-            ? (sub.counterparty_name !== undefined && sub.counterparty_name !== null && String(sub.counterparty_name).trim() !== '' ? sub.counterparty_name : sub.name)
+            ? (sub.counterparty_name !== undefined && sub.counterparty_name !== null && String(sub.counterparty_name).trim() !== '' ? sub.counterparty_name : sub.subscription_name)
             : '';
           state.filters = {
             types: [], accounts: [], major: [], minor: [],
@@ -804,20 +802,19 @@ function _collectForm() {
   const dayOfMonth = freq !== 'weekly' ? el('subDayOfMonth').value : '';
 
   return {
-    name:              el('subName').value.trim(),
-    counterparty_name: el('subCounterparty').value.trim(),
-    subscription_amount_local: parseFloat(el('subAmount').value),
-    frequency:         freq,
-    day_of_week:       dayOfWeek,
-    day_of_month:      dayOfMonth,
-    source_account:    el('subSourceAccount').value,
-    tx_type:           el('subTxType').value,
-    major_category:    el('subMajor').value,
-    minor_category:    el('subMinor').value,
-    tags:                    el('subTags').value.trim(),
-    description:             el('subDescription').value.trim(),
-    subscription_start_date: el('subStartDate').value,
-    subscription_end_date:   el('subEndDate').value,
+    subscription_name:             el('subName').value.trim(),
+    counterparty_name:             el('subCounterparty').value.trim(),
+    subscription_amount_local:     parseFloat(el('subAmount').value),
+    frequency:                     freq,
+    day_of_week:                   dayOfWeek,
+    day_of_month:                  dayOfMonth,
+    source_account:                el('subSourceAccount').value,
+    tx_type:                       el('subTxType').value,
+    major_category:                el('subMajor').value,
+    minor_category:                el('subMinor').value,
+    description:                   el('subDescription').value.trim(),
+    subscription_start_date_local: el('subStartDate').value,
+    subscription_end_date_local:   el('subEndDate').value,
   };
 }
 
@@ -829,7 +826,7 @@ async function _saveAdd() {
 
   const body = _collectForm();
 
-  if (body.name === undefined || body.name === null || String(body.name).trim() === '') {
+  if (body.subscription_name === undefined || body.subscription_name === null || String(body.subscription_name).trim() === '') {
     if (errEl) errEl.textContent = 'Name is required.';
     return;
   }
@@ -843,10 +840,10 @@ async function _saveAdd() {
   }
 
   // FE duplicate check by name
-  const norm = body.name.toLowerCase();
-  const nameDupe = state.subscriptions.find(s => s.name.toLowerCase() === norm);
+  const norm = body.subscription_name.toLowerCase();
+  const nameDupe = state.subscriptions.find(s => s.subscription_name !== undefined && s.subscription_name !== null && s.subscription_name.toLowerCase() === norm);
   if (nameDupe) {
-    if (errEl) errEl.textContent = `A subscription named "${nameDupe.name}" already exists.`;
+    if (errEl) errEl.textContent = `A subscription named "${nameDupe.subscription_name}" already exists.`;
     return;
   }
 
@@ -882,7 +879,7 @@ async function _saveEdit(row) {
 
   const body = _collectForm();
 
-  if (body.name === undefined || body.name === null || String(body.name).trim() === '') {
+  if (body.subscription_name === undefined || body.subscription_name === null || String(body.subscription_name).trim() === '') {
     if (errEl) errEl.textContent = 'Name is required.';
     return;
   }
@@ -924,22 +921,21 @@ async function _toggle(row) {
   showLoading();
   try {
     const res = await ExpenseAPI.updateSubscription({
-      row_num:                 row,
-      name:                    sub.name,
-      counterparty_name:       sub.counterparty_name,
-      subscription_amount_local: sub.subscription_amount_local,
-      frequency:               sub.frequency,
-      day_of_month:            sub.day_of_month,
-      day_of_week:             sub.day_of_week,
-      source_account:          sub.source_account,
-      tx_type:                 sub.tx_type,
-      major_category:          sub.major_category,
-      minor_category:          sub.minor_category,
-      tags:                    sub.tags,
-      description:             sub.description,
-      subscription_start_date: sub.subscription_start_date,
-      subscription_end_date:   sub.subscription_end_date,
-      record_status:           newStatus,
+      row_num:                       row,
+      subscription_name:             sub.subscription_name,
+      counterparty_name:             sub.counterparty_name,
+      subscription_amount_local:     sub.subscription_amount_local,
+      frequency:                     sub.frequency,
+      day_of_month:                  sub.day_of_month,
+      day_of_week:                   sub.day_of_week,
+      source_account:                sub.source_account,
+      tx_type:                       sub.tx_type,
+      major_category:                sub.major_category,
+      minor_category:                sub.minor_category,
+      description:                   sub.description,
+      subscription_start_date_local: sub.subscription_start_date_local,
+      subscription_end_date_local:   sub.subscription_end_date_local,
+      record_status:                 newStatus,
     });
     if (res.ok) {
       showMsg(newStatus === 'active' ? 'Subscription resumed.' : 'Subscription paused.');

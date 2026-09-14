@@ -20,6 +20,13 @@ _VALID_SYNC_STATUSES = {"create-pending", "create-failed", "update-pending", "up
 _ACTIONABLE = {"create-pending", "create-failed", "update-pending", "update-failed"}
 _BASE_CURRENCY = "XAU"
 _XAU_DECIMAL_PLACES = 9
+_DEPOSIT_SUBTYPES = {"current", "savings", "cash"}
+_MARKET_INVESTMENT_SUBTYPES = {"stocks_shares", "isa", "pension_sipp", "crypto", "commodities", "other"}
+_P2P_LENDING_SUBTYPES = {"p2p_lending"}
+_PROPERTY_SUBTYPES = {"property"}
+_REVOLVING_CREDIT_SUBTYPES = {"credit_card", "heloc", "overdraft"}
+_INSTALLMENT_LOAN_SUBTYPES = {"personal_loan", "auto_loan", "mortgage", "student_loan", "medical_loan", "debt_consolidation"}
+_FIXED_INCOME_SUBTYPES = {"fixed_deposit", "bonds"}
 _DAY_NAMES = {
     0: "MONDAY",
     1: "TUESDAY",
@@ -38,12 +45,12 @@ def _load_decimal_places(conn: Any) -> dict[str, int]:
     return {row[0]: row[1] for row in rows}
 
 
-def load_account_map(conn: Any) -> dict[str, tuple[Any, str]]:
-    """Return mapping of account UUID string → (account UUID, local_currency)."""
+def load_account_map(conn: Any) -> dict[str, tuple[Any, str, str]]:
+    """Return mapping of account UUID string → (account UUID, local_currency, account_subtype)."""
     with conn.cursor() as cursor:
-        cursor.execute("SELECT id, local_currency FROM account_master WHERE record_status NOT IN ('deleted', 'locked')")
+        cursor.execute("SELECT id, local_currency, account_subtype FROM account_master WHERE record_status NOT IN ('deleted', 'locked')")
         rows = cursor.fetchall()
-    return {str(row[0]): (row[0], row[1]) for row in rows}
+    return {str(row[0]): (row[0], row[1], row[2]) for row in rows}
 
 
 def _lookup_category(conn: Any, tx_type: str, major_category: str, minor_category: str) -> Any | None:
@@ -431,6 +438,7 @@ def _run_insert_steps(
     sheet_row_num: int,
     account_surrogate_id: Any,
     local_currency: str,
+    account_subtype: str,
     currency_decimal_places: dict[str, int],
     write_backs: list[sheets_transactions.WriteBack],
     created_at_override: str | None,
@@ -515,6 +523,34 @@ def _run_insert_steps(
     )
     logger.info(f"_run_insert_steps: tx_inserted entity=transactions transaction_id={transaction_id!r} id={surrogate_id}")
 
+    # Step 7.5 — update extension table trail (new transactions only)
+    if created_at_override is None:
+        _ext_args = dict(
+            conn=conn,
+            account_master_id=account_surrogate_id,
+            tx_surrogate_id=surrogate_id,
+            tx_amount_local=tx_amount_local,
+            tx_amount_base=tx_amount_base,
+            local_currency=local_currency,
+            currency_rate_id=currency_rate_id,
+            tx_type=typed["tx_type"],
+            transaction_id=transaction_id,
+        )
+        if account_subtype in _DEPOSIT_SUBTYPES:
+            _update_deposit_details(**_ext_args)
+        elif account_subtype in _MARKET_INVESTMENT_SUBTYPES:
+            _update_market_investment_details(**_ext_args)
+        elif account_subtype in _P2P_LENDING_SUBTYPES:
+            _update_p2p_lending_details(**_ext_args)
+        elif account_subtype in _PROPERTY_SUBTYPES:
+            _update_property_details(**_ext_args)
+        elif account_subtype in _REVOLVING_CREDIT_SUBTYPES:
+            _update_revolving_credit_details(**_ext_args)
+        elif account_subtype in _INSTALLMENT_LOAN_SUBTYPES:
+            _update_installment_loan_details(**_ext_args)
+        elif account_subtype in _FIXED_INCOME_SUBTYPES:
+            _update_fixed_income_details(**_ext_args)
+
     # Step 8 — resolve beneficiaries (optional; skip if not provided)
     if typed["beneficiaries_raw"] is not None:
         try:
@@ -529,11 +565,678 @@ def _run_insert_steps(
     return "ok"
 
 
+def _update_deposit_details(
+    conn: Any,
+    account_master_id: Any,
+    tx_surrogate_id: Any,
+    tx_amount_local: int,
+    tx_amount_base: int,
+    local_currency: str,
+    currency_rate_id: Any | None,
+    tx_type: str,
+    transaction_id: str,
+) -> None:
+    """Close the current account_deposit_details row and open a new one for this transaction.
+
+    Uses a SAVEPOINT so that a constraint violation (e.g. balance going negative) rolls back
+    only the deposit details changes — the transaction_master row is still committed.
+    Logs a warning and returns without raising if no current row exists (opening row not yet seeded).
+    """
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT id, current_balance_local_value, current_balance_base_value
+            FROM account_deposit_details
+            WHERE account_master_id = %s AND effective_to_dt IS NULL
+            """,
+            (account_master_id,),
+        )
+        current_row = cursor.fetchone()
+
+    if current_row is None:
+        logger.warning(
+            f"_update_deposit_details: no_current_row entity=account_deposit_details"
+            f" account_master_id={account_master_id} transaction_id={transaction_id!r}"
+            f" — opening row not yet seeded; skipping trail update"
+        )
+        return
+
+    current_id, current_balance_local, current_balance_base = current_row
+
+    delta_local = tx_amount_local if tx_type == "money-in" else -tx_amount_local
+    delta_base = tx_amount_base if tx_type == "money-in" else -tx_amount_base
+    new_balance_local = current_balance_local + delta_local
+    new_balance_base = current_balance_base + delta_base
+
+    with conn.cursor() as cursor:
+        cursor.execute("SAVEPOINT before_deposit_update")
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "UPDATE account_deposit_details SET effective_to_dt = now() WHERE id = %s",
+                (current_id,),
+            )
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO account_deposit_details (
+                    account_master_id, entity_type, entity_id,
+                    current_balance_local_value, current_balance_base_value,
+                    local_currency, base_currency, currency_rate_id,
+                    interest_rate, rate_type, interest_payment_frequency,
+                    effective_from_dt, effective_to_dt
+                ) VALUES (%s, 'transaction', %s, %s, %s, %s, %s, %s, NULL, NULL, NULL, now(), NULL)
+                """,
+                (
+                    account_master_id,
+                    tx_surrogate_id,
+                    new_balance_local,
+                    new_balance_base,
+                    local_currency,
+                    _BASE_CURRENCY,
+                    currency_rate_id,
+                ),
+            )
+        with conn.cursor() as cursor:
+            cursor.execute("RELEASE SAVEPOINT before_deposit_update")
+        logger.info(
+            f"_update_deposit_details: updated entity=account_deposit_details"
+            f" account_master_id={account_master_id} transaction_id={transaction_id!r}"
+            f" new_balance_local={new_balance_local}"
+        )
+    except (pg_errors.CheckViolation, pg_errors.UniqueViolation) as e:
+        with conn.cursor() as cursor:
+            cursor.execute("ROLLBACK TO SAVEPOINT before_deposit_update")
+        logger.warning(
+            f"_update_deposit_details: skipped entity=account_deposit_details"
+            f" account_master_id={account_master_id} transaction_id={transaction_id!r}"
+            f" constraint={e.diag.constraint_name}"
+        )
+
+
+def _update_market_investment_details(
+    conn: Any,
+    account_master_id: Any,
+    tx_surrogate_id: Any,
+    tx_amount_local: int,
+    tx_amount_base: int,
+    local_currency: str,
+    currency_rate_id: Any | None,
+    tx_type: str,
+    transaction_id: str,
+) -> None:
+    """Close the current account_market_investment_details row and open a new one.
+
+    Money-out = deploying capital (current_value up); money-in = liquidating (current_value down).
+    Metadata columns (cost_basis, units, unit_value, unit_type) are carried forward unchanged.
+    """
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT id,
+                   current_value_local_value, current_value_base_value,
+                   cost_basis_local_value, cost_basis_base_value,
+                   units_held, unit_value_local_value, unit_value_base_value, unit_type
+            FROM account_market_investment_details
+            WHERE account_master_id = %s AND effective_to_dt IS NULL
+            """,
+            (account_master_id,),
+        )
+        current_row = cursor.fetchone()
+
+    if current_row is None:
+        logger.warning(
+            f"_update_market_investment_details: no_current_row entity=account_market_investment_details"
+            f" account_master_id={account_master_id} transaction_id={transaction_id!r}"
+            f" — opening row not yet seeded; skipping trail update"
+        )
+        return
+
+    (current_id, current_value_local, current_value_base,
+     cost_basis_local, cost_basis_base,
+     units_held, unit_value_local, unit_value_base, unit_type) = current_row
+
+    delta_local = tx_amount_local if tx_type == "money-out" else -tx_amount_local
+    delta_base = tx_amount_base if tx_type == "money-out" else -tx_amount_base
+    new_value_local = current_value_local + delta_local
+    new_value_base = current_value_base + delta_base
+
+    with conn.cursor() as cursor:
+        cursor.execute("SAVEPOINT before_market_investment_update")
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "UPDATE account_market_investment_details SET effective_to_dt = now() WHERE id = %s",
+                (current_id,),
+            )
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO account_market_investment_details (
+                    account_master_id, entity_type, entity_id,
+                    current_value_local_value, current_value_base_value,
+                    cost_basis_local_value, cost_basis_base_value,
+                    units_held, unit_value_local_value, unit_value_base_value, unit_type,
+                    local_currency, base_currency, currency_rate_id,
+                    effective_from_dt, effective_to_dt
+                ) VALUES (%s, 'transaction', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now(), NULL)
+                """,
+                (
+                    account_master_id, tx_surrogate_id,
+                    new_value_local, new_value_base,
+                    cost_basis_local, cost_basis_base,
+                    units_held, unit_value_local, unit_value_base, unit_type,
+                    local_currency, _BASE_CURRENCY, currency_rate_id,
+                ),
+            )
+        with conn.cursor() as cursor:
+            cursor.execute("RELEASE SAVEPOINT before_market_investment_update")
+        logger.info(
+            f"_update_market_investment_details: updated entity=account_market_investment_details"
+            f" account_master_id={account_master_id} transaction_id={transaction_id!r}"
+            f" new_value_local={new_value_local}"
+        )
+    except (pg_errors.CheckViolation, pg_errors.UniqueViolation) as e:
+        with conn.cursor() as cursor:
+            cursor.execute("ROLLBACK TO SAVEPOINT before_market_investment_update")
+        logger.warning(
+            f"_update_market_investment_details: skipped entity=account_market_investment_details"
+            f" account_master_id={account_master_id} transaction_id={transaction_id!r}"
+            f" constraint={e.diag.constraint_name}"
+        )
+
+
+def _update_p2p_lending_details(
+    conn: Any,
+    account_master_id: Any,
+    tx_surrogate_id: Any,
+    tx_amount_local: int,
+    tx_amount_base: int,
+    local_currency: str,
+    currency_rate_id: Any | None,
+    tx_type: str,
+    transaction_id: str,
+) -> None:
+    """Close the current account_p2p_lending_details row and open a new one.
+
+    Money-out = deploying capital (current_value up); money-in = receiving repayment (current_value down).
+    principal_lent and rate metadata are carried forward unchanged.
+    """
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT id,
+                   current_value_local_value, current_value_base_value,
+                   principal_lent_local_value, principal_lent_base_value,
+                   interest_rate, rate_type
+            FROM account_p2p_lending_details
+            WHERE account_master_id = %s AND effective_to_dt IS NULL
+            """,
+            (account_master_id,),
+        )
+        current_row = cursor.fetchone()
+
+    if current_row is None:
+        logger.warning(
+            f"_update_p2p_lending_details: no_current_row entity=account_p2p_lending_details"
+            f" account_master_id={account_master_id} transaction_id={transaction_id!r}"
+            f" — opening row not yet seeded; skipping trail update"
+        )
+        return
+
+    (current_id, current_value_local, current_value_base,
+     principal_lent_local, principal_lent_base,
+     interest_rate, rate_type) = current_row
+
+    delta_local = tx_amount_local if tx_type == "money-out" else -tx_amount_local
+    delta_base = tx_amount_base if tx_type == "money-out" else -tx_amount_base
+    new_value_local = current_value_local + delta_local
+    new_value_base = current_value_base + delta_base
+
+    with conn.cursor() as cursor:
+        cursor.execute("SAVEPOINT before_p2p_update")
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "UPDATE account_p2p_lending_details SET effective_to_dt = now() WHERE id = %s",
+                (current_id,),
+            )
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO account_p2p_lending_details (
+                    account_master_id, entity_type, entity_id,
+                    principal_lent_local_value, principal_lent_base_value,
+                    current_value_local_value, current_value_base_value,
+                    local_currency, base_currency, currency_rate_id,
+                    interest_rate, rate_type,
+                    effective_from_dt, effective_to_dt
+                ) VALUES (%s, 'transaction', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now(), NULL)
+                """,
+                (
+                    account_master_id, tx_surrogate_id,
+                    principal_lent_local, principal_lent_base,
+                    new_value_local, new_value_base,
+                    local_currency, _BASE_CURRENCY, currency_rate_id,
+                    interest_rate, rate_type,
+                ),
+            )
+        with conn.cursor() as cursor:
+            cursor.execute("RELEASE SAVEPOINT before_p2p_update")
+        logger.info(
+            f"_update_p2p_lending_details: updated entity=account_p2p_lending_details"
+            f" account_master_id={account_master_id} transaction_id={transaction_id!r}"
+            f" new_value_local={new_value_local}"
+        )
+    except (pg_errors.CheckViolation, pg_errors.UniqueViolation) as e:
+        with conn.cursor() as cursor:
+            cursor.execute("ROLLBACK TO SAVEPOINT before_p2p_update")
+        logger.warning(
+            f"_update_p2p_lending_details: skipped entity=account_p2p_lending_details"
+            f" account_master_id={account_master_id} transaction_id={transaction_id!r}"
+            f" constraint={e.diag.constraint_name}"
+        )
+
+
+def _update_property_details(
+    conn: Any,
+    account_master_id: Any,
+    tx_surrogate_id: Any,
+    tx_amount_local: int,
+    tx_amount_base: int,
+    local_currency: str,
+    currency_rate_id: Any | None,
+    tx_type: str,
+    transaction_id: str,
+) -> None:
+    """Close the current account_property_details row and open a new one.
+
+    Money-out = capital deployed into the property (current_value up, e.g. renovation);
+    money-in = proceeds received from the property (current_value down, e.g. partial sale).
+    All metadata columns are carried forward unchanged.
+    """
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT id,
+                   current_value_local_value, current_value_base_value,
+                   purchase_price_local_value, purchase_price_base_value,
+                   monthly_rental_income_local_value, monthly_rental_income_base_value,
+                   purchase_date, property_address, is_rental
+            FROM account_property_details
+            WHERE account_master_id = %s AND effective_to_dt IS NULL
+            """,
+            (account_master_id,),
+        )
+        current_row = cursor.fetchone()
+
+    if current_row is None:
+        logger.warning(
+            f"_update_property_details: no_current_row entity=account_property_details"
+            f" account_master_id={account_master_id} transaction_id={transaction_id!r}"
+            f" — opening row not yet seeded; skipping trail update"
+        )
+        return
+
+    (current_id, current_value_local, current_value_base,
+     purchase_price_local, purchase_price_base,
+     rental_income_local, rental_income_base,
+     purchase_date, property_address, is_rental) = current_row
+
+    delta_local = tx_amount_local if tx_type == "money-out" else -tx_amount_local
+    delta_base = tx_amount_base if tx_type == "money-out" else -tx_amount_base
+    new_value_local = current_value_local + delta_local
+    new_value_base = current_value_base + delta_base
+
+    with conn.cursor() as cursor:
+        cursor.execute("SAVEPOINT before_property_update")
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "UPDATE account_property_details SET effective_to_dt = now() WHERE id = %s",
+                (current_id,),
+            )
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO account_property_details (
+                    account_master_id, entity_type, entity_id,
+                    purchase_price_local_value, purchase_price_base_value,
+                    current_value_local_value, current_value_base_value,
+                    monthly_rental_income_local_value, monthly_rental_income_base_value,
+                    local_currency, base_currency, currency_rate_id,
+                    purchase_date, property_address, is_rental,
+                    effective_from_dt, effective_to_dt
+                ) VALUES (%s, 'transaction', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now(), NULL)
+                """,
+                (
+                    account_master_id, tx_surrogate_id,
+                    purchase_price_local, purchase_price_base,
+                    new_value_local, new_value_base,
+                    rental_income_local, rental_income_base,
+                    local_currency, _BASE_CURRENCY, currency_rate_id,
+                    purchase_date, property_address, is_rental,
+                ),
+            )
+        with conn.cursor() as cursor:
+            cursor.execute("RELEASE SAVEPOINT before_property_update")
+        logger.info(
+            f"_update_property_details: updated entity=account_property_details"
+            f" account_master_id={account_master_id} transaction_id={transaction_id!r}"
+            f" new_value_local={new_value_local}"
+        )
+    except (pg_errors.CheckViolation, pg_errors.UniqueViolation) as e:
+        with conn.cursor() as cursor:
+            cursor.execute("ROLLBACK TO SAVEPOINT before_property_update")
+        logger.warning(
+            f"_update_property_details: skipped entity=account_property_details"
+            f" account_master_id={account_master_id} transaction_id={transaction_id!r}"
+            f" constraint={e.diag.constraint_name}"
+        )
+
+
+def _update_revolving_credit_details(
+    conn: Any,
+    account_master_id: Any,
+    tx_surrogate_id: Any,
+    tx_amount_local: int,
+    tx_amount_base: int,
+    local_currency: str,
+    currency_rate_id: Any | None,
+    tx_type: str,
+    transaction_id: str,
+) -> None:
+    """Close the current account_revolving_credit_details row and open a new one.
+
+    Money-out = spending / drawing (current_balance up); money-in = payment (current_balance down).
+    Balance stored as a positive magnitude representing amount owed.
+    All metadata columns are carried forward unchanged.
+    """
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT id,
+                   current_balance_local_value, current_balance_base_value,
+                   credit_limit_local_value, credit_limit_base_value,
+                   annual_percentage_rate, rate_type,
+                   payment_due_day, statement_day,
+                   minimum_payment_local_value, minimum_payment_base_value
+            FROM account_revolving_credit_details
+            WHERE account_master_id = %s AND effective_to_dt IS NULL
+            """,
+            (account_master_id,),
+        )
+        current_row = cursor.fetchone()
+
+    if current_row is None:
+        logger.warning(
+            f"_update_revolving_credit_details: no_current_row entity=account_revolving_credit_details"
+            f" account_master_id={account_master_id} transaction_id={transaction_id!r}"
+            f" — opening row not yet seeded; skipping trail update"
+        )
+        return
+
+    (current_id, current_balance_local, current_balance_base,
+     credit_limit_local, credit_limit_base,
+     apr, rate_type,
+     payment_due_day, statement_day,
+     min_payment_local, min_payment_base) = current_row
+
+    delta_local = tx_amount_local if tx_type == "money-out" else -tx_amount_local
+    delta_base = tx_amount_base if tx_type == "money-out" else -tx_amount_base
+    new_balance_local = current_balance_local + delta_local
+    new_balance_base = current_balance_base + delta_base
+
+    with conn.cursor() as cursor:
+        cursor.execute("SAVEPOINT before_revolving_credit_update")
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "UPDATE account_revolving_credit_details SET effective_to_dt = now() WHERE id = %s",
+                (current_id,),
+            )
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO account_revolving_credit_details (
+                    account_master_id, entity_type, entity_id,
+                    credit_limit_local_value, credit_limit_base_value,
+                    current_balance_local_value, current_balance_base_value,
+                    annual_percentage_rate, rate_type,
+                    payment_due_day, statement_day,
+                    minimum_payment_local_value, minimum_payment_base_value,
+                    local_currency, base_currency, currency_rate_id,
+                    effective_from_dt, effective_to_dt
+                ) VALUES (%s, 'transaction', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now(), NULL)
+                """,
+                (
+                    account_master_id, tx_surrogate_id,
+                    credit_limit_local, credit_limit_base,
+                    new_balance_local, new_balance_base,
+                    apr, rate_type,
+                    payment_due_day, statement_day,
+                    min_payment_local, min_payment_base,
+                    local_currency, _BASE_CURRENCY, currency_rate_id,
+                ),
+            )
+        with conn.cursor() as cursor:
+            cursor.execute("RELEASE SAVEPOINT before_revolving_credit_update")
+        logger.info(
+            f"_update_revolving_credit_details: updated entity=account_revolving_credit_details"
+            f" account_master_id={account_master_id} transaction_id={transaction_id!r}"
+            f" new_balance_local={new_balance_local}"
+        )
+    except (pg_errors.CheckViolation, pg_errors.UniqueViolation) as e:
+        with conn.cursor() as cursor:
+            cursor.execute("ROLLBACK TO SAVEPOINT before_revolving_credit_update")
+        logger.warning(
+            f"_update_revolving_credit_details: skipped entity=account_revolving_credit_details"
+            f" account_master_id={account_master_id} transaction_id={transaction_id!r}"
+            f" constraint={e.diag.constraint_name}"
+        )
+
+
+def _update_installment_loan_details(
+    conn: Any,
+    account_master_id: Any,
+    tx_surrogate_id: Any,
+    tx_amount_local: int,
+    tx_amount_base: int,
+    local_currency: str,
+    currency_rate_id: Any | None,
+    tx_type: str,
+    transaction_id: str,
+) -> None:
+    """Close the current account_installment_loan_details row and open a new one.
+
+    Money-in = loan repayment (outstanding_balance down); money-out = drawdown (outstanding_balance up).
+    All static metadata columns are carried forward unchanged.
+    """
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT id,
+                   outstanding_balance_local_value, outstanding_balance_base_value,
+                   original_principal_amount_local_value, original_principal_amount_base_value,
+                   monthly_payment_local_value, monthly_payment_base_value,
+                   interest_rate, rate_type, term_months, start_date, end_date
+            FROM account_installment_loan_details
+            WHERE account_master_id = %s AND effective_to_dt IS NULL
+            """,
+            (account_master_id,),
+        )
+        current_row = cursor.fetchone()
+
+    if current_row is None:
+        logger.warning(
+            f"_update_installment_loan_details: no_current_row entity=account_installment_loan_details"
+            f" account_master_id={account_master_id} transaction_id={transaction_id!r}"
+            f" — opening row not yet seeded; skipping trail update"
+        )
+        return
+
+    (current_id, outstanding_local, outstanding_base,
+     principal_local, principal_base,
+     monthly_payment_local, monthly_payment_base,
+     interest_rate, rate_type, term_months, start_date, end_date) = current_row
+
+    delta_local = -tx_amount_local if tx_type == "money-in" else tx_amount_local
+    delta_base = -tx_amount_base if tx_type == "money-in" else tx_amount_base
+    new_outstanding_local = outstanding_local + delta_local
+    new_outstanding_base = outstanding_base + delta_base
+
+    with conn.cursor() as cursor:
+        cursor.execute("SAVEPOINT before_installment_loan_update")
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "UPDATE account_installment_loan_details SET effective_to_dt = now() WHERE id = %s",
+                (current_id,),
+            )
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO account_installment_loan_details (
+                    account_master_id, entity_type, entity_id,
+                    original_principal_amount_local_value, original_principal_amount_base_value,
+                    outstanding_balance_local_value, outstanding_balance_base_value,
+                    monthly_payment_local_value, monthly_payment_base_value,
+                    local_currency, base_currency, currency_rate_id,
+                    interest_rate, rate_type, term_months, start_date, end_date,
+                    effective_from_dt, effective_to_dt
+                ) VALUES (%s, 'transaction', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now(), NULL)
+                """,
+                (
+                    account_master_id, tx_surrogate_id,
+                    principal_local, principal_base,
+                    new_outstanding_local, new_outstanding_base,
+                    monthly_payment_local, monthly_payment_base,
+                    local_currency, _BASE_CURRENCY, currency_rate_id,
+                    interest_rate, rate_type, term_months, start_date, end_date,
+                ),
+            )
+        with conn.cursor() as cursor:
+            cursor.execute("RELEASE SAVEPOINT before_installment_loan_update")
+        logger.info(
+            f"_update_installment_loan_details: updated entity=account_installment_loan_details"
+            f" account_master_id={account_master_id} transaction_id={transaction_id!r}"
+            f" new_outstanding_local={new_outstanding_local}"
+        )
+    except (pg_errors.CheckViolation, pg_errors.UniqueViolation) as e:
+        with conn.cursor() as cursor:
+            cursor.execute("ROLLBACK TO SAVEPOINT before_installment_loan_update")
+        logger.warning(
+            f"_update_installment_loan_details: skipped entity=account_installment_loan_details"
+            f" account_master_id={account_master_id} transaction_id={transaction_id!r}"
+            f" constraint={e.diag.constraint_name}"
+        )
+
+
+def _update_fixed_income_details(
+    conn: Any,
+    account_master_id: Any,
+    tx_surrogate_id: Any,
+    tx_amount_local: int,
+    tx_amount_base: int,
+    local_currency: str,
+    currency_rate_id: Any | None,
+    tx_type: str,
+    transaction_id: str,
+) -> None:
+    """Close the current account_fixed_income_details row and open a new one.
+
+    Money-out = capital deployed (current_value up); money-in = coupon / redemption proceeds
+    (current_value down). All static fields are carried forward unchanged.
+    """
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT id,
+                   current_value_local_value, current_value_base_value,
+                   face_value_local_value, face_value_base_value,
+                   purchase_price_local_value, purchase_price_base_value,
+                   interest_rate, rate_type, interest_payment_frequency,
+                   start_date, maturity_date
+            FROM account_fixed_income_details
+            WHERE account_master_id = %s AND effective_to_dt IS NULL
+            """,
+            (account_master_id,),
+        )
+        current_row = cursor.fetchone()
+
+    if current_row is None:
+        logger.warning(
+            f"_update_fixed_income_details: no_current_row entity=account_fixed_income_details"
+            f" account_master_id={account_master_id} transaction_id={transaction_id!r}"
+            f" — opening row not yet seeded; skipping trail update"
+        )
+        return
+
+    (current_id, current_value_local, current_value_base,
+     face_value_local, face_value_base,
+     purchase_price_local, purchase_price_base,
+     interest_rate, rate_type, interest_payment_frequency,
+     start_date, maturity_date) = current_row
+
+    delta_local = tx_amount_local if tx_type == "money-out" else -tx_amount_local
+    delta_base = tx_amount_base if tx_type == "money-out" else -tx_amount_base
+    new_value_local = current_value_local + delta_local
+    new_value_base = current_value_base + delta_base
+
+    with conn.cursor() as cursor:
+        cursor.execute("SAVEPOINT before_fixed_income_update")
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "UPDATE account_fixed_income_details SET effective_to_dt = now() WHERE id = %s",
+                (current_id,),
+            )
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO account_fixed_income_details (
+                    account_master_id, entity_type, entity_id,
+                    face_value_local_value, face_value_base_value,
+                    purchase_price_local_value, purchase_price_base_value,
+                    current_value_local_value, current_value_base_value,
+                    local_currency, base_currency, currency_rate_id,
+                    interest_rate, rate_type, interest_payment_frequency,
+                    start_date, maturity_date,
+                    effective_from_dt, effective_to_dt
+                ) VALUES (%s, 'transaction', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now(), NULL)
+                """,
+                (
+                    account_master_id, tx_surrogate_id,
+                    face_value_local, face_value_base,
+                    purchase_price_local, purchase_price_base,
+                    new_value_local, new_value_base,
+                    local_currency, _BASE_CURRENCY, currency_rate_id,
+                    interest_rate, rate_type, interest_payment_frequency,
+                    start_date, maturity_date,
+                ),
+            )
+        with conn.cursor() as cursor:
+            cursor.execute("RELEASE SAVEPOINT before_fixed_income_update")
+        logger.info(
+            f"_update_fixed_income_details: updated entity=account_fixed_income_details"
+            f" account_master_id={account_master_id} transaction_id={transaction_id!r}"
+            f" new_value_local={new_value_local}"
+        )
+    except (pg_errors.CheckViolation, pg_errors.UniqueViolation) as e:
+        with conn.cursor() as cursor:
+            cursor.execute("ROLLBACK TO SAVEPOINT before_fixed_income_update")
+        logger.warning(
+            f"_update_fixed_income_details: skipped entity=account_fixed_income_details"
+            f" account_master_id={account_master_id} transaction_id={transaction_id!r}"
+            f" constraint={e.diag.constraint_name}"
+        )
+
+
 def upsert_transactions(
     conn: Any,
     sheets_client: SheetsClient,
     rows: list[dict[str, Any]],
-    account_map: dict[str, tuple[Any, str]],
+    account_map: dict[str, tuple[Any, str, str]],
 ) -> None:
     """Process all transaction rows and write sync results back to the sheet."""
     in_sync_count = sum(1 for row in rows if row.get("sync_status") == "in-sync")
@@ -588,7 +1291,7 @@ def upsert_transactions(
                 failed += 1
                 continue
 
-            account_surrogate_id, local_currency = account_map[account_id_sheet]
+            account_surrogate_id, local_currency, account_subtype = account_map[account_id_sheet]
 
             if sync_status in ("create-pending", "create-failed"):
                 try:
@@ -603,6 +1306,7 @@ def upsert_transactions(
                             sheet_row_num=sheet_row_num,
                             account_surrogate_id=account_surrogate_id,
                             local_currency=local_currency,
+                            account_subtype=account_subtype,
                             currency_decimal_places=currency_decimal_places,
                             write_backs=write_backs,
                             created_at_override=None,
@@ -625,6 +1329,7 @@ def upsert_transactions(
                             sheet_row_num=sheet_row_num,
                             account_surrogate_id=account_surrogate_id,
                             local_currency=local_currency,
+                            account_subtype=account_subtype,
                             currency_decimal_places=currency_decimal_places,
                             write_backs=write_backs,
                         )
@@ -715,6 +1420,7 @@ def upsert_transactions(
                         sheet_row_num=sheet_row_num,
                         account_surrogate_id=account_surrogate_id,
                         local_currency=local_currency,
+                        account_subtype=account_subtype,
                         currency_decimal_places=currency_decimal_places,
                         write_backs=write_backs,
                         created_at_override=created_at_override,
@@ -793,6 +1499,7 @@ def _run_fallthrough_update(
     sheet_row_num: int,
     account_surrogate_id: Any,
     local_currency: str,
+    account_subtype: str,
     currency_decimal_places: dict[str, int],
     write_backs: list[sheets_transactions.WriteBack],
 ) -> str | None:
@@ -834,6 +1541,7 @@ def _run_fallthrough_update(
             sheet_row_num=sheet_row_num,
             account_surrogate_id=account_surrogate_id,
             local_currency=local_currency,
+            account_subtype=account_subtype,
             currency_decimal_places=currency_decimal_places,
             write_backs=write_backs,
             created_at_override=created_at_override,
