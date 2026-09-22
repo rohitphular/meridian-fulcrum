@@ -39,7 +39,7 @@ For each liability account:
 | `paidOff` | `currentBal ≤ 0` |
 | `balIncreased` | `currentBal > originalBal` — new drawdown detected |
 
-`_monthsSince(dateStr)`: computes calendar months between `acc.opening_date_local` (or first repayment tx date) and today. Minimum 1.
+`_monthsSince(dateStr)`: computes calendar months between `acc.account_opening_date_local` (or first repayment tx date) and today. Minimum 1.
 
 ---
 

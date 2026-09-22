@@ -173,14 +173,21 @@ function _validateFinancialRules(body, oldRow, accountMap) {
   return { ok: true };
 }
 
-function _loadAccountMap() {
+// opts.include_closed === true keeps inactive/locked accounts in the map (deleted is
+// always excluded). Used by the bulk transaction importer, where historical rows
+// legitimately reference accounts that have since been closed. Omitted/false → strict
+// map (active only) for interactive create, so new transactions can't be booked against
+// a closed account (Round-14 guard).
+function _loadAccountMap(opts) {
+  const includeClosed = opts !== undefined && opts !== null && opts.include_closed === true;
   const sheet = getOrCreateSheet(ACCOUNTS_SHEET, getAccountSheetColumns());
   const rows  = sheetToObjectsWithRow(sheet);
   const out   = {};
   rows.forEach(function(a) {
     if (a.id === undefined || a.id === null || String(a.id).trim() === '') return;
     const s = String(a.record_status);
-    if (s === 'deleted' || s === 'inactive' || s === 'locked') return;
+    if (s === 'deleted') return;
+    if (includeClosed === false && (s === 'inactive' || s === 'locked')) return;
     out[String(a.id)] = a;
   });
   return out;

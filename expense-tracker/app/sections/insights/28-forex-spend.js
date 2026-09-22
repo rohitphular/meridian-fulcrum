@@ -29,7 +29,7 @@ function _groupByCurrency(outTxs, quoteCcy) {
   const map = new Map();
   for (const tx of outTxs) {
     const acc = accountMap.get(tx.account_id);
-    const ccy = (acc ? acc.local_currency : quoteCcy ?? 'GBP').trim().toUpperCase();
+    const ccy = (acc ? acc.account_currency_local : quoteCcy ?? 'GBP').trim().toUpperCase();
     if (!map.has(ccy)) map.set(ccy, []);
     map.get(ccy).push({ tx, acc });
   }

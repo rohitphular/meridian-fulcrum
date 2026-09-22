@@ -121,7 +121,7 @@ function _renderForm(sub = null) {
   const activeAccounts = state.accounts.filter(a => a.record_status === 'active');
   const accOpts = `<option value="">— select —</option>` +
     activeAccounts.map(a =>
-      `<option value="${esc(a.id)}" ${a.id === srcAccVal ? 'selected' : ''}>${esc(a.account_name)} (${esc(a.local_currency)})</option>`
+      `<option value="${esc(a.id)}" ${a.id === srcAccVal ? 'selected' : ''}>${esc(a.account_name)} (${esc(a.account_currency_local)})</option>`
     ).join('');
 
   const header = isEdit ? `Editing: ${esc(sub.subscription_name)}` : 'New subscription';
@@ -230,8 +230,8 @@ function _sortSubs(subs) {
   return [...subs].sort((a, b) => {
     let va, vb;
     if (col === 'amount_base') {
-      const aCcy = (state.accountMap[a.source_account] !== undefined && state.accountMap[a.source_account] !== null) ? state.accountMap[a.source_account].local_currency : '';
-      const bCcy = (state.accountMap[b.source_account] !== undefined && state.accountMap[b.source_account] !== null) ? state.accountMap[b.source_account].local_currency : '';
+      const aCcy = (state.accountMap[a.source_account] !== undefined && state.accountMap[a.source_account] !== null) ? state.accountMap[a.source_account].account_currency_local : '';
+      const bCcy = (state.accountMap[b.source_account] !== undefined && state.accountMap[b.source_account] !== null) ? state.accountMap[b.source_account].account_currency_local : '';
       va = toBase(_toMonthly(parseFloat(a.subscription_amount_local), a.frequency), aCcy, null);
       vb = toBase(_toMonthly(parseFloat(b.subscription_amount_local), b.frequency), bCcy, null);
       const aIsNaN = !Number.isFinite(va);
@@ -315,7 +315,7 @@ function _renderSubRow(sub, sym) {
   }
 
   const isActive    = sub.record_status === 'active';
-  const subCcy      = (state.accountMap[sub.source_account] !== undefined && state.accountMap[sub.source_account] !== null) ? state.accountMap[sub.source_account].local_currency : '';
+  const subCcy      = (state.accountMap[sub.source_account] !== undefined && state.accountMap[sub.source_account] !== null) ? state.accountMap[sub.source_account].account_currency_local : '';
   const amtFmt      = `${getSymbol(subCcy)}${parseFloat(sub.subscription_amount_local).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}/${_freqShort(sub.frequency)}`;
   const isForeign   = subCcy !== '' && subCcy !== state.quoteCurrency;
   const _baseVal    = isForeign ? toBase(_toMonthly(parseFloat(sub.subscription_amount_local), sub.frequency), subCcy, null) : 0;
@@ -371,7 +371,7 @@ function _renderTable(subs) {
   const estMonthly = state.subscriptions
     .filter(s => s.record_status === 'active')
     .reduce((sum, s) => {
-      const sCcy = (state.accountMap[s.source_account] !== undefined && state.accountMap[s.source_account] !== null) ? state.accountMap[s.source_account].local_currency : '';
+      const sCcy = (state.accountMap[s.source_account] !== undefined && state.accountMap[s.source_account] !== null) ? state.accountMap[s.source_account].account_currency_local : '';
       const v = toBase(_toMonthly(s.subscription_amount_local, s.frequency), sCcy, null);
       return sum + (Number.isFinite(v) ? v : 0);
     }, 0);
@@ -497,31 +497,29 @@ async function _submitImport(subscriptions) {
     }
 
     const created = res.created;
-    const skipped = res.skipped;
+    const updated = res.updated;
     const failed  = res.failed;
 
     if (failed === 0) {
       _importParsed = null;
       state.subImportOpen = false;
       const parts = [];
-      if (created) parts.push(`${created} subscription${created !== 1 ? 's' : ''} imported`);
-      if (skipped) parts.push(`${skipped} already existed`);
+      if (created) parts.push(`${created} created`);
+      if (updated) parts.push(`${updated} updated`);
       const msg = parts.length > 0 ? parts.join(' · ') : 'Nothing to import.';
       showMsg(msg);
       document.dispatchEvent(new CustomEvent('et:reload'));
     } else {
       const resultRows = (res.results !== undefined && res.results !== null ? res.results : []).map(r => `
         <tr>
-          <td>${esc(r.name)}</td>
+          <td>${esc((r.key !== undefined && r.key !== null) ? String(r.key) : '—')}</td>
           <td>${r.ok
-            ? `<span class="badge badge-et-in">created</span>`
-            : r.error === 'duplicate_subscription'
-              ? `<span class="badge" style="color:var(--muted)">already exists</span>`
-              : `<span class="badge badge-et-out">${esc(r.error !== undefined && r.error !== null ? r.error : '[no error code]')}</span>`}
+            ? `<span class="badge badge-et-in">${esc(r.action !== undefined && r.action !== null ? r.action : 'ok')}</span>`
+            : `<span class="badge badge-et-out">${esc(r.error !== undefined && r.error !== null ? r.error : '[no error code]')}</span>`}
           </td>
         </tr>`).join('');
       _subImportResult = `
-        <div style="margin-bottom:8px;font-size:13px">${created} created${skipped ? ` · ${skipped} already existed` : ''} · <span style="color:var(--ember)">${failed} failed</span></div>
+        <div style="margin-bottom:8px;font-size:13px">${created} created · ${updated} updated · <span style="color:var(--ember)">${failed} failed</span></div>
         <div class="table-wrap" style="margin-bottom:8px">
           <table class="acc-table">
             <thead><tr><th>Name</th><th>Result</th></tr></thead>
@@ -532,8 +530,8 @@ async function _submitImport(subscriptions) {
       if (status) status.innerHTML = _subImportResult;
       _importParsed = null;
       if (btn) { btn.disabled = true; btn.textContent = 'Import'; }
-      if (created > 0) { document.dispatchEvent(new CustomEvent('et:reload')); }
-      showMsg(`${created} imported · ${skipped} skipped · ${failed} failed`, 'warn');
+      if (created > 0 || updated > 0) { document.dispatchEvent(new CustomEvent('et:reload')); }
+      showMsg(`${created} created · ${updated} updated · ${failed} failed`, 'warn');
     }
   } catch (err) {
     console.error('[subscriptions] _submitImport failed:', err);

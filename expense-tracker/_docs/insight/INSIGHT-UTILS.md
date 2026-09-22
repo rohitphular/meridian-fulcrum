@@ -154,7 +154,7 @@ tagPairs.forEach(({ tag }) => { freq[tag] = isNaN(freq[tag]) ? 1 : freq[tag] + 1
 
 ### `findMissingRates(txs, accounts)` → `string[]`
 
-Returns currencies that appear in accounts but have no entry in `state.rateMap`. The `txs` parameter is accepted for signature compatibility but currencies are derived from account `local_currency` fields only. Used to render the `.insight-warn` banner.
+Returns currencies that appear in accounts but have no entry in `state.rateMap`. The `txs` parameter is accepted for signature compatibility but currencies are derived from account `account_currency_local` fields only. Used to render the `.insight-warn` banner.
 
 ```js
 const missing = findMissingRates(txs, state.accounts);

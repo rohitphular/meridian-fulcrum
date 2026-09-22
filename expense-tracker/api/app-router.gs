@@ -82,6 +82,7 @@ function doPost(e) {
   if (body.action === 'delete_category')    return json(deleteCategory(body));
   if (body.action === 'create_account')      return json(createAccount(body));
   if (body.action === 'create_accounts_bulk') return json(createAccountsBulk(body));
+  if (body.action === 'import_account_data') return json(importAccountData(body));
   if (body.action === 'update_account')     return json(updateAccount(body));
   if (body.action === 'delete_account')     return json(deleteAccount(body));
   if (body.action === 'restore_account')    return json(restoreAccount(body));

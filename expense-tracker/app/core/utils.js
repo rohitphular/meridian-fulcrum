@@ -34,7 +34,7 @@ const ET_COLS  = [
   'source_amount_local', 'target_amount_local', 'major_category', 'minor_category',
   'description', 'counterparty_name', 'tx_tags', 'beneficiaries',
 ];
-const ACC_COLS = ['account_name', 'type', 'sub_type', 'local_currency', 'opening_value_local', 'current_value_local', 'description', 'record_status'];
+const ACC_COLS = ['account_name', 'type', 'sub_type', 'account_currency_local', 'opening_value_local', 'current_value_local', 'description', 'record_status'];
 // SUB_COLS intentionally excludes sync fields (sync_status, sync_date, sync_notes).
 // Those fields are system-internal pipeline state that would be meaningless or misleading
 // on re-import — a re-imported row would always start as create-pending regardless of the

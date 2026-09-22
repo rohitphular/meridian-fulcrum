@@ -45,7 +45,7 @@ Both rows are created together and linked via `parent_tx_id`. If the two account
 
 For a transfer, **two rows are required** — one money-out and one money-in. Both must be submitted together. Only the child (derived) row carries the parent's `id` as its `parent_tx_id`; the parent row's `parent_tx_id` is empty.
 
-The currency of any row is derived at runtime from the linked account (`account_id → account.local_currency`). It is not user-input and is not stored on the transaction row.
+The currency of any row is derived at runtime from the linked account (`account_id → account.account_currency_local`). It is not user-input and is not stored on the transaction row.
 
 ## Category-driven account-type hints
 

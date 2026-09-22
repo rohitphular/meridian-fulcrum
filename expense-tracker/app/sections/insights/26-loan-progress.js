@@ -49,7 +49,7 @@ function _loanStats(acc) {
   const hasOpening    = originalBal > 0;
 
   const repayTxs      = _repaymentTxs(acc);
-  const openingDate   = (acc.opening_date_local !== undefined && acc.opening_date_local !== null) ? acc.opening_date_local : (repayTxs[0]?.tx_date_local !== undefined && repayTxs[0]?.tx_date_local !== null) ? repayTxs[0].tx_date_local : null;
+  const openingDate   = (acc.account_opening_date_local !== undefined && acc.account_opening_date_local !== null) ? acc.account_opening_date_local : (repayTxs[0]?.tx_date_local !== undefined && repayTxs[0]?.tx_date_local !== null) ? repayTxs[0].tx_date_local : null;
   const months        = _monthsSince(openingDate);
   const avgMonthly    = totalRepaid > 0 ? totalRepaid / months : 0;
   const monthsToPayoff = (avgMonthly > 0 && currentBal > 0) ? Math.ceil(currentBal / avgMonthly) : null;
@@ -192,7 +192,7 @@ function _loanCardHtml(loan, sym) {
     </div>` : `<p style="font-size:var(--text-xs);color:var(--muted);margin:12px 0 0">No repayment transactions found.</p>`;
 
   const cat      = esc((loan.acc.sub_type !== undefined && loan.acc.sub_type !== null) ? loan.acc.sub_type : (loan.acc.type !== undefined && loan.acc.type !== null) ? loan.acc.type : 'Liability');
-  const currency = esc((loan.acc.local_currency !== undefined && loan.acc.local_currency !== null) ? loan.acc.local_currency : '—');
+  const currency = esc((loan.acc.account_currency_local !== undefined && loan.acc.account_currency_local !== null) ? loan.acc.account_currency_local : '—');
 
   return `
     <details style="background:var(--panel);border:1px solid var(--hair);border-radius:8px;padding:16px;margin-bottom:16px" data-loan-id="${esc(String(accId))}">

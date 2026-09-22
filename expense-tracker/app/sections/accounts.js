@@ -7,7 +7,8 @@ import { showLoading, hideLoading, showMsg } from '../core/ui.js';
 import { ExpenseAPI } from '../core/api.js';
 
 // Module-level holding area for the current import session's parsed rows.
-let _importParsed  = null;
+let _importParsed  = null;   // array of plain objects (header → cell value) or null
+let _importType    = '';     // selected file_type for the current import session
 let _accMenuKey    = null;
 let _accDraft      = null;   // pending filter selections; copied to state.accFilters on Search
 let _accDDCleanup  = null;   // cleanup fn for the currently open filter dropdown's outside-click listener
@@ -35,6 +36,17 @@ function _isLoan(a)          { return a.type === 'liability' && _loanSubSet().ha
 // All record statuses — includes 'deleted' so the filter bar can show deleted accounts.
 const ALL_RECORD_STATUSES = ['active', 'inactive', 'deleted', 'locked'];
 
+// Import file types — [label, value]. Value is the backend file_type target table.
+const IMPORT_FILE_TYPES = [
+  ['Accounts (master)',   'accounts_master'],
+  ['Deposit',             'account_deposit'],
+  ['Credit card',         'account_liability_credit_card'],
+  ['Mortgage',            'account_liability_mortgage'],
+  ['Personal loan',       'account_liability_personal_loan'],
+  ['Property',            'account_investment_property'],
+  ['Stock holdings',      'account_investment_stocks'],
+];
+
 // Convert snake_case sub_type value to a readable label.
 function _subTypeLabel(v) {
   if (v === undefined || v === null || v === '') return '—';
@@ -60,10 +72,10 @@ function _fmtBal(n) {
 function _balanceCell(a) {
   const val = parseFloat(a.current_value_local);
   if (Number.isFinite(val) === false) return '<span class="muted">—</span>';
-  const sym     = getSymbol(a.local_currency);
-  const foreign = a.local_currency !== state.quoteCurrency;
+  const sym     = getSymbol(a.account_currency_local);
+  const foreign = a.account_currency_local !== state.quoteCurrency;
   const baseTag = foreign
-    ? ` <span class="td-base-amt">${esc(fmtBase(Math.abs(val), a.local_currency, null))}</span>`
+    ? ` <span class="td-base-amt">${esc(fmtBase(Math.abs(val), a.account_currency_local, null))}</span>`
     : '';
 
   if (_isLiability(a)) {
@@ -117,15 +129,15 @@ function _renderNetWorth() {
 
   const totalAssets = state.accounts
     .filter(a => a.record_status !== 'deleted' && (a.type === 'asset' || a.type === 'investment'))
-    .reduce((s, a) => { const v = toBase(parseFloat(a.current_value_local), a.local_currency, null); return Number.isFinite(v) ? s + v : s; }, 0);
+    .reduce((s, a) => { const v = toBase(parseFloat(a.current_value_local), a.account_currency_local, null); return Number.isFinite(v) ? s + v : s; }, 0);
 
   const totalLiab = state.accounts
     .filter(a => a.record_status !== 'deleted' && a.type === 'liability')
-    .reduce((s, a) => { const v = toBase(parseFloat(a.current_value_local), a.local_currency, null); return Number.isFinite(v) ? s + Math.abs(v) : s; }, 0);
+    .reduce((s, a) => { const v = toBase(parseFloat(a.current_value_local), a.account_currency_local, null); return Number.isFinite(v) ? s + Math.abs(v) : s; }, 0);
 
   const liquidCash = state.accounts
     .filter(a => a.record_status !== 'deleted' && a.type === 'asset' && LIQUID_SUB_TYPES.has(a.sub_type))
-    .reduce((s, a) => { const v = toBase(parseFloat(a.current_value_local), a.local_currency, null); return Number.isFinite(v) ? s + v : s; }, 0);
+    .reduce((s, a) => { const v = toBase(parseFloat(a.current_value_local), a.account_currency_local, null); return Number.isFinite(v) ? s + v : s; }, 0);
 
   const netWorth = totalAssets - totalLiab;
 
@@ -168,7 +180,7 @@ function _applyAccFilters(accounts) {
   return accounts.filter(a => {
     if (f.type !== 'all' && a.type !== f.type) return false;
     if (f.subType !== 'all' && a.sub_type !== f.subType) return false;
-    if (f.currency !== 'all' && a.local_currency !== f.currency) return false;
+    if (f.currency !== 'all' && a.account_currency_local !== f.currency) return false;
     if (f.search !== '') {
       const q   = f.search.toLowerCase();
       const hay = (a.account_name + ' ' + a.description).toLowerCase();
@@ -186,7 +198,7 @@ function _renderAccFilterBar() {
   const currencies = [];
   const seenC = {};
   state.accounts.forEach(a => {
-    if (seenC[a.local_currency] === undefined) { seenC[a.local_currency] = true; currencies.push(a.local_currency); }
+    if (seenC[a.account_currency_local] === undefined) { seenC[a.account_currency_local] = true; currencies.push(a.account_currency_local); }
   });
   currencies.sort();
 
@@ -278,14 +290,25 @@ function _typeOptsHtml(selected) {
 // ── CSV import panel ──────────────────────────────────────────────────────────
 
 function _renderImportPanel() {
+  const typeOpts = IMPORT_FILE_TYPES.map(([label, value]) =>
+    `<option value="${esc(value)}"${_importType === value ? ' selected' : ''}>${esc(label)}</option>`
+  ).join('');
+
   return `
   <div class="card" style="margin-bottom:20px">
-    <div class="cat-form-header">Import accounts from CSV</div>
+    <div class="cat-form-header">Import account data from CSV</div>
     <div class="form-grid" style="margin-bottom:16px;align-items:start">
+      <div class="field">
+        <label for="accImportType">File type *</label>
+        <select id="accImportType">
+          <option value="">— select file type —</option>
+          ${typeOpts}
+        </select>
+      </div>
       <div class="field form-grid-span-2">
         <label for="accImportFile">CSV file</label>
         <input type="file" id="accImportFile" accept=".csv">
-        <div class="field-hint">Required: account_name, type, sub_type, local_currency, opening_date_local. Optional: id, legal_entity_name, local_timezone, closing_date_local, opening_value_local (defaults to 0), record_status, description</div>
+        <div class="field-hint">Required columns depend on the selected file type — the header row must match the target table's columns. Import account (master) rows before any detail rows, as detail rows reference accounts by account_id.</div>
       </div>
     </div>
     <div id="accImportStatus"></div>
@@ -297,64 +320,43 @@ function _renderImportPanel() {
   </div>`;
 }
 
-function _parseAccountsCsv(text) {
-  const lines = text.split(/\r?\n/).filter(l => l.trim());
-  if (lines.length === 0) return { accounts: [], errors: ['File is empty.'] };
+// Generic CSV parser: header row (normalized to snake_case) → array of plain
+// objects keyed by column name. The backend is the single source of validation;
+// the only FE parse errors surfaced are structural (empty file, missing header,
+// column-count mismatch).
+function _parseGenericCsv(text) {
+  const lines = text.split(/\r?\n/).filter(l => l.trim() !== '');
+  if (lines.length === 0) return { rows: [], errors: ['File is empty.'] };
+  if (lines.length === 1) return { rows: [], errors: ['No data rows found — the file has only a header row.'] };
 
-  const headers  = parseCsvRow(lines[0]).map(h => h.toLowerCase().replace(/\s+/g, '_'));
-  const accounts = [];
-  const errors   = [];
+  const headers = parseCsvRow(lines[0]).map(h => h.trim().toLowerCase().replace(/\s+/g, '_'));
+  const rows    = [];
+  const errors  = [];
 
   for (let i = 1; i < lines.length; i++) {
     const vals = parseCsvRow(lines[i]);
-    const row  = {};
-    headers.forEach((h, idx) => { row[h] = (vals[idx] !== undefined && vals[idx] !== null ? String(vals[idx]).trim() : ''); });
-
-    if (row.account_name === '')     { errors.push(`Row ${i + 1}: missing account_name`);     continue; }
-    if (row.type === '')             { errors.push(`Row ${i + 1}: missing type`);               continue; }
-    if (row.sub_type === '')         { errors.push(`Row ${i + 1}: missing sub_type`);           continue; }
-    if (row.local_currency === '')   { errors.push(`Row ${i + 1}: missing local_currency`);     continue; }
-    if (row.opening_date_local === '') { errors.push(`Row ${i + 1}: missing opening_date_local`); continue; }
-
-    const openingVal = row.opening_value_local === '' ? 0 : parseFloat(row.opening_value_local);
-    if (Number.isFinite(openingVal) === false) {
-      errors.push(`Row ${i + 1}: invalid opening_value_local "${row.opening_value_local}"`); continue;
+    if (vals.length !== headers.length) {
+      errors.push(`Row ${i + 1}: expected ${headers.length} column${headers.length !== 1 ? 's' : ''}, found ${vals.length}`);
+      continue;
     }
-
-    const rsRaw = (row.record_status !== undefined && row.record_status !== null ? String(row.record_status).trim() : '');
-    if (rsRaw !== '' && ['active', 'inactive', 'deleted', 'locked'].indexOf(rsRaw) === -1) {
-      errors.push(`Row ${i + 1}: invalid record_status "${rsRaw}"`); continue;
-    }
-    const resolvedStatus = rsRaw !== '' ? rsRaw : 'active';
-
-    const descRaw = (row.description !== undefined && row.description !== null ? String(row.description).trim() : '');
-
-    accounts.push({
-      id:                 (row.id !== undefined && row.id !== null ? String(row.id).trim() : ''),
-      account_name:       row.account_name,
-      legal_entity_name:  (row.legal_entity_name !== undefined && row.legal_entity_name !== null ? String(row.legal_entity_name).trim() : ''),
-      type:               row.type,
-      sub_type:           row.sub_type,
-      local_currency:     row.local_currency.toUpperCase(),
-      local_timezone:     (row.local_timezone !== undefined && row.local_timezone !== null ? String(row.local_timezone).trim() : ''),
-      opening_date_local: String(row.opening_date_local).trim(),
-      closing_date_local: (row.closing_date_local !== undefined && row.closing_date_local !== null ? String(row.closing_date_local).trim() : ''),
-      opening_value_local: openingVal,
-      record_status:      resolvedStatus,
-      description:        descRaw,
+    const row = {};
+    headers.forEach((h, idx) => {
+      const cell = vals[idx];
+      row[h] = (cell === undefined || cell === null) ? '' : String(cell).trim();
     });
+    rows.push(row);
   }
 
-  return { accounts, errors };
+  return { rows, errors };
 }
 
 function _renderImportStatus(parsed) {
-  const { accounts, errors } = parsed;
-  const errHtml = errors.length
+  const { rows, errors } = parsed;
+  const errHtml = errors.length !== 0
     ? `<div class="pin-error" style="margin-bottom:8px">${errors.map(e => esc(e)).join('<br>')}</div>`
     : '';
-  if (accounts.length === 0) return errHtml + '<p class="placeholder">No valid rows found.</p>';
-  return `${errHtml}<p style="font-size:13px;color:var(--muted);margin:0">${accounts.length} account${accounts.length !== 1 ? 's' : ''} ready to import</p>`;
+  if (rows.length === 0) return errHtml + '<p class="placeholder">No valid rows found.</p>';
+  return `${errHtml}<p style="font-size:13px;color:var(--muted);margin:0">${rows.length} row${rows.length !== 1 ? 's' : ''} ready to import</p>`;
 }
 
 // ── Unified form (Add / View / Edit) ─────────────────────────────────────────
@@ -370,7 +372,7 @@ function _renderAccountForm(a, mode) {
   const v = val => esc(String(val));
 
   const currencyOpts = state.rates.map(r =>
-    `<option value="${esc(r.currency)}" ${(!isAdd && a.local_currency === r.currency) ? 'selected' : ''}>${esc(r.currency)}</option>`
+    `<option value="${esc(r.currency)}" ${(!isAdd && a.account_currency_local === r.currency) ? 'selected' : ''}>${esc(r.currency)}</option>`
   ).join('');
 
   const header = (!isAdd) ? `
@@ -390,7 +392,7 @@ function _renderAccountForm(a, mode) {
       ? `<input type="text" id="accEditSubType" value="${esc(_subTypeLabel(a.sub_type))}" disabled>`
       : `<select id="accEditSubType">${_subTypeOptsHtml(a.type, a.sub_type)}</select>`;
 
-  const sym = isAdd ? '' : getSymbol(a.local_currency);
+  const sym = isAdd ? '' : getSymbol(a.account_currency_local);
 
   // 'deleted' is excluded from the edit form — deletion goes through delete_account, not update_account.
   const EDIT_RECORD_STATUSES = ['active', 'inactive', 'locked'];
@@ -414,7 +416,7 @@ function _renderAccountForm(a, mode) {
        </div>`
     : `<div class="field">
          <label>Opening date</label>
-         <input type="text" value="${v(_fmtDateDisplay(a.opening_date_local))}" disabled>
+         <input type="text" value="${v(_fmtDateDisplay(a.account_opening_date_local))}" disabled>
        </div>`;
 
   // Closing date: not shown on add; read-only in view, editable in edit
@@ -422,8 +424,8 @@ function _renderAccountForm(a, mode) {
     <div class="field">
       <label for="${pfx}ClosingDate">Closing date</label>
       ${isView
-        ? `<input type="text" value="${v(_fmtDateDisplay(a.closing_date_local))}" disabled>`
-        : `<input type="datetime-local" id="accEditClosingDate" value="${a.closing_date_local ? String(a.closing_date_local).replace(' ', 'T').substring(0, 16) : ''}">`}
+        ? `<input type="text" value="${v(_fmtDateDisplay(a.account_closing_date_local))}" disabled>`
+        : `<input type="datetime-local" id="accEditClosingDate" value="${a.account_closing_date_local ? String(a.account_closing_date_local).replace(' ', 'T').substring(0, 16) : ''}">`}
     </div>` : '';
 
   // Timezone: not shown on add (auto-detected from browser); read-only in view/edit
@@ -484,7 +486,7 @@ function _renderAccountForm(a, mode) {
       </div>` : `
       <div class="field">
         <label>Currency</label>
-        <input type="text" id="accEditCurrency" value="${v(a.local_currency)}" disabled>
+        <input type="text" id="accEditCurrency" value="${v(a.account_currency_local)}" disabled>
       </div>
       ${timezoneField}
       ${closingDateField}
@@ -552,7 +554,7 @@ function _renderAccountRow(a) {
   return `<tr${rowStyle}>
     <td>${esc(a.account_name)}${(a.description !== undefined && a.description !== null && a.description !== '') ? `<span class="info-icon-wrap"><span style="cursor:help;color:var(--teal);font-size:13px">ⓘ</span><span class="info-tooltip">${esc(a.description)}</span></span>` : ''}</td>
     <td style="color:var(--muted);font-size:12px">${esc(_subTypeLabel(a.sub_type))}</td>
-    <td>${esc(a.local_currency)}</td>
+    <td>${esc(a.account_currency_local)}</td>
     <td>${_balanceCell(a)}</td>
     <td><div style="display:flex;align-items:center;justify-content:flex-end;gap:5px">
       ${recordStatusIcon(a.record_status)}${syncStatusIcon(a.sync_status)}
@@ -595,8 +597,8 @@ function _renderTable(accounts) {
     if (accs === undefined || accs === null || accs.length === 0) return [];
     const countable = accs.filter(a => a.record_status !== 'deleted');
     const total = g.isLiab
-      ? countable.reduce((s, a) => { const v = toBase(parseFloat(a.current_value_local), a.local_currency, null); return Number.isFinite(v) ? s + Math.abs(v) : s; }, 0)
-      : countable.reduce((s, a) => { const v = toBase(parseFloat(a.current_value_local), a.local_currency, null); return Number.isFinite(v) ? s + v : s; }, 0);
+      ? countable.reduce((s, a) => { const v = toBase(parseFloat(a.current_value_local), a.account_currency_local, null); return Number.isFinite(v) ? s + Math.abs(v) : s; }, 0)
+      : countable.reduce((s, a) => { const v = toBase(parseFloat(a.current_value_local), a.account_currency_local, null); return Number.isFinite(v) ? s + v : s; }, 0);
     return [_groupHeader(g.label, total, sym, g.isLiab), ...accs.map(_renderAccountRow)];
   }).join('');
 
@@ -615,7 +617,7 @@ function _renderTable(accounts) {
         return `<div class="acc-card"${cardStyle}>
           <div class="acc-card-body">
             <div class="acc-card-name">${esc(a.account_name)}</div>
-            <div class="acc-card-meta">${esc(_subTypeLabel(a.sub_type))} · ${esc(a.local_currency)}</div>
+            <div class="acc-card-meta">${esc(_subTypeLabel(a.sub_type))} · ${esc(a.account_currency_local)}</div>
           </div>
           <div class="acc-card-bal">${_balanceCell(a)}</div>
           <div style="display:flex;align-items:center;gap:6px">
@@ -661,6 +663,7 @@ function _attachEvents() {
     if (state.accImportOpen) {
       state.accImportOpen = false;
       _importParsed = null;
+      _importType   = '';
     } else {
       state.accImportOpen = true;
       state.accAddOpen = false;
@@ -679,31 +682,42 @@ function _attachEvents() {
       state.accAddOpen = true;
       state.accImportOpen = false;
       _importParsed = null;
+      _importType   = '';
     }
     renderAccounts();
   });
 
   if (state.accImportOpen) {
+    el('accImportType').addEventListener('change', e => {
+      _importType = e.target.value;
+      _updateImportConfirmState();
+    });
+
     el('accImportFile').addEventListener('change', e => {
       const file = e.target.files[0];
-      if (file === undefined || file === null) return;
+      if (file === undefined || file === null) {
+        _importParsed = null;
+        _updateImportConfirmState();
+        return;
+      }
       const reader = new FileReader();
       reader.onload = ev => {
-        const parsed = _parseAccountsCsv(ev.target.result);
-        _importParsed = parsed.accounts.length ? parsed.accounts : null;
+        const parsed = _parseGenericCsv(ev.target.result);
+        _importParsed = parsed.rows.length !== 0 ? parsed.rows : null;
         el('accImportStatus').innerHTML = _renderImportStatus(parsed);
-        el('accImportConfirm').disabled = (_importParsed === null);
+        _updateImportConfirmState();
       };
       reader.readAsText(file);
     });
 
     el('accImportConfirm').addEventListener('click', () => {
-      if (_importParsed !== null) _submitImport(_importParsed);
+      if (_importParsed !== null && _importType !== '') _submitImport(_importType, _importParsed);
     });
 
     el('accImportCancel').addEventListener('click', () => {
       state.accImportOpen = false;
       _importParsed = null;
+      _importType   = '';
       renderAccounts();
     });
   }
@@ -960,7 +974,7 @@ function _v(id) {
 async function _saveNew() {
   const account_name   = _v('accNewName').trim();
   const legal_entity   = _v('accNewLegalEntity').trim();
-  const local_currency = _v('accNewCurrency');
+  const account_currency_local = _v('accNewCurrency');
   const type           = _v('accNewType');
   const sub_type       = _v('accNewSubType');
   const description    = _v('accNewDescription').trim();
@@ -970,7 +984,7 @@ async function _saveNew() {
   if (account_name === '')                                                                                                   { errEl.textContent = 'Account name is required.';  return; }
   if (type === undefined || type === null || !_validTypes().has(type))                                                       { errEl.textContent = 'Type is required.';            return; }
   if (sub_type === undefined || sub_type === null || String(sub_type).trim() === '')                                         { errEl.textContent = 'Sub-type is required.';        return; }
-  if (local_currency === undefined || local_currency === null || String(local_currency).trim() === '' || !(local_currency in state.rateMap)) { errEl.textContent = 'Currency is required.';  return; }
+  if (account_currency_local === undefined || account_currency_local === null || String(account_currency_local).trim() === '' || !(account_currency_local in state.rateMap)) { errEl.textContent = 'Currency is required.';  return; }
   if (opening_date_raw === '')                                                                                                { errEl.textContent = 'Opening date is required.';   return; }
   errEl.textContent = '';
 
@@ -982,16 +996,16 @@ async function _saveNew() {
   // Capture browser timezone automatically — not a user input field.
   const local_timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   // Convert datetime-local format (YYYY-MM-DDTHH:MM) to stored format (YYYY-MM-DD HH:MM).
-  const opening_date_local = opening_date_raw.replace('T', ' ');
+  const account_opening_date_local = opening_date_raw.replace('T', ' ');
 
   const payload = {
     account_name,
     legal_entity_name:  legal_entity,
-    local_currency,
+    account_currency_local,
     local_timezone,
     type,
     sub_type,
-    opening_date_local,
+    account_opening_date_local,
     description,
     opening_value_local: rawOV,
   };
@@ -1049,7 +1063,7 @@ async function _saveEdit() {
     payload.sub_type = subTypeEl.value;
   }
   if (closingDateEl !== null && closingDateEl.value !== '') {
-    payload.closing_date_local = closingDateEl.value.replace('T', ' ');
+    payload.account_closing_date_local = closingDateEl.value.replace('T', ' ');
   }
 
   const btn = el('accSaveEdit');
@@ -1182,9 +1196,20 @@ async function _restoreAccount(rowNum) {
   }
 }
 
-async function _submitImport(accounts) {
-  if ((accounts === undefined || accounts === null) || accounts.length === 0) {
-    showMsg('No accounts to import.', 'warn');
+// Enable the Import button only when BOTH a file_type is chosen AND rows parsed.
+function _updateImportConfirmState() {
+  const btn = el('accImportConfirm');
+  if (btn === null) return;
+  btn.disabled = (_importParsed === null || _importType === '');
+}
+
+async function _submitImport(fileType, rows) {
+  if (fileType === '') {
+    showMsg('Select a file type first.', 'warn');
+    return;
+  }
+  if (rows === undefined || rows === null || rows.length === 0) {
+    showMsg('No rows to import.', 'warn');
     return;
   }
   const btn   = el('accImportConfirm');
@@ -1193,7 +1218,7 @@ async function _submitImport(accounts) {
   if (errEl !== null) errEl.textContent = '';
   showLoading();
   try {
-    const res = await ExpenseAPI.createAccountsBulk({ accounts });
+    const res = await ExpenseAPI.importAccountData({ file_type: fileType, rows });
 
     if (res.ok === false && (res.results === undefined || res.results === null)) {
       console.warn('[accounts] _submitImport failed:', res.error);
@@ -1203,41 +1228,41 @@ async function _submitImport(accounts) {
     }
 
     const created = res.created;
-    const skipped = res.skipped;
+    const updated = res.updated;
     const failed  = res.failed;
 
     if (failed === 0) {
       _importParsed = null;
+      _importType   = '';
       state.accImportOpen = false;
       const msg = [
-        created ? `${created} account${created !== 1 ? 's' : ''} imported` : '',
-        skipped ? `${skipped} already existed` : '',
+        created !== 0 ? `${created} created` : '',
+        updated !== 0 ? `${updated} updated` : '',
       ].filter(s => s !== '').join(' · ');
       showMsg(msg !== '' ? msg : 'Nothing to import.');
       document.dispatchEvent(new CustomEvent('et:reload'));
     } else {
-      const resultRows = (res.results !== undefined && res.results !== null ? res.results : []).map(r => `
+      const results = (res.results !== undefined && res.results !== null) ? res.results : [];
+      const resultRows = results.map(r => `
         <tr>
-          <td>${esc(r.account_name)}</td>
+          <td>${esc((r.key !== undefined && r.key !== null) ? String(r.key) : '—')}</td>
           <td>${r.ok
-            ? `<span class="badge badge-et-in">created</span>`
-            : r.error === 'duplicate_account'
-              ? `<span class="badge" style="color:var(--muted)">already exists</span>`
-              : `<span class="badge badge-et-out">${esc((r.error !== undefined && r.error !== null) ? r.error : 'unknown')}</span>`}
+            ? `<span class="badge badge-et-in">${esc((r.action !== undefined && r.action !== null) ? r.action : 'ok')}</span>`
+            : `<span class="badge badge-et-out">${esc((r.error !== undefined && r.error !== null) ? r.error : 'unknown')}</span>`}
           </td>
         </tr>`).join('');
       el('accImportStatus').innerHTML = `
-        <div style="margin-bottom:8px;font-size:13px">${created} created${skipped ? ` · ${skipped} already existed` : ''} · <span style="color:var(--ember)">${failed} failed</span></div>
+        <div style="margin-bottom:8px;font-size:13px">${created} created · ${updated} updated · <span style="color:var(--ember)">${failed} failed</span></div>
         <div class="table-wrap" style="margin-bottom:8px">
           <table class="acc-table">
-            <thead><tr><th>Name</th><th>Result</th></tr></thead>
+            <thead><tr><th>Key</th><th>Result</th></tr></thead>
             <tbody>${resultRows}</tbody>
           </table>
         </div>`;
       _importParsed = null;
       if (btn !== null) { btn.disabled = true; btn.textContent = 'Import'; }
-      if (created > 0) { document.dispatchEvent(new CustomEvent('et:reload')); }
-      showMsg(`${created} imported · ${skipped} skipped · ${failed} failed`, 'warn');
+      if (created > 0 || updated > 0) { document.dispatchEvent(new CustomEvent('et:reload')); }
+      showMsg(`${created} created · ${updated} updated · ${failed} failed`, 'warn');
     }
   } catch (_) {
     console.error('[accounts] _submitImport failed:', _);

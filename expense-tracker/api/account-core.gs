@@ -53,20 +53,10 @@ function createAccount(body) {
   const validation = validateAccountCreate(body);
   if (validation.ok === false) return validation;
 
-  const normCurrency = String(body.local_currency).trim().toUpperCase();
+  const normCurrency = String(body.account_currency_local).trim().toUpperCase();
 
   const cols   = getAccountSheetColumns();
   const sheet  = getOrCreateSheet(ACCOUNTS_SHEET, cols);
-
-  // Duplicate guard — reject if an account with the same account_name already exists
-  const nameColIdx   = acctColIndex('account_name');
-  const existingRows = sheet.getDataRange().getValues();
-  const normName     = String(body.account_name).trim().toLowerCase();
-  for (let i = 1; i < existingRows.length; i++) {
-    if (String(existingRows[i][nameColIdx]).trim().toLowerCase() === normName) {
-      return { ok: false, error: 'duplicate_account' };
-    }
-  }
 
   // Use caller-supplied id (seed CSV import) when provided; otherwise generate a UUID.
   const id  = (body.id !== undefined && body.id !== null && String(body.id).trim() !== '')
@@ -93,12 +83,15 @@ function createAccount(body) {
   setCol('legal_entity_name',  body.legal_entity_name  !== undefined && body.legal_entity_name  !== null ? String(body.legal_entity_name).trim()  : '');
   setCol('type',               type);
   setCol('sub_type',           body.sub_type            !== undefined && body.sub_type            !== null ? String(body.sub_type).trim()            : '');
-  setCol('local_currency',     normCurrency);
+  setCol('account_currency_local',     normCurrency);
   setCol('local_timezone',     body.local_timezone      !== undefined && body.local_timezone      !== null ? String(body.local_timezone).trim()      : '');
-  setCol('opening_date_local', String(body.opening_date_local).trim());
-  setCol('closing_date_local', body.closing_date_local  !== undefined && body.closing_date_local  !== null ? String(body.closing_date_local).trim()  : '');
+  setCol('account_opening_date_local', String(body.account_opening_date_local).trim());
+  setCol('account_closing_date_local', body.account_closing_date_local  !== undefined && body.account_closing_date_local  !== null ? String(body.account_closing_date_local).trim()  : '');
+  setCol('tracking_start_date_local',  body.tracking_start_date_local   !== undefined && body.tracking_start_date_local   !== null ? String(body.tracking_start_date_local).trim()   : '');
   setCol('opening_value_local', openingValue);
-  setCol('record_status',      'active');
+  // Honor a supplied record_status (seed import may bring closed/inactive accounts);
+  // absent → 'active'. Validity already enforced by validateAccountCreate.
+  setCol('record_status',      (body.record_status !== undefined && body.record_status !== null && String(body.record_status).trim() !== '') ? String(body.record_status).trim() : 'active');
   setCol('description',        body.description         !== undefined && body.description         !== null ? String(body.description).trim()         : '');
   setCol('sync_status',        SYNC_STATUS_CREATE_PENDING);
   setCol('sync_date',          '');
@@ -110,26 +103,118 @@ function createAccount(body) {
   return { ok: true, id: id };
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Bulk create/replace — id-based upsert (does NOT delegate to createAccount).
+//
+// Dedup rule: each incoming row carries an `id` (uuid). One sheet read at the
+// start builds a map of id → 1-based sheet row number. For each incoming row:
+//   - id absent          → generate a uuid and INSERT (append).
+//   - id not in the map  → INSERT (append).
+//   - id present in map   → REPLACE that row in place (overwrite all columns),
+//                          preserving created_at and setting sync_status to
+//                          update-pending.
+// No duplicate_* short-circuits remain in this path.
+// ─────────────────────────────────────────────────────────────────────────────
 function createAccountsBulk(body) {
   if (Array.isArray(body.accounts) === false || body.accounts.length === 0)
     return { ok: false, error: 'missing_accounts' };
 
+  const cols    = getAccountSheetColumns();
+  const sheet   = getOrCreateSheet(ACCOUNTS_SHEET, cols);
+  const numCols = cols.length;
+
+  // One sheet read → map id → 1-based sheet row number.
+  const idColIdx     = acctColIndex('id');
+  const existingData = sheet.getDataRange().getValues();
+  const rowNumById   = {};
+  for (let i = 1; i < existingData.length; i++) {
+    const existingId = String(existingData[i][idColIdx]).trim();
+    if (existingId !== '') rowNumById[existingId] = i + 1;
+  }
+
+  const createdAtIdx  = getAccountSchemaField('created_at').sheet_column_position - 1;
+  const syncStatusIdx = getAccountSchemaField('sync_status').sheet_column_position - 1;
+
   const results = [];
+  let created = 0;
+  let updated = 0;
+  let failed  = 0;
+
   body.accounts.forEach(function(acct) {
-    const r = createAccount(acct);
-    const entry = { account_name: acct.account_name, ok: r.ok };
-    if (r.id !== undefined) entry.id = r.id;
-    if (r.error !== undefined) entry.error = r.error;
-    results.push(entry);
+    const validation = validateAccountCreate(acct);
+    if (validation.ok === false) {
+      results.push({ key: acct.id, ok: false, error: validation.error });
+      failed += 1;
+      return;
+    }
+
+    const now  = new Date().toISOString();
+    const type = String(acct.type).trim();
+    const isLiabilityAccount = isLiabilityType(type);
+    const normCurrency = String(acct.account_currency_local).trim().toUpperCase();
+
+    // Liabilities stored as negative; user always inputs positive.
+    const rawOV = Number(acct.opening_value_local);
+    const openingValue = isLiabilityAccount ? -(Math.abs(rawOV)) : rawOV;
+
+    const hasId = acct.id !== undefined && acct.id !== null && String(acct.id).trim() !== '';
+    const id = hasId ? String(acct.id).trim() : Utilities.getUuid();
+    const existingRowNum = rowNumById[id];
+    const isReplace = existingRowNum !== undefined;
+
+    const row = new Array(numCols).fill('');
+    function setCol(key, value) {
+      const field = getAccountSchemaField(key);
+      if (field !== undefined && field !== null) row[field.sheet_column_position - 1] = (value === undefined || value === null) ? '' : value;
+    }
+
+    setCol('id',                 id);
+    setCol('account_name',       String(acct.account_name).trim());
+    setCol('legal_entity_name',  acct.legal_entity_name  !== undefined && acct.legal_entity_name  !== null ? String(acct.legal_entity_name).trim()  : '');
+    setCol('type',               type);
+    setCol('sub_type',           acct.sub_type            !== undefined && acct.sub_type            !== null ? String(acct.sub_type).trim()            : '');
+    setCol('account_currency_local',     normCurrency);
+    setCol('local_timezone',     acct.local_timezone      !== undefined && acct.local_timezone      !== null ? String(acct.local_timezone).trim()      : '');
+    setCol('account_opening_date_local', String(acct.account_opening_date_local).trim());
+    setCol('account_closing_date_local', acct.account_closing_date_local  !== undefined && acct.account_closing_date_local  !== null ? String(acct.account_closing_date_local).trim()  : '');
+    setCol('tracking_start_date_local',  acct.tracking_start_date_local   !== undefined && acct.tracking_start_date_local   !== null ? String(acct.tracking_start_date_local).trim()   : '');
+    setCol('opening_value_local', openingValue);
+    // Honor a supplied record_status (seed import may bring closed/inactive accounts);
+    // absent → 'active'. Validity already enforced by validateAccountCreate.
+    setCol('record_status',      (acct.record_status !== undefined && acct.record_status !== null && String(acct.record_status).trim() !== '') ? String(acct.record_status).trim() : 'active');
+    setCol('description',        acct.description         !== undefined && acct.description         !== null ? String(acct.description).trim()         : '');
+    setCol('sync_date',          '');
+    setCol('sync_notes',         '');
+    setCol('updated_at',         now);
+
+    if (isReplace) {
+      // Preserve created_at from the existing row; advance sync_status.
+      const existingRow = existingData[existingRowNum - 1];
+      row[createdAtIdx]  = existingRow[createdAtIdx];
+      row[syncStatusIdx] = computeSyncStatus(String(existingRow[syncStatusIdx]));
+      sheet.getRange(existingRowNum, 1, 1, numCols).setValues([row]);
+      results.push({ key: id, ok: true, action: 'updated' });
+      updated += 1;
+    } else {
+      row[createdAtIdx]  = now;
+      row[syncStatusIdx] = SYNC_STATUS_CREATE_PENDING;
+      sheet.appendRow(row);
+      // Record the new row so a repeated id later in this batch replaces it.
+      rowNumById[id] = sheet.getLastRow();
+      existingData[rowNumById[id] - 1] = row; // keep aligned for created_at preservation
+      results.push({ key: id, ok: true, action: 'created' });
+      created += 1;
+    }
   });
 
-  const failed  = results.filter(function(r) { return r.ok === false && r.error !== 'duplicate_account'; });
-  const skipped = results.filter(function(r) { return r.error === 'duplicate_account'; });
+  console.log('createAccountsBulk: input=' + body.accounts.length
+    + ' created=' + created + ' updated=' + updated + ' failed=' + failed);
+
   return {
-    ok:      failed.length === 0,
-    created: results.length - failed.length - skipped.length,
-    skipped: skipped.length,
-    failed:  failed.length,
+    ok:      failed === 0,
+    created: created,
+    updated: updated,
+    failed:  failed,
     results: results,
   };
 }
@@ -177,8 +262,8 @@ function updateAccount(body) {
   if (body.sub_type !== undefined && body.sub_type !== null) {
     writeField('sub_type', String(body.sub_type).trim());
   }
-  if (body.closing_date_local !== undefined && body.closing_date_local !== null) {
-    writeField('closing_date_local', String(body.closing_date_local).trim());
+  if (body.account_closing_date_local !== undefined && body.account_closing_date_local !== null) {
+    writeField('account_closing_date_local', String(body.account_closing_date_local).trim());
   }
   if (body.description !== undefined && body.description !== null) {
     writeField('description', String(body.description).trim());

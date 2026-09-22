@@ -77,7 +77,7 @@ Full `allRows` (not capped at MAX_SEGMENTS — shows all tags):
 |---|---|
 | Tag | Normalised tag name |
 | Txs | Transaction count for that tag |
-| Total | Sum of `toBase(tx.tx_amount_local, account.local_currency) / tagCount` per tx — proportional split |
+| Total | Sum of `toBase(tx.tx_amount_local, account.account_currency_local) / tagCount` per tx — proportional split |
 | Avg | `total / count` |
 
 ---

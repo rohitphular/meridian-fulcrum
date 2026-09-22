@@ -27,7 +27,7 @@ function getSuggestedTransactions() {
   }).map(function(tx) {
     const acc = accountMap[String(tx.account_id)];
     return Object.assign({}, tx, {
-      currency: acc.local_currency,
+      currency: acc.account_currency_local,
       amount:   Number(tx.tx_amount_local),
     });
   });

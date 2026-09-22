@@ -33,7 +33,7 @@ var ACCOUNT_TYPE_SUB_TYPES = {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Schema — 18 columns in column-position order
+// Schema — 19 columns in column-position order
 // Column positions are append-only — never change an existing position.
 // Audit block sequence: record_status → sync_status → sync_date →
 //                       sync_notes → created_at → updated_at
@@ -103,8 +103,8 @@ const ACCOUNT_SCHEMA = {
     editable:              true,
     default_value:         '',
   },
-  local_currency: {
-    sheet_column_name:     'local_currency',
+  account_currency_local: {
+    sheet_column_name:     'account_currency_local',
     sheet_column_position: 6,
     ui_label:              'Currency',
     type:                  'string',
@@ -127,8 +127,8 @@ const ACCOUNT_SCHEMA = {
     editable:              false, // set on create from browser Intl; never user-editable
     default_value:         '',
   },
-  opening_date_local: {
-    sheet_column_name:     'opening_date_local',
+  account_opening_date_local: {
+    sheet_column_name:     'account_opening_date_local',
     sheet_column_position: 8,
     ui_label:              'Opening date',
     type:                  'string',
@@ -139,8 +139,8 @@ const ACCOUNT_SCHEMA = {
     editable:              false, // set on create; immutable
     default_value:         '',
   },
-  closing_date_local: {
-    sheet_column_name:     'closing_date_local',
+  account_closing_date_local: {
+    sheet_column_name:     'account_closing_date_local',
     sheet_column_position: 9,
     ui_label:              'Closing date',
     type:                  'string',
@@ -267,6 +267,23 @@ const ACCOUNT_SCHEMA = {
     required_for:          [],
     editable:              false,
     default_value:         null,
+  },
+
+  // ── Tracking (column 19) ──────────────────────────────────────────────────
+  // Date from which this account's balance is tracked in the app. opening_value_local
+  // is the balance as of this date (not account_opening_date_local, which is the true
+  // real-world open date). Appended here to preserve existing column positions.
+  tracking_start_date_local: {
+    sheet_column_name:     'tracking_start_date_local',
+    sheet_column_position: 19,
+    ui_label:              'Tracking start date',
+    type:                  'string',
+    enum_values:           null,
+    group:                 'core',
+    applies_to:            null,
+    required_for:          [],
+    editable:              false, // set on create; immutable
+    default_value:         '',
   },
 };
 

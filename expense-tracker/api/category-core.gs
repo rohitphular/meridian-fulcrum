@@ -253,76 +253,119 @@ function deleteCategory(body) {
   return { ok: true };
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Bulk create/replace — id-based upsert.
+//
+// Dedup rule: each incoming row carries an `id` (uuid). One sheet read at the
+// start builds a map of id → 1-based sheet row number. For each incoming row:
+//   - id absent          → generate a uuid and INSERT (append).
+//   - id not in the map  → INSERT (append).
+//   - id present in map   → REPLACE that row in place (overwrite all columns),
+//                          preserving created_at and setting sync_status to
+//                          update-pending.
+// No duplicate_* short-circuits remain in this path.
+// ─────────────────────────────────────────────────────────────────────────────
 function createCategoriesBulk(body) {
   if (!Array.isArray(body.categories) || body.categories.length === 0)
     return { ok: false, error: 'missing_categories' };
 
-  const cols   = getCategorySheetColumns();
-  const sheet  = getOrCreateSheet(CATEGORIES_SHEET, cols);
+  const cols    = getCategorySheetColumns();
+  const sheet   = getOrCreateSheet(CATEGORIES_SHEET, cols);
+  const numCols = cols.length;
+
+  // One sheet read → map id → 1-based sheet row number.
+  const ciId   = catColIndex('id');
   const values = sheet.getDataRange().getValues();
-
-  const ciType  = catColIndex('tx_type_key');
-  const ciMajor = catColIndex('major_category_key');
-  const ciMinor = catColIndex('minor_category_key');
-
-  // Map key → sheet row number (1-indexed) so we can update existing rows
-  const existing = {};
+  const rowNumById = {};
   for (let i = 1; i < values.length; i++) {
-    const key = String(values[i][ciType]) + '|' + String(values[i][ciMajor]) + '|' + String(values[i][ciMinor]);
-    existing[key] = i + 1;
+    const existingId = String(values[i][ciId]).trim();
+    if (existingId !== '') rowNumById[existingId] = i + 1;
   }
 
+  const createdAtIdx  = getCategorySchemaField('created_at').sheet_column_position - 1;
+  const syncStatusIdx = getCategorySchemaField('sync_status').sheet_column_position - 1;
+
   const results = [];
+  let created = 0;
+  let updated = 0;
+  let failed  = 0;
+
   body.categories.forEach(function(cat) {
-    // CAT-NEW-C-1: always run through slugify — even when caller supplies an explicit key —
-    // so the lookup into existing[] (which was built from actual sheet slugs) always matches.
-    const majKey = (cat.major_category_key !== undefined && cat.major_category_key !== null && String(cat.major_category_key).trim() !== '')
-      ? slugify(String(cat.major_category_key).trim())
-      : slugify(strField(cat.major_category_label));
-    const minKey = (cat.minor_category_key !== undefined && cat.minor_category_key !== null && String(cat.minor_category_key).trim() !== '')
-      ? slugify(String(cat.minor_category_key).trim())
-      : slugify(strField(cat.minor_category_label));
-    const key = strField(cat.tx_type_key) + '|' + majKey + '|' + minKey;
+    const validation = validateCategoryCreate(cat);
+    if (!validation.ok) {
+      results.push({ key: cat.id, ok: false, error: validation.error });
+      failed += 1;
+      return;
+    }
 
-    const catBody = {};
-    Object.keys(cat).forEach(function(k) { catBody[k] = cat[k]; });
-    catBody.pin = body.pin;
+    const majKey = slugify(String(cat.major_category_label).trim());
+    const minKey = slugify(String(cat.minor_category_label).trim());
+    if (majKey === '' || minKey === '') {
+      results.push({ key: cat.id, ok: false, error: 'invalid_category_label' });
+      failed += 1;
+      return;
+    }
 
-    if (existing[key] !== undefined) {
-      if (typeof existing[key] === 'number') {
-        // Category exists in sheet — update in-place so the CSV can override the seed
-        catBody.row_num = existing[key];
-        let r = updateCategory(catBody);
-        // CAT-NEW-1: if a key-changing rename was blocked by dependents, retry with force:true
-        if (!r.ok && r.error === 'category_key_change_has_dependents') {
-          catBody.force = true;
-          r = updateCategory(catBody);
-        }
-        const updateEntry = { name: key, ok: r.ok, updated: true };
-        if (r.error !== undefined) updateEntry.error = r.error;
-        results.push(updateEntry);
-        if (r.ok) existing[key] = true; // prevent second update of same row in this batch
-      } else {
-        // existing[key] === true: row was just created earlier in this batch — block as duplicate
-        results.push({ name: key, ok: false, updated: false, error: 'duplicate_category' });
-      }
+    const now = new Date().toISOString();
+    const hasId = cat.id !== undefined && cat.id !== null && String(cat.id).trim() !== '';
+    const id = hasId ? String(cat.id).trim() : Utilities.getUuid();
+    const existingRowNum = rowNumById[id];
+    const isReplace = existingRowNum !== undefined;
+
+    const row = new Array(numCols).fill('');
+    function setC(key, value) {
+      const field = getCategorySchemaField(key);
+      if (field) row[field.sheet_column_position - 1] = (value === undefined || value === null) ? '' : value;
+    }
+
+    setC('id',                        id);
+    setC('tx_type_key',               String(cat.tx_type_key).trim());
+    setC('tx_type_label',             TX_TYPE_LABEL_MAP[String(cat.tx_type_key).trim()]);
+    setC('major_category_label',      String(cat.major_category_label).trim());
+    setC('major_category_key',        majKey);
+    setC('minor_category_label',      String(cat.minor_category_label).trim());
+    setC('minor_category_key',        minKey);
+    setC('description',               strField(cat.description));
+    setC('record_status',             'active');
+    setC('tag_keywords',              normaliseKeywords(strField(cat.tag_keywords)));
+    setC('counterparty_examples',     normaliseCandidates(strField(cat.counterparty_examples)));
+    setC('source_account_types',      normaliseAccountTypes(strField(cat.source_account_types)));
+    setC('target_account_types',      normaliseAccountTypes(strField(cat.target_account_types)));
+    setC('source_account_mandatory',  cat.source_account_mandatory === true || cat.source_account_mandatory === 'true');
+    setC('target_account_mandatory',  cat.target_account_mandatory === true || cat.target_account_mandatory === 'true');
+    setC('is_subscription_eligible',  cat.is_subscription_eligible === true || cat.is_subscription_eligible === 'true');
+    setC('sync_date',                 '');
+    setC('sync_notes',                '');
+    setC('updated_at',                now);
+
+    if (isReplace) {
+      // Preserve created_at from the existing row; advance sync_status.
+      const existingRow = values[existingRowNum - 1];
+      row[createdAtIdx]  = existingRow[createdAtIdx];
+      row[syncStatusIdx] = computeSyncStatus(String(existingRow[syncStatusIdx]));
+      sheet.getRange(existingRowNum, 1, 1, numCols).setValues([row]);
+      results.push({ key: id, ok: true, action: 'updated' });
+      updated += 1;
     } else {
-      const r = createCategory(catBody);
-      const createEntry = { name: key, ok: r.ok, updated: false };
-      if (r.error !== undefined) createEntry.error = r.error;
-      results.push(createEntry);
-      if (r.ok) existing[key] = true; // block within-batch duplicates
+      row[createdAtIdx]  = now;
+      row[syncStatusIdx] = SYNC_STATUS_CREATE_PENDING;
+      sheet.appendRow(row);
+      // Record the new row so a repeated id later in this batch replaces it.
+      rowNumById[id] = sheet.getLastRow();
+      values[rowNumById[id] - 1] = row; // keep values[] aligned for created_at preservation
+      results.push({ key: id, ok: true, action: 'created' });
+      created += 1;
     }
   });
 
-  const failed  = results.filter(function(r) { return !r.ok; });
-  const updated = results.filter(function(r) { return r.ok && r.updated; });
-  const created = results.filter(function(r) { return r.ok && !r.updated; });
+  console.log('createCategoriesBulk: input=' + body.categories.length
+    + ' created=' + created + ' updated=' + updated + ' failed=' + failed);
+
   return {
-    ok:      failed.length === 0,
-    created: created.length,
-    updated: updated.length,
-    failed:  failed.length,
+    ok:      failed === 0,
+    created: created,
+    updated: updated,
+    failed:  failed,
     results: results,
   };
 }

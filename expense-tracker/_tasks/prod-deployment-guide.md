@@ -90,11 +90,11 @@ Files: `app/sections/categories.js`, `app/core/utils.js`
 
 | Layer    | File                            | What changed                                                                                                         |
 | -------- | ------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| Backend  | `api/account-schema.gs`         | Expanded from 14 to 18 cols; `name` → `account_name` (col 2); `legal_entity_name` added (col 3, editable: false); `type` → col 4; `sub_type` → col 5; `currency` → `local_currency` (col 6); `local_timezone` added (col 7, editable: false — system-set from browser); `opening_date_local` added (col 8, editable: false); `closing_date_local` added (col 9, editable: true); `opening_value_local` → col 10; `current_value_local` → col 11; `description` → col 12; `record_status` → col 13; `sync_status` → col 14; `sync_date` → col 15; `sync_notes` → col 16; `created_at` → col 17; `updated_at` → col 18 |
-| Backend  | `api/account-core.gs`           | `createAccount`: `generateAccountId()` replaced with UUID logic (uses caller-supplied `body.id` when present — seed import path; otherwise `Utilities.getUuid()`); all new fields set (`legal_entity_name`, `local_timezone`, `opening_date_local`, `closing_date_local`); no UTC conversion on datetimes; `updateAccount` now writes `account_name`, `closing_date_local` |
-| Backend  | `api/account-validation.gs`     | `body.name` → `body.account_name`, error `missing_name` → `missing_account_name`; `body.currency` → `body.local_currency`, error `missing_currency` → `missing_local_currency`; `opening_date_local` required on create → `missing_opening_date_local` |
-| Frontend | `app/sections/accounts.js`      | All `a.currency` → `a.local_currency`; all `a.name` → `a.account_name`; `local_timezone` auto-detected via `Intl.DateTimeFormat().resolvedOptions().timeZone` (not a form field); `opening_date_local` datetime-local input in add form; `closing_date_local` datetime-local input in edit form; `legal_entity_name` text input in add form (read-only in view/edit); CSV parser updated for all new column names |
-| Data     | `local/files/accounts_new.csv`  | `name` → `account_name`; `currency` → `local_currency`; `legal_entity_name` column added; `local_timezone` column added (GBP → `Europe/London`, INR → `Asia/Kolkata`); `opening_date` → `opening_date_local`; `closing_date` → `closing_date_local`; `id` column with pre-assigned UUIDs; 21 accounts |
+| Backend  | `api/account-schema.gs`         | Expanded from 14 to 18 cols; `name` → `account_name` (col 2); `legal_entity_name` added (col 3, editable: false); `type` → col 4; `sub_type` → col 5; `currency` → `account_currency_local` (col 6); `local_timezone` added (col 7, editable: false — system-set from browser); `account_opening_date_local` added (col 8, editable: false); `account_closing_date_local` added (col 9, editable: true); `opening_value_local` → col 10; `current_value_local` → col 11; `description` → col 12; `record_status` → col 13; `sync_status` → col 14; `sync_date` → col 15; `sync_notes` → col 16; `created_at` → col 17; `updated_at` → col 18 |
+| Backend  | `api/account-core.gs`           | `createAccount`: `generateAccountId()` replaced with UUID logic (uses caller-supplied `body.id` when present — seed import path; otherwise `Utilities.getUuid()`); all new fields set (`legal_entity_name`, `local_timezone`, `account_opening_date_local`, `account_closing_date_local`); no UTC conversion on datetimes; `updateAccount` now writes `account_name`, `account_closing_date_local` |
+| Backend  | `api/account-validation.gs`     | `body.name` → `body.account_name`, error `missing_name` → `missing_account_name`; `body.currency` → `body.account_currency_local`, error `missing_currency` → `missing_local_currency`; `account_opening_date_local` required on create → `missing_opening_date_local` |
+| Frontend | `app/sections/accounts.js`      | All `a.currency` → `a.account_currency_local`; all `a.name` → `a.account_name`; `local_timezone` auto-detected via `Intl.DateTimeFormat().resolvedOptions().timeZone` (not a form field); `account_opening_date_local` datetime-local input in add form; `account_closing_date_local` datetime-local input in edit form; `legal_entity_name` text input in add form (read-only in view/edit); CSV parser updated for all new column names |
+| Data     | `local/files/accounts_new.csv`  | `name` → `account_name`; `currency` → `account_currency_local`; `legal_entity_name` column added; `local_timezone` column added (GBP → `Europe/London`, INR → `Asia/Kolkata`); `opening_date` → `account_opening_date_local`; `closing_date` → `account_closing_date_local`; `id` column with pre-assigned UUIDs; 21 accounts |
 
 ### 1. Deploy backend
 
@@ -116,10 +116,10 @@ Files: `account-schema.gs`, `account-core.gs`, `account-validation.gs`, `sync-ut
 | 3   | `legal_entity_name`  |
 | 4   | `type`               |
 | 5   | `sub_type`           |
-| 6   | `local_currency`     |
+| 6   | `account_currency_local`     |
 | 7   | `local_timezone`     |
-| 8   | `opening_date_local` |
-| 9   | `closing_date_local` |
+| 8   | `account_opening_date_local` |
+| 9   | `account_closing_date_local` |
 | 10  | `opening_value_local`      |
 | 11  | `current_value_local`      |
 | 12  | `description`        |
@@ -151,13 +151,13 @@ Files: `app/sections/accounts.js`
 - [ ] Each row shows record status icon and sync status icon — both 16×16, aligned
 - [ ] Sheet col 1 (`id`) is populated with a UUID for every row after import
 - [ ] Sheet col 7 (`local_timezone`) is populated — GBP accounts have `Europe/London`, INR accounts have `Asia/Kolkata`
-- [ ] Sheet col 8 (`opening_date_local`) is populated — all rows have `2026-07-24 00:00:00` (or `2026-08-17 11:40:00` for Finio-2)
-- [ ] Sheet col 9 (`closing_date_local`) — Finio-1 has `2026-08-17 11:35:00`; all others blank
-- [ ] Add form: shows `account_name`, `legal_entity_name`, `type`, `sub_type`, `local_currency`, `opening_date_local` (datetime-local input), `opening_value_local`, `description` — does NOT show `local_timezone` (auto-detected)
+- [ ] Sheet col 8 (`account_opening_date_local`) is populated — all rows have `2026-07-24 00:00:00` (or `2026-08-17 11:40:00` for Finio-2)
+- [ ] Sheet col 9 (`account_closing_date_local`) — Finio-1 has `2026-08-17 11:35:00`; all others blank
+- [ ] Add form: shows `account_name`, `legal_entity_name`, `type`, `sub_type`, `account_currency_local`, `account_opening_date_local` (datetime-local input), `opening_value_local`, `description` — does NOT show `local_timezone` (auto-detected)
 - [ ] Create an account → sheet col 1 = UUID (auto-generated), col 7 = browser timezone, col 8 = entered datetime (no UTC conversion), col 13 = `active`, col 14 = `create-pending`, col 17 = `created_at` ISO, col 18 = `updated_at` ISO
-- [ ] View form: shows all fields including `local_timezone`, `opening_date_local`, `closing_date_local` (all read-only); `legal_entity_name` read-only
-- [ ] Edit form: `account_name`, `sub_type`, `closing_date_local`, `description`, `record_status` are editable; all other fields are disabled
-- [ ] Setting `closing_date_local` in edit form → stored as-is (no UTC conversion); col 9 updated in sheet
+- [ ] View form: shows all fields including `local_timezone`, `account_opening_date_local`, `account_closing_date_local` (all read-only); `legal_entity_name` read-only
+- [ ] Edit form: `account_name`, `sub_type`, `account_closing_date_local`, `description`, `record_status` are editable; all other fields are disabled
+- [ ] Setting `account_closing_date_local` in edit form → stored as-is (no UTC conversion); col 9 updated in sheet
 - [ ] Edit (rename to existing `account_name`) → `duplicate_account` error shown in form
 - [ ] Edit — `sub_type` editable; invalid value for account's type returns `invalid_sub_type`
 - [ ] Edit synced account → `sync_status = update-pending`; `sync_notes = ''`; `updated_at` refreshed
@@ -173,7 +173,7 @@ Files: `app/sections/accounts.js`
 - [ ] Filter toggle opens/closes panel
 - [ ] Type filter narrows table to matching group(s)
 - [ ] Sub-type trigger disabled until a Type is selected
-- [ ] Currency dropdown lists only `local_currency` values present in loaded accounts
+- [ ] Currency dropdown lists only `account_currency_local` values present in loaded accounts
 - [ ] Search matches against `account_name` and notes fields (case-insensitive substring)
 - [ ] Status filter — all 4 checked by default
 - [ ] Net worth summary cards remain unfiltered regardless of active filter selections
@@ -196,10 +196,10 @@ Files: `app/sections/accounts.js`
 | Backend  | `api/transaction-core.gs`         | Full rewrite: create maps source/target body → 1 row (non-transfer) or 2 linked rows (transfer); `_writeSingleTransaction` uses `account_id`/`tx_amount`; `updateTransaction` takes `account_id`/`tx_amount`; `_checkDuplicate` on (tx_date_time, tx_type, account_id, tx_amount); `sync_date_time` → `sync_date` in `_writeSingleTransaction` and `createTransactionsBulk`; no UTC conversion — `tx_date_time` stored as local time (YYYY-MM-DD HH:MM) |
 | Backend  | `api/transaction-validation.gs`   | `validateTransactionUpdate` checks `account_id`/`tx_amount`; `_validateFinancialRules` checks `account_id` on update path; rejects any `editable: false` field (including `tx_timezone`) if present in update body |
 | Backend  | `api/account-core.gs`             | `_countTransactionsReferencingAccount` uses `account_id` (not source/target)                                                  |
-| Backend  | `api/transaction-suggestions.gs`  | `outTx` augmentation uses `account_id`/`tx_amount`; suggestion output emits `account_id`; `getSuggestedTransactions` reads `acc.local_currency` (renamed from `acc.currency`) |
+| Backend  | `api/transaction-suggestions.gs`  | `outTx` augmentation uses `account_id`/`tx_amount`; suggestion output emits `account_id`; `getSuggestedTransactions` reads `acc.account_currency_local` (renamed from `acc.currency`) |
 | Backend  | `api/advisor-core.gs`             | `_buildSnapshot` + `_fetchRequestedData` use `tx_amount`/`account_id`                                                         |
 | Backend  | `api/rate-core.gs`                | `_countTransactionsWithCurrency` always returns 0 (currency no longer in transactions)                                         |
-| Frontend | `app/sections/transactions.js`    | Table display uses `account_id`/`tx_amount`/sibling map for transfer arrows; edit form is single-row (one account, one amount); balance rules use post-reversal `account_id`; copy prefill reconstructs source/target from sibling; delete/view forms updated; UTC helpers (`localToUtcISO`, `utcToLocalInput`) removed — `tx_date_time` stored/read as local time directly; `tx_timezone` captured from `Intl.DateTimeFormat().resolvedOptions().timeZone` on create (not a form field); edit form shows `tx_timezone` as read-only div; account map fields renamed: `.name` → `.account_name`, `.currency` → `.local_currency`, `.current_value` → `.current_value_local` |
+| Frontend | `app/sections/transactions.js`    | Table display uses `account_id`/`tx_amount`/sibling map for transfer arrows; edit form is single-row (one account, one amount); balance rules use post-reversal `account_id`; copy prefill reconstructs source/target from sibling; delete/view forms updated; UTC helpers (`localToUtcISO`, `utcToLocalInput`) removed — `tx_date_time` stored/read as local time directly; `tx_timezone` captured from `Intl.DateTimeFormat().resolvedOptions().timeZone` on create (not a form field); edit form shows `tx_timezone` as read-only div; account map fields renamed: `.name` → `.account_name`, `.currency` → `.account_currency_local`, `.current_value` → `.current_value_local` |
 | Frontend | `app/core/utils.js`               | `exportData` reconstructs source/target pairs from `parent_tx_id` sibling links; skips child rows (exported via parent)       |
 | Frontend | `app/core/daterange.js`           | Account filter uses `tx.account_id`; location/tag filter fields corrected to `user_location_*`/`tx_tags`                      |
 | Frontend | `app/core/state.js`               | Filter keys `tx_location_*` renamed to `user_location_*` to match transaction schema                                          |
@@ -287,7 +287,7 @@ Files: `app/sections/transactions.js`, `app/core/utils.js`, `app/core/daterange.
 - [ ] Copy a transfer row → add form opens with source/target reconstructed from sibling
 - [ ] Export CSV → file has 18 cols in source/target format; transfer pairs merged into 1 CSV row
 - [ ] Import CSV → transfer rows split into 2 sheet rows; money-out/money-in linked via `parent_tx_id`; `tx_date_time` stored as-is from CSV (no UTC conversion)
-- [ ] Suggestions panel → currency symbol shown correctly (reads `local_currency` from account via suggestion object)
+- [ ] Suggestions panel → currency symbol shown correctly (reads `account_currency_local` from account via suggestion object)
 - [ ] Rate delete blocked → still works (currency check via accounts, not transactions)
 - [ ] Account filter (in filter bar) → `account_id` filter matches correctly
 - [ ] `_checkDuplicate` skips deleted rows; key = (tx_date_time, tx_type, account_id, tx_amount)

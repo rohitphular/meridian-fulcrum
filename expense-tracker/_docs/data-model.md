@@ -22,10 +22,10 @@ All entity shapes. Field types are abstract — choose a concrete type appropria
 | 3 | `legal_entity_name` | string | optional | no | Institution name (e.g. "Barclays Bank UK"). Set once on create; immutable. |
 | 4 | `type` | enum | yes | no | `asset` \| `investment` \| `liability` |
 | 5 | `sub_type` | enum | yes | yes | Required for all types; valid values depend on type. See [Sub-types](#sub-types). |
-| 6 | `local_currency` | ISO-4217 string | yes | no | Must exist in `rates`. Immutable after creation. |
+| 6 | `account_currency_local` | ISO-4217 string | yes | no | Must exist in `rates`. Immutable after creation. |
 | 7 | `local_timezone` | string | optional | no | IANA timezone string (e.g. `Europe/London`). Detected from browser at creation; immutable. |
-| 8 | `opening_date_local` | string | optional | no | Date the account was opened (local time). Set once on create; immutable. |
-| 9 | `closing_date_local` | string | optional | yes | Date the account was closed (local time). Set when account is closed. |
+| 8 | `account_opening_date_local` | string | optional | no | Date the account was opened (local time). Set once on create; immutable. |
+| 9 | `account_closing_date_local` | string | optional | yes | Date the account was closed (local time). Set when account is closed. |
 | 10 | `opening_value_local` | number | yes | no | Balance at import. User enters positive for liabilities; store negates it. |
 | 11 | `current_value_local` | number | derived | no (system-managed) | Computed at read time as `opening_value_local + sum(transactions)` via `_buildAccountNetMap`. Never written back to the sheet after creation. Stored negative for liabilities; UI displays `abs(current_value_local)` labelled "owed" — user never sees a negative number. |
 | 12 | `description` | string | optional | yes | Free text notes. UI label: "Notes". |
@@ -60,7 +60,7 @@ liability:   sub_type ∈ { personal_loan, credit_card, mortgage, auto_loan, hel
 
 24-column single-leg schema. Each row represents one account movement. A cross-account transfer produces two linked rows — see [Transfer pattern](#transfer-pattern) below.
 
-**Currency is not stored on transactions — it is derived at runtime from the linked account (`account_id → account.local_currency`).**
+**Currency is not stored on transactions — it is derived at runtime from the linked account (`account_id → account.account_currency_local`).**
 
 Audit block: `record_status → sync_status → sync_date → sync_notes → created_at → updated_at`.
 
@@ -104,7 +104,7 @@ The effective exchange rate is **implicit**: `rate = Row B.tx_amount_local ÷ Ro
 
 21-column schema. Recurring payment obligations — planning and awareness layer only. Subscriptions never post to an account balance and never generate transactions automatically. The actual debit, when it occurs, is recorded as a separate transaction.
 
-**Currency is not stored on subscriptions — it is derived at display time from `state.accountMap[source_account].local_currency`.**
+**Currency is not stored on subscriptions — it is derived at display time from `state.accountMap[source_account].account_currency_local`.**
 
 | Col | Field | Type | Required | Notes |
 |---|---|---|---|---|
@@ -187,7 +187,7 @@ The base currency (XAU) is **not stored as a row** — it is the implicit fixed 
 
 ## Cross-entity invariants
 
-1. Every `account.local_currency` MUST exist in `rates`.
+1. Every `account.account_currency_local` MUST exist in `rates`.
 2. Every `transaction.account_id` MUST reference an existing account row.
 3. For transfer rows: the money-out row (parent) has an empty `parent_tx_id`; the money-in row (child) carries the money-out row's `id` as its `parent_tx_id`. A child row with a `parent_tx_id` that has no matching parent row is flagged as an incomplete transfer.
 4. A transaction's `major`/`minor` MAY reference a deleted category — the strings are stored as-is; orphan category references do not break reads. When a category's `major_category_label`, `minor_category_label`, or `tx_type_key` is changed via `update_category` such that the composite key `(tx_type_key, major_category_key, minor_category_key)` changes, the backend checks whether any transaction or subscription rows reference the old key. If dependent rows exist, the rename is rejected with `category_key_change_has_dependents` unless `force: true` is passed in the request — in which case the caller accepts responsibility for updating dependent rows (the backend does not cascade the rename). If no dependent rows exist, the rename proceeds without restriction.

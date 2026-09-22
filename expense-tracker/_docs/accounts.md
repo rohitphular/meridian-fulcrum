@@ -21,8 +21,8 @@ Schema reference: [data-model.md § Account](data-model.md#account).
 | `account_name` | All | Non-empty |
 | `type` | All | Must be one of: `asset`, `investment`, `liability` |
 | `sub_type` | All | Required for all accounts; valid values depend on type |
-| `local_currency` | create | Must exist in `rates` |
-| `opening_date_local` | create | Required; non-empty datetime string in local time (no UTC conversion) |
+| `account_currency_local` | create | Must exist in `rates` |
+| `account_opening_date_local` | create | Required; non-empty datetime string in local time (no UTC conversion) |
 | `opening_value_local` | create | Required; must be a finite number |
 
 ### opening_value_local
@@ -45,13 +45,13 @@ Each account type has a fixed set of valid sub-types driven by `get_account_sche
 
 ### Immutable after creation
 
-`id`, `type`, `local_currency`, `local_timezone`, `legal_entity_name`, `opening_date_local`, `opening_value_local`, `current_value_local`, `created_at`. Attempting to update any of these returns `{ ok: false, error: 'field_not_editable', field: '<field_key>' }` — the immutable field name is carried in the separate `field` property, not embedded in the error code string.
+`id`, `type`, `account_currency_local`, `local_timezone`, `legal_entity_name`, `account_opening_date_local`, `opening_value_local`, `current_value_local`, `created_at`. Attempting to update any of these returns `{ ok: false, error: 'field_not_editable', field: '<field_key>' }` — the immutable field name is carried in the separate `field` property, not embedded in the error code string.
 
-`sub_type`, `account_name`, `closing_date_local`, `description`, `record_status` are all editable post-creation.
+`sub_type`, `account_name`, `account_closing_date_local`, `description`, `record_status` are all editable post-creation.
 
-`closing_date_local` is populated via `update_account` when an account is closed — set alongside `record_status: inactive`.
+`account_closing_date_local` is populated via `update_account` when an account is closed — set alongside `record_status: inactive`.
 
-Datetimes (`opening_date_local`, `closing_date_local`) are stored in local time as-is — no UTC conversion is applied, because the corresponding timezone is captured in `local_timezone`.
+Datetimes (`account_opening_date_local`, `account_closing_date_local`) are stored in local time as-is — no UTC conversion is applied, because the corresponding timezone is captured in `local_timezone`.
 
 `record_status` can be changed to `active`, `inactive`, or `locked` via `update_account`. Setting it to `deleted` via `update_account` is rejected with `invalid_record_status` — the `deleted` state is set only via `delete_account`; restoring from `deleted` requires `restore_account`.
 
@@ -80,19 +80,19 @@ Four cards above the table, always in base currency and always unfiltered (filte
 
 | Card | Calculation |
 |---|---|
-| **Total Assets** | Sum of `toBase(current_value_local, local_currency)` over all non-deleted `asset` and `investment` accounts |
-| **Total Liabilities** | Sum of `abs(toBase(current_value_local, local_currency))` over all non-deleted `liability` accounts |
+| **Total Assets** | Sum of `toBase(current_value_local, account_currency_local)` over all non-deleted `asset` and `investment` accounts |
+| **Total Liabilities** | Sum of `abs(toBase(current_value_local, account_currency_local))` over all non-deleted `liability` accounts |
 | **Net Worth** | `Total Assets − Total Liabilities`. Negative renders in ember/red. |
-| **Liquid Cash** | Sum of `toBase(current_value_local, local_currency)` over non-deleted accounts where `type = asset AND sub_type ∈ {current, savings, cash}` |
+| **Liquid Cash** | Sum of `toBase(current_value_local, account_currency_local)` over non-deleted accounts where `type = asset AND sub_type ∈ {current, savings, cash}` |
 
 ## API surface
 
 | Operation | Behaviour |
 |---|---|
 | `list_accounts` | Return all rows; no defaults seeded |
-| `create_account` | Validate required fields (including `opening_value_local`, `opening_date_local`); duplicate `account_name` check → `duplicate_account`; negate value for liabilities; assign UUID `id` (caller-supplied `body.id` is used if provided — useful for seed CSV import with pre-assigned UUIDs); store `local_timezone` as-is from the frontend (captured from browser); store `opening_date_local` as-is (no UTC conversion); write `opening_value_local` to sheet; stamp `created_at`, `sync_status = create-pending`; append. `current_value_local` is NOT written at create time — it is computed at read time by `_buildAccountNetMap`. Returns `{ ok: true, id: '<uuid>' }`. |
+| `create_account` | Validate required fields (including `opening_value_local`, `account_opening_date_local`); duplicate `account_name` check → `duplicate_account`; negate value for liabilities; assign UUID `id` (caller-supplied `body.id` is used if provided — useful for seed CSV import with pre-assigned UUIDs); store `local_timezone` as-is from the frontend (captured from browser); store `account_opening_date_local` as-is (no UTC conversion); write `opening_value_local` to sheet; stamp `created_at`, `sync_status = create-pending`; append. `current_value_local` is NOT written at create time — it is computed at read time by `_buildAccountNetMap`. Returns `{ ok: true, id: '<uuid>' }`. |
 | `create_accounts_bulk` | Accept `accounts[]`; call `create_account` for each; return `{ created, skipped, failed, results }` — duplicates go in `skipped`. Each element of `results[]` has shape `{ account_name, ok, error?, id? }`: `error` is present only on failed rows; `id` is present only on successful rows |
-| `update_account` | Validate editable fields only; locked guard → `record_locked`; duplicate `account_name` check → `duplicate_account` (deleted accounts excluded from the collision check); advance `sync_status`; stamp `updated_at`. Editable fields: `account_name`, `sub_type`, `closing_date_local`, `description`, `record_status`. Valid `record_status` values for update: `active`, `inactive`, `locked` only — `deleted` is rejected with `invalid_record_status`. |
+| `update_account` | Validate editable fields only; locked guard → `record_locked`; duplicate `account_name` check → `duplicate_account` (deleted accounts excluded from the collision check); advance `sync_status`; stamp `updated_at`. Editable fields: `account_name`, `sub_type`, `account_closing_date_local`, `description`, `record_status`. Valid `record_status` values for update: `active`, `inactive`, `locked` only — `deleted` is rejected with `invalid_record_status`. |
 | `delete_account` | Locked guard; FK check → `account_in_use`; soft-delete (`record_status → deleted`) |
 | `restore_account` | Verifies record is in `deleted` state; sets `record_status → active` |
 | `get_account_schema` | Return the type taxonomy and all sub-type enums. Response shape: `{ types: { value, label, group }[], asset_sub_types: string[], investment_sub_types: string[], liability_sub_types: string[], loan_sub_types: string[] }` — frontend uses this to drive forms without hard-coding |
@@ -102,12 +102,12 @@ Four cards above the table, always in base currency and always unfiltered (filte
 | Code | Triggered by | Meaning |
 |---|---|---|
 | `missing_account_name` | create, update | `account_name` is blank |
-| `missing_local_currency` | create | `local_currency` not provided |
+| `missing_local_currency` | create | `account_currency_local` not provided |
 | `missing_sub_type` | create | `sub_type` not provided for a type that requires one |
-| `missing_opening_date_local` | create | `opening_date_local` is absent or empty |
+| `missing_opening_date_local` | create | `account_opening_date_local` is absent or empty |
 | `invalid_sub_type` | create, update | `sub_type` is not valid for the given account type |
 | `invalid_account_type` | create | Account type is not one of `asset`, `investment`, `liability` |
-| `unknown_currency` | create | `local_currency` is not present in the rates store (currency is immutable post-create) |
+| `unknown_currency` | create | `account_currency_local` is not present in the rates store (currency is immutable post-create) |
 | `missing_opening_value_local` | create | `opening_value_local` is absent or null |
 | `invalid_opening_value_local` | create | `opening_value_local` is present but not a finite number |
 | `duplicate_account` | create, update | Another non-deleted account already has the same `account_name` (deleted accounts are excluded from the collision check) |
@@ -125,8 +125,8 @@ Four cards above the table, always in base currency and always unfiltered (filte
 - Currency dropdown is populated from the rates table — adding a new currency requires adding it to `rates` first.
 - Sub-type dropdown updates to the valid values for the selected type. `sub_type` is editable in the edit form.
 - `local_timezone` is NOT a form input — it is auto-detected from `Intl.DateTimeFormat().resolvedOptions().timeZone` in the browser and sent silently with the create payload. It is displayed as a disabled field in view/edit.
-- `opening_date_local` is a required datetime-local input in the add form. It is displayed as read-only text in view/edit.
-- `closing_date_local` is not shown on the add form (the account is not yet closed). In edit mode it is an optional datetime-local input; in view mode it is read-only.
+- `account_opening_date_local` is a required datetime-local input in the add form. It is displayed as read-only text in view/edit.
+- `account_closing_date_local` is not shown on the add form (the account is not yet closed). In edit mode it is an optional datetime-local input; in view mode it is read-only.
 - `legal_entity_name` is an optional text input in the add form; shown as read-only (disabled) in view and edit (immutable after creation).
 - Edit mode disables all immutable fields (greyed, not submitted).
 - `record_status` edit dropdown offers only `active`, `inactive`, `locked`. `deleted` is not a selectable option; deletion is handled via the Delete action and restoration via Restore.
@@ -144,10 +144,10 @@ The sheet stores 18 columns in this order:
 | 3 | `legal_entity_name` | Set on create; immutable — represents the institution |
 | 4 | `type` | Immutable after create |
 | 5 | `sub_type` | Editable |
-| 6 | `local_currency` | Immutable after create |
+| 6 | `account_currency_local` | Immutable after create |
 | 7 | `local_timezone` | Set on create from browser `Intl.DateTimeFormat`; immutable; never a user-typed field |
-| 8 | `opening_date_local` | Set on create; stored in local time (no UTC conversion); immutable |
-| 9 | `closing_date_local` | Optional; set via update when account is closed; editable |
+| 8 | `account_opening_date_local` | Set on create; stored in local time (no UTC conversion); immutable |
+| 9 | `account_closing_date_local` | Optional; set via update when account is closed; editable |
 | 10 | `opening_value_local` | Immutable after create; stored negative for liabilities |
 | 11 | `current_value_local` | Virtual — header created by schema for column ordering only; always blank in sheet; injected at read time by `_buildAccountNetMap` |
 | 12 | `description` | Editable |
@@ -171,10 +171,10 @@ The import panel (accessible via the **Import** button in the section header) ac
 | `legal_entity_name` | No | Name of the institution / legal entity |
 | `type` | Yes | Must be `asset`, `investment`, or `liability` — validated by backend |
 | `sub_type` | Yes | Must be valid for the given type — validated by backend |
-| `local_currency` | Yes | Uppercased on parse; must exist in `rates` — validated by backend |
+| `account_currency_local` | Yes | Uppercased on parse; must exist in `rates` — validated by backend |
 | `local_timezone` | No | IANA timezone string (e.g. `Europe/London`). If absent, stored as empty string. When creating via the UI, the browser auto-detects this — the CSV import allows it to be supplied explicitly for seed data. |
-| `opening_date_local` | Yes | Datetime the account was opened in local time (e.g. `2026-07-24 00:00:00`). Stored as-is — no UTC conversion. |
-| `closing_date_local` | No | Datetime the account was closed in local time. Leave blank for active accounts. |
+| `account_opening_date_local` | Yes | Datetime the account was opened in local time (e.g. `2026-07-24 00:00:00`). Stored as-is — no UTC conversion. |
+| `account_closing_date_local` | No | Datetime the account was closed in local time. Leave blank for active accounts. |
 | `opening_value_local` | No | Defaults to `0` if empty. If present and not a finite number, the row is rejected as a parse error before submission. For liabilities, enter the positive amount owed — the backend negates it on write. |
 | `record_status` | No | If present, must be one of `active`, `inactive`, `deleted`, `locked` — invalid values are rejected as parse errors. The backend always creates accounts with `record_status = active` regardless of this value; the field has no effect on import. |
 | `description` | No | |

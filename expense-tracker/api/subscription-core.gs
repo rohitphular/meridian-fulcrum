@@ -131,6 +131,18 @@ function createSubscription(body) {
   return { ok: true, id: id };
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Bulk create/replace — id-based upsert.
+//
+// Dedup rule: each incoming row carries an `id` (uuid). One sheet read at the
+// start builds a map of id → 1-based sheet row number. For each incoming row:
+//   - id absent          → generate a uuid and INSERT (append).
+//   - id not in the map  → INSERT (append).
+//   - id present in map   → REPLACE that row in place (overwrite all columns),
+//                          preserving created_at and setting sync_status to
+//                          update-pending.
+// No duplicate_* short-circuits remain in this path.
+// ─────────────────────────────────────────────────────────────────────────────
 function createSubscriptionsBulk(body) {
   if (!Array.isArray(body.subscriptions) || body.subscriptions.length === 0)
     return { ok: false, error: 'missing_subscriptions' };
@@ -142,15 +154,17 @@ function createSubscriptionsBulk(body) {
   const now           = nowObj.toISOString();
   const todayMidnight = new Date(nowObj.getFullYear(), nowObj.getMonth(), nowObj.getDate());
 
-  // Build the duplicate-name set once from existing sheet rows.
-  const nameColIdx   = subColIndex('subscription_name');
-  const statusColIdx = subColIndex('record_status');
+  // One sheet read → map id → 1-based sheet row number.
+  const idColIdx     = subColIndex('id');
   const existingData = sheet.getDataRange().getValues();
-  const dupNameSet   = new Set();
+  const rowNumById   = {};
   for (let i = 1; i < existingData.length; i++) {
-    if (String(existingData[i][statusColIdx]) === 'deleted') continue;
-    dupNameSet.add(String(existingData[i][nameColIdx]).trim().toLowerCase());
+    const existingId = String(existingData[i][idColIdx]).trim();
+    if (existingId !== '') rowNumById[existingId] = i + 1;
   }
+
+  const createdAtIdx  = getSubscriptionSchemaField('created_at').sheet_column_position - 1;
+  const syncStatusIdx = getSubscriptionSchemaField('sync_status').sheet_column_position - 1;
 
   // Build one sheet-row array in memory without touching the sheet.
   function buildRow(b, id, initStatus) {
@@ -171,10 +185,8 @@ function createSubscriptionsBulk(body) {
     setC('major_category',   b.major_category !== undefined && b.major_category !== null ? String(b.major_category).trim() : '');
     setC('minor_category',   b.minor_category !== undefined && b.minor_category !== null ? String(b.minor_category).trim() : '');
     setC('description',      b.description !== undefined && b.description !== null ? String(b.description).trim() : '');
-    setC('created_at',       now);
     setC('tx_type',          b.tx_type !== undefined && b.tx_type !== null ? String(b.tx_type).trim() : '');
     setC('record_status',    initStatus);
-    setC('sync_status',      SYNC_STATUS_CREATE_PENDING);
     setC('sync_date',   '');
     setC('sync_notes',       '');
     setC('updated_at',       now);
@@ -184,49 +196,60 @@ function createSubscriptionsBulk(body) {
     return row;
   }
 
-  // Process each subscription in-memory, accumulate valid rows for a single write.
-  const batchRows = [];
-  const results   = [];
+  const results = [];
+  let created = 0;
+  let updated = 0;
+  let failed  = 0;
 
   body.subscriptions.forEach(function(sub) {
     const subBody = Object.assign({}, sub);
-    const label   = sub.subscription_name !== undefined && sub.subscription_name !== null ? String(sub.subscription_name) : '';
 
     const val = validateSubscriptionCreate(subBody);
     if (!val.ok) {
-      results.push({ name: label, ok: false, error: val.error, id: null });
+      results.push({ key: sub.id, ok: false, error: val.error });
+      failed += 1;
       return;
     }
 
-    const normName = String(subBody.subscription_name).trim().toLowerCase();
-    if (dupNameSet.has(normName)) {
-      results.push({ name: label, ok: false, error: 'duplicate_subscription', id: null });
-      return;
-    }
-
-    const id         = generateSubscriptionId();
     const endDateObj  = sheetDateTimeToDate(subBody.subscription_end_date_local);
     const endMidnight = endDateObj ? new Date(endDateObj.getFullYear(), endDateObj.getMonth(), endDateObj.getDate()) : null;
     const initStatus  = (endMidnight !== null && endMidnight < todayMidnight) ? 'inactive' : 'active';
 
-    // Add name to dup set so within-batch duplicates are also caught.
-    dupNameSet.add(normName);
-    batchRows.push(buildRow(subBody, id, initStatus));
-    results.push({ name: label, ok: true, error: null, id: id });
+    const hasId = subBody.id !== undefined && subBody.id !== null && String(subBody.id).trim() !== '';
+    const id = hasId ? String(subBody.id).trim() : generateSubscriptionId();
+    const existingRowNum = rowNumById[id];
+    const isReplace = existingRowNum !== undefined;
+
+    const row = buildRow(subBody, id, initStatus);
+
+    if (isReplace) {
+      // Preserve created_at from the existing row; advance sync_status.
+      const existingRow = existingData[existingRowNum - 1];
+      row[createdAtIdx]  = existingRow[createdAtIdx];
+      row[syncStatusIdx] = computeSyncStatus(String(existingRow[syncStatusIdx]));
+      sheet.getRange(existingRowNum, 1, 1, numCols).setValues([row]);
+      results.push({ key: id, ok: true, action: 'updated' });
+      updated += 1;
+    } else {
+      row[createdAtIdx]  = now;
+      row[syncStatusIdx] = SYNC_STATUS_CREATE_PENDING;
+      sheet.appendRow(row);
+      // Record the new row so a repeated id later in this batch replaces it.
+      rowNumById[id] = sheet.getLastRow();
+      existingData[rowNumById[id] - 1] = row; // keep aligned for created_at preservation
+      results.push({ key: id, ok: true, action: 'created' });
+      created += 1;
+    }
   });
 
-  // Single write for the entire valid batch.
-  if (batchRows.length > 0) {
-    sheet.getRange(sheet.getLastRow() + 1, 1, batchRows.length, numCols).setValues(batchRows);
-  }
+  console.log('createSubscriptionsBulk: input=' + body.subscriptions.length
+    + ' created=' + created + ' updated=' + updated + ' failed=' + failed);
 
-  const failed  = results.filter(function(r) { return !r.ok && r.error !== 'duplicate_subscription'; });
-  const skipped = results.filter(function(r) { return r.error === 'duplicate_subscription'; });
   return {
-    ok:      failed.length === 0,
-    created: results.length - failed.length - skipped.length,
-    skipped: skipped.length,
-    failed:  failed.length,
+    ok:      failed === 0,
+    created: created,
+    updated: updated,
+    failed:  failed,
     results: results,
   };
 }

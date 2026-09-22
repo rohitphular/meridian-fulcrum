@@ -11,6 +11,15 @@ const SUBSCRIPTIONS_SHEET      = 'subscriptions';
 const AUDIT_SHEET              = 'audit_access';
 const ADVISOR_SHEET            = 'advisor_chat';
 const COMPUTED_INSIGHTS_SHEET  = 'computed_insights';
+
+// Account data importer — detail sheets, one per non-master file_type.
+const ACCOUNT_DEPOSIT_SHEET                 = 'account_deposit';
+const ACCOUNT_LIABILITY_CREDIT_CARD_SHEET   = 'account_liability_credit_card';
+const ACCOUNT_LIABILITY_MORTGAGE_SHEET      = 'account_liability_mortgage';
+const ACCOUNT_LIABILITY_PERSONAL_LOAN_SHEET = 'account_liability_personal_loan';
+const ACCOUNT_INVESTMENT_PROPERTY_SHEET     = 'account_investment_property';
+const ACCOUNT_INVESTMENT_STOCKS_SHEET       = 'account_investment_stocks';
+
 const MAX_FAILURES        = 3;
 
 const ADVISOR_COLUMNS = ['timestamp', 'role', 'content'];

@@ -280,7 +280,7 @@ function _acctOptsWithHints(accounts, allowedTypesStr, selectedId = '') {
     ? accounts.filter(a => allowed.has((a.type !== undefined && a.type !== null ? a.type : '').toLowerCase()) || allowed.has((a.sub_type !== undefined && a.sub_type !== null ? a.sub_type : '').toLowerCase()))
     : accounts;
   return filtered.map(a =>
-    `<option value="${esc(a.id)}" ${a.id === selectedId ? 'selected' : ''}>${esc(a.account_name)} (${esc(a.local_currency)})</option>`
+    `<option value="${esc(a.id)}" ${a.id === selectedId ? 'selected' : ''}>${esc(a.account_name)} (${esc(a.account_currency_local)})</option>`
   ).join('');
 }
 
@@ -499,7 +499,7 @@ function _renderTxTable(validRows, warnRows) {
     const badgeCls    = tx.tx_type === 'money-in' ? 'badge-et-in' : tx.tx_type === 'money-out' ? 'badge-et-out' : 'badge-et-transfer';
     const typeLabel   = (_txTypeMap()[tx.tx_type] !== undefined && _txTypeMap()[tx.tx_type] !== null) ? _txTypeMap()[tx.tx_type] : tx.tx_type;
     const _txAccTbl   = (state.accountMap[tx.account_id] !== undefined && state.accountMap[tx.account_id] !== null) ? state.accountMap[tx.account_id] : {};
-    const txCur       = (_txAccTbl.local_currency !== undefined && _txAccTbl.local_currency !== null) ? _txAccTbl.local_currency : '';
+    const txCur       = (_txAccTbl.account_currency_local !== undefined && _txAccTbl.account_currency_local !== null) ? _txAccTbl.account_currency_local : '';
     const missingRate = state.rateMap[txCur] === undefined || state.rateMap[txCur] === null;
     const displayAmt  = Number(tx.tx_amount_local);
     const acctName    = (_txAccTbl.account_name !== undefined && _txAccTbl.account_name !== null) ? _txAccTbl.account_name : '—';
@@ -1014,7 +1014,7 @@ function _checkBalanceRules(transaction_type, sourceAccount, isTransfer, amount)
   const isMoneyOut      = transaction_type === 'money-out';
   if (!isMoneyOut && !isTransfer) return null;
 
-  const sym = getSymbol(sourceAccount.local_currency);
+  const sym = getSymbol(sourceAccount.account_currency_local);
   const fmt = n => Number(n).toFixed(2);
 
   // Rules 1 & 3 — asset accounts
@@ -1171,7 +1171,7 @@ function _renderTxForm(tx, mode) {
   const acctFormName  = (_txAccForm.account_name !== undefined && _txAccForm.account_name !== null) ? _txAccForm.account_name : '—';
 
   if (mode === 'view') {
-    const txCurView = (_txAccForm.local_currency !== undefined && _txAccForm.local_currency !== null) ? _txAccForm.local_currency : '';
+    const txCurView = (_txAccForm.account_currency_local !== undefined && _txAccForm.account_currency_local !== null) ? _txAccForm.account_currency_local : '';
     const viewAmt   = Number(tx.tx_amount_local);
     const _sibAccFormName = (_sibAccForm !== null && _sibAccForm !== undefined && _sibAccForm.account_name !== undefined && _sibAccForm.account_name !== null) ? _sibAccForm.account_name : '—';
     const viewAcct  = _sibAccForm !== null
@@ -1368,7 +1368,7 @@ function _renderTxDeleteRow(tx) {
         : _delSibAccName + ' → ' + acctName)
     : acctName;
   const delAmt = Number(tx.tx_amount_local);
-  const _delCur = (_txAccDel.local_currency !== undefined && _txAccDel.local_currency !== null) ? _txAccDel.local_currency : '';
+  const _delCur = (_txAccDel.account_currency_local !== undefined && _txAccDel.account_currency_local !== null) ? _txAccDel.account_currency_local : '';
   return `<tr>
     <td colspan="6">
       <span class="confirm-text">Delete <strong>${esc(fmtDateTime(tx.tx_date_local))}</strong> — ${esc(accLabel)} — ${esc(fmtNative(delAmt, _delCur))}?</span>
@@ -2118,6 +2118,7 @@ async function _submitTxImport(transactions) {
     chunks.push(payload.slice(i, i + _TX_IMPORT_CHUNK));
 
   let totalCreated = 0;
+  let totalUpdated = 0;
   let totalFailed  = 0;
   let allResults   = [];
 
@@ -2147,6 +2148,7 @@ async function _submitTxImport(transactions) {
       }
 
       if (res.created !== undefined && res.created !== null) totalCreated += res.created;
+      if (res.updated !== undefined && res.updated !== null) totalUpdated += res.updated;
       if (res.failed  !== undefined && res.failed  !== null) totalFailed  += res.failed;
       if (res.results !== undefined && res.results !== null) allResults    = allResults.concat(res.results);
     }
@@ -2156,17 +2158,17 @@ async function _submitTxImport(transactions) {
       _txImportParsed    = null;
       _txImportResult    = null;
       state.txImportOpen = false;
-      showMsg(`${totalCreated} transaction${totalCreated !== 1 ? 's' : ''} imported.`);
+      const okParts = [];
+      if (totalCreated > 0) okParts.push(`${totalCreated} created`);
+      if (totalUpdated > 0) okParts.push(`${totalUpdated} updated`);
+      showMsg(okParts.length > 0 ? okParts.join(' · ') : 'Nothing to import.');
       document.dispatchEvent(new CustomEvent('et:reload'));
     } else {
       const enriched   = allResults.map((r, i) => ({ ...r, tx: (payload[i] !== undefined && payload[i] !== null) ? payload[i] : {} }));
       const failedOnly = enriched.filter(r => !r.ok);
-      const dupCount   = failedOnly.filter(r => r.error === 'duplicate_transaction').length;
-      const errCount   = failedOnly.length - dupCount;
 
       const resultRows = failedOnly.map(r => {
         const tx    = r.tx;
-        const isDup = r.error === 'duplicate_transaction';
         const _txAcctId = (tx.account_id !== undefined && tx.account_id !== null && String(tx.account_id).trim() !== '') ? tx.account_id
           : ((tx.source_account !== undefined && tx.source_account !== null && String(tx.source_account).trim() !== '') ? tx.source_account : '');
         const _txCatStr = (tx.major_category !== undefined && tx.major_category !== null && String(tx.major_category).trim() !== '')
@@ -2177,25 +2179,25 @@ async function _submitTxImport(transactions) {
           _txAcctId,
           _txCatStr,
         ].filter(v => v !== undefined && v !== null && v !== '');
-        const _rLabel = (r.label !== undefined && r.label !== null) ? r.label : '';
+        const _rDate  = (tx.tx_date_local !== undefined && tx.tx_date_local !== null) ? String(tx.tx_date_local).slice(0, 10) : '';
+        const _rDesc  = (tx.description !== undefined && tx.description !== null && String(tx.description).trim() !== '') ? String(tx.description)
+          : ((tx.counterparty_name !== undefined && tx.counterparty_name !== null) ? String(tx.counterparty_name) : '');
+        const _rLabel = (_rDate + ' ' + _rDesc).trim();
         const _rError = (r.error !== undefined && r.error !== null && String(r.error).trim() !== '') ? r.error : '[no error code]';
         return `<tr>
           <td style="font-size:12px">
             <div style="color:var(--ink);font-family:var(--mono)">${esc(_rLabel)}</div>
             ${parts.length ? `<div style="color:var(--muted);font-size:11px;margin-top:2px">${esc(parts.join(' · '))}</div>` : ''}
           </td>
-          <td>${isDup
-            ? `<span class="badge" style="color:var(--muted)">duplicate</span>`
-            : `<span class="badge badge-et-out" style="font-family:var(--mono);font-size:11px">${esc(_rError)}</span>`}
-          </td>
+          <td><span class="badge badge-et-out" style="font-family:var(--mono);font-size:11px">${esc(_rError)}</span></td>
         </tr>`;
       }).join('');
 
       const summary = [
         `${totalCreated} created`,
-        errCount  ? `<span style="color:var(--ember)">${errCount} error${errCount > 1 ? 's' : ''}</span>` : '',
-        dupCount  ? `<span style="color:var(--muted)">${dupCount} duplicate${dupCount > 1 ? 's' : ''}</span>` : '',
-      ].filter(v => v !== undefined && v !== null && v !== '').join(' · ');
+        `${totalUpdated} updated`,
+        `<span style="color:var(--ember)">${totalFailed} failed</span>`,
+      ].join(' · ');
 
       _txImportResult = `
         <div style="margin-bottom:8px;font-size:13px">${summary}</div>
@@ -2208,11 +2210,8 @@ async function _submitTxImport(transactions) {
       if (status !== null && status !== undefined) status.innerHTML = _txImportResult;
       _txImportParsed = null;
       if (btn !== null && btn !== undefined) { btn.disabled = true; btn.textContent = 'Import'; }
-      if (totalCreated > 0) document.dispatchEvent(new CustomEvent('et:reload'));
-      const toastParts = [`${totalCreated} imported`];
-      if (errCount > 0) toastParts.push(`${errCount} error${errCount > 1 ? 's' : ''}`);
-      if (dupCount > 0) toastParts.push(`${dupCount} duplicate${dupCount > 1 ? 's' : ''}`);
-      showMsg(toastParts.join(' · '), 'warn');
+      if (totalCreated > 0 || totalUpdated > 0) document.dispatchEvent(new CustomEvent('et:reload'));
+      showMsg(`${totalCreated} created · ${totalUpdated} updated · ${totalFailed} failed`, 'warn');
     }
   } catch (err) {
     console.error('[transactions] _submitTxImport failed:', err);

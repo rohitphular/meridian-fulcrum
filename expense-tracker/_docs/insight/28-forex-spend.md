@@ -22,7 +22,7 @@ All outgoing transactions broken down by the native transaction currency. Answer
 const outTxs = txs.filter(t => t.tx_type === 'money-out');
 ```
 
-Grouped by the linked account's `local_currency` (derived as `accountMap.get(tx.account_id).local_currency`, trimmed, uppercased). Falls back to `state.quoteCurrency` when no matching account is found.
+Grouped by the linked account's `account_currency_local` (derived as `accountMap.get(tx.account_id).account_currency_local`, trimmed, uppercased). Falls back to `state.quoteCurrency` when no matching account is found.
 
 ---
 
@@ -33,7 +33,7 @@ For each currency group:
 | Field | Source |
 |---|---|
 | `nativeTotal` | `txs.reduce((s, t) => s + Math.abs(t.tx_amount_local), 0)` — sum in native currency |
-| `baseEquiv` | `sumAmountBase(txs)` — sum converted to base currency (XAU) via `toBase(tx.tx_amount_local, account.local_currency)` |
+| `baseEquiv` | `sumAmountBase(txs)` — sum converted to base currency (XAU) via `toBase(tx.tx_amount_local, account.account_currency_local)` |
 | `count` | `txs.length` |
 | `avgRate` | `state.rateMap[ccy]` — the current global rate for the currency; `null` when not in rateMap |
 | `hasEstimated` | Always `false` — `tx.fx_rate` is not a stored field; rates come from `state.rateMap` only |
@@ -120,6 +120,6 @@ Module-level constant covering common currencies: GBP £, USD $, EUR €, INR �
 | No `money-out` transactions | `chart-empty` "No spend transactions for this period." |
 | Only domestic spend | Foreign stat card = `£0 (0%)` |
 | No matching account for `tx.account_id` | Currency treated as `state.quoteCurrency` |
-| No stored `fx_rate` on transaction | `fx_rate` is not a stored field — base-currency equiv is always computed via `toBase(tx.tx_amount_local, account.local_currency)` using the current `rateMap`. `hasEstimated` is hardcoded `false`; the `~` prefix never appears. |
+| No stored `fx_rate` on transaction | `fx_rate` is not a stored field — base-currency equiv is always computed via `toBase(tx.tx_amount_local, account.account_currency_local)` using the current `rateMap`. `hasEstimated` is hardcoded `false`; the `~` prefix never appears. |
 | Currency not in `rateMap` | `⚠` warning badge in table; scatter point omitted (no `fx_rate`) |
 | > 8 currencies | `buildPalette` colours cycle (8-colour palette repeats) |

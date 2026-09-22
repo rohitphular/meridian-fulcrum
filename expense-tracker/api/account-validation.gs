@@ -9,7 +9,7 @@ function validateAccountCreate(body) {
     return { ok: false, error: 'invalid_account_type' };
   }
   if (body.account_name === undefined || body.account_name === null || String(body.account_name).trim() === '')         return { ok: false, error: 'missing_account_name' };
-  if (body.local_currency === undefined || body.local_currency === null || String(body.local_currency).trim() === '') return { ok: false, error: 'missing_local_currency' };
+  if (body.account_currency_local === undefined || body.account_currency_local === null || String(body.account_currency_local).trim() === '') return { ok: false, error: 'missing_local_currency' };
 
   // sub_type is required for all account types
   const subType = (body.sub_type !== undefined && body.sub_type !== null) ? String(body.sub_type).trim() : '';
@@ -25,9 +25,9 @@ function validateAccountCreate(body) {
     return { ok: false, error: 'invalid_sub_type' };
   }
 
-  // Cross-entity: local_currency must exist in the rates sheet.
+  // Cross-entity: account_currency_local must exist in the rates sheet.
   // listRates() auto-seeds defaults (GBP, INR, USD, EUR, AED) on an empty sheet.
-  const normCurrency    = String(body.local_currency).trim().toUpperCase();
+  const normCurrency    = String(body.account_currency_local).trim().toUpperCase();
   const ratesData       = listRates();
   const knownCurrencies = {};
   ratesData.forEach(function(r) {
@@ -44,8 +44,15 @@ function validateAccountCreate(body) {
     return { ok: false, error: 'invalid_opening_value_local' };
   }
 
-  if (body.opening_date_local === undefined || body.opening_date_local === null || String(body.opening_date_local).trim() === '') {
+  if (body.account_opening_date_local === undefined || body.account_opening_date_local === null || String(body.account_opening_date_local).trim() === '') {
     return { ok: false, error: 'missing_opening_date_local' };
+  }
+
+  // record_status is optional on create (defaults to 'active'); when supplied (e.g. seed
+  // import preserving a closed/inactive account) it must be a valid status — never coerced.
+  const recordStatus = (body.record_status !== undefined && body.record_status !== null) ? String(body.record_status).trim() : '';
+  if (recordStatus !== '' && getAccountSchemaField('record_status').enum_values.indexOf(recordStatus) === -1) {
+    return { ok: false, error: 'invalid_record_status' };
   }
 
   return { ok: true };
