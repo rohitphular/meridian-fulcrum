@@ -21,7 +21,7 @@ ssh -T git@github.com
 
 ### 2. Environment file
 
-A `.env.{env}` file must exist at the `meridian-fulcrum/` root — `.env.dev` for dev, `.env.prod` for prod. Neither file is committed to source control. Required variables:
+A `.env.{env}` file must exist under `meridian-fulcrum/infrastructure/` — `.env.dev` for dev, `.env.prod` for prod. Neither file is committed to source control. Required variables:
 
 | Variable | Purpose |
 |---|---|
@@ -66,6 +66,8 @@ Or via the module Makefile:
 ```bash
 make run ENV=dev
 make run ENV=prod
+# Scheduler-friendly, without a prompt:
+make run ENV=dev MODE=daily
 ```
 
 ---
@@ -82,7 +84,7 @@ Fetches the past 365 days of fiat and crypto rates from Yahoo Finance and upsert
 
 ## Historical mode
 
-Loads fiat rates from locally downloaded CSV files, then fetches today's crypto rates from Yahoo Finance.
+Loads fiat rates from locally downloaded CSV files, then fetches tracked crypto for the imported date range through today when yfinance is enabled.
 
 **Use this once** to backfill data before the daily job takes over.
 
@@ -117,7 +119,7 @@ make data-sync
 
 ## Logs
 
-Logs are written to `$MERIDIAN_LOG_ROOT`. Check there if a run fails silently. The job also exits with code 1 and logs the error on any unhandled failure.
+Logs are written to `$MERIDIAN_LOG_ROOT`. Check the source warnings and final status there. The job also exits with code 1 and logs the error on any unhandled failure.
 
 ---
 
@@ -126,7 +128,11 @@ Logs are written to `$MERIDIAN_LOG_ROOT`. Check there if a run fails silently. T
 | Symptom | Cause | Fix |
 |---|---|---|
 | `Permission denied (publickey)` during `uv sync` | System git not using your SSH agent | `git config --global core.sshCommand "$(which ssh)"` |
-| `KeyError: 'FULCRUM_DB_HOST'` (or similar) | Missing env var | Add the variable to `meridian-fulcrum/.env` |
-| `KeyError: 'CR_HISTORICAL_CSV_DIR'` | Running historical mode without that var set | Add `CR_HISTORICAL_CSV_DIR=/path/to/csvs` to `.env` |
-| `currency=XYZ no_data` warnings | Yahoo Finance returned no data for that ticker/date | Usually transient — re-run the next day |
+| `KeyError: 'FULCRUM_DB_HOST'` (or similar) | Missing env var | Add the variable to `meridian-fulcrum/infrastructure/.env.dev` or `.env.prod` |
+| `KeyError: 'CR_HISTORICAL_CSV_DIR'` | Running historical mode without that var set | Add `CR_HISTORICAL_CSV_DIR=/path/to/csvs` to the selected infrastructure env file |
+| `currency=XYZ no_data` warnings | Yahoo Finance returned no data for that ticker/date | Inspect provider availability; a wholly missing tracked series fails and rolls back the job |
 | No crypto rates in DB | Yahoo Finance `GC=F` or crypto ticker temporarily unavailable | Check logs; re-run when market data is available |
+
+Offline validation: `make lint` and `make test`. PostgreSQL integration tests use a disposable cluster and skip when local server binaries are absent.
+
+Missing CSV files are skipped; present files with no valid data or future dates fail. Bad individual rows are warned and skipped. Fiat gap filling carries the most recent real close through today, so old CSV files can produce stale carried rates; inspect `rate_source` and run daily mode afterward. Crypto has no weekend gap filling. All job writes commit together.

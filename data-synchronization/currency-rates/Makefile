@@ -12,10 +12,18 @@ help:
 .PHONY: run
 run: ## Run the currency-rates job — ENV=dev|prod required  (e.g. make run ENV=dev)
 	@[ -n "$(ENV)" ] || (echo "Usage: make run ENV=dev|prod"; exit 1)
-	bash cicd/start-up.sh $(ENV)
+	bash cicd/start-up.sh "$(ENV)" "$(MODE)"
 
 ##@ Dev
 
 .PHONY: generate-models
-generate-models: ## Regenerate typed model files from live schema (requires Docker)
-	uv run py-db-schema generate --db postgres
+generate-models: ## Regenerate typed model files from live schema (requires configured database)
+	uv run --locked py-db-schema generate --db postgres
+
+.PHONY: lint test
+lint: ## Check Python lint and formatting
+	uv run --locked ruff check .
+	uv run --locked ruff format --check .
+
+test: ## Run offline tests (isolated PostgreSQL tests require local server binaries)
+	MERIDIAN_LOG_ROOT=$${TMPDIR:-/tmp}/meridian-currency-rates-tests uv run --locked python -m pytest

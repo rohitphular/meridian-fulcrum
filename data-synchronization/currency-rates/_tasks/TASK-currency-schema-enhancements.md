@@ -198,3 +198,7 @@ WHERE table_name = 'currency_rates' AND column_name = 'rate_value';
 
 - `ledger-extract`: reads `currency_master.decimal_places` and `minor_unit_name` at job startup; reads `currency_rates.rate_value` at per-row processing. All three migrations must run before the transactions module is executed.
 - No other active consumer exists.
+
+## Review clarification (2026-09-23)
+
+Changing NUMERIC(19,6) to NUMERIC(19,8) increases fractional precision but reduces integer capacity from 13 to 11 digits. PostgreSQL rejects existing values that overflow; this is not an unconditional safe widening. Eight-place rates also do not guarantee nanogram conversion accuracy, especially for small crypto-per-gram quotes. The job now validates representable positive Decimal rates before writes.

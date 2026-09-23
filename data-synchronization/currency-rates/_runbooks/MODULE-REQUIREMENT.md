@@ -43,7 +43,7 @@ For every non-XAU transaction, `ledger-extract` looks up the rate for `(quote_cu
 | `minor_unit_name` | TEXT NOT NULL | Name of the lowest denomination (e.g. `pence`, `satoshi`, `nanogram`) |
 | `currency_type` | TEXT | One of: `fiat`, `commodity`, `crypto` |
 | `is_tracked` | BOOLEAN | Whether the sync job fetches rates for this currency |
-| `currency_rank` | INTEGER | Display ordering; NULL for XAU (base currency, always first) |
+| `currency_rank` | INTEGER | Fetch rank, used after oldest source date; NULL means no preference |
 | `last_fetched_date` | DATE | Updated by the sync job after each successful fetch |
 | `created_at` / `updated_at` | TIMESTAMPTZ | `updated_at` auto-maintained by trigger `fn_set_updated_at()` |
 
@@ -61,7 +61,7 @@ Key constraints:
 | `base_currency_code` | CHAR(3) | Always `XAU`; enforced by CHECK constraint |
 | `quote_currency_code` | CHAR(3) | The currency being priced against XAU |
 | `rate_value` | NUMERIC(19,8) | How many major units of quote_currency = 1 XAU (1 gram of gold) |
-| `rate_source` | TEXT | Origin of the rate (e.g. `yahoo_finance`, `stooq`) |
+| `rate_source` | TEXT | Origin of the rate (e.g. `yfinance`, `stooq`, `synthetic`, `forward_fill`) |
 | `created_at` / `updated_at` | TIMESTAMPTZ | `updated_at` auto-maintained by trigger |
 
 Key constraints:
@@ -83,7 +83,7 @@ All 18 have `minor_unit_name` seeded. Any future addition must also include `min
 | `0002_create_currency_rates.py` | Create `currency_rates` table, trigger, indexes |
 | `0003_update_xau_decimal_places.py` | Widen CHECK to BETWEEN 0 AND 9; add pinned constraint for XAU=9; UPDATE XAU decimal_places 2→9 |
 | `0004_add_minor_unit_name.py` | ADD `minor_unit_name TEXT`; seed all 18 rows; SET NOT NULL |
-| `0005_update_rate_value_precision.py` | Drop unused views `v_latest_rates` and `v_rates_to_gbp`; widen `currency_rates.rate_value` NUMERIC(19,6) → NUMERIC(19,8) |
+| `0005_update_rate_value_precision.py` | Drop unused views `v_latest_rates` and `v_rates_to_gbp`; change the scale of `currency_rates.rate_value` NUMERIC(19,6) → NUMERIC(19,8) |
 
 Migrations run in numeric order. Each migration follows the pattern:
 ```python
@@ -97,9 +97,9 @@ def upgrade(client: Any) -> None:
 
 **Daily mode** — fetches the past 365 days of rates from Yahoo Finance. Intended to run nightly after markets close. Upserts into `currency_rates` and updates `currency_master.last_fetched_date`.
 
-**Historical mode** — loads fiat rates from locally downloaded CSV files (stooq format), then fetches today's crypto rates from Yahoo Finance. Run once to backfill before the daily job takes over.
+**Historical mode** — loads fiat rates from locally downloaded CSV files (stooq format), then fetches tracked crypto over the imported date range through today from Yahoo Finance. Run once to backfill before the daily job takes over.
 
-Fiat rates are fetched for 14 currencies (all except XAU, BTC, ETH, SOL). Crypto rates are fetched from Yahoo Finance tickers. XAU has no rate row in `currency_rates` — it is the base; its rate_value would be 1 by definition and is never needed.
+Fiat rates are fetched for 14 currencies (all except XAU, BTC, ETH, SOL). Crypto rates are fetched from Yahoo Finance tickers. XAU identity rows with rate_value=1 and rate_source=synthetic are stored for each date in the requested range. Fiat gaps alone are forward-filled; crypto rows retain actual matching gold/crypto dates. Both currency types respect is_tracked. Job writes commit atomically and source-date watermarks never regress.
 
 ### Triggering the sync job
 
@@ -115,3 +115,5 @@ make run ENV=prod
 ```
 
 See `_runbooks/USAGE-INSTRUCTIONS.md` for prerequisites, environment variables, and troubleshooting.
+
+See the README for Decimal storage precision, futures-proxy caveats, missing-data failures, and source-date semantics. The ledger calculation above assumes local major units; minor-unit transaction amounts must first be divided by `10^decimal_places` and the XAU result scaled by `10^9` with the ledger rounding policy.

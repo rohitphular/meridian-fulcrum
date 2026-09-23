@@ -12,15 +12,15 @@ Read these documents in full before examining any code. They are the authoritati
 
 | Document | What it governs |
 |----------|-----------------|
-| `building-standards/APP-BE-PYTHON.md` | Job structure, uv deps, DB client pattern, migration pattern, runner pattern, error handling |
-| `building-standards/APP-LOGGING-PATTERNS.md` | Log format, log levels, what to never log |
-| `building-standards/APP-CONVENTIONS.md` | Python naming (snake_case, PascalCase, UPPER_SNAKE_CASE), PostgreSQL naming, no `__init__.py` |
+| `building-standards/documents/standards/APP-BE-PYTHON.md` | Job structure, uv deps, DB client pattern, migration pattern, runner pattern, error handling |
+| `building-standards/documents/standards/APP-LOGGING-PATTERNS.md` | Log format, log levels, what to never log |
+| `building-standards/documents/standards/APP-CONVENTIONS.md` | Python naming (snake_case, PascalCase, UPPER_SNAKE_CASE), PostgreSQL naming, no `__init__.py` |
 
 Then read the module's own documentation:
 
 - `data-synchronization/currency-rates/README.md` — source of truth for what this job is supposed to do
 - `data-synchronization/currency-rates/config.yaml` — which sources are enabled
-- `fulcrum/.env` — which env vars are defined
+- Environment variable names in README and `core/config.py`; do not print secret files
 
 ---
 
@@ -59,8 +59,13 @@ currency-rates/
 │       └── currency_rates.py
 └── migrations/
     ├── 0001_create_currency_master.py
-    └── 0002_create_currency_rates.py
+    ├── 0002_create_currency_rates.py
+    ├── 0003_update_xau_decimal_places.py
+    ├── 0004_add_minor_unit_name.py
+    └── 0005_update_rate_value_precision.py
 ```
+
+Also inventory `tests/`, `_tasks/`, and `_runbooks/MODULE-REQUIREMENT.md`.
 
 Exclude from this check: `.venv/`, `uv.lock`, `__pycache__/`
 
@@ -113,7 +118,7 @@ Check each item against the standard. Mark PASS or FAIL with file and line refer
 
 ### Type annotations
 
-- [ ] Every function signature has a return type annotation (`-> None`, `-> dict[str, float]`, etc.)
+- [ ] Every function signature has a return type annotation (`-> None`, `-> dict[str, Decimal]`, etc.)
 - [ ] Every function parameter has a type annotation
 - [ ] Local variables are NOT annotated unless the type is non-obvious from assignment
 
@@ -138,7 +143,7 @@ The linter and formatter must both pass with zero findings. This is a hard gate 
 
 ### Code quality
 
-- [ ] File reads in `core/historical.py` handle missing or malformed CSV content without crashing — each `open()` and CSV parse path logs a warning and continues rather than raising.
+- [ ] File reads in `core/historical.py` handle missing or malformed CSV content without crashing — missing files and individual invalid rows log warnings; unreadable files, unusable files, future dates, and no-data imports fail before committing.
 - [ ] No `except` block silently discards an error — every caught exception produces a `logger.warning` or `logger.error` entry before returning or re-raising.
 - [ ] Every resource that must be released (DB client) is closed in a `finally` block — never left open on the error path.
 - [ ] `uv.lock` is committed to source control and reflects the dependencies declared in `pyproject.toml`.
@@ -216,9 +221,9 @@ The README must be accurate enough that a reviewer can understand the job withou
 
 ### Schema
 
-- Every column listed in the README `currency_master` table exists in `migrations/0001_create_currency_master.py`.
-- Every column listed in the README `currency_rates` table exists in `migrations/0002_create_currency_rates.py`.
-- No column in either migration is absent from the README.
+- Every column listed in the README `currency_master` table exists in the schema after all migrations.
+- Every column listed in the README `currency_rates` table exists in the schema after all migrations.
+- No current column is absent from the README; account for later migrations.
 - Every constraint described in the README (unique on `quote_currency_code, rate_date`) exists in the migration.
 
 ### Data sources
@@ -226,7 +231,7 @@ The README must be accurate enough that a reviewer can understand the job withou
 - Confirm yfinance gold ticker (`GC=F`), forex pair mappings (`_FOREX` dict: ticker and multiply flag per currency), and supported fiat currency list match `sources/fiat.py`.
 - Confirm yfinance crypto ticker map (`_TICKERS`) matches `sources/crypto.py`.
 - Confirm `TROY_OZ_TO_GRAM` constant value matches `sources/constants.py`.
-- Confirm forward-fill behaviour description (fills gaps, `forward_fill` source label, `ON CONFLICT DO NOTHING`) matches `database/upsert.py`.
+- Confirm forward-fill behaviour description (fills gaps, `forward_fill` source label, refreshing derived rows while preserving real source rates) matches `database/upsert.py`.
 
 ### How to run
 
@@ -265,3 +270,7 @@ Produce a findings report with this exact structure:
 If there are no failures, state explicitly: "All checks passed."
 
 Do not suggest changes beyond what the standards and this document describe. Do not refactor code that is not flagged by a specific check.
+
+## Regression checks
+
+Run `make test` in addition to lint. Verify one-row provider downloads, date-aligned Decimal conversions, tracked crypto filtering, actual source dates, missing-series rollback, watermark nonregression, and refresh of fiat-derived gaps. Integration tests use isolated PostgreSQL; never run migrations or writes against dev/prod merely to review code. Report skipped checks and limitations rather than claiming universal compliance.

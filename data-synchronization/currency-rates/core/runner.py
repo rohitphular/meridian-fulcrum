@@ -13,14 +13,14 @@ logger = get_logger(__name__)
 
 def main() -> None:
     to_date = date.today()
-    from_date = to_date - timedelta(days=365)
+    from_date = to_date - timedelta(days=364)
 
     logger.info(f"runner: from_date={from_date} to_date={to_date}")
     try:
         job = CurrencyRatesJob(config.db_config())
         fiat_count, date_count = job.run(from_date, to_date)
     except Exception as e:
-        logger.error(f"runner: job_failed error={e}")
+        logger.error(f"runner: job_failed error={type(e).__name__}")
         sys.exit(1)
     logger.info(f"runner: complete from_date={from_date} to_date={to_date} fiat_currencies={fiat_count} dates={date_count}")
 

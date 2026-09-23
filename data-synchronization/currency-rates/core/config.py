@@ -16,12 +16,18 @@ _MERIDIAN_LOG_ROOT: str = os.environ["MERIDIAN_LOG_ROOT"]
 
 def load_config() -> dict[str, Any]:
     with open(_CONFIG_PATH) as f:
-        return yaml.safe_load(f)
+        settings = yaml.safe_load(f)
+    if not isinstance(settings, dict):
+        raise ValueError("invalid_config_mapping")
+    return settings
 
 
 def source_enabled(source: str) -> bool:
     cfg = load_config()
-    return bool(cfg.get("sources", {}).get(source, {}).get("enabled", False))
+    enabled = cfg["sources"][source]["enabled"]
+    if not isinstance(enabled, bool):
+        raise ValueError("source_enabled_must_be_boolean")
+    return enabled
 
 
 def historical_csv_dir() -> str:

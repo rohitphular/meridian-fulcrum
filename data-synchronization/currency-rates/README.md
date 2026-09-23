@@ -6,7 +6,7 @@ Fetches and stores daily exchange rates for fiat currencies and crypto assets, a
 
 ## What it does
 
-Fetches daily exchange rates for 14 fiat currencies and 3 crypto assets from Yahoo Finance (yfinance) and stores them in PostgreSQL. All rates use gold (XAU per gram) as the base, so any two currencies can be compared by dividing their rates without storing every pair. The job runs in two modes: Daily fetches the rolling last 365 days via Yahoo Finance for both fiat and crypto; Historical loads fiat rates from locally downloaded CSV files for a one-time backfill. After every fiat upsert, a forward-fill pass fills weekend and holiday gaps by carrying the last real closing rate forward.
+Fetches daily exchange rates for 14 fiat currencies and 3 crypto assets from Yahoo Finance (yfinance) and stores them in PostgreSQL. All rates use gold (XAU per gram) as the base, so any two currencies can be compared by dividing their rates without storing every pair. The job runs in two modes: Daily fetches the rolling last 365 days via Yahoo Finance for both fiat and crypto; Historical loads fiat rates from locally downloaded CSV files for a one-time backfill. After fetching, a forward-fill pass fills weekend and holiday gaps by carrying the last real closing rate forward.
 
 ---
 
@@ -24,7 +24,7 @@ This model lets any two currencies be compared without storing every pair — ju
 
 ## Currencies tracked
 
-The list of tracked currencies and their fetch order lives in `currency_master` — not hardcoded in Python. To add or remove a currency, update the table directly.
+The enabled currencies and fetch order come from `currency_master` for both fiat and crypto. Set `is_tracked` to disable fetching. Adding a currency also requires a supported ticker mapping in `sources/fiat.py` or `sources/crypto.py`, plus master metadata including `minor_unit_name`. Unsupported tracked codes fail the run.
 
 **Fiat (14)** — sourced from Yahoo Finance (yfinance). Fetched in priority order (see below):
 
@@ -57,7 +57,7 @@ The list of tracked currencies and their fetch order lives in `currency_master` 
 
 | Code | Asset |
 |------|-------|
-| XAU  | Gold (1 gram = 1.0, synthetic row inserted alongside fiat data) |
+| XAU  | Gold (1 gram = 1.0, synthetic row for every date in the requested range) |
 
 ---
 
@@ -66,11 +66,12 @@ The list of tracked currencies and their fetch order lives in `currency_master` 
 To ensure the most important currencies are processed first in case a run is interrupted, currencies are fetched in this order:
 
 1. **Never-fetched first** (`last_fetched_date IS NULL`) — currencies with no data at all are processed before those already partially covered
-2. **Then by `currency_rank` ASC** — within currencies that have been fetched, higher-ranked ones go before lower-ranked ones
+2. **Oldest source date first** — previously fetched currencies are ordered by `last_fetched_date` ascending
+3. **Then by `currency_rank` ASC** — rank breaks ties on source date
 
 SQL: `ORDER BY last_fetched_date ASC NULLS FIRST, currency_rank ASC NULLS LAST`
 
-After each successful fetch, `last_fetched_date` is updated to the latest date returned for that currency. If a run is cut short, the next run automatically resumes with the currencies that were missed.
+Rates, gap fills, and source-date watermarks commit together. A failed run rolls back all job writes. Watermarks advance only to actual source dates, never to gap-fill dates or backwards during an older historical import.
 
 To change the rank of a currency:
 ```sql
@@ -92,15 +93,15 @@ Gold is fetched as `GC=F` (COMEX gold futures, priced in USD per troy ounce). Fi
 
 USD needs no forex pair — GC=F is already XAU/USD.
 
-All values are divided by `31.1035` (troy ounces per gram) before storage.
+All values are divided by `31.1034768` (grams per troy ounce) before storage.
 
 ### Yahoo Finance (yfinance) — crypto rates
 
 Crypto tickers used: `BTC-USD`, `ETH-USD`, `SOL-USD`. Gold price from `GC=F`.
 
-Conversion: `grams_of_gold_per_crypto = (GC=F / crypto_usd) / 31.1035`
+Conversion: `crypto_units_per_gram = (GC=F / crypto_usd) / 31.1034768`
 
-This answers: "how many grams of gold does one unit of crypto buy?"
+This answers: "how many units of crypto equal one gram of gold?"
 
 ---
 
@@ -108,13 +109,13 @@ This answers: "how many grams of gold does one unit of crypto buy?"
 
 ### Daily (rolling last 365 days)
 
-Fetches the past 365 days of fiat rates and latest crypto rates from Yahoo Finance. Designed to run on a schedule (e.g. nightly cron).
+Fetches 365 calendar dates, from today minus 364 days through today inclusive, for both tracked fiat and crypto. Designed to run on a schedule (e.g. nightly cron).
 
 Entry point: `core/runner.py`
 
 ### Historical (one-time backfill)
 
-Loads fiat rates from locally downloaded CSV files (one file per currency, downloaded manually from stooq in the original XAU/{CCY} format). Processes files in the same priority order as the daily job. Logs a warning for any missing files and skips them. Fetches latest crypto rates from Yahoo Finance as a finishing step.
+Loads fiat rates from locally downloaded CSV files (one file per currency, downloaded manually from stooq in the original XAU/{CCY} format). Processes files in the same priority order as the daily job. Logs a warning for any missing files and skips them. When yfinance is enabled, fetches tracked crypto over the imported fiat date range through today, retaining actual source dates.
 
 Entry point: `core/historical.py`
 
@@ -136,12 +137,14 @@ https://stooq.com/q/d/l/?s=xauinr&f=20200101&t=20260812&i=d
 
 ## Weekend and holiday gap filling
 
-Gold and forex markets close on weekends and public holidays — Yahoo Finance returns no row for those days. After every fiat upsert, a forward-fill pass runs automatically:
+Gold and forex markets close on weekends and public holidays — Yahoo Finance returns no row for those days. After fetching, a forward-fill pass runs automatically:
 
-- Finds all dates in the range with no row for a given currency
+- Operates only on tracked fiat currencies successfully fetched or imported in this run
 - Carries the last real closing rate forward into those gap dates
 - Marks filled rows with `rate_source = 'forward_fill'` so they are always distinguishable from real closes
-- Never overwrites a real rate — uses `ON CONFLICT DO NOTHING`
+- Refreshes existing forward-filled rows after a corrected real close; preserves real source rows
+- Does not create or update crypto gaps; old crypto forward-fill rows from earlier versions require a separately reviewed data cleanup
+- Fills through the requested end date using the latest earlier real close, even after the last source date; the source tag identifies stale carried values
 
 The daily job's rolling 365-day window also self-heals any gap caused by a failed run: the next successful run covers the missed days automatically.
 
@@ -162,7 +165,7 @@ The daily job's rolling 365-day window also self-heals any gap caused by a faile
 | `currency_type`    | TEXT        | `fiat`, `commodity`, or `crypto` |
 | `is_tracked`       | BOOLEAN     | Whether this currency is actively fetched |
 | `currency_rank`    | INTEGER     | Fetch priority (1 = highest). NULL = no preference |
-| `last_fetched_date`| DATE        | Latest date for which we have rate data. NULL = never fetched |
+| `last_fetched_date`| DATE        | Latest real source date, excluding gap fills. NULL = never fetched |
 | `created_at`       | TIMESTAMPTZ | Auto-set on insert |
 | `updated_at`       | TIMESTAMPTZ | Auto-updated on any change |
 
@@ -175,11 +178,11 @@ The daily job's rolling 365-day window also self-heals any gap caused by a faile
 | `base_currency_code` | CHAR(3)        | Always `XAU` (enforced by constraint) |
 | `quote_currency_code`| CHAR(3)        | The currency being measured |
 | `rate_value`         | NUMERIC(19,8)  | Units of quote currency per 1 gram of XAU |
-| `rate_source`        | TEXT           | `yfinance` or `forward_fill` |
+| `rate_source`        | TEXT           | `yfinance`, `stooq`, `synthetic` (XAU identity), or `forward_fill` |
 | `created_at`         | TIMESTAMPTZ    | Auto-set on insert |
 | `updated_at`         | TIMESTAMPTZ    | Auto-updated on upsert |
 
-Unique constraint on `(quote_currency_code, rate_date)` — upserts overwrite on conflict, forward-fills skip on conflict.
+Unique constraint on `(quote_currency_code, rate_date)` — source upserts overwrite on conflict; forward-fills update only derived rows.
 
 ---
 
@@ -216,15 +219,21 @@ sources:
 ```
 currency-rates/
 ├── README.md
-├── Makefile                 # generate-models target (requires Docker)
+├── Makefile                 # run, lint, test, generate-models targets
 ├── config.yaml              # source toggles
 ├── pyproject.toml           # dependencies (uv)
 ├── py_db_migrate.toml       # migration CLI connection config
 ├── py_db_schema.toml        # model generation config
-├── start-up.sh              # interactive entry point — runs migrations then prompts for mode
+├── cicd/
+│   ├── envs.json
+│   └── start-up.sh          # mode selection, env loading, locked sync, migrations, run
 ├── _runbooks/
+│   ├── MODULE-REQUIREMENT.md
 │   ├── CODE-REVIEW-INSTRUCTIONS.md
 │   └── USAGE-INSTRUCTIONS.md
+├── _tasks/
+│   └── TASK-currency-schema-enhancements.md
+├── tests/                   # offline unit and isolated PostgreSQL regression tests
 ├── core/
 │   ├── config.py            # reads config.yaml and env vars
 │   ├── fetcher.py           # daily fetch logic (fiat loop + crypto via yfinance)
@@ -254,10 +263,12 @@ currency-rates/
 
 ```bash
 cd data-synchronization/currency-rates
-bash start-up.sh
+bash cicd/start-up.sh dev
+# Non-interactive daily run:
+make run ENV=dev MODE=daily
 ```
 
-The script loads `.env`, syncs dependencies, runs pending migrations, then prompts:
+Without an explicit mode, the script first prompts below. It then loads `infrastructure/.env.dev` or `infrastructure/.env.prod` from the repository root, syncs locked dependencies, runs pending migrations, and executes the selected job:
 
 ```
   1) Daily      — rolling last 365 days
@@ -265,3 +276,16 @@ The script loads `.env`, syncs dependencies, runs pending migrations, then promp
 ```
 
 For the historical load, place the downloaded stooq CSV files in the directory pointed to by `CR_HISTORICAL_CSV_DIR` before running. Missing files are logged as warnings and skipped — the load still completes for whatever files are present.
+
+
+## Validation and data limitations
+
+Run `make lint` and `make test` from this directory. Unit tests mock provider calls and use synthetic CSV fixtures. Integration tests start a disposable PostgreSQL cluster when local server binaries are available; they never use configured dev/prod databases. A skipped integration test is not a verified SQL pass.
+
+Arithmetic uses `Decimal` after parsing provider values; database writes round half-up to eight decimal places and reject nonfinite, nonpositive, or unrepresentable rates. Yahoo prices may already originate as floating-point values, so Decimal prevents additional binary arithmetic error but cannot recover lost source precision. Eight-place rates do not guarantee nanogram accuracy when converted back to XAU. The generated `database/models/currency_rates.py` currently annotates NUMERIC as float because of the shared schema generator; runtime writes here require Decimal and do not use that generated row type.
+
+`GC=F` is a futures proxy for gold, not a spot-gold fixing. Joined closes share a provider calendar/session date, not necessarily the same pricing instant. Crypto is stored only for dates with both gold and crypto closes; weekends and pre-listing dates can remain absent. Missing an entire tracked series fails daily/crypto fetching before writes; isolated missing source dates are omitted (fiat gaps are carried forward). Today's close may be provisional and corrected by the next run.
+
+Missing historical files are warnings and skipped. A present file with no valid rows, an unreadable file, future-dated data, or an import with no fiat data fails the job. Invalid individual CSV rows are warned and skipped. CSV imports are tagged `stooq`. Setting `sources.yfinance.enabled: false` skips the daily job and skips only the crypto portion of a historical import.
+
+This review changes code only: historical misdated crypto rows or incorrect provenance already in a database are not automatically deleted. Re-fetching correct dates repairs overlapping rows, but any remaining legacy rows need explicit review before cleanup.
