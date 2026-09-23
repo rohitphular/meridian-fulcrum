@@ -4,6 +4,7 @@
 // =============================================================================
 
 function validateAccountCreate(body) {
+  if (body === null || typeof body !== 'object' || Array.isArray(body)) return { ok: false, error: 'invalid_row' };
   const type = (body.type !== undefined && body.type !== null) ? String(body.type).trim() : '';
   if (VALID_ACCOUNT_TYPES.indexOf(type) === -1) {
     return { ok: false, error: 'invalid_account_type' };
@@ -37,7 +38,7 @@ function validateAccountCreate(body) {
     return { ok: false, error: 'unknown_currency' };
   }
 
-  if (body.opening_value_local === undefined || body.opening_value_local === null) {
+  if (body.opening_value_local === undefined || body.opening_value_local === null || String(body.opening_value_local).trim() === '') {
     return { ok: false, error: 'missing_opening_value_local' };
   }
   if (Number.isFinite(Number(body.opening_value_local)) === false) {
@@ -47,6 +48,11 @@ function validateAccountCreate(body) {
   if (body.account_opening_date_local === undefined || body.account_opening_date_local === null || String(body.account_opening_date_local).trim() === '') {
     return { ok: false, error: 'missing_opening_date_local' };
   }
+
+  if (body.tracking_start_date_local !== undefined && body.tracking_start_date_local !== null
+      && String(body.tracking_start_date_local).trim() !== ''
+      && sheetDateTimeToDate(body.tracking_start_date_local) === null)
+    return { ok: false, error: 'invalid_tracking_start_date_local' };
 
   // record_status is optional on create (defaults to 'active'); when supplied (e.g. seed
   // import preserving a closed/inactive account) it must be a valid status — never coerced.

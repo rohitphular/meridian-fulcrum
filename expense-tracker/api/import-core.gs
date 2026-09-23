@@ -39,7 +39,7 @@ function importAccountData(body) {
   // check (unknown_account) and the sub_type applicability check (sub_type_mismatch).
   const accountSheet = getOrCreateSheet(ACCOUNTS_SHEET, getAccountSheetColumns());
   const accounts     = sheetToObjects(accountSheet);
-  const accountSubTypeById = {};
+  const accountSubTypeById = Object.create(null);
   accounts.forEach(function(account) {
     accountSubTypeById[String(account.id).trim()] = String(account.sub_type).trim();
   });
@@ -50,7 +50,7 @@ function importAccountData(body) {
   // 'id' column (registry key_field is 'id' and required for every detail file_type).
   const idColIdx  = spec.columns.indexOf('id');
   const values    = sheet.getDataRange().getValues();
-  const rowNumById = {};
+  const rowNumById = Object.create(null);
   if (idColIdx !== -1) {
     for (let i = 1; i < values.length; i++) {
       const existingId = String(values[i][idColIdx]).trim();
@@ -80,6 +80,8 @@ function importAccountData(body) {
 // Validates a single row against the spec, then INSERTs or REPLACEs it by id.
 // Returns { key, ok:true, action:'created'|'updated' } or { key, ok:false, error }.
 function _importRow(sheet, spec, row, accountSubTypeById, rowNumById, values) {
+  if (row === null || typeof row !== 'object' || Array.isArray(row))
+    return { key: '', ok: false, error: 'invalid_row' };
   const key = (row[spec.key_field] !== undefined && row[spec.key_field] !== null)
     ? row[spec.key_field]
     : '';
@@ -116,6 +118,16 @@ function _importRow(sheet, spec, row, accountSubTypeById, rowNumById, values) {
     }
   }
 
+  // Numeric cells must contain finite numbers; malformed text must never reach Sheets.
+  const numericFields = spec.numeric_fields;
+  for (let i = 0; i < numericFields.length; i++) {
+    const field = numericFields[i];
+    const value = row[field];
+    if (value === undefined || value === null || String(value).trim() === '') continue;
+    if ((typeof value !== 'number' && typeof value !== 'string') || !Number.isFinite(Number(value)))
+      return { key: key, ok: false, error: 'invalid_' + field };
+  }
+
   // 5. Mortgage cross-entity rule — a non-empty linked_property_account_id must
   //    reference an existing account with sub_type 'property'.
   const linkedPropertyId = row.linked_property_account_id;
@@ -137,7 +149,7 @@ function _importRow(sheet, spec, row, accountSubTypeById, rowNumById, values) {
     const value = row[column];
     if (value === undefined) return '';       // column absent from this import row
     if (value === null) return '';            // explicit null → empty cell
-    return value;
+    return typeof value === 'string' ? value.trim() : value;
   });
 
   // Audit columns are only touched when the spec declares them. Detail specs differ:
@@ -153,7 +165,10 @@ function _importRow(sheet, spec, row, accountSubTypeById, rowNumById, values) {
     const existingRow = values[existingRowNum - 1];
     if (createdAtIdx !== -1)  rowArray[createdAtIdx]  = existingRow[createdAtIdx];
     if (syncStatusIdx !== -1) rowArray[syncStatusIdx] = computeSyncStatus(String(existingRow[syncStatusIdx]));
+    if (!Number.isInteger(existingRowNum) || existingRowNum < 2 || existingRowNum > sheet.getLastRow())
+      return { key: key, ok: false, error: 'invalid_row' };
     sheet.getRange(existingRowNum, 1, 1, spec.columns.length).setValues([rowArray]);
+    values[existingRowNum - 1] = rowArray;
     return { key: key, ok: true, action: 'updated' };
   }
 

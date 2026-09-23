@@ -9,6 +9,9 @@ function listAccounts() {
   const netMap   = _buildAccountNetMap(accounts);
   return accounts.map(function(a) {
     const opening = Number(a.opening_value_local);
+    if (a.opening_value_local === undefined || a.opening_value_local === null
+        || String(a.opening_value_local).trim() === '' || !Number.isFinite(opening))
+      throw new Error('invalid_account_opening_value');
     // netMap is pre-seeded for every account id by _buildAccountNetMap.
     const net     = netMap[a.id];
     return Object.assign({}, a, { current_value_local: opening + net });
@@ -21,7 +24,9 @@ function listAccounts() {
 function _buildAccountNetMap(accounts) {
   // Seed the map to zero for every account first — accounts with no transactions must
   // resolve to opening_value + 0, not opening_value + undefined (which yields NaN).
-  const net = {};
+  const net = Object.create(null);
+  const trackingStartById = Object.create(null);
+  accounts.forEach(function(a) { trackingStartById[a.id] = sheetDateTimeToDate(a.tracking_start_date_local); });
   accounts.forEach(function(a) { net[a.id] = 0; });
 
   const txSheet  = getOrCreateSheet(TRANSACTIONS_SHEET, getTransactionSheetColumns());
@@ -32,6 +37,7 @@ function _buildAccountNetMap(accounts) {
   const amtIdx  = txColIndex('tx_amount_local');
   const typeIdx = txColIndex('tx_type');
   const statIdx = txColIndex('record_status');
+  const dateIdx = txColIndex('tx_date_local');
 
   // Index by account ID — that is what the transactions sheet stores in account_id
   const validIds = {};
@@ -43,6 +49,14 @@ function _buildAccountNetMap(accounts) {
     const amount = Number(values[i][amtIdx]);
     const type   = String(values[i][typeIdx]).trim();
     if (accId === '' || validIds[accId] !== true) continue;
+    if (!Number.isFinite(amount) || amount <= 0) {
+      console.warn('_buildAccountNetMap: skipped_reason=invalid_amount row=' + (i + 1));
+      continue;
+    }
+    const transactionDate = sheetDateTimeToDate(values[i][dateIdx]);
+    if (transactionDate === null) continue;
+    const trackingStart = trackingStartById[accId];
+    if (trackingStart !== null && transactionDate < trackingStart) continue;
     if (type === 'money-in')       net[accId] += amount;
     else if (type === 'money-out') net[accId] -= amount;
   }
@@ -126,7 +140,7 @@ function createAccountsBulk(body) {
   // One sheet read → map id → 1-based sheet row number.
   const idColIdx     = acctColIndex('id');
   const existingData = sheet.getDataRange().getValues();
-  const rowNumById   = {};
+  const rowNumById   = Object.create(null);
   for (let i = 1; i < existingData.length; i++) {
     const existingId = String(existingData[i][idColIdx]).trim();
     if (existingId !== '') rowNumById[existingId] = i + 1;
@@ -143,7 +157,7 @@ function createAccountsBulk(body) {
   body.accounts.forEach(function(acct) {
     const validation = validateAccountCreate(acct);
     if (validation.ok === false) {
-      results.push({ key: acct.id, ok: false, error: validation.error });
+      results.push({ key: acct !== null && typeof acct === 'object' ? acct.id : '', ok: false, error: validation.error });
       failed += 1;
       return;
     }
@@ -225,7 +239,7 @@ function updateAccount(body) {
   const sheet   = getOrCreateSheet(ACCOUNTS_SHEET, cols);
   const rowNum  = Number(body.row_num);
   const lastRow = sheet.getLastRow();
-  if (!Number.isFinite(rowNum) || rowNum < 2 || rowNum > lastRow) return { ok: false, error: 'invalid_row' };
+  if (!Number.isInteger(rowNum) || rowNum < 2 || rowNum > lastRow) return { ok: false, error: 'invalid_row' };
 
   const allRows = sheet.getDataRange().getValues();
 
@@ -269,7 +283,7 @@ function updateAccount(body) {
     writeField('description', String(body.description).trim());
   }
   if (body.record_status !== undefined && body.record_status !== null) {
-    writeField('record_status', String(body.record_status));
+    writeField('record_status', String(body.record_status).trim());
   }
 
   // sync_status: preserve create-pending if not yet synced; clear sync_notes either way.
@@ -293,7 +307,7 @@ function deleteAccount(body) {
   const sheet   = getOrCreateSheet(ACCOUNTS_SHEET, cols);
   const rowNum  = Number(body.row_num);
   const lastRow = sheet.getLastRow();
-  if (!Number.isFinite(rowNum) || rowNum < 2 || rowNum > lastRow) return { ok: false, error: 'invalid_row' };
+  if (!Number.isInteger(rowNum) || rowNum < 2 || rowNum > lastRow) return { ok: false, error: 'invalid_row' };
 
   // Single read — extract all needed values from this row before mutating.
   const allData       = sheet.getDataRange().getValues();
@@ -356,7 +370,7 @@ function restoreAccount(body) {
   const sheet   = getOrCreateSheet(ACCOUNTS_SHEET, cols);
   const rowNum  = Number(body.row_num);
   const lastRow = sheet.getLastRow();
-  if (!Number.isFinite(rowNum) || rowNum < 2 || rowNum > lastRow) return { ok: false, error: 'invalid_row' };
+  if (!Number.isInteger(rowNum) || rowNum < 2 || rowNum > lastRow) return { ok: false, error: 'invalid_row' };
 
   // Single read — extract both the status check and the sync_status from the same read.
   const allData = sheet.getDataRange().getValues();

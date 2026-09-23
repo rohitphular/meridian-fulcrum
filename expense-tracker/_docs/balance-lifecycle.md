@@ -28,12 +28,13 @@ The user always inputs and sees positive numbers for liabilities. The store nega
 `_buildAccountNetMap` iterates all non-deleted transaction rows and accumulates:
 
 ```
-for each non-deleted transaction row:
+for each non-deleted row with valid date, positive finite amount and known account:
+    if tracking_start_date_local is set and tx_date_local is earlier: skip
     if tx_type === 'money-in':  net[account_id] += tx_amount_local
     if tx_type === 'money-out': net[account_id] -= tx_amount_local
 ```
 
-The resulting `net[id]` value is the total effect of all transactions on the account since `opening_value_local` was recorded.
+The opening value is the snapshot at `tracking_start_date_local`, when set. The cutoff is inclusive: a movement exactly at the tracking timestamp counts. A blank cutoff retains all-history behavior. `account_opening_date_local` records the real-world opening date and is not the balance cutoff. Historical insight replay activates the opening snapshot at the tracking timestamp; it converts openings and movements using the same display currency.
 
 Each transaction row touches exactly **one** account via `account_id`. A transfer between two accounts is two rows, each accumulating into its own account's net independently.
 
@@ -49,7 +50,7 @@ Because `current_value_local` is derived, any change to the transactions sheet i
 **money-out:**
 `net[account_id] -= tx_amount_local` → `current_value_local` falls by `tx_amount_local`.
 
-**Transfer (two rows, same parent_tx_id):**
+**Transfer (child points to parent ID):**
 Row A (money-out on source): `net[source_id] -= Row A.tx_amount_local`
 Row B (money-in on target): `net[target_id] += Row B.tx_amount_local`
 
@@ -59,12 +60,12 @@ If source and target accounts differ in currency, `Row B.tx_amount_local ≠ Row
 
 An edit is logically equivalent to removing the old row's contribution and adding the new row's contribution. Because the net map is computed fresh from the sheet on every read, this happens automatically — editing the row's `tx_amount_local` or `tx_type` or `account_id` changes the data that `_buildAccountNetMap` will aggregate on the next call.
 
-For financial rule validation at edit time, the frontend and backend must compute the **post-reversal balance** before checking insufficient-balance rules:
+For financial rule validation at edit time, the frontend computes the **post-reversal balance** before checking insufficient-balance rules:
 
 ```
 post_reversal_balance = current_value_local
 
-if old.account_id == new.account_id:
+if old.account_id == new.account_id and old row contributed to the tracked balance:
     if old.tx_type == 'money-in':  post_reversal_balance -= old.tx_amount_local
     if old.tx_type == 'money-out': post_reversal_balance += old.tx_amount_local
 ```
@@ -83,7 +84,7 @@ The computed model is naturally idempotent for reads — `listAccounts` always d
 
 ## Concurrency
 
-Single-user model. No locking is required — requests are sequential. If ported to a concurrent backend, wrap each transaction write in a database transaction to prevent partial reads while `_buildAccountNetMap` is scanning.
+Single-user model. POST mutations are serialized with a script lock; contention returns `busy_retry`. Reads and external spreadsheet edits can still overlap. Google Sheets does not provide a transaction spanning multiple requests or sheets.
 
 ## Worked example — cross-currency transfer (GBP to INR)
 

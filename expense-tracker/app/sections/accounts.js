@@ -425,7 +425,7 @@ function _renderAccountForm(a, mode) {
       <label for="${pfx}ClosingDate">Closing date</label>
       ${isView
         ? `<input type="text" value="${v(_fmtDateDisplay(a.account_closing_date_local))}" disabled>`
-        : `<input type="datetime-local" id="accEditClosingDate" value="${a.account_closing_date_local ? String(a.account_closing_date_local).replace(' ', 'T').substring(0, 16) : ''}">`}
+        : `<input type="datetime-local" id="accEditClosingDate" value="${esc(a.account_closing_date_local ? String(a.account_closing_date_local).replace(' ', 'T').substring(0, 16) : '')}">`}
     </div>` : '';
 
   // Timezone: not shown on add (auto-detected from browser); read-only in view/edit
@@ -474,6 +474,12 @@ function _renderAccountForm(a, mode) {
         ${subTypeField}
       </div>
       ${openingDateField}
+      <div class="field">
+        <label for="${pfx}TrackingStart">Tracking start date</label>
+        ${isAdd
+          ? '<input type="datetime-local" id="accNewTrackingStart"><div class="field-hint">Opening value applies from this time. Earlier transactions remain in history but do not affect balances. Leave blank to include all history.</div>'
+          : `<input type="text" id="accEditTrackingStart" value="${v(_fmtDateDisplay(a.tracking_start_date_local))}" disabled>`}
+      </div>
 
       ${isAdd ? `
       <div class="field">
@@ -1006,6 +1012,7 @@ async function _saveNew() {
     type,
     sub_type,
     account_opening_date_local,
+    tracking_start_date_local: _v('accNewTrackingStart').trim().replace('T', ' '),
     description,
     opening_value_local: rawOV,
   };

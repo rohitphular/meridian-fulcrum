@@ -80,23 +80,30 @@ function _buildSnapshot() {
   const accounts  = listAccounts();
   const ratesData = listRates();
 
-  const rateMap = {};
+  const rateMap = Object.create(null);
+  const accountMap = Object.create(null);
+  accounts.forEach(function(account) { accountMap[String(account.id)] = account; });
   ratesData.forEach(function(r) {
     if (r.currency) rateMap[String(r.currency).toUpperCase()] = Number(r.rate);
   });
 
   let assets = 0, liabilities = 0;
+  let omittedAccounts = 0, omittedTransactions = 0;
   const acctList = [];
 
   accounts.filter(function(a) { return String(a.record_status) === 'active'; }).forEach(function(a) {
-    const bal    = Number(a.current_value);
-    const rate   = rateMap[String(a.currency).toUpperCase()];
+    const bal    = Number(a.current_value_local);
+    const rate   = rateMap[String(a.account_currency_local).toUpperCase()];
+    if (!Number.isFinite(bal) || !Number.isFinite(rate) || rate <= 0) {
+      omittedAccounts += 1;
+      return;
+    }
     const balXau = bal / rate;
 
     if (isLiabilityType(a.type)) liabilities += Math.abs(balXau);
     else                          assets      += balXau;
 
-    acctList.push({ name: a.name, type: a.type, sub_type: a.sub_type, currency: a.currency, balance: Math.round(bal * 100) / 100 });
+    acctList.push({ name: a.account_name, type: a.type, sub_type: a.sub_type, currency: a.account_currency_local, balance: Math.round(bal * 100) / 100 });
   });
 
   const txSheet = getOrCreateSheet(TRANSACTIONS_SHEET, getTransactionSheetColumns());
@@ -106,14 +113,26 @@ function _buildSnapshot() {
   cutoff.setMonth(cutoff.getMonth() - 3);
 
   const recentTx = allTx.filter(function(tx) {
-    const d = new Date(tx.tx_date_local);
-    return !isNaN(d.getTime()) && d >= cutoff && tx.tx_type;
+    const d = sheetDateTimeToDate(tx.tx_date_local);
+    if (String(tx.record_status) === 'deleted' || d === null) {
+      omittedTransactions += 1;
+      return false;
+    }
+    return d >= cutoff;
   });
 
-  const catSpend = {}, cpSpend = {};
+  const catSpend = Object.create(null), cpSpend = Object.create(null);
   let totalIn = 0, totalOut = 0;
   recentTx.forEach(function(tx) {
-    const amt = Number(tx.tx_amount_local);
+    const account = accountMap[String(tx.account_id)];
+    const rate = account !== undefined ? rateMap[String(account.account_currency_local).toUpperCase()] : undefined;
+    const nativeAmount = Number(tx.tx_amount_local);
+    if (!Number.isFinite(nativeAmount) || nativeAmount <= 0 || !Number.isFinite(rate) || rate <= 0
+        || (tx.tx_type !== 'money-in' && tx.tx_type !== 'money-out')) {
+      omittedTransactions += 1;
+      return;
+    }
+    const amt = nativeAmount / rate;
     if (tx.tx_type === 'money-out') {
       totalOut += amt;
       const key = tx.major_category + ' / ' + tx.minor_category;
@@ -143,9 +162,12 @@ function _buildSnapshot() {
     net_worth_xau:        Math.round((assets - liabilities) * 100) / 100,
     total_assets_xau:     Math.round(assets * 100) / 100,
     total_liabilities_xau: Math.round(liabilities * 100) / 100,
-    note: 'Net worth is converted to XAU (grams of gold) using stored exchange rates. Account balances shown in native currency.',
+    note: 'Net worth and transaction totals use XAU (grams of gold) at stored exchange rates. Account balances use native currency. Transfers are included in gross money flows. Omitted counts include invalid records and deleted transactions.',
+    omitted_accounts: omittedAccounts,
+    omitted_transactions: omittedTransactions,
     accounts: acctList,
     last_3_months: {
+      currency: 'XAU',
       total_income:           Math.round(totalIn  * 100) / 100,
       total_expense:          Math.round(totalOut * 100) / 100,
       top_spending_categories: topCategories,
@@ -227,9 +249,10 @@ function _fetchRequestedData(request) {
   cutoff.setMonth(cutoff.getMonth() - monthsBack);
 
   const allTx      = sheetToObjects(txSheet);
-  const accountMap = _loadAccountMap();
+  const accountMap = _loadAccountMap({ include_closed: true });
 
   const filtered = allTx.filter(function(tx) {
+    if (String(tx.record_status) === 'deleted' || !Number.isFinite(Number(tx.tx_amount_local))) return false;
     const d = new Date(tx.tx_date_local);
     if (isNaN(d.getTime()) || d < cutoff) return false;
     if (request.tx_type        && tx.tx_type        !== request.tx_type)        return false;
@@ -248,7 +271,7 @@ function _fetchRequestedData(request) {
       date:             tx.tx_date_local,
       type:             tx.tx_type,
       amount:           Number(tx.tx_amount_local),
-      currency:         (acc !== undefined && acc !== null) ? acc.currency : null,
+      currency:         (acc !== undefined && acc !== null) ? acc.account_currency_local : null,
       major:            tx.major_category,
       minor:            tx.minor_category,
       counterparty:     tx.counterparty_name,

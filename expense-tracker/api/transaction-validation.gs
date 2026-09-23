@@ -95,6 +95,15 @@ function validateTransactionRecord(body, catMap, accountMap) {
       return { ok: false, error: 'missing_target_amount' };
   }
 
+  // The single-leg writer selects the target whenever source is not mandatory.
+  // Validate that selected leg even for categories with both flags false.
+  if (cat.source_account_mandatory !== true && cat.target_account_mandatory !== true) {
+    if (body.target_account === undefined || body.target_account === null || String(body.target_account).trim() === '')
+      return { ok: false, error: 'missing_target_account' };
+    if (!Number.isFinite(tgtAmtNum) || tgtAmtNum <= 0)
+      return { ok: false, error: 'missing_target_amount' };
+  }
+
   const finErr = _validateFinancialRules(body, null, accountMap);
   if (!finErr.ok) return finErr;
 

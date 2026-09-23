@@ -13,6 +13,12 @@ function getOrCreateSheet(name, columns) {
   }
   const lastCol = sheet.getLastColumn();
   const headers = lastCol > 0 ? sheet.getRange(1, 1, 1, lastCol).getValues()[0] : [];
+  // Positional schemas cannot safely read/write reordered or renamed legacy headers.
+  // Require an explicit sheet migration instead of appending duplicate replacements.
+  for (let i = 0; i < Math.min(headers.length, columns.length); i++) {
+    if (headers[i] !== columns[i])
+      throw new Error('sheet_header_mismatch: migrate sheet ' + name + ' column ' + (i + 1));
+  }
   let added = 0;
   columns.forEach(col => {
     if (!headers.includes(col)) sheet.getRange(1, lastCol + ++added).setValue(col);
@@ -56,6 +62,7 @@ function extractMeta(source) {
 // already non-exploitable in practice, but the cost is one tight loop.
 function checkPin(pin) {
   const stored = PropertiesService.getScriptProperties().getProperty('PIN_SECRET');
+  if (stored === null || stored === undefined || String(stored).trim() === '') return false;
   return _constantTimeEqual(pin, stored);
 }
 
@@ -109,6 +116,8 @@ function toBool(v) {
 // Returns null if the value is blank, null, undefined, or unparseable.
 function sheetDateTimeToDate(str) {
   if (str === undefined || str === null || String(str).trim() === '') return null;
+  if (Object.prototype.toString.call(str) === '[object Date]')
+    return Number.isFinite(str.getTime()) ? new Date(str.getTime()) : null;
   const d = new Date(String(str).trim().replace(' ', 'T'));
   return isNaN(d.getTime()) ? null : d;
 }

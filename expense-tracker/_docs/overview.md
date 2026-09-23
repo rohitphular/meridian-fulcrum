@@ -27,7 +27,7 @@ The base currency is **XAU (1 gram of gold, rate = 1, never editable)**. All cro
 
 ## Transaction types
 
-Transactions use a **single-leg model**: each row represents one account movement. The field `account_id` identifies the affected account and `tx_amount_local` holds the movement amount. Transfers between owned accounts are represented as two linked rows sharing a `parent_tx_id`.
+Transactions use a **single-leg model**: each row represents one account movement. The field `account_id` identifies the affected account and `tx_amount_local` holds the movement amount. Transfers between owned accounts are represented as two linked rows; the child stores the parent ID in `parent_tx_id`.
 
 | Type | Direction | `account_id` | Categorised |
 |---|---|---|---|
@@ -51,9 +51,9 @@ Liabilities are modelled as accounts with negative balances. There is no separat
 | Area | Capability |
 |---|---|
 | Authentication | PIN + optional TOTP, IP rate-limit, audit log |
-| Accounts | CRUD; archive without delete; per-type fields (loan terms, credit limits, overdraft, investment platform, etc.); utilisation and repayment-progress derived fields |
+| Accounts | CRUD; archive without delete; opening snapshot and tracking date; separate account-detail CSV imports |
 | Transactions | CRUD; single-leg model (`account_id` + `tx_amount_local`); eight filter dimensions; client-side date range; sort; pagination; CSV/JSON export; cascading category dropdowns; FX rate when accounts differ in currency |
-| Categories | CRUD; two-level taxonomy scoped per transaction type; archive without delete; auto-seed on first run |
+| Categories | CRUD; two-level taxonomy scoped per transaction type; archive without delete; CSV import or manual creation |
 | Rates | Upsert per currency; XAU base currency read-only (rate = 1); auto-seed on first run |
 | Subscriptions | Registry of recurring payment obligations; frequency, amount, account, and category linkage; 21-column schema |
 | Insight | Income/Expense/Net/Savings-rate cards; monthly bar chart; spend by category (drillable major → minor); spend by account |
@@ -71,5 +71,5 @@ Liabilities are modelled as accounts with negative balances. There is no separat
 
 - **Single-user.** No tenancy model. Auth gate is a shared secret (PIN + TOTP).
 - **Append-friendly store.** Sheets/database is the durable record; the app re-reads after every mutation rather than maintaining a cache delta.
-- **Eventual consistency is not a concern.** All writes are synchronous within one request; one user means no contention.
+- **Concurrent requests are possible.** Multiple browser tabs and parallel reads can overlap even for one user. Google Sheets does not provide database transactions across sheets.
 - **Language-agnostic.** The reference implementation runs on Google Apps Script + a static JS frontend, but every requirement in `docs/` is described in terms of logic and data — not framework or platform.

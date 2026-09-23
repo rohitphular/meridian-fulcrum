@@ -1005,12 +1005,14 @@ function _afRefreshToAccountField() {
 // ── Financial hard-block rules 1–6 ───────────────────────────────────────────
 // Returns null on pass, or a multi-line error string on block.
 // Rules 1 & 3 — insufficient balance (asset accounts).
-// Rules 2 & 4 — credit limit exceeded (credit-card accounts).
+// Credit-limit checks require revolving-credit details, which list_accounts does not expose.
 // Rule 5     — money-out from a loan account (with exemption for interest/charges).
 // Rule 6     — FX transfer: source_amount_local and target_amount_local may differ for cross-currency transfers.
 
-function _checkBalanceRules(transaction_type, sourceAccount, isTransfer, amount) {
+function _checkBalanceRules(transaction_type, sourceAccount, isTransfer, amount, txDate) {
   if (sourceAccount === undefined || sourceAccount === null) return null;
+  const trackingStart = String(sourceAccount.tracking_start_date_local ?? '').trim();
+  if (trackingStart !== '' && txDate !== undefined && new Date(txDate) < new Date(trackingStart.replace(' ', 'T'))) return null;
   const isMoneyOut      = transaction_type === 'money-out';
   if (!isMoneyOut && !isTransfer) return null;
 
@@ -1018,7 +1020,7 @@ function _checkBalanceRules(transaction_type, sourceAccount, isTransfer, amount)
   const fmt = n => Number(n).toFixed(2);
 
   // Rules 1 & 3 — asset accounts
-  if ((state.accountSchema !== undefined && state.accountSchema !== null && state.accountSchema.asset_types !== undefined && state.accountSchema.asset_types !== null ? state.accountSchema.asset_types : []).includes(sourceAccount.type)) {
+  if (sourceAccount.type === 'asset' || sourceAccount.type === 'investment') {
     const balance = Number(sourceAccount.current_value_local);
     if (balance < amount) {
       return (
@@ -1030,36 +1032,6 @@ function _checkBalanceRules(transaction_type, sourceAccount, isTransfer, amount)
     return null;
   }
 
-  // Rules 2 & 4 — credit card accounts
-  if (sourceAccount.type === 'credit_card') {
-    const creditLimit = Number(sourceAccount.credit_card_limit);
-    if ((sourceAccount.credit_card_limit === undefined || sourceAccount.credit_card_limit === null || sourceAccount.credit_card_limit === '') || creditLimit <= 0) return null; // no limit set — skip check
-
-    const balance         = Number(sourceAccount.current_value_local); // negative: amount owed stored as negative
-    const availableCredit = creditLimit + balance;                 // e.g. limit=1000, balance=−600 → available=400
-
-    if (amount > availableCredit) {
-      const owed = Math.abs(balance);
-      if (availableCredit < 0) {
-        // Already over the limit before this transaction
-        const alreadyOver = Math.abs(availableCredit);
-        return (
-          `Credit limit exceeded.\n` +
-          `${sourceAccount.account_name} — limit ${sym}${fmt(creditLimit)}, currently ${sym}${fmt(owed)} owed, already ${sym}${fmt(alreadyOver)} over the limit.\n` +
-          `This transaction of ${sym}${fmt(amount)} cannot be applied.`
-        );
-      } else {
-        // Within limit but this transaction would exceed it
-        const overage = amount - availableCredit;
-        return (
-          `Credit limit exceeded.\n` +
-          `${sourceAccount.account_name} — limit ${sym}${fmt(creditLimit)}, currently ${sym}${fmt(owed)} owed, available ${sym}${fmt(availableCredit)}.\n` +
-          `This transaction of ${sym}${fmt(amount)} would exceed the limit by ${sym}${fmt(overage)}.`
-        );
-      }
-    }
-    return null;
-  }
 
   return null;
 }
@@ -1070,8 +1042,8 @@ function _checkBalanceRules(transaction_type, sourceAccount, isTransfer, amount)
 function _checkRule5(transaction_type, sourceAccount, major_category, minor_category) {
   if (transaction_type !== 'money-out') return null;
   if (sourceAccount === undefined || sourceAccount === null) return null;
-  const loanTypes = (state.accountSchema !== undefined && state.accountSchema !== null && state.accountSchema.loan_types !== undefined && state.accountSchema.loan_types !== null) ? state.accountSchema.loan_types : [];
-  if (!loanTypes.includes(sourceAccount.type)) return null;
+  const loanTypes = (state.accountSchema !== undefined && state.accountSchema !== null && state.accountSchema.loan_sub_types !== undefined && state.accountSchema.loan_sub_types !== null) ? state.accountSchema.loan_sub_types : [];
+  if (sourceAccount.type !== 'liability' || !loanTypes.includes(sourceAccount.sub_type)) return null;
   if (major_category === 'debt-finance' && minor_category === 'interest-charges') return null;
   return (
     `Cannot record money-out from a loan account.\n` +
@@ -1124,7 +1096,7 @@ async function _saveTransaction() {
 
   const sourceAcc     = state.accountMap[source_account];
   const targetAcc     = state.accountMap[target_account];
-  const balanceError  = _checkBalanceRules(tx_type, sourceAcc, isTransfer, source_amount);
+  const balanceError  = _checkBalanceRules(tx_type, sourceAcc, isTransfer, source_amount, dateRaw);
   if (balanceError) { errEl.textContent = balanceError; return; }
 
   const rule5Error    = _checkRule5(tx_type, sourceAcc, major_category, minor_category);
@@ -1467,14 +1439,16 @@ async function _saveEdit() {
   // Undo the old movement only when the account hasn't changed.
   if (acctEdit === undefined || acctEdit === null || !Number.isFinite(Number(acctEdit.current_value_local))) { errEl.textContent = 'Account not found or has no valid balance.'; return; }
   let postRevBal = Number(acctEdit.current_value_local);
-  if (oldTx && String(oldTx.account_id) === String(account_id)) {
+  const trackingStart = String(acctEdit.tracking_start_date_local ?? '').trim();
+  if (oldTx && oldTx.record_status !== 'deleted' && String(oldTx.account_id) === String(account_id) &&
+      (trackingStart === '' || new Date(String(oldTx.tx_date_local).replace(' ', 'T')) >= new Date(trackingStart.replace(' ', 'T')))) {
     const oldAmt = Number(oldTx.tx_amount_local);
     if (oldTx.tx_type === 'money-in')  postRevBal -= oldAmt;
     if (oldTx.tx_type === 'money-out') postRevBal += oldAmt;
   }
   const acctPR = Object.assign({}, acctEdit, { current_value_local: postRevBal });
 
-  const balanceErrorEdit = _checkBalanceRules(tx_type, acctPR, false, tx_amount_local);
+  const balanceErrorEdit = _checkBalanceRules(tx_type, acctPR, false, tx_amount_local, dateRaw);
   if (balanceErrorEdit) { errEl.textContent = balanceErrorEdit; return; }
 
   const rule5ErrorEdit = _checkRule5(tx_type, acctEdit, major_category, minor_category);
@@ -1827,7 +1801,7 @@ function _renderFilterBar() {
           </div>
           <div id="filterAccountWrap" style="flex:1;min-width:130px;position:relative">
             <button id="filterAccountTrigger" type="button" style="width:100%;display:flex;justify-content:space-between;align-items:center;text-align:left;background:var(--panel);border:1px solid var(--hair-strong);border-radius:8px;padding:6px 10px;font-size:var(--text-base);color:var(--ink);cursor:pointer;outline:none">
-              <span id="filterAccountLabel">${f.accounts.length ? f.accounts.map(id => { const a = state.accountMap[id]; return (a !== undefined && a !== null && a.account_name !== undefined && a.account_name !== null && a.account_name !== '') ? a.account_name : id; }).join(', ') : 'All accounts'}</span>
+              <span id="filterAccountLabel">${esc(f.accounts.length ? f.accounts.map(id => { const a = state.accountMap[id]; return (a !== undefined && a !== null && a.account_name !== undefined && a.account_name !== null && a.account_name !== '') ? a.account_name : id; }).join(', ') : 'All accounts')}</span>
               <span style="color:var(--muted);font-size:var(--text-2xs);margin-left:8px">▼</span>
             </button>
             <div id="filterAccountDropdown" class="hidden" style="position:fixed;z-index:1000;background:var(--panel);border:1px solid var(--hair-strong);border-radius:8px;padding:8px 10px;display:flex;flex-direction:column;gap:8px;box-shadow:0 4px 16px rgba(0,0,0,.15);max-height:200px;overflow-y:auto">
@@ -1956,6 +1930,7 @@ function _parseTxCsv(text) {
     if (rowErrors.length) { errors.push(`Row ${i + 1}: ${rowErrors.join('; ')}`); continue; }
 
     transactions.push({
+      id:                      row.id,
       tx_date_local:            row.tx_date_local.replace('T', ' '),
       tx_timezone_local:        (row.tx_timezone_local        !== undefined && row.tx_timezone_local        !== null && row.tx_timezone_local        !== '') ? row.tx_timezone_local        : '',
       tx_type:                  row.tx_type,
@@ -2102,15 +2077,12 @@ async function _submitTxImport(transactions) {
   if (btn !== null && btn !== undefined)   { btn.disabled = true; btn.textContent = 'Importing…'; }
   if (errEl !== null && errEl !== undefined) errEl.textContent = '';
 
-  // Strip display-only fields and deduplicate before chunking.
-  const seen    = new Set();
-  const payload = [];
-  transactions.forEach(tx => {
+  // Preserve every row and its ID; the backend owns upsert and duplicate rules.
+  const payload = transactions.map(tx => {
     const clean = Object.assign({}, tx);
     delete clean._src_name;
     delete clean._tgt_name;
-    const key = [clean.tx_date_local, clean.tx_type, (clean.source_account !== undefined && clean.source_account !== null) ? clean.source_account : '', (clean.target_account !== undefined && clean.target_account !== null) ? clean.target_account : '', clean.source_amount_local].join('|');
-    if (!seen.has(key)) { seen.add(key); payload.push(clean); }
+    return clean;
   });
 
   const chunks = [];

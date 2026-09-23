@@ -7,7 +7,7 @@ Backend deploy pipeline. Pushes `.gs` source to a GAS project draft and promotes
 | File | Purpose |
 |---|---|
 | `envs.json` | Single source of truth for both envs' Script ID + Deployment ID + /exec URL. Edited by hand. |
-| `script-deployment.sh` | Backend deploy pipeline — takes env as required first arg; pure clasp (no git). |
+| `deploy.sh` | Backend deploy pipeline — takes env as required first arg; pure clasp (no git). |
 
 ## Prerequisites
 
@@ -25,37 +25,37 @@ Configured in `cicd/envs.json`. Each env declares `script_id`, `deployment_id`, 
 | `dev` | Iteration — pushes to the dev GAS project |
 | `prod` | Live — pushes to the prod GAS project |
 
-Until prod's IDs are filled in (currently `TODO`), prod deploys are refused. The env list in the menu is derived from `envs.json` — adding a new top-level block in that file makes it selectable.
+Deployment is refused if the selected environment still has `TODO` IDs. The interactive menu offers dev/prod; explicit environment arguments are validated against `envs.json`.
 
 ## The model
 
 Three files are involved at deploy time:
 
 1. **`cicd/envs.json`** — read-only source of truth. The script reads IDs from here.
-2. **`backend/.clasp.json`** — committed with `"scriptId": "${SCRIPT_ID_PLACEHOLDER}"`. The script writes the real `scriptId` here at the start of the deploy and restores the placeholder on exit (via an `EXIT` trap that fires on success, failure, or Ctrl-C).
+2. **`api/.clasp.json`** — committed with `"scriptId": "${SCRIPT_ID_PLACEHOLDER}"`. The script writes the real `scriptId` here at the start of the deploy and restores the placeholder on exit (via an `EXIT` trap that fires on success, failure, or Ctrl-C).
 3. **`app/config.js`** — committed with runtime hostname detection. `file://` / `localhost` → dev URL; `*.github.io` → prod URL. **NOT touched by the deploy script.**
 
 ## Deploy flow
 
-The canonical entry point is the Forge launcher:
+From the repository root, the deploy entry point is:
 
 ```bash
-bash forge/deploy.sh
+bash expense-tracker/cicd/deploy.sh
 ```
 
-It asks for app and env, then dispatches. You can also call the script directly:
+It asks for an environment and description. From `expense-tracker/`, you can also provide them directly:
 
 ```bash
-bash cicd/script-deployment.sh dev  "expense-tracker: <change>"
-bash cicd/script-deployment.sh prod "expense-tracker: <change>"
+bash cicd/deploy.sh dev  "expense-tracker: <change>"
+bash cicd/deploy.sh prod "expense-tracker: <change>"
 ```
 
-### What `script-deployment.sh` does (5 steps)
+### What `deploy.sh` does (5 steps)
 
 1. **Validate env arg** against `envs.json`. Unknown env is rejected with the list of valid envs.
 2. **Resolve `scriptId` + `deploymentId`** for that env from `envs.json`. Refuses if either is `TODO`.
-3. **Install EXIT trap** that restores `backend/.clasp.json` `scriptId` to the placeholder — fires on any exit path.
-4. **Write target env's `scriptId`** into `backend/.clasp.json` so `clasp push` targets the right GAS project.
+3. **Install EXIT trap** that restores `api/.clasp.json` `scriptId` to the placeholder — fires on any exit path.
+4. **Write target env's `scriptId`** into `api/.clasp.json` so `clasp push` targets the right GAS project.
 5. **`clasp push --force`** uploads `.gs` source → **`clasp deploy --deploymentId <id>`** promotes it to a new live version on the env's deployment.
 
 Script exits → trap fires → `.clasp.json` back to `${SCRIPT_ID_PLACEHOLDER}`.
@@ -79,9 +79,9 @@ Do this once for `dev`, then again for `prod`.
    - `TOTP_SECRET` — Base32 secret. Generate: `python3 -c "import base64, os; print(base64.b32encode(os.urandom(20)).decode())"`. Add to an authenticator app.
    - `TOTP_ENABLED` — `false` for dev (faster iteration), `true` for prod.
 4. **Record the Script ID** in `cicd/envs.json` under the matching env. Leave `deployment_id` and `script_url` as `TODO`.
-5. **Bootstrap push** — `script-deployment.sh` refuses while `envs.json` has TODOs, so for the first push hand-edit `backend/.clasp.json` to set `scriptId` to this env's value, then:
+5. **Bootstrap push** — `deploy.sh` refuses while `envs.json` has TODOs, so for the first push hand-edit `api/.clasp.json` to set `scriptId` to this env's value, then:
    ```bash
-   cd backend/
+   cd api/
    clasp push --force
    cd ..
    ```
@@ -90,9 +90,9 @@ Do this once for `dev`, then again for `prod`.
    - `deployment_id` — the long segment between `/s/` and `/exec`
    - `script_url` — the full `/exec` URL
 8. **Update `app/config.js`** — paste the env's `/exec` URL into the matching constant (`DEV_SCRIPT_URL` or `PROD_SCRIPT_URL`).
-9. **First real deploy** — `bash cicd/script-deployment.sh <env> "bootstrap"`.
+9. **First real deploy** — `bash cicd/deploy.sh <env> "bootstrap"`.
 
-After step 9, subsequent deploys are one command: `bash forge/deploy.sh`.
+After step 9, subsequent deploys are one command: `bash expense-tracker/cicd/deploy.sh`.
 
 ## Frontend hosting
 
@@ -100,7 +100,7 @@ After step 9, subsequent deploys are one command: `bash forge/deploy.sh`.
 
 | Where the page is loaded | URL chosen |
 |---|---|
-| `file://app/index.html` | dev |
+| `file://app/index.html` | dev URL selected, but ES modules require serving the app over HTTP |
 | `http://localhost:*` | dev |
 | `https://*.github.io/...` | prod |
 
@@ -111,16 +111,22 @@ To host on GitHub Pages: push `main` to GitHub, enable Pages from the main branc
 When you want to push without involving the deploy script:
 
 ```bash
-# 1. Hand-edit backend/.clasp.json so scriptId = the target env's value from envs.json
-cd backend/
+# 1. Hand-edit api/.clasp.json so scriptId = the target env's value from envs.json
+cd api/
 clasp push --force
 clasp deploy --deploymentId "<paste from envs.json>" --description "your description"
-# 2. Restore the placeholder in .clasp.json — by hand, OR by running script-deployment.sh once
+# 2. Restore the placeholder in .clasp.json — by hand, OR by running deploy.sh once
 #    (which flips to env's scriptId, then trap restores placeholder on exit).
 ```
 
 ## Safety notes
 
 - `clasp push --force` overwrites the GAS draft with local files. If you edited code in the GAS browser editor since the last push, run `clasp pull` first.
-- `clasp login` tokens expire roughly once per year. Re-run `clasp login` if `clasp deploy` fails with an auth error.
+- Re-run `clasp login` if deployment reports expired or invalid credentials.
 - The PIN + TOTP gate is what protects your data, not the URL. Both URLs are publicly committed.
+
+## Schema compatibility before deployment
+
+Compare existing tab headers, in order, with the current schema getters and `IMPORT_REGISTRY`. Missing trailing columns can be appended automatically. Renamed or reordered columns return `sheet_header_mismatch` before any data write; migrate those headers and corresponding data explicitly first. In particular, older account currency/date names and subscription layouts must not simply have duplicate new headers appended.
+
+The local regression suite does not inspect live sheet layouts. Run `node --test expense-tracker/tests/*.cjs` from the repository root, then validate the intended environment separately.

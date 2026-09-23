@@ -107,7 +107,6 @@ function _renderForm(sub = null) {
   const txTypeVal      = isEdit ? sub.tx_type           : (p !== null && p !== undefined && p.tx_type !== undefined && p.tx_type !== null ? p.tx_type : '');
   const majorVal       = isEdit ? sub.major_category    : (p !== null && p !== undefined && p.major_category !== undefined && p.major_category !== null ? p.major_category : '');
   const minorVal       = isEdit ? sub.minor_category    : (p !== null && p !== undefined && p.minor_category !== undefined && p.minor_category !== null ? p.minor_category : '');
-  const tagsVal        = isEdit ? String(sub.tags).replace(/;/g, ', ') : (p !== null && p !== undefined && p.tx_tags !== undefined && p.tx_tags !== null ? String(p.tx_tags).replace(/;/g, ', ') : '');
   const descriptionVal = isEdit ? sub.description       : '';
   const dayVal         = isEdit ? (sub.frequency === 'weekly' ? sub.day_of_week : sub.day_of_month) : '';
   const startDateVal   = isEdit ? sub.subscription_start_date_local : '';
@@ -172,10 +171,6 @@ function _renderForm(sub = null) {
       <div class="field form-grid-span-2">
         <label for="subMinor">Minor category</label>
         <select id="subMinor">${_minorOpts(txTypeVal, majorVal, minorVal)}</select>
-      </div>
-      <div class="field form-grid-span-4">
-        <label for="subTags">Tags</label>
-        <input type="text" id="subTags" value="${esc(tagsVal)}" placeholder="streaming, entertainment">
       </div>
       <div class="field form-grid-span-4">
         <label for="subDescription">Notes</label>
@@ -416,7 +411,7 @@ function _renderImportPanel() {
       <div class="field form-grid-span-2">
         <label for="subImportFile">CSV file</label>
         <input type="file" id="subImportFile" accept=".csv">
-        <div class="field-hint">Columns: subscription_name, counterparty_name, subscription_amount_local, frequency, day_of_month, day_of_week, source_account, tx_type, major_category, minor_category, tags, description, subscription_start_date, subscription_end_date</div>
+        <div class="field-hint">Columns: subscription_name, counterparty_name, subscription_amount_local, frequency, day_of_month, day_of_week, source_account, tx_type, major_category, minor_category, description, subscription_start_date_local, subscription_end_date_local, subscription_timezone_local</div>
       </div>
     </div>
     <div id="subImportStatus">${_subImportResult !== null ? _subImportResult : ''}</div>
@@ -452,6 +447,9 @@ function _parseSubscriptionsCsv(text) {
     }
 
     subscriptions.push({
+      id:                           row.id,
+      record_status:                row.record_status,
+      subscription_timezone_local:  row.subscription_timezone_local,
       subscription_name:             row.subscription_name,
       counterparty_name:             row.counterparty_name,
       subscription_amount_local,
@@ -811,6 +809,9 @@ function _collectForm() {
     major_category:                el('subMajor').value,
     minor_category:                el('subMinor').value,
     description:                   el('subDescription').value.trim(),
+    subscription_timezone_local: state.subEditRow !== null
+      ? state.subscriptions.find(sub => sub._row === state.subEditRow)?.subscription_timezone_local ?? ''
+      : Intl.DateTimeFormat().resolvedOptions().timeZone,
     subscription_start_date_local: el('subStartDate').value,
     subscription_end_date_local:   el('subEndDate').value,
   };
@@ -931,6 +932,7 @@ async function _toggle(row) {
       major_category:                sub.major_category,
       minor_category:                sub.minor_category,
       description:                   sub.description,
+      subscription_timezone_local:  sub.subscription_timezone_local,
       subscription_start_date_local: sub.subscription_start_date_local,
       subscription_end_date_local:   sub.subscription_end_date_local,
       record_status:                 newStatus,

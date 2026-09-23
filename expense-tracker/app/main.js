@@ -37,54 +37,62 @@ function setTheme(theme) {
 async function loadAll() {
   showLoading();
   try {
-    const [txRes, catRes, accRes, ratesRes, schemaRes, txSchemaRes, catSchemaRes, subRes] = await Promise.all([
-      ExpenseAPI.listTransactions(),
-      ExpenseAPI.listCategories(),
-      ExpenseAPI.listAccounts(),
-      ExpenseAPI.listRates(),
-      loadAccountSchema(),
-      loadTransactionSchema(),
-      loadCategorySchema(),
-      ExpenseAPI.listSubscriptions(),
-    ]);
-
-    if (!txRes.ok) {
-      if (txRes.error === 'auth' || txRes.error === 'locked') {
-        clearSession(); showPinGate(); return;
+    const requests = [
+      ['transactions', () => ExpenseAPI.listTransactions()],
+      ['categories', () => ExpenseAPI.listCategories()],
+      ['accounts', () => ExpenseAPI.listAccounts()],
+      ['rates', () => ExpenseAPI.listRates()],
+      ['account schema', loadAccountSchema],
+      ['transaction schema', loadTransactionSchema],
+      ['category schema', loadCategorySchema],
+      ['subscriptions', () => ExpenseAPI.listSubscriptions()],
+    ];
+    const responses = await Promise.allSettled(requests.map(([, request]) => Promise.resolve().then(request)));
+    const failures = [];
+    responses.forEach((response, index) => {
+      const entity = requests[index][0];
+      if (response.status === 'rejected') {
+        failures.push({ entity, code: response.reason?.code ?? 'connection_error' });
+      } else if (index >= 4 && index <= 6) {
+        if (response.value === null || !Array.isArray(response.value?.types)) failures.push({ entity, code: 'invalid_schema' });
+      } else if (response.value?.ok !== true || !Array.isArray(response.value.data)) {
+        failures.push({ entity, code: response.value?.error ?? 'invalid_response' });
       }
-      showMsg('Failed to load transactions: ' + (txRes.error || 'unknown'), 'warn');
-    } else {
-      state.transactions = txRes.data ?? [];
-      sessionStorage.setItem('et_transactions_cache', JSON.stringify(state.transactions));
+    });
+    if (failures.length > 0) {
+      if (failures.some(failure => failure.code === 'auth' || failure.code === 'locked')) {
+        clearSession();
+        showPinGate();
+      }
+      const details = failures.map(failure => `${failure.entity}: ${failure.code}`).join('; ');
+      const hint = failures.some(failure => failure.code === 'sheet_header_mismatch')
+        ? ' Check the affected sheet headers against the current schema before retrying.'
+        : ' Retry after resolving the error.';
+      showMsg('Refresh failed — ' + details + '.' + hint + ' The last complete view is unchanged.', 'warn');
+      return;
     }
 
-    if (catRes.ok) {
-      state.categories = catRes.data ?? [];
-      state.categories.forEach(c => {
-        const toBool = v => v === true || String(v).toLowerCase() === 'true';
-        c.source_account_mandatory   = toBool(c.source_account_mandatory);
-        c.target_account_mandatory   = toBool(c.target_account_mandatory);
-        c.is_subscription_eligible   = toBool(c.is_subscription_eligible);
-      });
-    }
-    if (accRes.ok) {
-      state.accounts   = accRes.data ?? [];
-      state.accountMap = Object.fromEntries(state.accounts.map(a => [a.id, a]));
-    }
-    if (ratesRes.ok) {
-      state.rates   = ratesRes.data ?? [];
-      state.rateMap = {};
-      state.rates.forEach(r => { state.rateMap[r.currency] = Number(r.rate); });
-    }
-    if (schemaRes)    state.accountSchema    = schemaRes;
-    if (txSchemaRes)  state.transactionSchema = txSchemaRes;
-    if (catSchemaRes) state.categorySchema   = catSchemaRes;
-
-    if (subRes?.ok) {
-      state.subscriptions = subRes.data ?? [];
-    } else {
-      state.subscriptions = [];
-    }
+    const [txRes, catRes, accRes, ratesRes, schemaRes, txSchemaRes, catSchemaRes, subRes] = responses.map(response => response.value);
+    const toBool = value => value === true || String(value).toLowerCase() === 'true';
+    const snapshot = {
+      transactions: txRes.data,
+      categories: catRes.data.map(category => ({
+        ...category,
+        source_account_mandatory: toBool(category.source_account_mandatory),
+        target_account_mandatory: toBool(category.target_account_mandatory),
+        is_subscription_eligible: toBool(category.is_subscription_eligible),
+      })),
+      accounts: accRes.data,
+      accountMap: Object.fromEntries(accRes.data.map(account => [account.id, account])),
+      rates: ratesRes.data,
+      rateMap: Object.fromEntries(ratesRes.data.map(rate => [rate.currency, Number(rate.rate)])),
+      accountSchema: schemaRes,
+      transactionSchema: txSchemaRes,
+      categorySchema: catSchemaRes,
+      subscriptions: subRes.data,
+    };
+    // Commit only after every dependency and derived collection is ready.
+    Object.assign(state, snapshot);
 
     populateQuoteCurrencySelect();
     showSection(sessionStorage.getItem('et_section') || 'home');
@@ -138,9 +146,6 @@ async function init() {
     const meta = await fetchGeo();
     SheetsClient.init({ scriptUrl: window.CONFIG.SCRIPT_URL, pin: session.pin, meta });
     hidePinGate();
-
-    const cached = sessionStorage.getItem('et_transactions_cache');
-    if (cached) { try { state.transactions = JSON.parse(cached); } catch (_) {} }
 
     await loadAll();
   } else {

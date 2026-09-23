@@ -2,74 +2,95 @@
 // FULCRUM FORGE — Rate core operations
 // =============================================================================
 
-// Rates are GBP-relative: how many units of each currency equal 1 GBP.
-// XAU = grams of gold per 1 GBP (~0.013 at £77/g — update via the UI after first run).
+// Illustrative initial rates, expressed as currency units per gram of XAU.
+// These preserve the old seed's cross-currency ratios; update them before relying on valuations.
 const DEFAULT_RATES = [
-  { currency: 'GBP', rate: 1,     symbol: '£'  },
-  { currency: 'XAU', rate: 0.013, symbol: '⊕'  },
-  { currency: 'INR', rate: 105,   symbol: '₹'  },
-  { currency: 'USD', rate: 1.27,  symbol: '$'  },
-  { currency: 'EUR', rate: 1.17,  symbol: '€'  },
+  { currency: 'GBP', rate: 1 / 0.013, symbol: '£' },
+  { currency: 'XAU', rate: 1, symbol: '⊕' },
+  { currency: 'INR', rate: 105 / 0.013, symbol: '₹' },
+  { currency: 'USD', rate: 1.27 / 0.013, symbol: '$' },
+  { currency: 'EUR', rate: 1.17 / 0.013, symbol: '€' },
 ];
 
-function listRates() {
-  const cols   = getRateSheetColumns();
-  const sheet  = getOrCreateSheet(RATES_SHEET, cols);
-  const values = sheet.getDataRange().getValues();
-  const now    = new Date().toISOString();
-
-  if (values.length <= 1) {
-    DEFAULT_RATES.forEach(r => {
-      const row = new Array(cols.length).fill('');
-      row[rateColIndex('currency')]   = r.currency;
-      row[rateColIndex('rate')]       = r.rate;
-      row[rateColIndex('symbol')]     = r.symbol !== undefined ? r.symbol : '';
-      row[rateColIndex('updated_at')] = now;
-      sheet.appendRow(row);
-    });
-    return DEFAULT_RATES.map(r => ({ currency: r.currency, rate: r.rate, symbol: r.symbol, updated_at: now }));
+// Older sheets store all rates against GBP, including grams of XAU per GBP.
+// Dividing every rate by that XAU row preserves each conversion ratio. A sheet
+// without an XAU row follows the documented XAU-relative convention (implicit 1).
+// Reads expose a normalised view; only an explicit upsert persists normalisation.
+function _normaliseRatesToXau(rateRows) {
+  const currencies = new Set();
+  rateRows.forEach(function(rateRow) {
+    const currency = String(rateRow.currency).trim().toUpperCase();
+    if (!/^[A-Z0-9]{1,8}$/.test(currency) || currencies.has(currency)) {
+      throw new Error('invalid_rate_table');
+    }
+    if (!Number.isFinite(Number(rateRow.rate)) || Number(rateRow.rate) <= 0) {
+      throw new Error('invalid_rate_table');
+    }
+    currencies.add(currency);
+  });
+  const xauRow = rateRows.find(function(rateRow) { return String(rateRow.currency).trim().toUpperCase() === 'XAU'; });
+  const xauRate = xauRow === undefined ? 1 : Number(xauRow.rate);
+  const normalised = rateRows.map(function(rateRow) {
+    const rate = Number(rateRow.rate) / xauRate;
+    if (!Number.isFinite(rate) || rate <= 0) { throw new Error('invalid_rate_table'); }
+    return Object.assign({}, rateRow, { currency: String(rateRow.currency).trim().toUpperCase(), rate: rate });
+  });
+  if (xauRow === undefined) {
+    normalised.push({ currency: 'XAU', rate: 1, symbol: '⊕', updated_at: '' });
   }
-  return sheetToObjects(sheet);
+  return normalised;
+}
+
+function listRates() {
+  const columns = getRateSheetColumns();
+  const sheet = getOrCreateSheet(RATES_SHEET, columns);
+  const rateRows = sheetToObjects(sheet);
+  if (rateRows.length === 0) {
+    const now = new Date().toISOString();
+    const seededRates = DEFAULT_RATES.map(function(rateRow) { return Object.assign({}, rateRow, { updated_at: now }); });
+    sheet.getRange(2, 1, seededRates.length, columns.length).setValues(seededRates.map(function(rateRow) {
+      return columns.map(function(column) { return rateRow[column]; });
+    }));
+    return seededRates;
+  }
+  return _normaliseRatesToXau(rateRows);
 }
 
 function upsertRate(body) {
-  const v = validateRateUpsert(body);
-  if (!v.ok) return v;
-
-  const cols   = getRateSheetColumns();
-  const sheet  = getOrCreateSheet(RATES_SHEET, cols);
-  const values = sheet.getDataRange().getValues();
-  const now    = new Date().toISOString();
-  const ci     = rateColIndex('currency');
-
-  for (let i = 1; i < values.length; i++) {
-    if (values[i][ci] !== body.currency) continue;
-    sheet.getRange(i + 1, rateColIndex('rate')       + 1).setValue(Number(body.rate));
-    sheet.getRange(i + 1, rateColIndex('symbol')     + 1).setValue(
-      body.symbol !== undefined ? body.symbol : values[i][rateColIndex('symbol')]
-    );
-    sheet.getRange(i + 1, rateColIndex('updated_at') + 1).setValue(now);
-    return { ok: true };
+  const validation = validateRateUpsert(body);
+  if (validation.ok === false) { return validation; }
+  const currency = String(body.currency).trim().toUpperCase();
+  const columns = getRateSheetColumns();
+  const sheet = getOrCreateSheet(RATES_SHEET, columns);
+  let rateRows;
+  try {
+    rateRows = _normaliseRatesToXau(sheetToObjects(sheet));
+  } catch (error) {
+    console.error('upsertRate: error=invalid_rate_table');
+    return { ok: false, error: 'invalid_rate_table' };
   }
-
-  const row = new Array(cols.length).fill('');
-  row[rateColIndex('currency')]   = body.currency;
-  row[rateColIndex('rate')]       = Number(body.rate);
-  row[rateColIndex('symbol')]     = body.symbol;
-  row[rateColIndex('updated_at')] = now;
-  sheet.appendRow(row);
+  const existing = rateRows.find(function(rateRow) { return rateRow.currency === currency; });
+  const symbol = body.symbol === undefined || body.symbol === null
+    ? (existing === undefined ? '' : existing.symbol)
+    : String(body.symbol);
+  const replacement = { currency: currency, rate: Number(body.rate), symbol: symbol, updated_at: new Date().toISOString() };
+  if (existing === undefined) { rateRows.push(replacement); }
+  else { rateRows[rateRows.indexOf(existing)] = replacement; }
+  // Rewrite together so a legacy table can never contain a mix of GBP- and XAU-relative rates.
+  sheet.getRange(2, 1, rateRows.length, columns.length).setValues(rateRows.map(function(rateRow) {
+    return columns.map(function(column) { return rateRow[column]; });
+  }));
   return { ok: true };
 }
 
 function deleteRate(body) {
-  if (!body.currency)                                      return { ok: false, error: 'missing_currency' };
-  if (body.currency === 'GBP' || body.currency === 'XAU') return { ok: false, error: 'base_currency_readonly' };
+  if (body.currency === undefined || body.currency === null || String(body.currency).trim() === '') { return { ok: false, error: 'missing_currency' }; }
+  const currency = String(body.currency).trim().toUpperCase();
+  if (currency === 'XAU') { return { ok: false, error: 'base_currency_readonly' }; }
 
   // T-05 FK checks: refuse if any account or transaction is in this currency.
-  // Without the guards, deletion silently breaks net-worth math (toBase falls
-  // back to 1:1 on a missing rate) and per-account totals — the user keeps
-  // trusting wrong numbers.
-  const accCount = _countAccountsWithCurrency(body.currency);
+  // Missing rates prevent reliable conversion of account and transaction totals.
+  const accCount = _countAccountsWithCurrency(currency);
   if (accCount > 0) {
     return {
       ok: false,
@@ -77,7 +98,7 @@ function deleteRate(body) {
       referenced_count: accCount,
     };
   }
-  const txCount = _countTransactionsWithCurrency(body.currency);
+  const txCount = _countTransactionsWithCurrency(currency);
   if (txCount > 0) {
     return {
       ok: false,
@@ -91,7 +112,7 @@ function deleteRate(body) {
   const ci     = rateColIndex('currency');
 
   for (let i = 1; i < values.length; i++) {
-    if (values[i][ci] !== body.currency) continue;
+    if (String(values[i][ci]).trim().toUpperCase() !== currency) continue;
     sheet.deleteRow(i + 1);
     return { ok: true };
   }
@@ -101,10 +122,10 @@ function deleteRate(body) {
 function _countAccountsWithCurrency(currency) {
   const sheet  = getOrCreateSheet(ACCOUNTS_SHEET, getAccountSheetColumns());
   const values = sheet.getDataRange().getValues();
-  const ci     = acctColIndex('currency');
+  const ci     = acctColIndex('account_currency_local');
   let count = 0;
   for (let i = 1; i < values.length; i++) {
-    if (String(values[i][ci]) === String(currency)) count++;
+    if (String(values[i][ci]).trim().toUpperCase() === currency) count++;
   }
   return count;
 }

@@ -8,6 +8,17 @@
 // =============================================================================
 
 function doGet(e) {
+  try {
+    return _dispatchGet(e);
+  } catch (error) {
+    const schemaMismatch = error !== null && error !== undefined && typeof error.message === 'string' && error.message.indexOf('sheet_header_mismatch:') === 0;
+    console.error('doGet: error=' + (schemaMismatch ? error.message : 'request_failed'));
+    if (schemaMismatch) return json({ ok: false, error: 'sheet_header_mismatch' });
+    return json({ ok: false, error: 'request_failed' });
+  }
+}
+
+function _dispatchGet(e) {
   const meta   = extractMeta(e.parameter);
   const action = e.parameter.action || '';
 
@@ -20,6 +31,7 @@ function doGet(e) {
       return json({ ok: false, error: 'auth' });
     }
     if (!verifyTotp(e.parameter.totp)) {
+      recordAccess(meta, false);
       return json({ ok: false, error: 'totp_invalid' });
     }
     recordAccess(meta, true);
@@ -58,6 +70,9 @@ function doPost(e) {
   try { body = JSON.parse(e.postData.contents); }
   catch (_) { return json({ ok: false, error: 'invalid_json' }); }
 
+  if (body === null || typeof body !== 'object' || Array.isArray(body))
+    return json({ ok: false, error: 'invalid_request' });
+
   const meta = extractMeta(body);
 
   if (checkLocked(meta.ip)) return json({ ok: false, error: 'locked' });
@@ -69,6 +84,21 @@ function doPost(e) {
   }
   recordAccess(meta, true);
 
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(10000)) return json({ ok: false, error: 'busy_retry' });
+  try {
+    return _dispatchPost(body);
+  } catch (error) {
+    const schemaMismatch = error !== null && error !== undefined && typeof error.message === 'string' && error.message.indexOf('sheet_header_mismatch:') === 0;
+    console.error('doPost: error=' + (schemaMismatch ? error.message : 'request_failed'));
+    if (schemaMismatch) return json({ ok: false, error: 'sheet_header_mismatch' });
+    return json({ ok: false, error: 'request_failed' });
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function _dispatchPost(body) {
   if (body.action === 'create_transaction')      return json(createTransaction(body));
   if (body.action === 'update_transaction')      return json(updateTransaction(body));
   if (body.action === 'delete_transaction')      return json(deleteTransaction(body));

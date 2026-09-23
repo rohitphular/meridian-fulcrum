@@ -200,112 +200,74 @@ export function cumulativeByDay(txs, from, to) {
 
 // ── Account balance replay ────────────────────────────────────────────────────
 
-export function accountBalanceByMonth(accounts, txs, months) {
-  const result = new Map();
-  months.forEach(m => result.set(m, {}));
-
-  accounts.forEach(acc => {
-    const openingRaw = Number(acc.opening_value_local);
-    let balance = isNaN(openingRaw) ? 0 : openingRaw;
-    const accTxs = txs
-      .filter(tx => tx.account_id === acc.id)
-      .sort((a, b) => new Date(a.tx_date_local) - new Date(b.tx_date_local));
-
-    let txIdx = 0;
-    months.forEach(monthKey => {
-      const [yr, mo] = monthKey.split('-').map(Number);
-      const endOfMonth = new Date(yr, mo, 0, 23, 59, 59);
-
-      while (txIdx < accTxs.length) {
-        const d = new Date(accTxs[txIdx].tx_date_local);
-        if (d > endOfMonth) break;
-        const tx  = accTxs[txIdx];
-        const amt = toBase(Number(tx.tx_amount_local), acc.account_currency_local);
-        if (tx.tx_type === 'money-out') balance -= (isNaN(amt) ? 0 : amt);
-        if (tx.tx_type === 'money-in')  balance += (isNaN(amt) ? 0 : amt);
-        txIdx++;
-      }
-      result.get(monthKey)[acc.id] = balance;
-    });
+// Opening balances and transactions are events in the account's local timeline.
+// Historical transactions before tracking start must not double-count the opening value.
+function _balanceEvents(accounts, txs) {
+  const accountMap = new Map(accounts.map(account => [account.id, account]));
+  const starts = new Map();
+  const events = [];
+  accounts.forEach(account => {
+    const rawStart = String(account.tracking_start_date_local ?? '').trim();
+    const start = rawStart === '' ? -Infinity : new Date(rawStart.replace(' ', 'T')).getTime();
+    starts.set(account.id, start);
+    const opening = toBase(Number(account.opening_value_local), account.account_currency_local);
+    if (!Number.isNaN(start) && Number.isFinite(opening)) {
+      events.push({ time: start, accountId: account.id, amount: opening });
+    }
   });
-  return result;
+  txs.forEach(tx => {
+    const account = accountMap.get(tx.account_id);
+    if (account === undefined || tx.record_status === 'deleted') return;
+    const time = new Date(String(tx.tx_date_local).replace(' ', 'T')).getTime();
+    if (!Number.isFinite(time) || !(time >= starts.get(account.id))) return;
+    const native = Number(tx.tx_amount_local);
+    if (!Number.isFinite(native) || native <= 0) return;
+    const amount = toBase(native, account.account_currency_local);
+    if (!Number.isFinite(amount)) return;
+    if (tx.tx_type === 'money-in' || tx.tx_type === 'money-out') {
+      events.push({ time, accountId: account.id, amount: tx.tx_type === 'money-out' ? -amount : amount });
+    }
+  });
+  return events.sort((a, b) => a.time - b.time);
 }
 
-// ── Per-account balance at a single point in time ────────────────────────────
-// Single O(T) pass over sorted transactions; returns Map<accountId, balance>.
-// More efficient than calling computeDailyTotalAssets once per account.
+function _balanceSnapshots(accounts, txs, dates) {
+  const events = _balanceEvents(accounts, txs);
+  const balances = Object.fromEntries(accounts.map(account => [account.id, 0]));
+  let eventIndex = 0;
+  return dates.map(date => {
+    const end = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 23, 59, 59, 999).getTime();
+    while (eventIndex < events.length && events[eventIndex].time <= end) {
+      const event = events[eventIndex++];
+      balances[event.accountId] += event.amount;
+    }
+    return { ...balances };
+  });
+}
+
+export function accountBalanceByMonth(accounts, txs, months) {
+  const orderedMonths = [...months].sort();
+  const dates = orderedMonths.map(month => {
+    const [year, monthNumber] = month.split('-').map(Number);
+    return new Date(year, monthNumber, 0);
+  });
+  const snapshots = _balanceSnapshots(accounts, txs, dates);
+  return new Map(orderedMonths.map((month, index) => [month, snapshots[index]]));
+}
 
 export function computeBalancesAt(accounts, allTxs, date) {
-  const dateEnd    = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 23, 59, 59, 999);
-  const accountMap = new Map(accounts.map(a => [a.id, a]));
-  const balance    = {};
-  accounts.forEach(a => {
-    const v = toBase(Number(a.opening_value_local), a.account_currency_local);
-    balance[a.id] = isNaN(v) ? 0 : v;
-  });
-
-  const sorted = [...allTxs].sort(
-    (a, b) => new Date(a.tx_date_local) - new Date(b.tx_date_local)
-  );
-
-  for (const tx of sorted) {
-    if (new Date(tx.tx_date_local) > dateEnd) break;
-    const acc = accountMap.get(tx.account_id);
-    if (!acc) continue;
-    const amt = toBase(Number(tx.tx_amount_local), acc.account_currency_local);
-    if (tx.tx_type === 'money-out') {
-      balance[tx.account_id] -= isNaN(amt) ? 0 : amt;
-    } else if (tx.tx_type === 'money-in') {
-      balance[tx.account_id] += isNaN(amt) ? 0 : amt;
-    }
-  }
-
-  return new Map(Object.entries(balance));
+  return new Map(Object.entries(_balanceSnapshots(accounts, allTxs, [date])[0]));
 }
 
-// ── Daily total asset balance replay ─────────────────────────────────────────
-//
-// Replays ALL transactions chronologically from each account's opening_value,
-// returning one total-asset-value entry per calendar day in [from, to].
-// Used by MoM, YoY, WoW and Net Worth insights.
-
 export function computeDailyTotalAssets(assetAccounts, allTxs, from, to) {
-  const accountMap = new Map(assetAccounts.map(a => [a.id, a]));
-  const balance    = {};
-  assetAccounts.forEach(a => {
-    const v = toBase(Number(a.opening_value_local), a.account_currency_local);
-    balance[a.id] = isNaN(v) ? 0 : v;
-  });
-
-  const sorted = [...allTxs].sort(
-    (a, b) => new Date(a.tx_date_local) - new Date(b.tx_date_local)
-  );
-  const daysInPeriod = Math.round((to - from) / 86400000) + 1;
-  const dailyTotals  = [];
-  let txIdx          = 0;
-  const cursor       = new Date(from.getFullYear(), from.getMonth(), from.getDate());
-
-  for (let d = 0; d < daysInPeriod; d++) {
-    const endOfDay = new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate(), 23, 59, 59, 999);
-    while (txIdx < sorted.length) {
-      const txDate = new Date(sorted[txIdx].tx_date_local);
-      if (txDate > endOfDay) break;
-      const tx  = sorted[txIdx];
-      const acc = accountMap.get(tx.account_id);
-      if (acc) {
-        const amt = toBase(Number(tx.tx_amount_local), acc.account_currency_local);
-        if (tx.tx_type === 'money-out') {
-          balance[tx.account_id] -= isNaN(amt) ? 0 : amt;
-        } else if (tx.tx_type === 'money-in') {
-          balance[tx.account_id] += isNaN(amt) ? 0 : amt;
-        }
-      }
-      txIdx++;
-    }
-    dailyTotals.push(Object.values(balance).reduce((s, v) => s + (isNaN(v) ? 0 : v), 0));
+  const dates = [];
+  const cursor = new Date(from.getFullYear(), from.getMonth(), from.getDate());
+  while (cursor <= to) {
+    dates.push(new Date(cursor));
     cursor.setDate(cursor.getDate() + 1);
   }
-  return dailyTotals;
+  return _balanceSnapshots(assetAccounts, allTxs, dates)
+    .map(balances => Object.values(balances).reduce((sum, amount) => sum + amount, 0));
 }
 
 // ── Country normalisation (shared by D24 and D25) ────────────────────────────

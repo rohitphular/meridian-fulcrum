@@ -101,7 +101,7 @@ function updateCategory(body) {
   const rowNum  = Number(body.row_num);
   const lastRow = sheet.getLastRow();
   // CAT-NEW-L-3: guard against NaN row_num — NaN < 2 is false, so the bounds check silently passes without this.
-  if (!Number.isFinite(rowNum) || rowNum < 2 || rowNum > lastRow) return { ok: false, error: 'invalid_row' };
+  if (!Number.isInteger(rowNum) || rowNum < 2 || rowNum > lastRow) return { ok: false, error: 'invalid_row' };
 
   const ciType  = catColIndex('tx_type_key');
   const ciMajor = catColIndex('major_category_key');
@@ -228,7 +228,7 @@ function deleteCategory(body) {
   const rowNum  = Number(body.row_num);
   const lastRow = sheet.getLastRow();
   // CAT-NEW-L-3: guard against NaN row_num — NaN < 2 is false, so the bounds check silently passes without this.
-  if (!Number.isFinite(rowNum) || rowNum < 2 || rowNum > lastRow) return { ok: false, error: 'invalid_row' };
+  if (!Number.isInteger(rowNum) || rowNum < 2 || rowNum > lastRow) return { ok: false, error: 'invalid_row' };
 
   // CAT-M-2 + CAT-NEW-7: read the full data once; update the target row in-memory; write back in a single setValues call.
   const allRows  = sheet.getDataRange().getValues();

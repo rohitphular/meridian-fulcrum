@@ -7,15 +7,15 @@ Schema reference: [data-model.md § Transaction](data-model.md#transaction). Bal
 ## Capabilities
 
 - Create, edit, soft-delete, restore, and lock transactions across two types: `money-in`, `money-out`
-- Transfers (moving money between owned accounts) are two linked rows sharing the same `parent_tx_id` — not a third `tx_type`
+- Transfers (moving money between owned accounts) are two linked rows whose child carries the parent's ID in `parent_tx_id` — not a third `tx_type`
 - Cascading category dropdowns (type → major → minor)
 - Cross-currency transfers: the two linked rows carry amounts in their respective account currencies; the ratio is the effective exchange rate
 - Ten independent filter dimensions, combined with AND (date range, type, account, major category, minor category, country, city, area, tag, free-text search)
-- Active-filter chips with one-click removal
+- Active-filter count on the Filters button
 - Sortable, paginated table; mobile uses card layout
 - Date-range scoping (shared with the insight section)
 - CSV / JSON export of the **currently filtered rows** (both date-range and active filter dimensions apply)
-- CSV bulk import — upload, preview, then submit; duplicates shown as "already exists" badges and counted separately
+- CSV bulk import — upload, preview, then submit; ID-based insert or replacement, with created/updated/failed counts
 - Warning banner separating malformed rows from the main table
 
 ## Transaction types
@@ -25,12 +25,12 @@ Schema reference: [data-model.md § Transaction](data-model.md#transaction). Bal
 | `money-in` | Money enters `account_id` | `account.current_value_local += tx_amount_local` |
 | `money-out` | Money leaves `account_id` | `account.current_value_local -= tx_amount_local` |
 
-There is no `money-transfer` type. **Transfers** (moving money between owned accounts) are represented as two separate rows that share a `parent_tx_id`:
+There is no `money-transfer` type. **Transfers** (moving money between owned accounts) are represented as two separate rows linked by the child's `parent_tx_id`:
 
 - **money-out row**: `account_id` = source account, `tx_amount_local` = amount leaving in the source account's currency.
 - **money-in row**: `account_id` = target account, `tx_amount_local` = amount arriving in the target account's currency.
 
-Both rows are created together and linked via `parent_tx_id`. If the two accounts share a currency, both `tx_amount_local` values are equal. If they differ, the ratio `money-in.tx_amount_local ÷ money-out.tx_amount_local` is the effective exchange rate — no explicit FX marker or column is stored.
+Both rows are created together and linked via the child's `parent_tx_id`. Either direction may be the initiating parent. For same-currency transfers, a missing target amount uses the source amount; an explicit target amount is retained. If they differ, the ratio `money-in.tx_amount_local ÷ money-out.tx_amount_local` is the effective exchange rate — no explicit FX marker or column is stored.
 
 ## Required fields
 
@@ -43,7 +43,7 @@ Both rows are created together and linked via `parent_tx_id`. If the two account
 | `major_category`, `minor_category` | Always (both types are categorised) |
 | `parent_tx_id` | Not accepted in CSV import — the backend auto-generates the parent-child transfer relationship. Present in the data model for linked transfer rows but not user-supplied. |
 
-For a transfer, **two rows are required** — one money-out and one money-in. Both must be submitted together. Only the child (derived) row carries the parent's `id` as its `parent_tx_id`; the parent row's `parent_tx_id` is empty.
+For a transfer, **two rows are required** — one money-out and one money-in. Both must be submitted together. Only the child carries the parent's `id` as its `parent_tx_id`; the parent link is empty. Either direction may be the parent, depending on the initiating type.
 
 The currency of any row is derived at runtime from the linked account (`account_id → account.account_currency_local`). It is not user-input and is not stored on the transaction row.
 
@@ -69,7 +69,7 @@ Examples from the default seed:
 
 ## Hard-block rules
 
-See [financial-rules.md](financial-rules.md). The rules cover: insufficient asset balance, credit limit exceeded (currently unenforced), no money-out from a loan, and incomplete cross-currency transfer pairs.
+See [financial-rules.md](financial-rules.md). That document distinguishes implemented account/amount/category validation from UI-only balance checks and unimplemented credit-limit enforcement.
 
 ## Cascading category dropdowns
 
@@ -85,7 +85,7 @@ The cascade applies identically in both the add form and the edit form.
 | Path | Behaviour |
 |---|---|
 | Same-currency standalone | `tx_amount_local` debits or credits the account; no second row needed |
-| Same-currency transfer | Two rows with equal `tx_amount_local` values; both carry the same `parent_tx_id` |
+| Same-currency transfer | Two rows; a missing target amount uses the source amount. The child carries the parent ID; the parent link is blank |
 | Cross-currency transfer | Two rows with different `tx_amount_local` values (each in their account's currency); effective rate = money-in `tx_amount_local` ÷ money-out `tx_amount_local` |
 | Display in the table | Base-currency conversion uses the global rate from `rates` for each account's currency; a `†` marker indicates a row-level implied rate differs from the current global rate |
 
@@ -130,7 +130,7 @@ Client-side, default 50 rows per page (selectable: 10 / 25 / 50). Resets to page
 Rows missing `id`, `tx_date_local`, or with an invalid `tx_type` are diverted into a collapsed warning section. They:
 
 - Do NOT participate in insight totals
-- Do NOT affect account balances (their balance-effect would already have been applied at creation time)
+- Balance aggregation independently excludes deleted rows, invalid dates, nonpositive/nonfinite amounts, unknown accounts and pre-tracking movements. A missing transaction ID alone is a UI warning and does not remove an otherwise valid movement from the balance.
 - ARE visible by clicking the `⚠ N rows have warnings` banner
 - ARE only fixable by editing the underlying store directly — the app surfaces them as a diagnostic only
 
@@ -149,14 +149,18 @@ The export operates on the **currently filtered rows** — the same set visible 
 |---|---|
 | `list_transactions` | Return all rows (including soft-deleted) |
 | `create_transaction` | Validate (`tx_amount_local` validated unconditionally, regardless of category flags); duplicate check on `(tx_date_local, tx_type, account_id, tx_amount_local)` skipping deleted rows → `duplicate_transaction`; assign `id`; stamp `record_status = active`, `created_at`, `updated_at`; append. For transfers, both legs are duplicate-checked BEFORE any row is written — see Transfer atomicity below. |
-| `create_transactions_bulk` | Accept `transactions[]`; validate all rows (including unconditional `tx_amount_local` check), generate IDs, and write them in a single `sheet.setValues()` call — per-row `create_transaction` is NOT called; return `{ ok, created, failed, results }` |
+| `create_transactions_bulk` | Accept `transactions[]`; validate rows, insert or replace by supplied ID, preserve child identities and deletion tombstones, and rewrite the resulting data region; return `{ ok, created, updated, failed, results }` |
 | `update_transaction` | Locked guard → `record_locked`; deleted guard → `transaction_deleted`; validate; duplicate check on `(tx_date_local, tx_type, account_id, tx_amount_local)` excluding the current row (via `excludeRowNum` parameter on `_checkDuplicate`) → `duplicate_transaction`; validates `major_category` / `minor_category` FK when those fields are present in the update body (returns `unknown_category` if the composite key `(tx_type, major_category, minor_category)` is not found); overwrite editable fields in a single batch write; stamp `updated_at`; advance `sync_status` |
 | `delete_transaction` | Already-deleted guard → `transaction_already_deleted`; locked guard → `record_locked`; soft-delete (`record_status → deleted`) in a single `setValues()` write; stamp `updated_at` |
 | `restore_transaction` | Check `record_status = deleted`; set `record_status → active` in a single `setValues()` write; stamp `updated_at` |
 
 ### Transfer atomicity
 
-For transfers (`create_transaction` where both a source and target account are required by the category), both the parent leg and the child leg are duplicate-checked BEFORE any row is written to the sheet. If either leg would be a duplicate, the entire transfer is rejected and no rows are written. This eliminates the orphan risk that existed previously, where the parent leg could be written before the child validation ran.
+For transfers (`create_transaction` where both a source and target account are required by the category), both the parent leg and the child leg are duplicate-checked BEFORE any row is written to the sheet. If either leg would be a duplicate, the entire transfer is rejected and no rows are written. Both built rows are written together in one `setValues` call. POST dispatch serializes mutations with a script lock; this is not a cross-request or cross-sheet database transaction.
+
+### Bulk replacement and sync
+
+A supplied CSV ID selects the standalone or parent row to replace. Existing child IDs and creation timestamps are retained. If a transfer becomes standalone, the displaced child remains as a `deleted` sync tombstone instead of disappearing from the sheet. Repeating a transaction ID within one batch returns `duplicate_id_in_batch`; addressing an existing child ID directly returns `transfer_child_id_requires_parent`.
 
 ### Amount validation
 
@@ -210,7 +214,7 @@ The import panel accepts a CSV file. Canonical column names (no aliases):
 
 | Column | Required | Notes |
 |---|---|---|
-| `id` | No | UUID. If omitted, the backend assigns one. Each transaction `id` is unique — the backend enforces this by construction (sequential IDs scan for uniqueness; bulk UUIDs are collision-resistant). |
+| `id` | No | UUID. If supplied, identifies the standalone or parent row to insert or replace; otherwise a new UUID is generated. |
 | `tx_date_local` | Yes | Date/time of the transaction in local time (e.g. `2026-08-12 14:30:00`). Stored as-is — no UTC conversion. |
 | `tx_timezone_local` | No | IANA timezone string (e.g. `Europe/London`). When submitting via the UI form, this is auto-detected from the browser (`Intl.DateTimeFormat().resolvedOptions().timeZone`) and sent silently — it is never a user-typed input. CSV import may supply it explicitly. Immutable after creation. |
 | `tx_type` | Yes | `money-in` or `money-out` |
@@ -236,11 +240,11 @@ The import panel accepts a CSV file. Canonical column names (no aliases):
 | `created_at` | No | System field — accepted in header but silently ignored on import |
 | `updated_at` | No | System field — accepted in header but silently ignored on import |
 
-The system fields (`id`, `record_status`, `sync_status`, `sync_date`, `sync_notes`, `created_at`, `updated_at`) are accepted in the CSV header row but are silently ignored on import — the backend always assigns its own values for system fields.
+The system fields (`record_status`, `sync_status`, `sync_date`, `sync_notes`, `created_at`, `updated_at`) are accepted in the CSV header row but are silently ignored on import — the backend always assigns its own values for system fields.
 
 `parent_tx_id` is not accepted as a CSV column. The backend auto-generates the parent-child transfer relationship from the `source_account` and `target_account` columns — do not include it in the CSV file.
 
-Preview is shown before submission. Duplicate rows (matched on `tx_date_local` + `tx_type` + `account_id` + `tx_amount_local`) are shown with an "already exists" badge and counted in `skipped`, not `failed`. Results summary: `N imported · M already existed`.
+Preview is shown before submission. Bulk imports match by supplied `id`, not by the interactive duplicate tuple. Results distinguish created, updated, and failed rows. Retain IDs when re-importing to avoid creating new records.
 
 ## Add / edit form layout
 

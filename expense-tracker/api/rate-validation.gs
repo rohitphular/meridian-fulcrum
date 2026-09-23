@@ -3,15 +3,17 @@
 // =============================================================================
 
 function validateRateUpsert(body) {
-  if (!body.currency)                               return { ok: false, error: 'missing_currency' };
-  if (body.currency === 'GBP')                      return { ok: false, error: 'base_currency_readonly' };
-  if (body.rate === undefined || body.rate === null) return { ok: false, error: 'missing_rate' };
-  if (Number(body.rate) <= 0)                       return { ok: false, error: 'rate_must_be_positive' };
-
-  // Currency code must be alpha+digits only — feeds into innerHTML at many
-  // points in the frontend (toBase warnings, transactions list, etc.).
-  if (!/^[A-Za-z0-9]{1,8}$/.test(String(body.currency))) {
-    return { ok: false, error: 'invalid_currency_code' };
+  if (body.currency === undefined || body.currency === null || String(body.currency).trim() === '') {
+    return { ok: false, error: 'missing_currency' };
+  }
+  const currency = String(body.currency).trim().toUpperCase();
+  if (!/^[A-Z0-9]{1,8}$/.test(currency)) { return { ok: false, error: 'invalid_currency_code' }; }
+  if (currency === 'XAU') { return { ok: false, error: 'base_currency_readonly' }; }
+  if (body.rate === undefined || body.rate === null || String(body.rate).trim() === '') {
+    return { ok: false, error: 'missing_rate' };
+  }
+  if (!Number.isFinite(Number(body.rate)) || Number(body.rate) <= 0) {
+    return { ok: false, error: 'rate_must_be_positive' };
   }
 
   // F-5 fix: symbol is rendered into HTML via innerHTML across the frontend

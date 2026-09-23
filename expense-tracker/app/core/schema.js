@@ -15,7 +15,7 @@ export async function loadAccountSchema() {
     return res.data;
   }
   console.warn('[schema] account schema fetch failed:', res?.error);
-  return null;
+  throw Object.assign(new Error('Schema fetch failed'), { code: res?.error ?? 'invalid_schema' });
 }
 
 export async function loadTransactionSchema() {
@@ -29,7 +29,7 @@ export async function loadTransactionSchema() {
     return res.data;
   }
   console.warn('[schema] transaction schema fetch failed:', res?.error);
-  return null;
+  throw Object.assign(new Error('Schema fetch failed'), { code: res?.error ?? 'invalid_schema' });
 }
 
 export async function loadCategorySchema() {
@@ -43,5 +43,5 @@ export async function loadCategorySchema() {
     return res.data;
   }
   console.warn('[schema] category schema fetch failed:', res?.error);
-  return null;
+  throw Object.assign(new Error('Schema fetch failed'), { code: res?.error ?? 'invalid_schema' });
 }

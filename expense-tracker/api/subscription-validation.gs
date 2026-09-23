@@ -9,7 +9,7 @@ function validateSubscriptionCreate(body) {
 
   if (body.subscription_amount_local === undefined || body.subscription_amount_local === null) return { ok: false, error: 'missing_subscription_amount_local' };
   const amount = Number(body.subscription_amount_local);
-  if (isNaN(amount) || amount <= 0) return { ok: false, error: 'invalid_subscription_amount_local' };
+  if (!Number.isFinite(amount) || amount <= 0) return { ok: false, error: 'invalid_subscription_amount_local' };
 
   if (body.source_account === undefined || body.source_account === null || String(body.source_account).trim() === '')
     return { ok: false, error: 'missing_source_account' };
@@ -42,7 +42,7 @@ function validateSubscriptionUpdate(body) {
 
   if (body.subscription_amount_local !== undefined && body.subscription_amount_local !== null) {
     const amount = Number(body.subscription_amount_local);
-    if (isNaN(amount) || amount <= 0) return { ok: false, error: 'invalid_subscription_amount_local' };
+    if (!Number.isFinite(amount) || amount <= 0) return { ok: false, error: 'invalid_subscription_amount_local' };
   }
 
   const schedErr = _validateSchedule(body);

@@ -80,42 +80,50 @@ export function getSymbol(currency, rates) {
 }
 
 export function toBase(amount, fromCurrency, rowFxRate, rateMap, quoteCurrency) {
-  const raw = parseFloat(amount);
-  const amt = Number.isFinite(raw) ? raw : 0;
+  const raw = amount === undefined || amount === null || String(amount).trim() === '' ? NaN : Number(amount);
+  if (!Number.isFinite(raw)) return NaN;
+  const amt = raw;
   const to  = rateMap[quoteCurrency];
-  if (!to) return NaN;
-  if (rowFxRate && parseFloat(rowFxRate) > 0) return (amt / parseFloat(rowFxRate)) * to;
+  if (!Number.isFinite(to) || to <= 0) return NaN;
+  if (rowFxRate !== undefined && rowFxRate !== null && String(rowFxRate).trim() !== '') {
+    const rowRate = Number(rowFxRate);
+    if (!Number.isFinite(rowRate) || rowRate <= 0) return NaN;
+    return (amt / rowRate) * to;
+  }
   const from = rateMap[fromCurrency];
-  if (!from) return NaN;
+  if (!Number.isFinite(from) || from <= 0) return NaN;
   return (amt / from) * to;
 }
 
 export function toQuote(amount, fromCurrency, rateMap, quoteCurrency) {
   const from = rateMap[fromCurrency];
   const to   = rateMap[quoteCurrency];
-  const raw  = parseFloat(amount);
-  const amt  = Number.isFinite(raw) ? raw : 0;
-  if (!from || !to) return NaN;
+  const raw = amount === undefined || amount === null || String(amount).trim() === '' ? NaN : Number(amount);
+  if (!Number.isFinite(raw)) return NaN;
+  const amt = raw;
+  if (!Number.isFinite(from) || from <= 0 || !Number.isFinite(to) || to <= 0) return NaN;
   return (amt / from) * to;
 }
 
 export function fmtBase(amount, fromCurrency, rowFxRate, rateMap, quoteCurrency, rates) {
   const val = toBase(amount, fromCurrency, rowFxRate, rateMap, quoteCurrency);
-  if (isNaN(val)) return '—';
+  if (!Number.isFinite(val)) return '—';
   const sym = getSymbol(quoteCurrency, rates);
   return sym + val.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 export function fmtNative(amount, currency, rates) {
   const sym = getSymbol(currency, rates);
-  const raw = parseFloat(amount);
-  const val = Number.isFinite(raw) ? raw : 0;
+  const raw = amount === undefined || amount === null || String(amount).trim() === '' ? NaN : Number(amount);
+  if (!Number.isFinite(raw)) return '—';
+  const val = raw;
   return sym + val.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 export function fmtAmount(amount, currency, symbolMap) {
-  const raw = parseFloat(amount);
-  const num = Number.isFinite(raw) ? raw : 0;
+  const raw = amount === undefined || amount === null || String(amount).trim() === '' ? NaN : Number(amount);
+  if (!Number.isFinite(raw)) return '—';
+  const num = raw;
   const sym = symbolMap[currency] ?? (currency + ' ');
   return sym + num.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }

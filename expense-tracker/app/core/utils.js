@@ -28,22 +28,23 @@ export const fmtBase    = (amount, from, rowFxRate) => _fmtBase(amount, from, ro
 export const fmtNative  = (amount, currency)        => _fmtNative(amount, currency, state.rates);
 
 const ET_COLS  = [
-  'tx_date_local', 'tx_timezone_local', 'tx_type', 'source_account', 'target_account',
+  'id', 'tx_date_local', 'tx_timezone_local', 'tx_type', 'source_account', 'target_account',
   'user_location_area', 'user_location_city', 'user_location_country',
   'user_location_latitude', 'user_location_longitude',
   'source_amount_local', 'target_amount_local', 'major_category', 'minor_category',
   'description', 'counterparty_name', 'tx_tags', 'beneficiaries',
 ];
-const ACC_COLS = ['account_name', 'type', 'sub_type', 'account_currency_local', 'opening_value_local', 'current_value_local', 'description', 'record_status'];
+const ACC_COLS = ['id', 'account_name', 'legal_entity_name', 'type', 'sub_type', 'account_currency_local', 'local_timezone', 'account_opening_date_local', 'account_closing_date_local', 'tracking_start_date_local', 'opening_value_local', 'description', 'record_status'];
 // SUB_COLS intentionally excludes sync fields (sync_status, sync_date, sync_notes).
 // Those fields are system-internal pipeline state that would be meaningless or misleading
 // on re-import — a re-imported row would always start as create-pending regardless of the
 // exported sync state, so exporting them serves no purpose and could confuse callers.
 // subscription_name is used instead of name so the exported CSV matches the import format.
 const SUB_COLS = ['id', 'subscription_name', 'counterparty_name', 'subscription_amount_local', 'frequency', 'day_of_month', 'day_of_week',
-  'source_account', 'tx_type', 'major_category', 'minor_category', 'tags', 'record_status', 'description',
-  'created_at', 'subscription_start_date', 'subscription_end_date', 'updated_at'];
+  'source_account', 'tx_type', 'major_category', 'minor_category', 'record_status', 'description',
+  'created_at', 'subscription_start_date_local', 'subscription_end_date_local', 'subscription_timezone_local', 'updated_at'];
 const CAT_COLS = [
+  'id',
   'tx_type_key', 'tx_type_label',
   'major_category_key', 'major_category_label',
   'minor_category_key', 'minor_category_label',
@@ -69,11 +70,13 @@ export const exportData = (format, rows) => {
   });
 
   // Reconstruct source/target from account_id + sibling relationship.
-  // Skip child rows (parent_tx_id set) — they are exported via the parent row.
+  // Export a transfer once even when filtering leaves only its child leg.
   const exported = [];
   const seen = {};
-  rows.forEach(tx => {
-    if (tx.parent_tx_id) return; // child leg: will be handled when parent is encountered
+  rows.forEach(row => {
+    const tx = row.parent_tx_id && byId[row.parent_tx_id] ? byId[row.parent_tx_id] : row;
+    if (seen[tx.id] === true) return;
+    seen[tx.id] = true;
     const acct   = (state.accountMap[tx.account_id] !== undefined && state.accountMap[tx.account_id] !== null) ? state.accountMap[tx.account_id] : null;
     const sib    = (siblingMap[tx.id] !== undefined && siblingMap[tx.id] !== null) ? siblingMap[tx.id] : null;
     const sibAcc = (sib !== null && state.accountMap[sib.account_id] !== undefined && state.accountMap[sib.account_id] !== null) ? state.accountMap[sib.account_id] : null;
@@ -111,7 +114,7 @@ export const exportData = (format, rows) => {
     }
 
     exported.push(Object.assign({}, tx, {
-      tx_date_local:        utcToLocalInput(tx.tx_date_local),
+      tx_date_local:        tx.tx_date_local,
       source_account,
       target_account,
       source_amount_local:  source_amount,
@@ -124,7 +127,7 @@ export const exportData = (format, rows) => {
 };
 export const exportAccounts      = (format, rows) => _exportData(format, rows, 'accounts', ACC_COLS);
 export const exportSubscriptions = (format, rows) => {
-  const normalised = rows.map(r => ({ ...r, subscription_name: r.name, created_at: utcToLocalInput(r.created_at) }));
+  const normalised = rows.map(r => ({ ...r, created_at: utcToLocalInput(r.created_at) }));
   return _exportData(format, normalised, 'subscriptions', SUB_COLS);
 };
 export const exportCategories    = (format, rows) => _exportData(format, rows, 'categories', CAT_COLS);
@@ -200,7 +203,10 @@ export function parseCsvRow(line) {
   let inQ = false;
   for (let i = 0; i < line.length; i++) {
     const c = line[i];
-    if (c === '"') { inQ = !inQ; }
+    if (c === '"') {
+      if (inQ && line[i + 1] === '"') { cur += '"'; i++; }
+      else { inQ = !inQ; }
+    }
     else if (c === ',' && !inQ) { result.push(cur.trim()); cur = ''; }
     else { cur += c; }
   }

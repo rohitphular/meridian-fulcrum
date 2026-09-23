@@ -157,7 +157,7 @@ function createSubscriptionsBulk(body) {
   // One sheet read → map id → 1-based sheet row number.
   const idColIdx     = subColIndex('id');
   const existingData = sheet.getDataRange().getValues();
-  const rowNumById   = {};
+  const rowNumById   = Object.create(null);
   for (let i = 1; i < existingData.length; i++) {
     const existingId = String(existingData[i][idColIdx]).trim();
     if (existingId !== '') rowNumById[existingId] = i + 1;
@@ -202,6 +202,11 @@ function createSubscriptionsBulk(body) {
   let failed  = 0;
 
   body.subscriptions.forEach(function(sub) {
+    if (sub === null || typeof sub !== 'object' || Array.isArray(sub)) {
+      results.push({ key: '', ok: false, error: 'invalid_row' });
+      failed += 1;
+      return;
+    }
     const subBody = Object.assign({}, sub);
 
     const val = validateSubscriptionCreate(subBody);

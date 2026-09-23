@@ -68,7 +68,7 @@ Validation enforces this at both create and update: supplying the wrong anchor f
 
 ```
 active  ──pause──►  inactive  ──restore──►  active
-active  ──expiry──► inactive  (auto, via subscription_end_date)
+active  ──expiry──► inactive  (auto, via subscription_end_date_local)
 active  ──delete──► deleted   ──restore──►  active
 inactive ─delete──► deleted   ──restore──►  active
 locked  ──(no mutations allowed)
@@ -78,10 +78,10 @@ locked  ──(no mutations allowed)
 |---|---|---|
 | `active → inactive` | `update_subscription` with `record_status: inactive` | Manual pause. Subscription stays visible in the list. `next_payment_date` is returned as blank. |
 | `inactive → active` | `update_subscription` with `record_status: active` | Manual resume. Resumes `next_payment_date` computation. |
-| `active → inactive` (auto) | Lazy expiry during `list_subscriptions` | Triggered by `subscription_end_date` being in the past (see below). |
+| `active → inactive` (auto) | Lazy expiry during `list_subscriptions` | Triggered by `subscription_end_date_local` being in the past (see below). |
 | `active → deleted` | `delete_subscription` | Soft-delete; row remains in the sheet. |
 | `inactive → deleted` | `delete_subscription` | Same as above. |
-| `deleted → active` | `restore_subscription` | Dedicated restore action. Verifies the record is in `deleted` state and that no other active subscription has the same name before restoring. Always restores to `active`. |
+| `deleted → active` | `restore_subscription` | Dedicated restore action. Verifies the record is in `deleted` state and that no other non-deleted subscription has the same name before restoring. Always restores to `active`. |
 | `locked` | Set externally | Cannot be edited or deleted. `updateSubscription` and `deleteSubscription` return `record_locked`. |
 
 `update_subscription` accepts `record_status` values of `active` or `inactive` only. Passing any other value returns `invalid_record_status`.
@@ -118,16 +118,16 @@ All subscription endpoints are routed through the single `/exec` GAS endpoint.
 | `list_subscriptions` | GET | Returns all non-deleted rows. Runs lazy expiry (lazy expiry is a write operation — if any subscriptions have passed their end date, the sheet is mutated during this GET-equivalent call). Appends computed `next_payment_date` to each row. |
 | `get_subscription_schema` | GET | Returns the `frequencies` enum array. Used by the frontend to populate frequency dropdowns without hardcoding. |
 | `create_subscription` | POST | Validates required fields; duplicate name check (`duplicate_subscription`); appends row; returns `{ ok: true, id }`. |
-| `create_subscriptions_bulk` | POST | Accepts `{ subscriptions: [] }`; validates all rows in memory, then appends all valid rows in a single `setValues` call; returns `{ ok, created, skipped, failed, results }`. Duplicates go in `skipped`, not `failed`. Within-batch duplicate names are caught against both the pre-existing sheet rows and any rows already accepted earlier in the same batch. |
-| `update_subscription` | POST | Validates editable fields; locked guard; applies changed fields in memory then writes the row in a single `setValues` call; advances `sync_status`; stamps `updated_at`. Toggling `record_status` (pause/resume) via `update_subscription` requires all other required fields (`name`, `frequency`, `source_account`, and the schedule anchor) to be included in the payload. Omitting them will return the corresponding `missing_*` error. |
+| `create_subscriptions_bulk` | POST | Accepts `{ subscriptions: [] }`; validates each row and inserts or replaces by `id`. Replacement preserves `created_at` and advances `sync_status`. Returns `{ ok, created, updated, failed, results }`; successful result entries include `key` and `action` (`created` or `updated`). Name matching is not the bulk identity rule. |
+| `update_subscription` | POST | Validates editable fields; locked guard; applies changed fields in memory then writes the row in a single `setValues` call; advances `sync_status`; stamps `updated_at`. Toggling `record_status` (pause/resume) via `update_subscription` requires all other required fields (`subscription_name`, `frequency`, `source_account`, and the schedule anchor) to be included in the payload. Omitting them will return the corresponding `missing_*` error. |
 | `delete_subscription` | POST | Locked guard; reads full row into memory, applies `record_status → deleted` and sync fields, then writes back in a single `setValues` call; advances `sync_status`; stamps `updated_at`. No FK guard (subscriptions are not referenced by other entities). |
-| `restore_subscription` | POST | Verifies record is in `deleted` state; checks no other active subscription has the same name; reads the full row into memory, applies `record_status → active` and sync fields, then writes back in a single `setValues` call; stamps `updated_at`. Always restores to `active`. |
+| `restore_subscription` | POST | Verifies record is in `deleted` state; checks no other non-deleted subscription has the same name; reads the full row into memory, applies `record_status → active` and sync fields, then writes back in a single `setValues` call; stamps `updated_at`. Always restores to `active`. |
 
 ### Validation error codes
 
 | Error | Trigger |
 |---|---|
-| `missing_name` | `name` absent, null, or empty string |
+| `missing_name` | `subscription_name` absent, null, or empty string |
 | `missing_subscription_amount_local` | `subscription_amount_local` absent or null on create |
 | `invalid_subscription_amount_local` | `subscription_amount_local` is not a positive number. On create, must be present and positive. On update, if absent from the body it is not written; if present, it must be a positive number. |
 | `missing_source_account` | `source_account` absent, null, or empty string |
@@ -145,7 +145,7 @@ All subscription endpoints are routed through the single `/exec` GAS endpoint.
 | `invalid_row` | `row_num` is outside the sheet's data range |
 | `record_locked` | Target row has `record_status = locked` |
 | `not_deleted` | Record is not in `deleted` state — returned by `restore_subscription` |
-| `duplicate_name` | Another active subscription has the same name. Returned by `restore_subscription`. |
+| `duplicate_name` | Another non-deleted subscription has the same name. Returned by `restore_subscription`. |
 
 ## CSV bulk import
 
@@ -161,17 +161,22 @@ The frontend parses a CSV file client-side before submitting to `create_subscrip
 
 ### Optional columns
 
-`counterparty_name`, `day_of_month`, `day_of_week`, `source_account`, `tx_type`, `major_category`, `minor_category`, `description`, `subscription_start_date_local`, `subscription_end_date_local`, `subscription_timezone_local`.
+`id`, `record_status`, `counterparty_name`, `day_of_month`, `day_of_week`, `source_account`, `tx_type`, `major_category`, `minor_category`, `description`, `subscription_start_date_local`, `subscription_end_date_local`, `subscription_timezone_local`.
 
 ### Rules
 
-- `id` is never read from the CSV — it is always auto-generated by `generateSubscriptionId()`.
+- A supplied `id` identifies the row to insert or replace. Omit it to generate a new UUID; repeated imports without IDs create new records.
+- `record_status` may be parsed, but bulk creation/replacement currently computes status as active or expired/inactive; it does not restore arbitrary lifecycle states from CSV.
 - Currency is not a CSV column. It is derived at display time from `state.accountMap[source_account].account_currency_local`.
 - Rows that fail client-side validation (missing name, missing subscription_amount_local, missing frequency, non-positive amount) are logged as parse errors and excluded from the payload; they are not sent to the backend.
 - Rows that pass client-side parsing but fail backend validation are returned in `results` with `ok: false`.
-- Duplicate names (matched against existing non-deleted subscriptions) are returned in `skipped`, not `failed`. The `ok` field on the bulk response is `true` as long as there are no non-duplicate failures.
-- The response shape is `{ ok, created, skipped, failed, results }`.
+- Bulk imports match IDs, not names. The response has `ok: true` only when `failed === 0`.
+- The response shape is `{ ok, created, updated, failed, results }`.
 
 ## Known structural notes
 
 **Column positions are append-only — do not reorder.** The schema reached its current layout through several rounds of additions and corrections. Any future additions go at the end (after col 21).
+
+## Schedule limitations
+
+Quarterly and annual recurrence currently have a day-of-month but no fixed month anchor. The calculation begins with the current server month, so it does not preserve an original quarterly/annual cycle across months. Start date and per-row timezone are informational; the next date is not constrained by start/end dates. These need a separate schedule-contract change before being treated as a payment calendar.

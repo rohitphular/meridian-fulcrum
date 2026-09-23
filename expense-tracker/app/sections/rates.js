@@ -130,8 +130,8 @@ function _rateRowHtml(r) {
       let body, hint;
       if (blocked.error === 'currency_in_use_by_accounts') {
         const names = state.accounts
-          .filter(a => a.currency === r.currency)
-          .map(a => `<strong>${esc(a.name)}</strong>`);
+          .filter(a => a.account_currency_local === r.currency)
+          .map(a => `<strong>${esc(a.account_name)}</strong>`);
         const namesStr = names.length ? names.join(', ') : `${n} account${n === 1 ? '' : 's'}`;
         body = `Cannot delete <strong>${esc(r.currency)}</strong> — used by: ${namesStr}.`;
         hint = 'Delete those accounts first (an account\'s currency cannot be changed).';

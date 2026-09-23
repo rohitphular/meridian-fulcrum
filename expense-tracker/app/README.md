@@ -1,11 +1,10 @@
 # Expense Tracker — Frontend
 
-Single-page app written in vanilla JavaScript ES modules. No framework, no bundler, no build step. Open `index.html` in a browser and it runs.
+Single-page app written in vanilla JavaScript ES modules. No framework, no bundler, no build step. Serve the repository over HTTP and open `/expense-tracker/app/`.
 
 ## Why vanilla
 
-- Apps Script can host static files but not a Node build pipeline.
-- The app is small enough (≈5k lines total) that a framework would add more weight than it removes.
+- Static files run directly in the browser; Apps Script serves the API.
 - Every file you see in this folder is exactly what ships.
 
 ## File layout
@@ -14,36 +13,37 @@ Single-page app written in vanilla JavaScript ES modules. No framework, no bundl
 app/
 ├── index.html              entry — shell, auth overlay, tab nav, mounts
 ├── main.js                 boots auth, loads schemas, wires tab nav → section renderers
-├── config.js               SCRIPT_URL pointer to the GAS /exec endpoint (gitignored copy of config.example.js)
+├── config.js               committed hostname-based dev/prod GAS /exec selection
 ├── core/                   cross-cutting modules
 │   ├── state.js              single mutable state object (the source of truth)
 │   ├── api.js                ExpenseAPI — typed wrappers over fetch(SCRIPT_URL)
-│   ├── auth.js               PIN + TOTP gate, session token in sessionStorage
+│   ├── auth.js               PIN + TOTP gate, expiring PIN session in sessionStorage
 │   ├── schema.js             loads account/transaction/category schemas from the backend
 │   ├── nav.js                showSection(name) — swaps visible tab content
 │   ├── daterange.js          this_month / last_30 / custom filter for transactions
 │   ├── utils.js              el, esc, fmtDateTime, fmtNative, fmtBase, exportData …
-│   └── ui.js                 re-exports loading/toast helpers from forge/_shared/ui.js
+│   └── ui.js                 re-exports loading/toast helpers from expense-tracker/_shared/ui.js
 ├── sections/               one module per tab; each exports a render<Name>() function
 │   ├── insights.js           summary cards, charts
 │   ├── transactions.js       filterable + sortable list (largest module — ~1200 lines)
 │   ├── accounts.js           accounts table + net-worth summary
 │   ├── categories.js         category tree (major → minor) with archive toggle
-│   ├── rates.js              FX rates per currency (base = GBP)
+│   ├── rates.js              FX rates per currency (base = XAU; selectable display currency)
 │   └── advisor.js            LLM chat panel
 └── style/
     └── expense-tracker.css   all app styles — light + dark themes
 ```
 
-Design tokens (`--ink`, `--ember`, `--teal`, type scale, fonts) live in `../../_shared/style-tokens.css` and are linked from `index.html`. Do not redefine them locally.
+Design tokens (`--ink`, `--ember`, `--teal`, type scale, fonts) live in `../_shared/style-tokens.css` and are linked from `index.html`. Do not redefine them locally.
 
 ## How it boots
 
 1. `index.html` links `_shared/style-tokens.css` then `style/expense-tracker.css`, loads `config.js` (sets `window.CONFIG.SCRIPT_URL`), then `main.js` as `type="module"`.
-2. `main.js` checks for a session token. No token → show PIN gate. Valid token → hide overlay, reveal `.app-shell`.
+2. `main.js` checks the local six-hour PIN session. No valid local session → show PIN gate; otherwise initialise the API client and load data. Every API request validates the PIN server-side.
 3. Schemas are fetched once (`loadAccountSchema`, `loadTransactionSchema`, `loadCategorySchema`) and stored on `state`.
-4. The Insight section renders by default. Clicking a tab calls `showSection(name)` which calls the section's `renderXxx()`.
-5. On any data mutation (save / delete), the section fires `document.dispatchEvent(new CustomEvent('et:reload'))` — `main.js` listens, refetches, and re-renders the current section.
+4. The saved section renders, defaulting to Home. Clicking a tab calls `showSection(name)` which calls the section's `renderXxx()`.
+5. Refresh validates every entity/schema response before assigning one complete snapshot. A failed dependency preserves the previous view and displays its error.
+6. On any data mutation (save / delete), the section fires `document.dispatchEvent(new CustomEvent('et:reload'))` — `main.js` listens, refetches, and re-renders the current section.
 
 ## State model
 
@@ -55,7 +55,7 @@ state.accounts       // [] of accounts
 state.accountMap     // { 'acc-001': account } — keyed lookup
 state.categories     // [] of categories
 state.rates          // [] of FX rates
-state.rateMap        // { GBP: 1, INR: 105, … }
+state.rateMap        // currency units per 1g XAU; XAU = 1
 state.quoteCurrency  // 'GBP'
 
 state.dateRange / customFrom / customTo   // insight + tx filter
@@ -70,7 +70,7 @@ state.catAddOpen / catViewRow / catEditRow / catDeleteRow
 
 Each section owns its own `xxxAddOpen` / `xxxViewRow` / `xxxEditRow` / `xxxDeleteRow` keys. Set one, call `renderXxx()`, the right card appears.
 
-## Section pattern (all 5 sections follow this)
+## Section pattern
 
 ```
 ┌─ sec-head ────────────────────────────────────┐
@@ -109,35 +109,30 @@ Never use literal px font sizes in code or styles. Pick the closest token.
 
 ## UX patterns
 
-- **Sticky header** with brand, base-currency picker, theme toggle, and tab nav.
+- **Sticky header** with brand, display-currency picker, theme toggle, and tab nav.
 - **Card-form-above-table** for view/edit on every section — never inline row expansion.
-- **Filter bar** (transactions) — collapsible, summarises active filters as removable chips.
+- **Filter bar** (transactions) — collapsible, summarises active filters with a count.
 - **Loading overlay** (`showLoading()` / `hideLoading()`) — used for every network call.
 - **Toast** (`showMsg(text)`) — non-blocking confirmations.
-- **Number formatting** — `fmtNative(amount, currency)` for source-currency; `fmtBase(amount, currency, fxRate)` for the GBP-equivalent on rows with cross-currency amounts.
+- **Number formatting** — `fmtNative(amount, currency)` for source-currency; `fmtBase(amount, currency, fxRate)` for the selected display-currency equivalent.
 
 ## Adding a new section
 
 1. Create `sections/<name>.js` exporting `renderName()`.
 2. Add `xxxAddOpen` / `xxxViewRow` / `xxxEditRow` / `xxxDeleteRow` to `core/state.js`.
-3. Import the render fn in `main.js` and add a case in the tab dispatcher.
+3. Import the render function in `core/nav.js` and add it to the tab dispatcher.
 4. Add `<button class="tab-btn" data-section="<name>">Label</button>` to the tab nav in `index.html`.
 5. Style with existing tokens. Do not introduce new colours unless they're added to `_shared/style-tokens.css` first.
 
 ## Running locally
 
-The app is static. Three ways to view changes:
+Run from the `meridian-fulcrum` repository root so the app and its shared assets are served together:
 
 ```bash
-# 1) Direct — open index.html (some browsers refuse to fetch modules over file://)
-open app/index.html
-
-# 2) Quick static server
-cd app && python3 -m http.server 8000      # → http://localhost:8000
-
-# 3) Test against a /dev GAS deployment
-#    Set SCRIPT_URL in app/config.js to the /dev URL, then serve as above.
-#    See backend/README.md for the /dev workflow.
+python3 -m http.server 8000
+# Open http://localhost:8000/expense-tracker/app/
 ```
 
-Frontend changes are NOT shipped via the deploy script — they only need a `git commit && git push` (GitHub Pages publishes the main branch automatically). The deploy script in `cicd/script-deployment.sh` handles backend-only operations (`clasp push` + `clasp deploy`). See `cicd/README.md` and `backend/README.md` for the push-vs-deploy distinction.
+ES modules do not run over `file://`. Serving only `app/` hides the sibling `_shared/` assets. Local hosting selects the dev API in `config.js`.
+
+Frontend changes are NOT shipped via the deploy script — they only need a `git commit && git push` (GitHub Pages publishes the main branch automatically). The deploy script in `cicd/deploy.sh` handles backend-only operations (`clasp push` + `clasp deploy`). See `cicd/README.md` and `api/README.md` for the push-vs-deploy distinction.

@@ -20,13 +20,9 @@ function listTransactions() {
 //         major_category, minor_category, + location/text fields }
 // ─────────────────────────────────────────────────────────────────────────────
 function createTransaction(body) {
-  if ((body.target_amount_local === undefined || body.target_amount_local === null || String(body.target_amount_local).trim() === '' || !Number.isFinite(Number(body.target_amount_local)) || Number(body.target_amount_local) <= 0) &&
-      body.source_amount_local !== undefined && body.source_amount_local !== null && Number.isFinite(Number(body.source_amount_local)) && Number(body.source_amount_local) > 0) {
-    body.target_amount_local = body.source_amount_local;
-  }
-
   const catMap     = _buildCategoryMap();
   const accountMap = _loadAccountMap();
+  _defaultSameCurrencyTransferAmount(body, catMap, accountMap);
   const validation = validateTransactionRecord(body, catMap, accountMap);
   if (!validation.ok) return validation;
 
@@ -68,14 +64,16 @@ function createTransaction(body) {
     const childDup  = _checkDuplicate(txSheet, childBody);
     if (childDup) return childDup;
 
-    // Both legs are clean — write parent first, then child (child carries parent_tx_id).
-    const parentResult = _writeSingleTransaction(parentBody, { skipDupCheck: true, sheet: txSheet });
+    // Build both validated legs before one sheet write to avoid half a transfer.
+    const parentResult = _writeSingleTransaction(parentBody, { skipDupCheck: true, sheet: txSheet, deferWrite: true });
     if (!parentResult.ok) return parentResult;
 
     childBody.parent_tx_id = parentResult.id;
-    const childResult = _writeSingleTransaction(childBody, { skipDupCheck: true, sheet: txSheet });
+    const childResult = _writeSingleTransaction(childBody, { skipDupCheck: true, sheet: txSheet, deferWrite: true });
     if (!childResult.ok) return childResult;
 
+    txSheet.getRange(txSheet.getLastRow() + 1, 1, 2, getTransactionSheetColumns().length)
+      .setValues([parentResult.row, childResult.row]);
     return { ok: true, ids: [parentResult.id, childResult.id] };
   }
 
@@ -89,6 +87,25 @@ function createTransaction(body) {
     tx_amount_local: tx_amount_local,
     parent_tx_id:    '',
   }));
+}
+
+// Only a transfer between known accounts in the same currency can infer its
+// missing target amount. Cross-currency legs require an explicit target amount.
+function _defaultSameCurrencyTransferAmount(body, catMap, accountMap) {
+  const category = catMap[body.tx_type + '|' + body.major_category + '|' + body.minor_category];
+  if (category === undefined || category.source_account_mandatory !== true || category.target_account_mandatory !== true) return;
+  if (body.target_amount_local !== undefined && body.target_amount_local !== null && String(body.target_amount_local).trim() !== '') return;
+  const source = accountMap[String(body.source_account)];
+  const target = accountMap[String(body.target_account)];
+  if (source === undefined || target === undefined) return;
+  const sourceCurrency = source.account_currency_local;
+  const targetCurrency = target.account_currency_local;
+  if (sourceCurrency === undefined || sourceCurrency === null || String(sourceCurrency).trim() === '') return;
+  if (targetCurrency === undefined || targetCurrency === null || String(targetCurrency).trim() === '') return;
+  if (String(sourceCurrency).trim().toUpperCase() !== String(targetCurrency).trim().toUpperCase()) return;
+  if (body.source_amount_local !== undefined && body.source_amount_local !== null
+      && Number.isFinite(Number(body.source_amount_local)) && Number(body.source_amount_local) > 0)
+    body.target_amount_local = body.source_amount_local;
 }
 
 // Shared categorisation/location/text fields extracted from the create body.
@@ -116,7 +133,8 @@ function _txSharedFields(body) {
 // opts: { skipDupCheck: boolean, sheet: Sheet } — skipDupCheck: set true when
 //   caller has already run _checkDuplicate (e.g. the transfer path pre-checks
 //   both legs before any write). sheet: pre-opened sheet object; when provided
-//   the function uses it directly and skips the getOrCreateSheet call.
+//   the function uses it directly and skips the getOrCreateSheet call. deferWrite
+//   returns the built row so the caller can write a complete transfer in one call.
 // ─────────────────────────────────────────────────────────────────────────────
 function _writeSingleTransaction(body, opts) {
   const cols  = getTransactionSheetColumns();
@@ -168,6 +186,7 @@ function _writeSingleTransaction(body, opts) {
   setCol('created_at',      now);
   setCol('updated_at',      now);
 
+  if (opts !== undefined && opts !== null && opts.deferWrite === true) return { ok: true, id: id, row: row };
   sheet.appendRow(row);
   return { ok: true, id };
 }
@@ -182,7 +201,7 @@ function updateTransaction(body) {
   const sheet   = getOrCreateSheet(TRANSACTIONS_SHEET, cols);
   const rowNum  = Number(body.row_num);
   const lastRow = sheet.getLastRow();
-  if (!Number.isFinite(rowNum) || rowNum < 2 || rowNum > lastRow) return { ok: false, error: 'invalid_row' };
+  if (!Number.isInteger(rowNum) || rowNum < 2 || rowNum > lastRow) return { ok: false, error: 'invalid_row' };
 
   const oldRow = sheet.getRange(rowNum, 1, 1, cols.length).getValues()[0];
 
@@ -251,7 +270,7 @@ function deleteTransaction(body) {
   const sheet   = getOrCreateSheet(TRANSACTIONS_SHEET, cols);
   const rowNum  = Number(body.row_num);
   const lastRow = sheet.getLastRow();
-  if (!Number.isFinite(rowNum) || rowNum < 2 || rowNum > lastRow) return { ok: false, error: 'invalid_row' };
+  if (!Number.isInteger(rowNum) || rowNum < 2 || rowNum > lastRow) return { ok: false, error: 'invalid_row' };
 
   // TX-NEW-H-1 + T-H6: single row read; mutate in-array; single setValues() write.
   const rowData           = sheet.getRange(rowNum, 1, 1, cols.length).getValues()[0];
@@ -289,7 +308,7 @@ function restoreTransaction(body) {
   const sheet   = getOrCreateSheet(TRANSACTIONS_SHEET, cols);
   const rowNum  = Number(body.row_num);
   const lastRow = sheet.getLastRow();
-  if (!Number.isFinite(rowNum) || rowNum < 2 || rowNum > lastRow) return { ok: false, error: 'invalid_row' };
+  if (!Number.isInteger(rowNum) || rowNum < 2 || rowNum > lastRow) return { ok: false, error: 'invalid_row' };
 
   // T-H6: single row read for all field values — replaces N individual getValue() calls.
   const rowData           = sheet.getRange(rowNum, 1, 1, cols.length).getValues()[0];
@@ -320,12 +339,12 @@ function restoreTransaction(body) {
 // Dedup rule: each incoming CSV row carries an `id` (uuid).
 //   - Non-transfer row: the single sheet leg's `id` = the CSV row's `id`.
 //   - Transfer row:     the PARENT leg's `id` = the CSV row's `id`; the CHILD leg
-//                       gets a generated uuid but its `parent_tx_id` = the CSV id.
+//                       retains its existing ID when present; parent_tx_id = CSV id.
 //   - id absent:        generate a uuid for the (parent/single) leg and INSERT.
 //
 // Upsert per CSV id: before writing, every existing sheet row whose `id` equals a
 // CSV id in this batch OR whose `parent_tx_id` equals a CSV id in this batch is
-// removed, then the fresh leg(s) are inserted. This cleanly replaces BOTH legs of
+// replaced, with displaced children retained as deleted sync tombstones. Both legs of
 // a transfer on re-import.
 //
 // Implementation — read-once, filter, rewrite:
@@ -339,7 +358,7 @@ function restoreTransaction(body) {
 //
 // This is correct because row deletions renumber the sheet: rewriting the entire
 // data region from a computed array avoids the fragility of deleting rows by
-// number mid-batch, and the single write keeps the chunk atomic.
+// number mid-batch. POST dispatch serializes mutations with the script lock.
 //
 // body: { transactions: [ { same shape as createTransaction body } ] }
 // ─────────────────────────────────────────────────────────────────────────────
@@ -368,10 +387,12 @@ function createTransactionsBulk(body) {
   const existingRows    = existingData.length <= 1 ? [] : existingData.slice(1);
 
   // created_at lookup by leg id — used to preserve created_at when a leg is replaced.
-  const createdAtById = {};
+  const createdAtById = Object.create(null);
   // Set of ids addressable by an existing row (its own id, or a parent_tx_id it points
   // to) — a CSV id in this set means the incoming row REPLACES existing leg(s).
-  const existingAddressableIds = {};
+  const existingAddressableIds = Object.create(null);
+  const childIdByParentId = Object.create(null);
+  const existingChildIds = Object.create(null);
   existingRows.forEach(function(r) {
     const rowId    = String(r[idColIdx]).trim();
     const parentId = String(r[parentColIdx]).trim();
@@ -379,7 +400,11 @@ function createTransactionsBulk(body) {
       createdAtById[rowId]           = r[createdAtColIdx];
       existingAddressableIds[rowId]  = true;
     }
-    if (parentId !== '') existingAddressableIds[parentId] = true;
+    if (parentId !== '') {
+      existingAddressableIds[parentId] = true;
+      childIdByParentId[parentId] = rowId;
+      existingChildIds[rowId] = true;
+    }
   });
 
   // Build one sheet-row array without touching the sheet.
@@ -413,7 +438,7 @@ function createTransactionsBulk(body) {
     setC('sync_notes',              '');
     setC('updated_at',              now);
     // created_at: preserve when this leg's own id matches an existing (replaced) row;
-    // otherwise stamp now. Child legs get a fresh uuid each import → always now.
+    // otherwise stamp now. Reimported transfer children retain their IDs.
     const preserved = createdAtById[id];
     setC('created_at', preserved !== undefined ? preserved : now);
     // sync_status: a replaced leg advances to update-pending via computeSyncStatus.
@@ -425,19 +450,21 @@ function createTransactionsBulk(body) {
 
   // ── Process each transaction in-memory ────────────────────────────────────
   const newRows   = [];   // freshly built leg rows to write
-  const batchIds  = {};   // set of CSV ids used as a leg id or parent_tx_id in this batch
+  const batchIds  = Object.create(null);   // set of CSV ids used as a leg id or parent_tx_id in this batch
   const results   = [];
   let created = 0;
   let updated = 0;
   let failed  = 0;
 
   body.transactions.forEach(function(tx) {
+    if (tx === null || typeof tx !== 'object' || Array.isArray(tx)) {
+      results.push({ key: '', ok: false, error: 'invalid_row' });
+      failed += 1;
+      return;
+    }
     const txBody = Object.assign({}, tx);
 
-    if ((txBody.target_amount_local === undefined || txBody.target_amount_local === null || String(txBody.target_amount_local).trim() === '' || !Number.isFinite(Number(txBody.target_amount_local)) || Number(txBody.target_amount_local) <= 0) &&
-        txBody.source_amount_local !== undefined && txBody.source_amount_local !== null && Number.isFinite(Number(txBody.source_amount_local)) && Number(txBody.source_amount_local) > 0) {
-      txBody.target_amount_local = txBody.source_amount_local;
-    }
+    _defaultSameCurrencyTransferAmount(txBody, catMap, accountMap);
 
     const val = validateTransactionRecord(txBody, catMap, accountMap);
     if (!val.ok) {
@@ -449,6 +476,16 @@ function createTransactionsBulk(body) {
     // Resolve the leg id for this CSV row: caller-supplied id, else a generated uuid.
     const hasId = txBody.id !== undefined && txBody.id !== null && String(txBody.id).trim() !== '';
     const csvId = hasId ? String(txBody.id).trim() : Utilities.getUuid();
+    if (existingChildIds[csvId] === true) {
+      results.push({ key: csvId, ok: false, error: 'transfer_child_id_requires_parent' });
+      failed += 1;
+      return;
+    }
+    if (batchIds[csvId] === true) {
+      results.push({ key: csvId, ok: false, error: 'duplicate_id_in_batch' });
+      failed += 1;
+      return;
+    }
     batchIds[csvId] = true;
     // Replace vs insert is decided by whether this id already addresses existing legs.
     const isReplace = existingAddressableIds[csvId] === true;
@@ -474,7 +511,7 @@ function createTransactionsBulk(body) {
       }
 
       const parentId = csvId;                 // parent leg id = CSV id
-      const childId  = Utilities.getUuid();   // child leg gets its own uuid
+      const childId  = childIdByParentId[parentId] !== undefined ? childIdByParentId[parentId] : Utilities.getUuid();
 
       const shared = _txSharedFields(txBody);
       newRows.push(buildRow(Object.assign({}, shared, { tx_type: parentType, account_id: parentAcct, tx_amount_local: parentAmt, parent_tx_id: '' }), parentId));
@@ -498,13 +535,30 @@ function createTransactionsBulk(body) {
   // ── Filter out existing rows being replaced by this batch ──────────────────
   // Drop any existing row whose own id, or whose parent_tx_id, is a CSV id in this
   // batch. Everything else is kept as-is.
-  const keptRows = existingRows.filter(function(r) {
-    const rowId    = String(r[idColIdx]).trim();
+  const newLegIds = Object.create(null);
+  newRows.forEach(function(row) { newLegIds[String(row[idColIdx])] = true; });
+  const keptRows = [];
+  existingRows.forEach(function(r) {
+    const rowId = String(r[idColIdx]).trim();
     const parentId = String(r[parentColIdx]).trim();
-    if (rowId !== '' && batchIds[rowId] === true) return false;
-    if (parentId !== '' && batchIds[parentId] === true) return false;
-    return true;
+    if (batchIds[rowId] !== true && batchIds[parentId] !== true) {
+      keptRows.push(r);
+      return;
+    }
+    if (newLegIds[rowId] === true) return;
+    // A removed transfer child must reach downstream sync as a deletion.
+    const tombstone = r.slice();
+    if (String(tombstone[txColIndex('record_status')]) !== 'deleted') {
+      tombstone[txColIndex('record_status')] = 'deleted';
+      tombstone[txColIndex('sync_status')] = computeSyncStatus(String(tombstone[txColIndex('sync_status')]));
+      tombstone[txColIndex('sync_notes')] = '';
+      tombstone[txColIndex('updated_at')] = now;
+    }
+    keptRows.push(tombstone);
   });
+
+  if (created + updated === 0)
+    return { ok: false, created: created, updated: updated, failed: failed, results: results };
 
   // ── Single rewrite of the whole data region ────────────────────────────────
   const finalRows      = keptRows.concat(newRows);

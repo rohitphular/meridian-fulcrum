@@ -1,150 +1,59 @@
-# Expense Tracker — Re-Wire Brain
+# Expense Tracker — Current project state
 
-Personal finance ledger. Tracks income, expenses, and transfers across multiple accounts in multiple currencies. Balances stay exact automatically.
+Updated: 2026-09-23. This snapshot supersedes the historical review notes below.
 
----
+## Architecture and local use
 
-## Live URLs
+Vanilla JS ES modules in `app/`, shared browser helpers in `_shared/`, GAS V8 backend in `api/`, Google Sheets storage. The backend is a single `/exec` endpoint; `app/config.js` selects dev locally and prod on `*.github.io`.
 
-| | URL |
-|---|---|
-| **App (prod)** | https://rohitphular.github.io/fulcrum/forge/expense-tracker/app/ |
-| **App (local)** | `make app-start` → http://localhost:8000/expense-tracker/app/ |
-| **Backend (prod)** | GAS `/exec` — in `app/config.js` as `PROD_SCRIPT_URL` |
-| **Backend (dev)** | GAS `/exec` — in `app/config.js` as `DEV_SCRIPT_URL` |
-
-Login: PIN + 6-digit TOTP code from your authenticator app. TOTP can be disabled for dev (`TOTP_ENABLED = false` in Script Properties).
-
----
-
-## Stack in one line per layer
-
-| Layer | What |
-|---|---|
-| Frontend | Vanilla JS ES modules — no framework, no build step. Lives in `app/`. |
-| Backend | Google Apps Script V8 (`.gs` files). Lives in `api/`. One HTTPS endpoint. |
-| Database | Google Sheet — one tab per entity. Auto-created on first request. |
-| Hosting | GitHub Pages (frontend) · GAS Web App deployment (backend) |
-| Auth | PIN (every request) + RFC 6238 TOTP (login only) |
-
----
-
-## Folder map
-
-```
-expense-tracker/
-├── app/          Frontend SPA — sections, state, API wrappers, styles
-├── api/          GAS backend — .gs modules by domain
-├── cicd/         deploy.sh, logs.sh, envs.json
-├── _docs/        Language-agnostic requirements (what, not how)
-├── _tasks/       In-flight task notes
-├── Makefile      app-start, app-stop, api-deploy, api-logs
-└── REWIRE-BRAIN.md  ← you are here
-```
-
-Shared code for all Forge modules: `forge/_shared/` (sheets-client.js, auth.js, ui.js, utils.js, style-tokens.css).
-
----
-
-## Data model essentials
-
-| Concept | Reality |
-|---|---|
-| **Base currency** | XAU — 1 gram of gold. All cross-currency totals convert to XAU. Never GBP. |
-| **Transaction model** | Single-leg. Each row has one `account_id` + `tx_amount`. A transfer between two accounts is two rows linked via `parent_tx_id`. No `money-transfer` tx_type; no `source_account`/`target_account` on rows; no `fx_rate` column. |
-| **Lifecycle field** | `record_status` (`active` / `inactive` / `deleted` / `locked`). There is no `is_active` field anywhere in the codebase. |
-| **Balance field** | `current_value` on accounts. Not `current_balance`. System-managed — never written directly via the account API. |
-| **Timestamp field** | `tx_date_local` on transactions. Not `transaction_date_utc`. |
-
----
-
-## What is built
-
-| Feature | Status |
-|---|---|
-| Transactions — create / edit / delete (money-in, money-out, transfer) | ✓ Done |
-| Accounts — 13 types (current, savings, loan, credit card, crypto, …) | ✓ Done |
-| Automatic balance tracking — two-phase reversal on edit/delete | ✓ Done |
-| Multi-currency — per-account currency, FX rates, XAU base-currency conversion | ✓ Done |
-| Categories — two-level taxonomy (major → minor), account-type hints | ✓ Done |
-| FX Rates — manage rates, auto-seeded with GBP/INR/USD/EUR/AED defaults | ✓ Done |
-| Subscriptions — 22-column schema, full CRUD, bulk CSV import, filter bar, sortable table, status icons, context menu, locked/deleted guard, auto-expiry | ✓ Done |
-| Insight — summary cards, monthly trend chart, category breakdown | ✓ Done |
-| Advisor — LLM chat panel (OpenAI gpt-4o-mini, script property key) | ✓ Done |
-| Auth — PIN + TOTP gate, IP-based lockout after 3 failures | ✓ Done |
-| CI/CD — one-command deploy via `make api-deploy` | ✓ Done |
-| Dark mode | ✓ Done |
-
-## What is pending
-
-Nothing tracked in `_tasks/` right now. Check `_docs/overview.md` for the full feature scope and any out-of-scope items.
-
----
-
-## Start working locally
+From the `meridian-fulcrum` repository root:
 
 ```bash
-# Run the frontend (file:// is blocked — HTTP server required)
-make app-start
-# → http://localhost:8000/expense-tracker/app/
-
-# Edit backend
-cd api
-# Edit .gs files, then deploy:
-make api-deploy   # pick env → enter description
+python3 -m http.server 8000
+# http://localhost:8000/expense-tracker/app/
 ```
 
-Backend changes take effect immediately after deploy. Frontend changes are live on save — just refresh.
+From `expense-tracker/`, backend deployment uses `bash cicd/deploy.sh <env> "description"`. Deployment is separate from local validation. No deployment was performed during this review.
 
----
+## Current model
 
-## Deploy
+- Accounts: 19 columns, including `account_currency_local`, real-world `account_opening_date_local` / `account_closing_date_local`, and appended `tracking_start_date_local`.
+- Opening balance is a snapshot at the tracking timestamp. Current balances are recomputed from eligible non-deleted movements on or after that timestamp; blank tracking date retains all history.
+- Transactions: 24-column single-leg ledger. Transfers have a parent and child; only the child stores `parent_tx_id`. Either direction may initiate the pair. IDs are UUIDs; bulk imports preserve supplied IDs.
+- Subscriptions: 21 columns, `subscription_name`, `subscription_amount_local`, start/end dates suffixed `_local`, and `subscription_timezone_local`. No subscription `tags` field. Schedule calculation still uses server local time; quarterly/annual schedules lack a fixed month anchor.
+- Categories: 21 columns; interactive duplicate checks use the composite category key, bulk imports use ID.
+- Rates: API rates use XAU (one gram of gold) as base, XAU=1. Legacy GBP-relative rows are normalised on read without rewriting; explicit upsert persists all rows on the XAU basis together. The display currency is selectable.
+- Account master/detail imports: one master plus six detail types, described in [_docs/account-imports.md](_docs/account-imports.md). These differ from the Python extractor's older seven-extension design.
+
+## Review fixes and validation
+
+The September 23 review fixed lost CSV IDs, subscription export fields, transfer export selection, tracking-aware balance replay, mixed-currency opening balances, UI balance/loan guards, invalid numeric values, obsolete currency references, and unsafe closing-date/filter-label HTML insertion. Data refreshes now validate all entity/schema responses before replacing the current snapshot; failed dependencies retain the previous complete view and show their error.
+
+Backend fixes include fail-closed missing PIN configuration, failed-TOTP audit counting, JSON error responses, integer row checks, serialized POST mutations, one-write transfer creation, preserved child IDs on re-import, and deleted child tombstones for downstream sync. Advisor snapshots use current account fields and XAU totals.
+
+Run local regression checks from the repository root:
 
 ```bash
-bash forge/expense-tracker/cicd/deploy.sh
-# 1. Pick: dev | prod
-# 2. Enter a description (or leave blank)
+node --test expense-tracker/tests/*.cjs
 ```
 
-This does: `clasp push --force` → `clasp deploy` → restores `.clasp.json` placeholder. Git is NOT touched — commit and push separately.
+Tests mock the browser/GAS boundary; they do not certify a live deployment.
 
-Frontend deploys automatically via GitHub Pages on every `git push` to `main`. No separate deploy step.
+## Deployment and integration prerequisites
 
----
+- Existing sheet headers must match the positional schema. Missing trailing columns may append; renamed/reordered headers fail with `sheet_header_mismatch` before data writes. Explicitly migrate legacy sheets before deploying against them. Source CSVs and live sheets were not changed by this review.
+- The Python account transform still expects older field names. Its Phase 2 detail extraction is not implemented and needs reconciliation with the six current detail tabs.
+- Financial policy enforcement is partial: UI balance and loan checks are not server-side guarantees; credit limits are not enforced. See [_docs/financial-rules.md](_docs/financial-rules.md).
+- TOTP protects the login handshake; subsequent API calls use the PIN. Browser sessions expire locally after six hours. IP metadata is client-supplied, so IP lockout is not a trusted network perimeter.
+- Subscription schedules have no fixed quarterly/annual month anchor and do not use each row's timezone. See [_docs/subscriptions.md](_docs/subscriptions.md).
 
-## Key files to know
+## Reading map
 
-| File | Why you'd open it |
-|---|---|
-| `app/config.js` | Backend URLs for dev + prod |
-| `app/core/state.js` | All app state — data, UI flags, filters |
-| `app/core/api.js` | Every backend action in one place |
-| `app/sections/transactions.js` | Largest section — ~1200 lines, the reference implementation |
-| `app/sections/subscriptions.js` | Subscriptions section — filter bar, sortable table, context menu, bulk import |
-| `api/app-router.gs` | All backend actions wired here |
-| `api/app-config.gs` | Sheet name constants |
-| `api/subscription-schema.gs` | Subscription field registry (22 columns, append-only positions) |
-| `api/subscription-core.gs` | Subscription CRUD — create, list, update, delete, bulk import |
-| `api/subscription-validation.gs` | Subscription field validation and error codes |
-| `cicd/envs.json` | Script IDs + Deployment IDs for dev + prod |
+Start at [_docs/README.md](_docs/README.md), then the entity document. Backend/FE standards are under `../building-standards/documents/standards/`. Relevant files: `APP-BE-GSCRIPT.md`, `APP-FE-VANILLA.md`, `APP-AUTH-PIN-TOTP.md`, `APP-CONVENTIONS.md`, `APP-LOGGING-PATTERNS.md`, and `UX-DESIGN-FULCRUM.md`.
 
----
+## Historical review notes
 
-## Where to read more
-
-| Topic | Doc |
-|---|---|
-| Adding a new backend domain | `../building-standards/APP-BE-GSCRIPT.md` |
-| Adding a new frontend section | `../building-standards/APP-FE-VANILLA.md` |
-| Auth implementation details | `../building-standards/APP-AUTH-PIN-TOTP.md` |
-| Deploy pipeline internals | `../building-standards/APP-CICD-PATTERNS.md` |
-| Design system + UX patterns | `../building-standards/UX-DESIGN-FULCRUM.md` |
-| Naming conventions | `../building-standards/APP-CONVENTIONS.md` |
-| Logging standards | `../building-standards/APP-LOGGING-PATTERNS.md` |
-| Shared utilities catalog | `../building-standards/APP-SHARED-CODE.md` |
-| Domain requirements (what the app does) | `_docs/README.md` |
-
----
+The following notes record earlier states and may describe removed fields or superseded behavior. Use the current snapshot and entity docs for current contracts.
 
 ## Recent changes (Rounds 1–14)
 

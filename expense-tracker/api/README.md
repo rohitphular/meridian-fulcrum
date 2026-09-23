@@ -11,11 +11,13 @@ Source is split into per-domain `.gs` modules. GAS flattens them all into one na
 | App | `app-auth.gs`, `app-config.gs`, `app-router.gs`, `app-utils.gs` | Auth, config, HTTP routing, shared helpers |
 | Accounts | `account-core.gs`, `account-schema.gs`, `account-utils.gs`, `account-validation.gs` | Account CRUD, schema, validation |
 | Transactions | `transaction-core.gs`, `transaction-schema.gs`, `transaction-utils.gs`, `transaction-validation.gs` | Transaction CRUD, schema, validation |
-| Categories | `category-core.gs`, `category-schema.gs`, `category-seed.gs`, `category-utils.gs`, `category-validation.gs` | Category CRUD, schema, seed data, validation |
+| Categories | `category-core.gs`, `category-schema.gs`, `category-utils.gs`, `category-validation.gs` | Category CRUD, schema, validation |
+| Import | `import-core.gs`, `import-registry.gs` | Account master/detail CSV validation and ID-based replacement |
+| Subscriptions | `subscription-core.gs`, `subscription-schema.gs`, `subscription-utils.gs`, `subscription-validation.gs` | Recurring obligations and schedule calculation |
 | Rates | `rate-core.gs`, `rate-schema.gs`, `rate-validation.gs` | FX rate CRUD, schema, validation |
 | Advisor | `advisor-core.gs` | LLM advisor endpoint |
 | Manifest | `appsscript.json` | GAS runtime config — timezone, V8 engine, web app access |
-| clasp link | `.clasp.json` | Links this directory to a GAS project. Committed with `"scriptId": "${SCRIPT_ID_PLACEHOLDER}"`; the real `scriptId` is written by `cicd/script-deployment.sh` at deploy time and reverted on exit. |
+| clasp link | `.clasp.json` | Links this directory to a GAS project. Committed with `"scriptId": "${SCRIPT_ID_PLACEHOLDER}"`; the real `scriptId` is written by `cicd/deploy.sh` at deploy time and reverted on exit. |
 
 `.clasp.json` holds the Script ID — a public identifier, not a secret. OAuth tokens live in `~/.clasprc.json` and are gitignored.
 
@@ -57,10 +59,10 @@ A push without a deploy means users still see the previous version.
 The canonical deploy path is:
 
 ```bash
-bash forge/deploy.sh        # pick expense-tracker, pick env
+bash expense-tracker/cicd/deploy.sh        # from repository root; pick env
 ```
 
-This dispatches to `cicd/script-deployment.sh` which handles env-scoped `scriptId` writing, clasp push, clasp deploy, and placeholder revert.
+This dispatches to `cicd/deploy.sh` which handles env-scoped `scriptId` writing, clasp push, clasp deploy, and placeholder revert.
 
 The deploy is **backend-only** — git operations are NOT performed. Commit and push manually when you're ready to record state in git.
 
@@ -71,7 +73,7 @@ See `cicd/README.md` for the full pipeline detail.
 Each GAS project has a `/dev` URL that always serves the latest draft (whatever was last `clasp push`'d). Useful for fast iteration without burning a new deployment version.
 
 1. Hand-edit `api/.clasp.json` to the env's `scriptId` (from `cicd/envs.json`)
-2. `cd backend && clasp push --force`
+2. `cd api && clasp push --force`
 3. In the GAS editor → **Deploy → Test deployments** → copy the `/dev` URL
 4. Temporarily edit the env's URL constant in `app/config.js` to point at the `/dev` URL
 5. Test in the browser (must be signed into the same Google account)
