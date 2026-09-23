@@ -24,28 +24,6 @@ def bootstrap_job_execution_details(conn: Any) -> None:
     conn.commit()
 
 
-def read_last_sheet_modified_at(conn: Any) -> datetime | None:
-    """Return last_sheet_modified_at for the job; None on first run."""
-    with conn.cursor() as cursor:
-        cursor.execute(
-            "SELECT last_sheet_modified_at FROM job_execution_details WHERE job_name = %s",
-            (_JOB_NAME,),
-        )
-        row = cursor.fetchone()
-    return row[0] if row else None
-
-
-def update_ran_at(conn: Any) -> None:
-    """UPDATE ran_at = now() (early-exit path). Commits."""
-    with conn.cursor() as cursor:
-        cursor.execute(
-            "UPDATE job_execution_details SET ran_at = now() WHERE job_name = %s",
-            (_JOB_NAME,),
-        )
-    conn.commit()
-    logger.info("update_ran_at: committed")
-
-
 def upsert_job_execution_details(conn: Any, last_sheet_modified_at: datetime) -> None:
     """Phase 3 finalise — UPSERT with cached modified time. Commits."""
     with conn.cursor() as cursor:

@@ -2,8 +2,8 @@ entities:
   categories:
     enabled: true
   accounts:
-    enabled: true
+    enabled: false
   transactions:
-    enabled: true
+    enabled: false
   subscriptions:
-    enabled: true
+    enabled: false

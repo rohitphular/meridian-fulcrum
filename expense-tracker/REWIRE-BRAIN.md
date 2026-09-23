@@ -42,7 +42,7 @@ Tests mock the browser/GAS boundary; they do not certify a live deployment.
 ## Deployment and integration prerequisites
 
 - Existing sheet headers must match the positional schema. Missing trailing columns may append; renamed/reordered headers fail with `sheet_header_mismatch` before data writes. Explicitly migrate legacy sheets before deploying against them. Source CSVs and live sheets were not changed by this review.
-- The Python account transform still expects older field names. Its Phase 2 detail extraction is not implemented and needs reconciliation with the six current detail tabs.
+- The Python ledger extractor now maps the current account master fields and tracking snapshot date. It imports categories, account masters, transactions and subscriptions with guarded sync-only acknowledgements; see `data-synchronization/ledger-extract/README.md`. The six account-detail tabs still need a separately designed extraction path; historical extension balances are not maintained. Ledger migrations 0011–0013 and a reviewed reprocessing run are needed to adopt the new snapshot metadata in an existing database.
 - Financial policy enforcement is partial: UI balance and loan checks are not server-side guarantees; credit limits are not enforced. See [_docs/financial-rules.md](_docs/financial-rules.md).
 - TOTP protects the login handshake; subsequent API calls use the PIN. Browser sessions expire locally after six hours. IP metadata is client-supplied, so IP lockout is not a trusted network perimeter.
 - Subscription schedules have no fixed quarterly/annual month anchor and do not use each row's timezone. See [_docs/subscriptions.md](_docs/subscriptions.md).

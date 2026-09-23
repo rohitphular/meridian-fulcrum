@@ -1,7 +1,13 @@
 from __future__ import annotations
 
-import decimal
+import re
+from datetime import datetime
+from decimal import Decimal, InvalidOperation
 from typing import Any
+from uuid import UUID
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+from transforms.dates import local_datetime
 
 _VALID_ACCOUNT_TYPES = {"asset", "investment", "liability"}
 _VALID_RECORD_STATUSES = {"active", "inactive", "deleted", "locked"}
@@ -13,90 +19,76 @@ def _to_optional_str(raw: Any) -> str | None:
     return str(raw).strip()
 
 
-def transform(row: dict[str, Any]) -> dict[str, Any]:
-    """Validate and type-convert a raw accounts sheet row dict.
+def _required(row: dict[str, Any], field: str) -> str:
+    value = _to_optional_str(row.get(field))
+    if value is None:
+        raise ValueError(f"accounts: field={field} is required")
+    return value
 
-    Raises ValueError with a clear message on any validation failure.
-    """
-    # id — UUID stamped by GAS on create; authoritative identifier for this row
-    raw_id = row.get("id")
-    if raw_id is None or str(raw_id).strip() == "":
-        raise ValueError("accounts: field=id is required but got empty/None")
-    account_id = str(raw_id).strip()
 
-    # account_name (sheet col 2)
-    raw_account_name = row.get("account_name")
-    if raw_account_name is None or str(raw_account_name).strip() == "":
-        raise ValueError(f"accounts: id={account_id!r} field=account_name is required but got empty/None")
-    account_name = str(raw_account_name).strip()
-
-    # legal_entity_name (sheet col 3) — optional
-    legal_entity_name = _to_optional_str(row.get("legal_entity_name"))
-
-    # type → account_type (sheet col 4)
-    raw_account_type = row.get("type")
-    if raw_account_type is None or str(raw_account_type).strip() == "":
-        raise ValueError(f"accounts: id={account_id!r} field=account_type is required but got empty/None")
-    account_type = str(raw_account_type).strip()
-    if account_type not in _VALID_ACCOUNT_TYPES:
-        raise ValueError(f"accounts: id={account_id!r} field=account_type value={account_type!r} not in {_VALID_ACCOUNT_TYPES}")
-
-    # sub_type → account_subtype (sheet col 5)
-    raw_account_subtype = row.get("sub_type")
-    if raw_account_subtype is None or str(raw_account_subtype).strip() == "":
-        raise ValueError(f"accounts: id={account_id!r} field=account_subtype is required but got empty/None")
-    account_subtype = str(raw_account_subtype).strip()
-
-    # local_currency (sheet col 6)
-    raw_currency = row.get("local_currency")
-    if raw_currency is None or str(raw_currency).strip() == "":
-        raise ValueError(f"accounts: id={account_id!r} field=local_currency is required but got empty/None")
-    local_currency = str(raw_currency).strip().upper()
-    if len(local_currency) != 3:
-        raise ValueError(f"accounts: id={account_id!r} field=local_currency value={local_currency!r} must be exactly 3 characters")
-
-    # local_timezone (sheet col 7) — optional; auto-detected by browser on create, never user-typed
-    local_timezone = _to_optional_str(row.get("local_timezone"))
-
-    # opening_date_local (sheet col 8) — optional str; immutable after create; stored as-is (no UTC conversion)
-    opening_date_local = _to_optional_str(row.get("opening_date_local"))
-
-    # closing_date_local (sheet col 9) — optional; set when account is closed
-    closing_date_local = _to_optional_str(row.get("closing_date_local"))
-
-    # opening_value_local (sheet col 10)
-    raw_opening_value = row.get("opening_value_local")
-    if raw_opening_value is None or str(raw_opening_value).strip() == "":
-        raise ValueError(f"accounts: id={account_id!r} field=opening_value_local is required but got empty/None")
+def _local_date(raw: Any, field: str, timezone_name: str | None) -> str | None:
+    value = _to_optional_str(raw)
+    if value is None:
+        return None
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}(?::\d{2}(?:\.\d{1,6})?)?)?", value) is None:
+        raise ValueError(f"accounts: field={field} must be an ISO local date or datetime without an offset")
     try:
-        opening_amount_local_value = decimal.Decimal(str(raw_opening_value).strip())
-    except decimal.InvalidOperation:
-        raise ValueError(f"accounts: id={account_id!r} field=opening_value_local value={raw_opening_value!r} is not a valid decimal number")
-    if not opening_amount_local_value.is_finite():
-        raise ValueError(f"accounts: id={account_id!r} field=opening_value_local value={raw_opening_value!r} is not finite")
+        parsed = datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise ValueError(f"accounts: field={field} must be an ISO local date or datetime") from exc
+    if parsed.tzinfo is not None:
+        raise ValueError(f"accounts: field={field} must be local wall time without a UTC offset")
+    if timezone_name is not None:
+        local_datetime(parsed.isoformat(sep=" "), timezone_name, field)
+    return value
 
-    # description (sheet col 12) — optional
-    account_description = _to_optional_str(row.get("description"))
 
-    # record_status (sheet col 13)
-    raw_record_status = row.get("record_status")
-    if raw_record_status is None or str(raw_record_status).strip() == "":
-        raise ValueError(f"accounts: id={account_id!r} field=record_status is required but got empty/None")
-    record_status = str(raw_record_status).strip()
+def transform(row: dict[str, Any]) -> dict[str, Any]:
+    """Map the current 19-column GAS account contract to database field names."""
+    try:
+        account_id = str(UUID(_required(row, "id")))
+    except ValueError as exc:
+        raise ValueError("accounts: field=id must be a valid UUID") from exc
+    account_type = _required(row, "type")
+    if account_type not in _VALID_ACCOUNT_TYPES:
+        raise ValueError("accounts: field=type must be asset, investment, or liability")
+    local_currency = _required(row, "account_currency_local").upper()
+    if len(local_currency) != 3 or not local_currency.isascii() or not local_currency.isalpha():
+        raise ValueError("accounts: field=account_currency_local must be a three-letter currency code")
+    local_timezone = _to_optional_str(row.get("local_timezone"))
+    if local_timezone is not None:
+        try:
+            ZoneInfo(local_timezone)
+        except (ZoneInfoNotFoundError, ValueError, KeyError) as exc:
+            raise ValueError("accounts: field=local_timezone must be a recognised IANA timezone") from exc
+    opening_date = _local_date(row.get("account_opening_date_local"), "account_opening_date_local", local_timezone)
+    closing_date = _local_date(row.get("account_closing_date_local"), "account_closing_date_local", local_timezone)
+    tracking_date = _local_date(row.get("tracking_start_date_local"), "tracking_start_date_local", local_timezone)
+    if opening_date is not None and closing_date is not None and datetime.fromisoformat(closing_date) < datetime.fromisoformat(opening_date):
+        raise ValueError("accounts: account_closing_date_local precedes account_opening_date_local")
+    try:
+        opening_amount = Decimal(_required(row, "opening_value_local"))
+    except InvalidOperation as exc:
+        raise ValueError("accounts: field=opening_value_local must be a decimal number") from exc
+    if not opening_amount.is_finite():
+        raise ValueError("accounts: field=opening_value_local must be finite")
+    if (account_type == "liability" and opening_amount > 0) or (account_type != "liability" and opening_amount < 0):
+        raise ValueError("accounts: opening value must be nonpositive for liabilities and nonnegative for assets/investments")
+    record_status = _required(row, "record_status")
     if record_status not in _VALID_RECORD_STATUSES:
-        raise ValueError(f"accounts: id={account_id!r} field=record_status value={record_status!r} not in {_VALID_RECORD_STATUSES}")
-
+        raise ValueError("accounts: field=record_status must be active, inactive, deleted, or locked")
     return {
         "id": account_id,
-        "account_name": account_name,
-        "legal_entity_name": legal_entity_name,
+        "account_name": _required(row, "account_name"),
+        "legal_entity_name": _to_optional_str(row.get("legal_entity_name")),
         "account_type": account_type,
-        "account_subtype": account_subtype,
+        "account_subtype": _required(row, "sub_type"),
         "local_currency": local_currency,
         "local_timezone": local_timezone,
-        "opening_date_local": opening_date_local,
-        "closing_date_local": closing_date_local,
-        "opening_amount_local_value": opening_amount_local_value,
-        "account_description": account_description,
+        "opening_date_local": opening_date,
+        "closing_date_local": closing_date,
+        "tracking_start_date_local": tracking_date,
+        "opening_amount_local_value": opening_amount,
+        "account_description": _to_optional_str(row.get("description")),
         "record_status": record_status,
     }

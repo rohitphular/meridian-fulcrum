@@ -8,265 +8,158 @@ from py_google_workspace.gsheets import SheetsClient
 from py_logging import get_logger
 
 import sheets.categories as sheets_categories
-from transforms import categories as categories_transform
+import transforms.categories as categories_transform
 
 logger = get_logger(__name__)
 
 _SHEET_NAME = "categories"
-_VALID_SYNC_STATUSES = {"create-pending", "create-failed", "update-pending", "update-failed", "in-sync"}
 _ACTIONABLE = {"create-pending", "create-failed", "update-pending", "update-failed"}
+_JOIN_TABLES = {"category_source_account_types", "category_target_account_types"}
 
 
-def _to_sync_notes(e: Exception) -> str:
-    if isinstance(e, ValueError):
-        return str(e).removeprefix("categories: ")
-    if isinstance(e, pg_errors.UniqueViolation):
-        constraint = e.diag.constraint_name
-        if constraint == "pk_category_master":
-            return "Duplicate ID — a category with this ID already exists in the DB; the sheet contains two rows with the same GAS-stamped UUID"
-        if constraint == "uq_category_master_nat_key":
-            return "Duplicate category — a category with this tx_type / major_category / minor_category combination already exists"
-        return f"Unique constraint violation: {constraint}"
-    if isinstance(e, pg_errors.ForeignKeyViolation):
-        return "Invalid account subtype — one or more values in source_account_types or target_account_types do not exist"
-    if isinstance(e, pg_errors.CheckViolation):
-        return "Value failed a database constraint — verify field values match allowed options"
-    if isinstance(e, pg_errors.NotNullViolation):
-        return "A required field is missing a value"
-    raise TypeError(f"_to_sync_notes: unhandled exception type {type(e).__name__}")
+def _to_sync_notes(exc: Exception) -> str:
+    if isinstance(exc, ValueError):
+        return str(exc).removeprefix("categories: ")
+    if isinstance(exc, pg_errors.UniqueViolation):
+        return "Duplicate category classification belongs to another ID; reconcile the sheet and database IDs"
+    if isinstance(exc, pg_errors.ForeignKeyViolation):
+        return "Invalid category/account type reference"
+    if isinstance(exc, pg_errors.CheckViolation):
+        return f"Database constraint failed: {exc.diag.constraint_name}"
+    if isinstance(exc, pg_errors.NotNullViolation):
+        return f"Required database field is null: {exc.diag.column_name}"
+    raise TypeError(f"_to_sync_notes: unhandled exception type {type(exc).__name__}")
 
 
-def _expand_account_types(conn: Any, category_id: str, raw_field: str | None, table_name: str, natural_key: str) -> int:
-    """Expand comma-separated account subtype tokens into join table rows.
-
-    Runs inside the caller's transaction — does not commit or rollback.
-    Returns count of rows inserted (ON CONFLICT DO NOTHING skips are not counted).
-    """
+def _resolve_account_types(conn: Any, raw_field: Any) -> list[Any]:
+    """Resolve every hint before writing; GAS 'investment' means all investment subtypes."""
     if raw_field is None or str(raw_field).strip() == "":
-        return 0
-
-    tokens = [t.strip() for t in str(raw_field).split(",") if t.strip() != ""]
-    inserted = 0
-
+        return []
+    tokens = dict.fromkeys(token.strip().lower() for token in str(raw_field).split(",") if token.strip())
+    resolved: dict[Any, None] = {}
     with conn.cursor() as cursor:
         for token in tokens:
-            cursor.execute(
-                "SELECT id FROM account_types WHERE account_subtype = %s AND record_status = 'active'",
-                (token,),
-            )
+            if token == "investment":
+                cursor.execute("SELECT id FROM account_types WHERE account_type = %s AND record_status = 'active'", (token,))
+            else:
+                cursor.execute("SELECT id FROM account_types WHERE account_subtype = %s AND record_status = 'active'", (token,))
             matched = cursor.fetchall()
             if not matched:
-                logger.warning(f"upsert_categories: unknown_account_subtype entity=categories natural_key={natural_key} token={token!r}")
-                continue
-            for (account_type_id,) in matched:
-                cursor.execute(
-                    f"INSERT INTO {table_name} (category_id, account_type_id) VALUES (%s, %s) ON CONFLICT DO NOTHING",
-                    (category_id, account_type_id),
-                )
-                inserted += cursor.rowcount
-
-    return inserted
+                raise ValueError(f"categories: unknown or inactive account type hint {token!r}; check source_account_types/target_account_types")
+            resolved.update((account_type_id, None) for (account_type_id,) in matched)
+    return list(resolved)
 
 
 def _insert_category(conn: Any, typed: dict[str, Any]) -> str:
-    """INSERT OR UPDATE via ON CONFLICT. Returns the category_master UUID."""
+    """Upsert only by stable source UUID; a different UUID cannot hijack a natural key."""
     with conn.cursor() as cursor:
+        cursor.execute(
+            "SELECT tx_type_key, major_category_key, minor_category_key FROM category_master WHERE id = %s FOR UPDATE",
+            (typed["id"],),
+        )
+        existing = cursor.fetchone()
+        proposed = tuple(typed[field] for field in ("tx_type_key", "major_category_key", "minor_category_key"))
+        if existing is not None and tuple(existing) != proposed:
+            cursor.execute(
+                """SELECT EXISTS (SELECT 1 FROM transaction_master WHERE category_id = %s)
+                       OR EXISTS (SELECT 1 FROM subscription_master WHERE category_id = %s)""",
+                (typed["id"], typed["id"]),
+            )
+            if cursor.fetchone()[0]:
+                raise ValueError("categories: classification keys have transaction/subscription references; reconcile dependent rows before changing keys")
         cursor.execute(
             """
             INSERT INTO category_master (
-                id,
-                tx_type_key, tx_type_label,
-                major_category_key, major_category_label,
-                minor_category_key, minor_category_label,
-                description, tag_keywords, counterparty_examples,
-                source_account_mandatory, target_account_mandatory,
-                is_subscription_eligible, record_status,
-                created_at, updated_at
+                id, tx_type_key, tx_type_label, major_category_key, major_category_label,
+                minor_category_key, minor_category_label, description, tag_keywords,
+                counterparty_examples, source_account_mandatory, target_account_mandatory,
+                is_subscription_eligible, record_status, created_at, updated_at
             ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now(), now())
-            ON CONFLICT (tx_type_key, major_category_key, minor_category_key) DO UPDATE SET
-                tx_type_label            = EXCLUDED.tx_type_label,
-                major_category_label     = EXCLUDED.major_category_label,
-                minor_category_label     = EXCLUDED.minor_category_label,
-                description              = EXCLUDED.description,
-                tag_keywords             = EXCLUDED.tag_keywords,
-                counterparty_examples    = EXCLUDED.counterparty_examples,
+            ON CONFLICT (id) DO UPDATE SET
+                tx_type_key = EXCLUDED.tx_type_key,
+                tx_type_label = EXCLUDED.tx_type_label,
+                major_category_key = EXCLUDED.major_category_key,
+                major_category_label = EXCLUDED.major_category_label,
+                minor_category_key = EXCLUDED.minor_category_key,
+                minor_category_label = EXCLUDED.minor_category_label,
+                description = EXCLUDED.description,
+                tag_keywords = EXCLUDED.tag_keywords,
+                counterparty_examples = EXCLUDED.counterparty_examples,
                 source_account_mandatory = EXCLUDED.source_account_mandatory,
                 target_account_mandatory = EXCLUDED.target_account_mandatory,
                 is_subscription_eligible = EXCLUDED.is_subscription_eligible,
-                record_status            = EXCLUDED.record_status,
-                updated_at               = now()
+                record_status = EXCLUDED.record_status,
+                updated_at = now()
             RETURNING id
             """,
-            (
-                typed["id"],
-                typed["tx_type_key"],
-                typed["tx_type_label"],
-                typed["major_category_key"],
-                typed["major_category_label"],
-                typed["minor_category_key"],
-                typed["minor_category_label"],
-                typed["description"],
-                typed["tag_keywords"],
-                typed["counterparty_examples"],
-                typed["source_account_mandatory"],
-                typed["target_account_mandatory"],
-                typed["is_subscription_eligible"],
-                typed["record_status"],
+            tuple(
+                typed[field]
+                for field in (
+                    "id",
+                    "tx_type_key",
+                    "tx_type_label",
+                    "major_category_key",
+                    "major_category_label",
+                    "minor_category_key",
+                    "minor_category_label",
+                    "description",
+                    "tag_keywords",
+                    "counterparty_examples",
+                    "source_account_mandatory",
+                    "target_account_mandatory",
+                    "is_subscription_eligible",
+                    "record_status",
+                )
             ),
         )
         return cursor.fetchone()[0]
 
 
-def _rebuild_join_rows(conn: Any, category_id: str, raw_source: str | None, raw_target: str | None, natural_key: str) -> tuple[int, int]:
-    """Delete all existing join rows for this category and re-insert from raw field values.
-
-    Runs inside the caller's transaction. Returns (src_count, tgt_count) inserted.
-    """
+def _replace_join_rows(conn: Any, category_id: str, account_type_ids: list[Any], table_name: str) -> None:
+    if table_name not in _JOIN_TABLES:
+        raise ValueError("categories: unsupported join table")
     with conn.cursor() as cursor:
-        cursor.execute("DELETE FROM category_source_account_types WHERE category_id = %s", (category_id,))
-        cursor.execute("DELETE FROM category_target_account_types WHERE category_id = %s", (category_id,))
-
-    src_count = _expand_account_types(conn, category_id, raw_source, "category_source_account_types", natural_key)
-    tgt_count = _expand_account_types(conn, category_id, raw_target, "category_target_account_types", natural_key)
-    return src_count, tgt_count
+        cursor.execute(f"DELETE FROM {table_name} WHERE category_id = %s", (category_id,))
+        for account_type_id in account_type_ids:
+            cursor.execute(f"INSERT INTO {table_name} (category_id, account_type_id) VALUES (%s, %s)", (category_id, account_type_id))
 
 
-def upsert_categories(conn: Any, sheets_client: SheetsClient, rows: list[dict[str, Any]], row_start: int) -> None:
-    """Process a batch of category rows and write all sync column updates back in one API call.
-
-    row_start is the 1-indexed data row number of the first row in this batch
-    (1 = first row after header). Sheet row = row_start + row_index + 1.
-    """
-    in_sync_count = sum(1 for row in rows if row.get("sync_status") == "in-sync")
-    actionable_count = sum(1 for row in rows if row.get("sync_status") in _ACTIONABLE)
-    logger.info(f"upsert_categories: batch_start entity=categories row_start={row_start} total={len(rows)} in_sync={in_sync_count} actionable={actionable_count}")
-
+def upsert_categories(conn: Any, sheets_client: SheetsClient, rows: list[dict[str, Any]], row_start: int) -> int:
+    """Commit master and both hint mappings together; report all failed rows."""
+    logger.info(f"upsert_categories: batch_start row_start={row_start} total={len(rows)}")
     write_backs: list[sheets_categories.WriteBack] = []
-    inserted = 0
-    updated = 0
-    failed = 0
-
+    succeeded = failed = 0
     try:
         for row_index, row in enumerate(rows):
-            sheet_row_num = row_start + row_index + 1
-
-            raw_sync_status = row.get("sync_status")
-            if raw_sync_status is None or str(raw_sync_status).strip() == "":
-                logger.warning(f"upsert_categories: missing_sync_status entity=categories row={sheet_row_num} — skipping")
-                continue
-            sync_status = str(raw_sync_status).strip()
+            sheet_row_num = row.get("_sheet_row_num", row_start + row_index + 1)
+            sync_status = str(row.get("sync_status") or "").strip()
             if sync_status == "in-sync":
                 continue
-            if sync_status not in _VALID_SYNC_STATUSES:
-                logger.warning(f"upsert_categories: unknown_sync_status entity=categories row={sheet_row_num} sync_status={sync_status!r} — skipping")
+            if sync_status not in _ACTIONABLE:
+                failed += 1
+                logger.warning(f"upsert_categories: invalid_sync_status row={sheet_row_num}")
                 continue
-
-            failed_status = "create-failed" if sync_status in ("create-pending", "create-failed") else "update-failed"
-
+            failed_status = "create-failed" if sync_status.startswith("create-") else "update-failed"
             try:
                 typed = categories_transform.transform(row)
-            except ValueError as e:
-                sync_dt = datetime.now(timezone.utc).isoformat()
-                logger.warning(f"upsert_categories: transform_error entity=categories row={sheet_row_num} sync_status={failed_status} error={e}")
-                write_backs.append(sheets_categories.write_back(sheet_row_num, failed_status, sync_dt, _to_sync_notes(e)))
+                source_ids = _resolve_account_types(conn, row.get("source_account_types"))
+                target_ids = _resolve_account_types(conn, row.get("target_account_types"))
+                category_id = _insert_category(conn, typed)
+                _replace_join_rows(conn, category_id, source_ids, "category_source_account_types")
+                _replace_join_rows(conn, category_id, target_ids, "category_target_account_types")
+                conn.commit()
+            except (ValueError, pg_errors.UniqueViolation, pg_errors.ForeignKeyViolation, pg_errors.CheckViolation, pg_errors.NotNullViolation) as exc:
+                conn.rollback()
                 failed += 1
-                continue
-
-            natural_key = typed["natural_key"]
-            raw_source = row.get("source_account_types")
-            raw_target = row.get("target_account_types")
-
-            if sync_status in ("create-pending", "create-failed"):
-                try:
-                    category_id = _insert_category(conn, typed)
-                    src_count, tgt_count = _rebuild_join_rows(conn, category_id, raw_source, raw_target, natural_key)
-                    conn.commit()
-                    sync_dt = datetime.now(timezone.utc).isoformat()
-                    write_backs.append(sheets_categories.write_back(sheet_row_num, "in-sync", sync_dt, ""))
-                    inserted += 1
-                    logger.info(f"upsert_categories: inserted entity=categories natural_key={natural_key} src_account_types={src_count} tgt_account_types={tgt_count}")
-                except (
-                    pg_errors.UniqueViolation,
-                    pg_errors.ForeignKeyViolation,
-                    pg_errors.CheckViolation,
-                    pg_errors.NotNullViolation,
-                ) as e:
-                    conn.rollback()
-                    sync_dt = datetime.now(timezone.utc).isoformat()
-                    logger.error(f"upsert_categories: create_failed entity=categories natural_key={natural_key} error={e}")
-                    write_backs.append(sheets_categories.write_back(sheet_row_num, "create-failed", sync_dt, _to_sync_notes(e)))
-                    failed += 1
-                except Exception as e:
-                    conn.rollback()
-                    logger.error(f"upsert_categories: unexpected_error entity=categories natural_key={natural_key} row={sheet_row_num} error={e!r}")
-                    raise
-
+                logger.warning(f"upsert_categories: row_failed row={sheet_row_num} error_type={type(exc).__name__}")
+                write_backs.append(sheets_categories.write_back(sheet_row_num, failed_status, datetime.now(timezone.utc).isoformat(), _to_sync_notes(exc)))
+            except Exception:
+                conn.rollback()
+                raise
             else:
-                try:
-                    with conn.cursor() as cursor:
-                        cursor.execute(
-                            """
-                            UPDATE category_master SET
-                                tx_type_label            = %s,
-                                major_category_label     = %s,
-                                minor_category_label     = %s,
-                                description              = %s,
-                                tag_keywords             = %s,
-                                counterparty_examples    = %s,
-                                source_account_mandatory = %s,
-                                target_account_mandatory = %s,
-                                is_subscription_eligible = %s,
-                                record_status            = %s,
-                                updated_at               = now()
-                            WHERE tx_type_key = %s AND major_category_key = %s AND minor_category_key = %s
-                            RETURNING id
-                            """,
-                            (
-                                typed["tx_type_label"],
-                                typed["major_category_label"],
-                                typed["minor_category_label"],
-                                typed["description"],
-                                typed["tag_keywords"],
-                                typed["counterparty_examples"],
-                                typed["source_account_mandatory"],
-                                typed["target_account_mandatory"],
-                                typed["is_subscription_eligible"],
-                                typed["record_status"],
-                                typed["tx_type_key"],
-                                typed["major_category_key"],
-                                typed["minor_category_key"],
-                            ),
-                        )
-                        row_result = cursor.fetchone()
-
-                    if row_result is None:
-                        logger.warning(f"upsert_categories: update_fallback_to_insert entity=categories natural_key={natural_key}")
-                        category_id = _insert_category(conn, typed)
-                    else:
-                        category_id = row_result[0]
-
-                    src_count, tgt_count = _rebuild_join_rows(conn, category_id, raw_source, raw_target, natural_key)
-                    conn.commit()
-                    sync_dt = datetime.now(timezone.utc).isoformat()
-                    write_backs.append(sheets_categories.write_back(sheet_row_num, "in-sync", sync_dt, ""))
-                    updated += 1
-                    logger.info(f"upsert_categories: updated entity=categories natural_key={natural_key} src_account_types={src_count} tgt_account_types={tgt_count}")
-                except (
-                    pg_errors.UniqueViolation,
-                    pg_errors.ForeignKeyViolation,
-                    pg_errors.CheckViolation,
-                    pg_errors.NotNullViolation,
-                ) as e:
-                    conn.rollback()
-                    sync_dt = datetime.now(timezone.utc).isoformat()
-                    logger.error(f"upsert_categories: update_failed entity=categories natural_key={natural_key} error={e}")
-                    write_backs.append(sheets_categories.write_back(sheet_row_num, "update-failed", sync_dt, _to_sync_notes(e)))
-                    failed += 1
-                except Exception as e:
-                    conn.rollback()
-                    logger.error(f"upsert_categories: unexpected_error entity=categories natural_key={natural_key} row={sheet_row_num} error={e!r}")
-                    raise
-
+                succeeded += 1
+                write_backs.append(sheets_categories.write_back(sheet_row_num, "in-sync", datetime.now(timezone.utc).isoformat(), ""))
     finally:
-        logger.info(f"upsert_categories: batch_done entity=categories inserted={inserted} updated={updated} failed={failed}")
         sheets_categories.flush(sheets_client, _SHEET_NAME, write_backs)
+        logger.info(f"upsert_categories: batch_done succeeded={succeeded} failed={failed}")
+    return failed

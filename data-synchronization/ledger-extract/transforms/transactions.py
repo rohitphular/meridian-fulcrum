@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from uuid import UUID
+
+from transforms.dates import local_datetime
 
 _VALID_TX_TYPES = {"money-in", "money-out"}
 _VALID_RECORD_STATUSES = {"active", "inactive", "deleted", "locked"}
@@ -24,24 +26,10 @@ def transform(row: dict[str, Any]) -> dict[str, Any]:
     raw_tx_date_local = row.get("tx_date_local")
     if raw_tx_date_local is None or str(raw_tx_date_local).strip() == "":
         raise ValueError(f"transactions: transaction_id={transaction_id!r} field=tx_date_local is required but got empty/None")
-    try:
-        tx_date_local_naive = datetime.fromisoformat(str(raw_tx_date_local).strip())
-    except ValueError:
-        raise ValueError(f"transactions: transaction_id={transaction_id!r} field=tx_date_local value={raw_tx_date_local!r} is not a valid datetime (YYYY-MM-DD HH:MM:SS)")
-
-    # Column 3 — tx_timezone_local
-    raw_tx_timezone_local = row.get("tx_timezone_local")
-    if raw_tx_timezone_local is not None and str(raw_tx_timezone_local).strip() != "":
-        tx_timezone_local = str(raw_tx_timezone_local).strip()
-    else:
-        tx_timezone_local = "Europe/London"
-    try:
-        ZoneInfo(tx_timezone_local)
-    except (ZoneInfoNotFoundError, KeyError):
-        raise ValueError(f"transactions: transaction_id={transaction_id!r} field=tx_timezone_local value={tx_timezone_local!r} is not a recognised IANA timezone name")
-
+    # Keep the documented legacy default for rows created without a timezone.
+    tx_timezone_local = str(row.get("tx_timezone_local") or "").strip() or "Europe/London"
     tx_timezone_base = "UTC"
-    tx_date_time_base = tx_date_local_naive.replace(tzinfo=ZoneInfo(tx_timezone_local)).astimezone(ZoneInfo(tx_timezone_base))
+    tx_date_time_base = local_datetime(raw_tx_date_local, tx_timezone_local, "transactions: tx_date_local").astimezone(timezone.utc)
 
     # Column 4 — parent_tx_id
     raw_parent_tx_id = row.get("parent_tx_id")
@@ -49,6 +37,9 @@ def transform(row: dict[str, Any]) -> dict[str, Any]:
         parent_tx_id: str | None = str(raw_parent_tx_id).strip()
     else:
         parent_tx_id = None
+
+    if parent_tx_id == transaction_id:
+        raise ValueError("transactions: self_parent_reference")
 
     # Column 5 — tx_type
     raw_tx_type = row.get("tx_type")
@@ -62,7 +53,10 @@ def transform(row: dict[str, Any]) -> dict[str, Any]:
     raw_account_id = row.get("account_id")
     if raw_account_id is None or str(raw_account_id).strip() == "":
         raise ValueError(f"transactions: transaction_id={transaction_id!r} field=account_id is required but got empty/None")
-    account_id_sheet = str(raw_account_id).strip()
+    try:
+        account_id_sheet = str(UUID(str(raw_account_id).strip()))
+    except ValueError as error:
+        raise ValueError("transactions: invalid_account_id") from error
 
     # Column 7 — tx_amount_local
     raw_tx_amount_local = row.get("tx_amount_local")
@@ -161,6 +155,11 @@ def transform(row: dict[str, Any]) -> dict[str, Any]:
             raise ValueError(f"transactions: transaction_id={transaction_id!r} field=user_location_longitude value={raw_user_location_longitude!r} is not finite")
     else:
         user_location_longitude = None
+
+    if user_location_latitude is not None and not -90 <= user_location_latitude <= 90:
+        raise ValueError("transactions: latitude_out_of_range")
+    if user_location_longitude is not None and not -180 <= user_location_longitude <= 180:
+        raise ValueError("transactions: longitude_out_of_range")
 
     # Latitude/longitude pair consistency — both must be present or both absent
     if (user_location_latitude is None) != (user_location_longitude is None):

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
-from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
+from uuid import UUID
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+from transforms.dates import local_datetime
 
 _VALID_FREQUENCIES = {"weekly", "monthly", "quarterly", "annual"}
 _VALID_RECORD_STATUSES = {"active", "inactive", "deleted", "locked"}
@@ -111,7 +114,10 @@ def transform(row: dict[str, Any]) -> dict[str, Any]:
     raw_source_account = row.get("source_account")
     if raw_source_account is None or str(raw_source_account).strip() == "":
         raise ValueError(f"subscriptions: subscription_id={subscription_id!r} field=source_account is required but got empty/None")
-    account_id_sheet = str(raw_source_account).strip()
+    try:
+        account_id_sheet = str(UUID(str(raw_source_account).strip()))
+    except ValueError as error:
+        raise ValueError("subscriptions: invalid_source_account") from error
 
     # Column 9 — tx_type
     raw_tx_type = row.get("tx_type")
@@ -150,32 +156,27 @@ def transform(row: dict[str, Any]) -> dict[str, Any]:
 
     # Columns 14–18 are write-back only — not read here.
 
-    # Column 19 — subscription_start_date_local
-    raw_start_date = row.get("subscription_start_date_local")
-    if raw_start_date is None or str(raw_start_date).strip() == "":
-        raise ValueError(f"subscriptions: subscription_id={subscription_id!r} subscription_start_date_required")
-    try:
-        subscription_start_date_local = datetime.strptime(str(raw_start_date).strip(), "%Y-%m-%d %H:%M:%S")
-    except ValueError:
-        raise ValueError(f"subscriptions: subscription_id={subscription_id!r} invalid_subscription_start_date value={raw_start_date!r} — expected YYYY-MM-DD HH:MM:SS")
-
-    # Column 20 — subscription_end_date_local (optional)
-    raw_end_date = row.get("subscription_end_date_local")
-    subscription_end_date_local: datetime | None
-    if raw_end_date is not None and str(raw_end_date).strip() != "":
-        try:
-            subscription_end_date_local = datetime.strptime(str(raw_end_date).strip(), "%Y-%m-%d %H:%M:%S")
-        except ValueError:
-            raise ValueError(f"subscriptions: subscription_id={subscription_id!r} invalid_subscription_end_date value={raw_end_date!r} — expected YYYY-MM-DD HH:MM:SS")
-    else:
-        subscription_end_date_local = None
-
-    # Column 21 — subscription_timezone_local (optional; pass through as-is)
     raw_timezone = row.get("subscription_timezone_local")
-    if raw_timezone is not None and str(raw_timezone).strip() != "":
-        subscription_timezone_local: str | None = str(raw_timezone).strip()
-    else:
-        subscription_timezone_local = None
+    subscription_timezone_local = str(raw_timezone).strip() if raw_timezone is not None and str(raw_timezone).strip() else None
+    if subscription_timezone_local is not None:
+        try:
+            ZoneInfo(subscription_timezone_local)
+        except (ZoneInfoNotFoundError, ValueError) as error:
+            raise ValueError("subscriptions: invalid_subscription_timezone_local") from error
+
+    dates = {}
+    for field in ("subscription_start_date_local", "subscription_end_date_local"):
+        raw_date = row.get(field)
+        if raw_date is None or str(raw_date).strip() == "":
+            dates[field] = None
+        else:
+            if subscription_timezone_local is None:
+                raise ValueError("subscriptions: missing_subscription_timezone_local")
+            dates[field] = local_datetime(raw_date, subscription_timezone_local, f"subscriptions: {field}")
+    subscription_start_date_local = dates["subscription_start_date_local"]
+    subscription_end_date_local = dates["subscription_end_date_local"]
+    if subscription_start_date_local is not None and subscription_end_date_local is not None and subscription_end_date_local < subscription_start_date_local:
+        raise ValueError("subscriptions: end_before_start")
 
     return {
         "subscription_id": subscription_id,

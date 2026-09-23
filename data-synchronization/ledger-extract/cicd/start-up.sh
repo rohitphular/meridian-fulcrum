@@ -11,24 +11,32 @@ cd "$JOB_DIR"
 # ── Step 1: Resolve env ───────────────────────────────────────────────────────
 
 ENV_ARG="${1:-}"
-
-if [[ -z "$ENV_ARG" ]]; then
-  echo "ERROR: environment argument is required."
-  echo "  Usage: ./start-up.sh dev|prod"
+if [[ $# -gt 2 || ( $# -eq 2 && "$2" != "--reprocess" ) ]]; then
+  echo "Usage: bash cicd/start-up.sh dev|prod [--reprocess]"
   exit 1
 fi
+if [[ -z "$ENV_ARG" ]]; then
+  echo "ERROR: environment argument is required."
+  echo "  Usage: ./cicd/start-up.sh dev|prod [--reprocess]"
+  exit 1
+fi
+
+# Keep only validated job arguments; "$@" also handles zero arguments on Bash 3.2.
+shift
 
 VALID_ENVS=()
 while IFS= read -r line; do
   VALID_ENVS+=("$line")
-done < <(python3 -c "
+done < <(python3 - "$ENVS_FILE" <<'PYTHON'
 import json
-with open('$ENVS_FILE') as f:
+import sys
+with open(sys.argv[1]) as f:
     d = json.load(f)
 for k in d.keys():
     if not k.startswith('_'):
         print(k)
-")
+PYTHON
+)
 
 env_is_valid=0
 for e in "${VALID_ENVS[@]}"; do
@@ -43,18 +51,21 @@ fi
 
 # ── Step 2: Read non-secrets from envs.json ───────────────────────────────────
 
-SPREADSHEET_ID=$(python3 -c "
+SPREADSHEET_ID=$(python3 - "$ENVS_FILE" "$ENV_ARG" <<'PYTHON'
 import json
-d = json.load(open('$ENVS_FILE'))['$ENV_ARG']
-print(d.get('spreadsheet_id', 'TODO'))
-")
+import sys
+with open(sys.argv[1]) as config_file:
+    settings = json.load(config_file)[sys.argv[2]]
+print(settings.get("spreadsheet_id", "TODO"))
+PYTHON
+)
 
-if [[ "$SPREADSHEET_ID" == "TODO" ]]; then
+if [[ -z "$SPREADSHEET_ID" || "$SPREADSHEET_ID" == "TODO" ]]; then
   echo "ERROR: '$ENV_ARG' spreadsheet_id is not configured in cicd/envs.json."
   exit 1
 fi
 
-export LE_SPREADSHEET_ID="$SPREADSHEET_ID"
+
 
 # ── Step 3: Load secrets ──────────────────────────────────────────────────────
 
@@ -66,14 +77,15 @@ fi
 
 echo "[$ENV_ARG] Loading env vars..."
 set -a; source "$ENV_FILE"; set +a
+export LE_SPREADSHEET_ID="$SPREADSHEET_ID"
 
 # ── Step 4: Install dependencies, run migrations, run job ─────────────────────
 
 echo "[$ENV_ARG] Installing dependencies..."
-uv sync --quiet
+uv sync --locked --quiet
 
 echo "[$ENV_ARG] Running migrations..."
-uv run py-db-migrate run --db postgres
+uv run --locked py-db-migrate run --db postgres
 
 echo "[$ENV_ARG] Running ledger-extract job..."
-uv run python -m core.runner
+uv run --locked python -m core.runner "$@"

@@ -15,7 +15,20 @@ def upgrade(client: Any) -> None:
             END $$;
         """)
 
-        cursor.execute("DROP TABLE IF EXISTS transactions")
+        # A legacy deployment may still have data in this table. Refuse the
+        # migration instead of silently discarding financial history.
+        cursor.execute("""
+            DO $$
+            BEGIN
+                IF to_regclass('public.transactions') IS NOT NULL THEN
+                    LOCK TABLE public.transactions IN ACCESS EXCLUSIVE MODE;
+                    IF EXISTS (SELECT 1 FROM public.transactions LIMIT 1) THEN
+                        RAISE EXCEPTION 'Legacy transactions contains data; migrate and verify its rows before applying ledger migration 0005';
+                    END IF;
+                    DROP TABLE public.transactions;
+                END IF;
+            END $$;
+        """)
 
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS transaction_master (

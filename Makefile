@@ -83,7 +83,7 @@ api-logs: ## Open GAS executions page in browser (interactive: pick env)
 ##@ Data Synchronization
 
 .PHONY: data-sync
-data-sync: ## Run a data-synchronization module (interactive: pick module + env)
+data-sync: ## Run a data-synchronization module (pick module + env; ledger-extract also asks sync mode)
 	@echo ""; \
 	i=1; \
 	for dir in data-synchronization/*/; do \
@@ -111,7 +111,20 @@ data-sync: ## Run a data-synchronization module (interactive: pick module + env)
 	elif [ "$$ENV_CHOICE" = "2" ]; then ENV="prod"; \
 	else echo "Invalid choice '$$ENV_CHOICE'. Enter 1 or 2."; exit 1; \
 	fi; \
-	bash "$${selected}cicd/start-up.sh" "$$ENV"
+	set -- "$$ENV"; \
+	if [ "$$selected" = "data-synchronization/ledger-extract/" ]; then \
+		echo ""; \
+		echo "  1) normal-sync — skip existing in-sync records"; \
+		echo "  2) hard-sync — include in-sync records"; \
+		echo ""; \
+		printf "Select sync mode: "; read -r SYNC_CHOICE; \
+		case "$$SYNC_CHOICE" in \
+			1) ;; \
+			2) set -- "$$@" --reprocess ;; \
+			*) echo "Invalid choice '$$SYNC_CHOICE'. Enter 1 or 2."; exit 1 ;; \
+		esac; \
+	fi; \
+	bash "$${selected}cicd/start-up.sh" "$$@"
 
 ##@ Job
 

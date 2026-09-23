@@ -10,16 +10,16 @@ help:
 ##@ Run
 
 .PHONY: run
-run: upgrade-libs ## Run the extract job — ENV=dev|prod required  (e.g. make run ENV=dev)
+run: ## Run the extract job — ENV=dev|prod required  (e.g. make run ENV=dev)
 	@[ -n "$(ENV)" ] || (echo "Usage: make run ENV=dev|prod"; exit 1)
-	bash cicd/start-up.sh $(ENV)
+	bash cicd/start-up.sh "$(ENV)"
 
 ##@ Dev
 
 .PHONY: lint
 lint: ## Lint and format-check — must pass before deploy
-	uv run ruff check .
-	uv run ruff format --check .
+	uv run --locked ruff check .
+	uv run --locked ruff format --check .
 
 .PHONY: upgrade-libs
 upgrade-libs: ## Re-resolve all meridian-common-libs packages to their latest commits on main
@@ -27,4 +27,14 @@ upgrade-libs: ## Re-resolve all meridian-common-libs packages to their latest co
 
 .PHONY: generate-models
 generate-models: ## Regenerate typed model files (spins up a fresh Docker PostgreSQL container — requires Docker running)
-	uv run py-db-schema generate --db postgres
+	uv run --locked py-db-schema generate --db postgres
+
+.PHONY: test test-unit test-integration
+test: ## Run unit and disposable PostgreSQL integration tests
+	uv run --locked python -m pytest
+
+test-unit: ## Run offline tests without external services
+	uv run --locked python -m pytest tests/unit
+
+test-integration: ## Run with disposable PostgreSQL (local server binaries required)
+	uv run --locked python -m pytest tests/integration

@@ -15,7 +15,7 @@ def write_back_success(
     created_at: str,
     updated_at: str,
 ) -> WriteBack:
-    return (sheet_row_num, _SYNC_STATUS_COL, [sync_status, sync_date, sync_notes, created_at, updated_at])
+    return (sheet_row_num, _SYNC_STATUS_COL, [sync_status, sync_date, sync_notes])
 
 
 def write_back_failure(

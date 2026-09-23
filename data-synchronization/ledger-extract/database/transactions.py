@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, timezone
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation, localcontext
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -11,77 +11,55 @@ from py_google_workspace.gsheets import SheetsClient
 from py_logging import get_logger
 
 import sheets.transactions as sheets_transactions
-from transforms import transactions as transactions_transform
+import transforms.transactions as transactions_transform
+from transforms.financial import to_minor_units
 
 logger = get_logger(__name__)
 
 _SHEET_NAME = "transactions"
-_VALID_SYNC_STATUSES = {"create-pending", "create-failed", "update-pending", "update-failed", "in-sync"}
 _ACTIONABLE = {"create-pending", "create-failed", "update-pending", "update-failed"}
 _BASE_CURRENCY = "XAU"
 _XAU_DECIMAL_PLACES = 9
-_DEPOSIT_SUBTYPES = {"current", "savings", "cash"}
-_MARKET_INVESTMENT_SUBTYPES = {"stocks_shares", "isa", "pension_sipp", "crypto", "commodities", "other"}
-_P2P_LENDING_SUBTYPES = {"p2p_lending"}
-_PROPERTY_SUBTYPES = {"property"}
-_DAY_NAMES = {
-    0: "MONDAY",
-    1: "TUESDAY",
-    2: "WEDNESDAY",
-    3: "THURSDAY",
-    4: "FRIDAY",
-    5: "SATURDAY",
-    6: "SUNDAY",
-}
+_DAY_NAMES = ("MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY")
 
 
-def _load_decimal_places(conn: Any) -> dict[str, int]:
+def load_decimal_places(conn: Any) -> dict[str, int]:
     with conn.cursor() as cursor:
         cursor.execute("SELECT currency_code, decimal_places FROM currency_master")
         rows = cursor.fetchall()
-    return {row[0]: row[1] for row in rows}
+    return {row[0].strip(): row[1] for row in rows}
 
 
 def load_account_map(conn: Any) -> dict[str, tuple[Any, str, str]]:
-    """Return mapping of account UUID string → (account UUID, local_currency, account_subtype)."""
+    """Include historical accounts: source lifecycle changes must remain extractable."""
     with conn.cursor() as cursor:
-        cursor.execute("SELECT id, local_currency, account_subtype FROM account_master WHERE record_status NOT IN ('deleted', 'locked')")
+        cursor.execute("SELECT id, local_currency, account_subtype FROM account_master")
         rows = cursor.fetchall()
-    return {str(row[0]): (row[0], row[1], row[2]) for row in rows}
+    return {str(row[0]): (row[0], row[1].strip(), row[2]) for row in rows}
 
 
-def _lookup_category(conn: Any, tx_type: str, major_category: str, minor_category: str) -> Any | None:
+def lookup_category(conn: Any, tx_type: str, major_category: str, minor_category: str) -> Any | None:
+    # Historical transactions may still reference inactive/deleted categories.
     with conn.cursor() as cursor:
         cursor.execute(
             """
             SELECT id FROM category_master
             WHERE tx_type_key = %s AND major_category_key = %s AND minor_category_key = %s
-              AND record_status = 'active'
             """,
             (tx_type, major_category, minor_category),
         )
         row = cursor.fetchone()
-    if row is None:
-        return None
-    return row[0]
+    return None if row is None else row[0]
 
 
-def _resolve_counterparty(conn: Any, counterparty_name: str | None, transaction_id: str) -> Any | None:
+def resolve_counterparty(conn: Any, counterparty_name: str | None, transaction_id: str) -> Any | None:
     if counterparty_name is None:
         return None
-
-    cleaned = re.sub(r"[^a-zA-Z0-9 ]", "", counterparty_name)
-    cleaned = cleaned.strip().upper()
-    cleaned = re.sub(r" +", "_", cleaned)
-    cleaned = re.sub(r"_+", "_", cleaned)
-
-    if cleaned == "":
-        logger.warning(
-            f"_resolve_counterparty: empty_key_after_normalisation entity=transactions transaction_id={transaction_id!r} counterparty_name={counterparty_name!r} — setting counterparty_id=NULL"
-        )
-        return None
-
-    counterparty_key = cleaned
+    # Preserve Unicode names while retaining the existing English key convention.
+    cleaned = "".join(character for character in counterparty_name if character.isalnum() or character.isspace()).strip().upper()
+    counterparty_key = re.sub(r"\s+", "_", cleaned)
+    if not counterparty_key:
+        raise ValueError("counterparty_name_not_representable")
     with conn.cursor() as cursor:
         cursor.execute(
             """
@@ -89,1179 +67,360 @@ def _resolve_counterparty(conn: Any, counterparty_name: str | None, transaction_
             VALUES (%s, %s, 'active', now(), now())
             ON CONFLICT (counterparty_key) DO UPDATE SET
                 counterparty_label = EXCLUDED.counterparty_label,
-                record_status      = 'active',
-                updated_at         = now()
+                record_status = 'active', updated_at = now()
             RETURNING id
             """,
             (counterparty_key, counterparty_name),
         )
-        pk_row = cursor.fetchone()
-    if pk_row is None:
-        raise RuntimeError(f"counterparty upsert returned no id for counterparty_key={counterparty_key!r}")
-    logger.info(f"_resolve_counterparty: upserted entity=transactions transaction_id={transaction_id!r} counterparty_id={pk_row[0]} counterparty_key={counterparty_key!r}")
-    return pk_row[0]
+        counterparty = cursor.fetchone()
+    if counterparty is None:
+        raise RuntimeError("counterparty_upsert_returned_no_id")
+    return counterparty[0]
 
 
-def _resolve_beneficiaries(
-    conn: Any,
-    raw_beneficiaries: str,
-    transaction_ref: Any,
-    transaction_id: str,
-) -> None:
-    entries = [e.strip() for e in raw_beneficiaries.split(";")]
-
-    for entry in entries:
-        if entry == "":
-            raise ValueError(f"transactions: beneficiary_empty_name in beneficiaries field for transaction_id={transaction_id!r}")
-
-    has_percentage = [":" in e for e in entries]
+def _parse_beneficiaries(raw_beneficiaries: str | None) -> list[tuple[str, Decimal]]:
+    """Validate all allocations before any database writes; stored shares total exactly 100."""
+    if raw_beneficiaries is None:
+        return []
+    entries = [entry.strip() for entry in raw_beneficiaries.split(";")]
+    if any(not entry for entry in entries):
+        raise ValueError("transactions: beneficiary_empty_name")
+    has_percentage = [":" in entry for entry in entries]
     if any(has_percentage) and not all(has_percentage):
-        raise ValueError(f"transactions: beneficiary_inconsistent_percentage_format for transaction_id={transaction_id!r} — all entries must have a percentage or none")
-
-    names: list[str]
-    percentages: list[Decimal]
-
+        raise ValueError("transactions: beneficiary_inconsistent_percentage_format")
+    names = []
+    percentages = []
     if all(has_percentage):
-        names = []
-        percentages = []
         for entry in entries:
-            parts = entry.split(":", 1)
-            name = parts[0].strip()
-            pct_raw = parts[1].strip()
-            if name == "":
-                raise ValueError(f"transactions: beneficiary_empty_name in beneficiaries field for transaction_id={transaction_id!r}")
+            name, percentage_raw = (part.strip() for part in entry.split(":", 1))
+            if not name:
+                raise ValueError("transactions: beneficiary_empty_name")
             try:
-                pct = Decimal(pct_raw)
-            except Exception as e:
-                logger.warning(f"_resolve_beneficiaries: invalid_percentage value={pct_raw!r} transaction_id={transaction_id!r} error={e}")
-                raise ValueError(f"transactions: beneficiary_invalid_percentage value={pct_raw!r} for transaction_id={transaction_id!r}") from e
-            if pct <= 0 or pct > 100:
-                raise ValueError(f"transactions: beneficiary_invalid_percentage value={pct} for transaction_id={transaction_id!r} — must be > 0 and <= 100")
+                percentage = Decimal(percentage_raw)
+                if not percentage.is_finite() or not 0 < percentage <= 100:
+                    raise ValueError("transactions: beneficiary_invalid_percentage")
+                percentage = percentage.quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
+            except InvalidOperation as error:
+                raise ValueError("transactions: beneficiary_invalid_percentage") from error
+            if percentage <= 0:
+                raise ValueError("transactions: beneficiary_percentage_rounds_to_zero")
             names.append(name)
-            percentages.append(pct)
-
-        total = sum(percentages)
-        if abs(total - Decimal("100")) > Decimal("0.01"):
-            raise ValueError(f"transactions: beneficiary_percentages_do_not_sum_to_100 total={total} for transaction_id={transaction_id!r}")
+            percentages.append(percentage)
+        if sum(percentages) != Decimal("100"):
+            raise ValueError("transactions: beneficiary_percentages_do_not_sum_to_100")
     else:
-        names = list(entries)
-        count = len(names)
-        base_pct = (Decimal("100") / Decimal(count)).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
-        remainder = Decimal("100.0000") - base_pct * (count - 1)
-        percentages = [base_pct] * (count - 1) + [remainder]
+        names = entries
+        percentage = (Decimal("100") / len(names)).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
+        percentages = [percentage] * (len(names) - 1) + [Decimal("100") - percentage * (len(names) - 1)]
+        if min(percentages) <= 0:
+            raise ValueError("transactions: too_many_beneficiaries")
+    if len(set(names)) != len(names):
+        raise ValueError("transactions: duplicate_beneficiary")
+    return list(zip(names, percentages))
 
-    for name, pct in zip(names, percentages):
-        with conn.cursor() as cursor:
+
+def _replace_beneficiaries(conn: Any, beneficiaries: list[tuple[str, Decimal]], transaction_ref: Any) -> None:
+    with conn.cursor() as cursor:
+        cursor.execute("DELETE FROM transaction_beneficiaries WHERE transaction_ref = %s", (transaction_ref,))
+        for name, percentage in beneficiaries:
             cursor.execute(
                 """
                 INSERT INTO beneficiaries_master (beneficiary_name, record_status, created_at, updated_at)
                 VALUES (%s, 'active', now(), now())
-                ON CONFLICT (beneficiary_name) DO UPDATE SET
-                    record_status = 'active',
-                    updated_at    = now()
+                ON CONFLICT (beneficiary_name) DO UPDATE SET record_status = 'active', updated_at = now()
                 RETURNING id
                 """,
                 (name,),
             )
-            bm_row = cursor.fetchone()
-        if bm_row is None:
-            raise RuntimeError(f"beneficiaries_master upsert returned no id for name={name!r}")
-        beneficiary_id = bm_row[0]
-
-        with conn.cursor() as cursor:
+            beneficiary = cursor.fetchone()
+            if beneficiary is None:
+                raise RuntimeError("beneficiary_upsert_returned_no_id")
             cursor.execute(
                 """
                 INSERT INTO transaction_beneficiaries (transaction_ref, beneficiary_id, split_percentage, created_at)
                 VALUES (%s, %s, %s, now())
                 """,
-                (transaction_ref, beneficiary_id, pct),
+                (transaction_ref, beneficiary[0], percentage),
             )
-    logger.info(f"_resolve_beneficiaries: resolved entity=transactions transaction_id={transaction_id!r} count={len(names)}")
 
 
-def _resolve_amount(
-    conn: Any,
-    tx_amount: Decimal,
-    local_currency: str,
-    tx_date: Any,
-    currency_decimal_places: dict[str, int],
-) -> tuple[int, int, Any | None]:
-    """Compute (tx_amount_local, tx_amount_base, currency_rate_id)."""
+def _resolve_amount(conn: Any, tx_amount: Decimal, local_currency: str, tx_date: Any, currency_decimal_places: dict[str, int]) -> tuple[int, int, Any | None, Decimal]:
+    """Use the exact UTC transaction date and integer minor units, with one HALF_UP rounding."""
     if local_currency not in currency_decimal_places:
-        raise ValueError(f"transactions: currency {local_currency!r} not found in currency_master")
-
+        raise ValueError("transactions: currency_not_found")
+    if currency_decimal_places.get(_BASE_CURRENCY) != _XAU_DECIMAL_PLACES:
+        raise ValueError("transactions: invalid_xau_decimal_places")
     local_dp = currency_decimal_places[local_currency]
-    tx_amount_local = int((tx_amount * Decimal(10) ** local_dp).to_integral_value(ROUND_HALF_UP))
-
-    if tx_amount_local == 0:
-        raise ValueError(f"transactions: amount_rounds_to_zero_in_minor_units for currency={local_currency!r}")
-
+    tx_amount_local = to_minor_units(tx_amount, local_dp, "transactions: tx_amount_local")
+    if tx_amount_local <= 0:
+        raise ValueError("transactions: amount_rounds_to_zero_in_minor_units")
     if local_currency == _BASE_CURRENCY:
-        return tx_amount_local, tx_amount_local, None
-
+        return tx_amount_local, tx_amount_local, None, Decimal(1)
     with conn.cursor() as cursor:
         cursor.execute(
             """
             SELECT id, rate_value FROM currency_rates
-            WHERE quote_currency_code = %s
-              AND rate_date = %s
-              AND base_currency_code = 'XAU'
+            WHERE quote_currency_code = %s AND rate_date = %s AND base_currency_code = 'XAU'
             """,
             (local_currency, tx_date),
         )
         rate_row = cursor.fetchone()
-
     if rate_row is None:
-        raise ValueError(f"transactions: currency_rate_not_found: {local_currency} on {tx_date}")
-
-    rate_id = rate_row[0]
-    rate_value = rate_row[1]
-
-    xau_dp = currency_decimal_places[_BASE_CURRENCY]
-    if xau_dp != _XAU_DECIMAL_PLACES:
-        raise ValueError(f"currency_master.decimal_places for XAU is {xau_dp}, expected {_XAU_DECIMAL_PLACES}")
-    if not isinstance(rate_value, Decimal):
-        raise TypeError(f"_resolve_amount: expected Decimal from psycopg2, got {type(rate_value).__name__}")
-
-    tx_amount_base = int((Decimal(tx_amount_local) * Decimal(10) ** xau_dp / (rate_value * Decimal(10) ** local_dp)).to_integral_value(ROUND_HALF_UP))
-
-    return tx_amount_local, tx_amount_base, rate_id
+        raise ValueError(f"transactions: currency_rate_not_found currency={local_currency} date={tx_date}")
+    rate_id, rate_value = rate_row
+    if not isinstance(rate_value, Decimal) or not rate_value.is_finite() or rate_value <= 0:
+        raise ValueError("transactions: invalid_currency_rate")
+    with localcontext() as context:
+        context.prec = 64
+        amount_base = Decimal(tx_amount_local).scaleb(-local_dp) / rate_value
+        tx_amount_base = to_minor_units(amount_base, _XAU_DECIMAL_PLACES, "transactions: tx_amount_base")
+    if tx_amount_base <= 0:
+        raise ValueError("transactions: amount_rounds_to_zero_in_base_units")
+    return tx_amount_local, tx_amount_base, rate_id, rate_value
 
 
-def _extract_datetime_fields(tx_date_time_base: Any, tx_timezone_local: str) -> tuple[Any, str, str]:
-    """Return (tx_date_time_local, tx_day_of_week_base, tx_day_of_week_local)."""
+def _extract_datetime_fields(tx_date_time_base: datetime, tx_timezone_local: str) -> tuple[datetime, str, str]:
     tx_date_time_local = tx_date_time_base.astimezone(ZoneInfo(tx_timezone_local)).replace(tzinfo=None)
-    tx_day_of_week_base = _DAY_NAMES[tx_date_time_base.weekday()]
-    tx_day_of_week_local = _DAY_NAMES[tx_date_time_local.weekday()]
-    return tx_date_time_local, tx_day_of_week_base, tx_day_of_week_local
+    return tx_date_time_local, _DAY_NAMES[tx_date_time_base.weekday()], _DAY_NAMES[tx_date_time_local.weekday()]
 
 
-def _to_sync_notes(e: Exception) -> str:
-    if isinstance(e, ValueError):
-        return str(e).removeprefix("transactions: ")
-    if isinstance(e, pg_errors.UniqueViolation):
-        constraint = e.diag.constraint_name
-        if constraint == "uq_tm_transaction_id":
-            return "Duplicate transaction_id — already exists in DB"
-        return f"Unique constraint violation: {constraint}"
-    if isinstance(e, pg_errors.ForeignKeyViolation):
-        constraint = e.diag.constraint_name
-        if constraint == "fk_tm_parent_tx":
-            return "parent_tx_id references a transaction that does not exist in DB — sync the parent row first"
-        if constraint == "fk_tm_account":
-            return "account_id references an account that no longer exists"
-        if constraint == "fk_tm_rate_ref":
-            return "Currency rate reference no longer exists in currency_rates"
-        if constraint == "fk_tm_counterparty":
-            return "counterparty_id references a counterparty that no longer exists"
-        if constraint == "fk_tm_category":
-            return "category_id references a category that no longer exists"
-        return f"DB FK violation: {constraint}"
-    if isinstance(e, pg_errors.CheckViolation):
-        constraint = e.diag.constraint_name
-        if constraint == "chk_tm_record_status":
-            return "Invalid record_status — must be active, inactive, deleted, or locked"
-        if constraint == "chk_tm_tx_amount_local":
-            return "tx_amount_local must be > 0 — indicates a code bug; file a bug report"
-        if constraint == "chk_tm_tx_amount_base":
-            return "tx_amount_base must be > 0 — indicates a code bug; file a bug report"
-        if constraint == "chk_tm_base_currency":
-            return "base_currency must be XAU — indicates a code bug; file a bug report"
-        if constraint == "chk_tm_local_currency":
-            return "local_currency must be a 3-character uppercase ISO code — indicates a code bug; file a bug report"
-        if constraint == "chk_tm_tx_timezone_base":
-            return "tx_timezone_base must be UTC — indicates a code bug; file a bug report"
-        if constraint == "chk_tm_rate_ref_required":
-            return "currency_rate_id constraint violated — indicates a code bug in the extract job; file a bug report"
-        return f"DB constraint violation: {constraint}"
-    if isinstance(e, pg_errors.NotNullViolation):
-        return f"Required field is null: {e.diag.column_name} — indicates a code bug; file a bug report"
-    raise TypeError(f"_to_sync_notes: unhandled exception type {type(e).__name__}")
+def _to_sync_notes(error: Exception) -> str:
+    if isinstance(error, ValueError):
+        return str(error).removeprefix("transactions: ")
+    if isinstance(error, pg_errors.IntegrityError):
+        return f"database_constraint_violation constraint={error.diag.constraint_name or 'unknown'}"
+    if isinstance(error, pg_errors.DataError):
+        return "database_value_out_of_range_or_invalid"
+    raise TypeError(f"unhandled_row_error type={type(error).__name__}")
 
 
-def _do_insert(
-    conn: Any,
-    typed: dict[str, Any],
-    account_surrogate_id: Any,
-    local_currency: str,
-    tx_amount_local: int,
-    tx_amount_base: int,
-    currency_rate_id: Any | None,
-    category_id: Any,
-    counterparty_id: Any | None,
-    tx_date_time_local: Any,
-    tx_day_of_week_base: str,
-    tx_day_of_week_local: str,
-    created_at_override: str | None,
-) -> Any:
-    """Execute transaction_master INSERT and return the surrogate UUID.
-
-    When created_at_override is None the DB uses now() for created_at.
-    When provided (re-insert on update-pending or UNIQUE fallthrough) the override value is bound directly.
-    """
-    if created_at_override is not None:
-        sql = """
-            INSERT INTO transaction_master (
-                transaction_id, parent_tx_id,
-                tx_date_time_base, tx_date_time_local,
-                tx_timezone_base, tx_timezone_local,
-                tx_day_of_week_base, tx_day_of_week_local,
-                category_id, account_id,
-                tx_amount_local, tx_amount_base,
-                local_currency, base_currency,
-                currency_rate_id,
-                tx_description, counterparty_id, tx_tags,
-                user_location_area, user_location_city, user_location_country,
-                user_location_latitude, user_location_longitude,
-                record_status,
-                created_at, updated_at
-            ) VALUES (
-                %s, %s,
-                %s, %s,
-                %s, %s,
-                %s, %s,
-                %s, %s,
-                %s, %s,
-                %s, %s,
-                %s,
-                %s, %s, %s,
-                %s, %s, %s,
-                %s, %s,
-                %s,
-                %s, now()
-            )
-            RETURNING id
-        """
-        params: tuple[Any, ...] = (
-            typed["transaction_id"],
-            typed["parent_tx_id"],
-            typed["tx_date_time_base"],
-            tx_date_time_local,
-            typed["tx_timezone_base"],
-            typed["tx_timezone_local"],
-            tx_day_of_week_base,
-            tx_day_of_week_local,
-            category_id,
-            account_surrogate_id,
-            tx_amount_local,
-            tx_amount_base,
-            local_currency,
-            _BASE_CURRENCY,
-            currency_rate_id,
-            typed["tx_description"],
-            counterparty_id,
-            typed["tx_tags"],
-            typed["user_location_area"],
-            typed["user_location_city"],
-            typed["user_location_country"],
-            typed["user_location_latitude"],
-            typed["user_location_longitude"],
-            typed["record_status"],
-            created_at_override,
-        )
-    else:
-        sql = """
-            INSERT INTO transaction_master (
-                transaction_id, parent_tx_id,
-                tx_date_time_base, tx_date_time_local,
-                tx_timezone_base, tx_timezone_local,
-                tx_day_of_week_base, tx_day_of_week_local,
-                category_id, account_id,
-                tx_amount_local, tx_amount_base,
-                local_currency, base_currency,
-                currency_rate_id,
-                tx_description, counterparty_id, tx_tags,
-                user_location_area, user_location_city, user_location_country,
-                user_location_latitude, user_location_longitude,
-                record_status,
-                created_at, updated_at
-            ) VALUES (
-                %s, %s,
-                %s, %s,
-                %s, %s,
-                %s, %s,
-                %s, %s,
-                %s, %s,
-                %s, %s,
-                %s,
-                %s, %s, %s,
-                %s, %s, %s,
-                %s, %s,
-                %s,
-                now(), now()
-            )
-            RETURNING id
-        """
-        params = (
-            typed["transaction_id"],
-            typed["parent_tx_id"],
-            typed["tx_date_time_base"],
-            tx_date_time_local,
-            typed["tx_timezone_base"],
-            typed["tx_timezone_local"],
-            tx_day_of_week_base,
-            tx_day_of_week_local,
-            category_id,
-            account_surrogate_id,
-            tx_amount_local,
-            tx_amount_base,
-            local_currency,
-            _BASE_CURRENCY,
-            currency_rate_id,
-            typed["tx_description"],
-            counterparty_id,
-            typed["tx_tags"],
-            typed["user_location_area"],
-            typed["user_location_city"],
-            typed["user_location_country"],
-            typed["user_location_latitude"],
-            typed["user_location_longitude"],
-            typed["record_status"],
-        )
-
+def _validate_parent(conn: Any, typed: dict[str, Any], account_id: Any) -> None:
+    if typed["parent_tx_id"] is None:
+        return
     with conn.cursor() as cursor:
-        cursor.execute(sql, params)
-        pk_row = cursor.fetchone()
-
-    if pk_row is None:
-        raise RuntimeError(f"INSERT returned no id for transaction_id={typed['transaction_id']!r}")
-    return pk_row[0]
-
-
-def _run_insert_steps(
-    conn: Any,
-    typed: dict[str, Any],
-    transaction_id: str,
-    sheet_row_num: int,
-    account_surrogate_id: Any,
-    local_currency: str,
-    account_subtype: str,
-    currency_decimal_places: dict[str, int],
-    write_backs: list[sheets_transactions.WriteBack],
-    created_at_override: str | None,
-    failed_status: str,
-) -> str | None:
-    """Execute steps 3–10 of the create path (shared by create-pending and UNIQUE fallthrough).
-
-    Returns 'ok' on success, or writes a failure write_back and returns None.
-    On return of None, conn has been rolled back already.
-    """
-    # Step 3 — validate parent_tx_id
-    parent_tx_id = typed["parent_tx_id"]
-    if parent_tx_id is not None:
-        with conn.cursor() as cursor:
-            cursor.execute(
-                "SELECT 1 FROM transaction_master WHERE transaction_id = %s",
-                (parent_tx_id,),
-            )
-            if cursor.fetchone() is None:
-                conn.rollback()
-                sync_dt = datetime.now(timezone.utc).isoformat()
-                logger.warning(f"upsert_transactions: parent_tx_not_found entity=transactions row={sheet_row_num} transaction_id={transaction_id!r} parent_tx_id={parent_tx_id!r}")
-                write_backs.append(sheets_transactions.write_back_failure(sheet_row_num, failed_status, sync_dt, "parent_tx_not_found"))
-                return None
-
-    # Step 4 — resolve amounts
-    try:
-        tx_amount_local, tx_amount_base, currency_rate_id = _resolve_amount(
-            conn,
-            typed["tx_amount_local"],
-            local_currency,
-            typed["tx_date_time_base"].date(),
-            currency_decimal_places,
+        cursor.execute(
+            """
+            SELECT tm.parent_tx_id, tm.account_id, cm.tx_type_key, tm.record_status
+            FROM transaction_master tm JOIN category_master cm ON cm.id = tm.category_id
+            WHERE tm.transaction_id = %s
+            """,
+            (typed["parent_tx_id"],),
         )
-    except ValueError as e:
-        conn.rollback()
-        sync_dt = datetime.now(timezone.utc).isoformat()
-        logger.warning(f"upsert_transactions: amount_error entity=transactions row={sheet_row_num} transaction_id={transaction_id!r} error={e}")
-        write_backs.append(sheets_transactions.write_back_failure(sheet_row_num, failed_status, sync_dt, _to_sync_notes(e)))
-        return None
+        parent = cursor.fetchone()
+    if parent is None:
+        raise ValueError("transactions: parent_tx_not_found")
+    if parent[0] is not None:
+        raise ValueError("transactions: nested_parent_reference")
+    # Deleted child rows are tombstones and may reflect a former relationship.
+    if typed["record_status"] != "deleted":
+        if str(parent[1]) == str(account_id) or parent[2] == typed["tx_type"]:
+            raise ValueError("transactions: invalid_transfer_pair")
+        if parent[3] == "deleted":
+            raise ValueError("transactions: parent_transaction_deleted")
 
-    logger.info(
-        f"_run_insert_steps: amount_resolved entity=transactions transaction_id={transaction_id!r}"
-        f" local_currency={local_currency} tx_amount_local={tx_amount_local} tx_amount_base={tx_amount_base} currency_rate_id={currency_rate_id}"
-    )
 
-    # Step 5 — resolve counterparty
-    counterparty_id = _resolve_counterparty(conn, typed["counterparty_name"], transaction_id)
+def _validate_stored_relationships(conn: Any, transaction_ids: list[str]) -> None:
+    """Validate the final pair state, including unchanged siblings of edited parents."""
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT 1
+            FROM transaction_master child
+            JOIN transaction_master parent ON parent.transaction_id = child.parent_tx_id
+            JOIN category_master child_category ON child_category.id = child.category_id
+            JOIN category_master parent_category ON parent_category.id = parent.category_id
+            WHERE child.record_status != 'deleted'
+              AND (child.transaction_id = ANY(%s) OR parent.transaction_id = ANY(%s))
+              AND (parent.parent_tx_id IS NOT NULL OR parent.record_status = 'deleted'
+                   OR child.account_id = parent.account_id OR child_category.tx_type_key = parent_category.tx_type_key)
+            LIMIT 1
+            """,
+            (transaction_ids, transaction_ids),
+        )
+        if cursor.fetchone() is not None:
+            raise ValueError("transactions: invalid_transfer_pair")
+        cursor.execute(
+            """
+            SELECT child.parent_tx_id
+            FROM transaction_master child
+            WHERE child.parent_tx_id IS NOT NULL AND child.record_status != 'deleted'
+              AND (child.parent_tx_id = ANY(%s) OR child.parent_tx_id IN (
+                  SELECT changed.parent_tx_id FROM transaction_master changed WHERE changed.transaction_id = ANY(%s)
+              ))
+            GROUP BY child.parent_tx_id HAVING count(*) > 1
+            LIMIT 1
+            """,
+            (transaction_ids, transaction_ids),
+        )
+        if cursor.fetchone() is not None:
+            raise ValueError("transactions: multiple_live_transfer_children")
 
-    # Step 6 — resolve category
-    category_id = _lookup_category(conn, typed["tx_type"], typed["major_category"], typed["minor_category"])
+
+def _upsert_row(conn: Any, typed: dict[str, Any], account_map: dict[str, tuple[Any, str, str]], decimal_places: dict[str, int]) -> tuple[Any, Any]:
+    account = account_map.get(typed["account_id_sheet"])
+    if account is None:
+        raise ValueError("transactions: account_not_found")
+    account_id, local_currency, _account_subtype = account
+    beneficiaries = _parse_beneficiaries(typed["beneficiaries_raw"])
+    _validate_parent(conn, typed, account_id)
+    amount_local, amount_base, currency_rate_id, applied_rate_value = _resolve_amount(conn, typed["tx_amount_local"], local_currency, typed["tx_date_time_base"].date(), decimal_places)
+    category_id = lookup_category(conn, typed["tx_type"], typed["major_category"], typed["minor_category"])
     if category_id is None:
-        conn.rollback()
-        sync_dt = datetime.now(timezone.utc).isoformat()
-        logger.warning(
-            f"upsert_transactions: category_not_found entity=transactions"
-            f" row={sheet_row_num} transaction_id={transaction_id!r}"
-            f" tx_type={typed['tx_type']!r} major={typed['major_category']!r} minor={typed['minor_category']!r}"
-        )
-        write_backs.append(sheets_transactions.write_back_failure(sheet_row_num, failed_status, sync_dt, "category_not_found"))
-        return None
-
-    logger.info(f"_run_insert_steps: category_resolved entity=transactions transaction_id={transaction_id!r} category_id={category_id}")
-
-    tx_date_time_local, tx_day_of_week_base, tx_day_of_week_local = _extract_datetime_fields(typed["tx_date_time_base"], typed["tx_timezone_local"])
-
-    # Step 7 — INSERT transaction_master
-    surrogate_id = _do_insert(
-        conn=conn,
-        typed=typed,
-        account_surrogate_id=account_surrogate_id,
-        local_currency=local_currency,
-        tx_amount_local=tx_amount_local,
-        tx_amount_base=tx_amount_base,
-        currency_rate_id=currency_rate_id,
-        category_id=category_id,
-        counterparty_id=counterparty_id,
-        tx_date_time_local=tx_date_time_local,
-        tx_day_of_week_base=tx_day_of_week_base,
-        tx_day_of_week_local=tx_day_of_week_local,
-        created_at_override=created_at_override,
-    )
-    logger.info(f"_run_insert_steps: tx_inserted entity=transactions transaction_id={transaction_id!r} id={surrogate_id}")
-
-    # Step 7.5 — update extension table trail (new transactions only)
-    if created_at_override is None:
-        _ext_args = dict(
-            conn=conn,
-            account_master_id=account_surrogate_id,
-            tx_surrogate_id=surrogate_id,
-            tx_amount_local=tx_amount_local,
-            tx_amount_base=tx_amount_base,
-            local_currency=local_currency,
-            currency_rate_id=currency_rate_id,
-            tx_type=typed["tx_type"],
-            transaction_id=transaction_id,
-        )
-        if account_subtype in _DEPOSIT_SUBTYPES:
-            _update_deposit_details(**_ext_args)
-        elif account_subtype in _MARKET_INVESTMENT_SUBTYPES:
-            _update_market_investment_details(**_ext_args)
-        elif account_subtype in _P2P_LENDING_SUBTYPES:
-            _update_p2p_lending_details(**_ext_args)
-        elif account_subtype in _PROPERTY_SUBTYPES:
-            _update_property_details(**_ext_args)
-
-    # Step 8 — resolve beneficiaries (optional; skip if not provided)
-    if typed["beneficiaries_raw"] is not None:
-        try:
-            _resolve_beneficiaries(conn, typed["beneficiaries_raw"], surrogate_id, transaction_id)
-        except ValueError as e:
-            conn.rollback()
-            sync_dt = datetime.now(timezone.utc).isoformat()
-            logger.warning(f"upsert_transactions: beneficiary_error entity=transactions row={sheet_row_num} transaction_id={transaction_id!r} error={e}")
-            write_backs.append(sheets_transactions.write_back_failure(sheet_row_num, failed_status, sync_dt, _to_sync_notes(e)))
-            return None
-
-    return "ok"
-
-
-def _update_deposit_details(
-    conn: Any,
-    account_master_id: Any,
-    tx_surrogate_id: Any,
-    tx_amount_local: int,
-    tx_amount_base: int,
-    local_currency: str,
-    currency_rate_id: Any | None,
-    tx_type: str,
-    transaction_id: str,
-) -> None:
-    """Close the current account_deposit_details row and open a new one for this transaction.
-
-    Uses a SAVEPOINT so that a constraint violation (e.g. balance going negative) rolls back
-    only the deposit details changes — the transaction_master row is still committed.
-    Logs a warning and returns without raising if no current row exists (opening row not yet seeded).
-    """
+        raise ValueError("transactions: category_not_found")
+    counterparty_id = resolve_counterparty(conn, typed["counterparty_name"], typed["transaction_id"])
+    local_datetime, base_day, local_day = _extract_datetime_fields(typed["tx_date_time_base"], typed["tx_timezone_local"])
     with conn.cursor() as cursor:
         cursor.execute(
             """
-            SELECT id, current_balance_local_value, current_balance_base_value
-            FROM account_deposit_details
-            WHERE account_master_id = %s AND effective_to_dt IS NULL
+            INSERT INTO transaction_master (
+                transaction_id, parent_tx_id, tx_date_time_base, tx_date_time_local,
+                tx_timezone_base, tx_timezone_local, tx_day_of_week_base, tx_day_of_week_local,
+                category_id, account_id, tx_amount_local, tx_amount_base, local_currency, base_currency,
+                currency_rate_id, applied_rate_value, tx_description, counterparty_id, tx_tags,
+                user_location_area, user_location_city, user_location_country, user_location_latitude, user_location_longitude,
+                record_status, created_at, updated_at
+            ) VALUES (
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'XAU',
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now(), now()
+            ) ON CONFLICT (transaction_id) DO UPDATE SET
+                parent_tx_id = EXCLUDED.parent_tx_id,
+                tx_date_time_base = EXCLUDED.tx_date_time_base, tx_date_time_local = EXCLUDED.tx_date_time_local,
+                tx_timezone_base = EXCLUDED.tx_timezone_base, tx_timezone_local = EXCLUDED.tx_timezone_local,
+                tx_day_of_week_base = EXCLUDED.tx_day_of_week_base, tx_day_of_week_local = EXCLUDED.tx_day_of_week_local,
+                category_id = EXCLUDED.category_id, account_id = EXCLUDED.account_id,
+                tx_amount_local = EXCLUDED.tx_amount_local, tx_amount_base = EXCLUDED.tx_amount_base,
+                local_currency = EXCLUDED.local_currency, base_currency = EXCLUDED.base_currency,
+                currency_rate_id = EXCLUDED.currency_rate_id, applied_rate_value = EXCLUDED.applied_rate_value, tx_description = EXCLUDED.tx_description,
+                counterparty_id = EXCLUDED.counterparty_id, tx_tags = EXCLUDED.tx_tags,
+                user_location_area = EXCLUDED.user_location_area, user_location_city = EXCLUDED.user_location_city,
+                user_location_country = EXCLUDED.user_location_country,
+                user_location_latitude = EXCLUDED.user_location_latitude, user_location_longitude = EXCLUDED.user_location_longitude,
+                record_status = EXCLUDED.record_status, updated_at = now()
+            RETURNING id, created_at
             """,
-            (account_master_id,),
+            (
+                typed["transaction_id"],
+                typed["parent_tx_id"],
+                typed["tx_date_time_base"],
+                local_datetime,
+                typed["tx_timezone_base"],
+                typed["tx_timezone_local"],
+                base_day,
+                local_day,
+                category_id,
+                account_id,
+                amount_local,
+                amount_base,
+                local_currency,
+                currency_rate_id,
+                applied_rate_value,
+                typed["tx_description"],
+                counterparty_id,
+                typed["tx_tags"],
+                typed["user_location_area"],
+                typed["user_location_city"],
+                typed["user_location_country"],
+                typed["user_location_latitude"],
+                typed["user_location_longitude"],
+                typed["record_status"],
+            ),
         )
-        current_row = cursor.fetchone()
-
-    if current_row is None:
-        logger.warning(
-            f"_update_deposit_details: no_current_row entity=account_deposit_details"
-            f" account_master_id={account_master_id} transaction_id={transaction_id!r}"
-            f" — opening row not yet seeded; skipping trail update"
-        )
-        return
-
-    current_id, current_balance_local, current_balance_base = current_row
-
-    delta_local = tx_amount_local if tx_type == "money-in" else -tx_amount_local
-    delta_base = tx_amount_base if tx_type == "money-in" else -tx_amount_base
-    new_balance_local = current_balance_local + delta_local
-    new_balance_base = current_balance_base + delta_base
-
-    with conn.cursor() as cursor:
-        cursor.execute("SAVEPOINT before_deposit_update")
-    try:
-        with conn.cursor() as cursor:
-            cursor.execute(
-                "UPDATE account_deposit_details SET effective_to_dt = now() WHERE id = %s",
-                (current_id,),
-            )
-        with conn.cursor() as cursor:
-            cursor.execute(
-                """
-                INSERT INTO account_deposit_details (
-                    account_master_id, entity_type, entity_id,
-                    current_balance_local_value, current_balance_base_value,
-                    local_currency, base_currency, currency_rate_id,
-                    interest_rate, rate_type, interest_payment_frequency,
-                    effective_from_dt, effective_to_dt
-                ) VALUES (%s, 'transaction', %s, %s, %s, %s, %s, %s, NULL, NULL, NULL, now(), NULL)
-                """,
-                (
-                    account_master_id,
-                    tx_surrogate_id,
-                    new_balance_local,
-                    new_balance_base,
-                    local_currency,
-                    _BASE_CURRENCY,
-                    currency_rate_id,
-                ),
-            )
-        with conn.cursor() as cursor:
-            cursor.execute("RELEASE SAVEPOINT before_deposit_update")
-        logger.info(
-            f"_update_deposit_details: updated entity=account_deposit_details"
-            f" account_master_id={account_master_id} transaction_id={transaction_id!r}"
-            f" new_balance_local={new_balance_local}"
-        )
-    except (pg_errors.CheckViolation, pg_errors.UniqueViolation) as e:
-        with conn.cursor() as cursor:
-            cursor.execute("ROLLBACK TO SAVEPOINT before_deposit_update")
-        logger.warning(
-            f"_update_deposit_details: skipped entity=account_deposit_details"
-            f" account_master_id={account_master_id} transaction_id={transaction_id!r}"
-            f" constraint={e.diag.constraint_name}"
-        )
+        transaction = cursor.fetchone()
+    if transaction is None:
+        raise RuntimeError("transaction_upsert_returned_no_id")
+    _replace_beneficiaries(conn, beneficiaries, transaction[0])
+    return transaction[0], transaction[1]
 
 
-def _update_market_investment_details(
-    conn: Any,
-    account_master_id: Any,
-    tx_surrogate_id: Any,
-    tx_amount_local: int,
-    tx_amount_base: int,
-    local_currency: str,
-    currency_rate_id: Any | None,
-    tx_type: str,
-    transaction_id: str,
-) -> None:
-    """Close the current account_market_investment_details row and open a new one.
+def _group_rows(rows: list[dict[str, Any]]) -> list[list[tuple[int, dict[str, Any]]]]:
+    """Keep physical row numbers while grouping transfers and ordering parents first."""
+    row_by_id = {}
+    for index, row in enumerate(rows):
+        identity = str(row.get("id") or "").strip()
+        if identity:
+            if identity in row_by_id:
+                raise ValueError("transactions: duplicate_source_id")
+            row_by_id[identity] = (int(row.get("_sheet_row_num", index + 2)), row)
+    groups: dict[str, list[tuple[int, dict[str, Any]]]] = {}
+    for index, row in enumerate(rows):
+        identity = str(row.get("id") or "").strip()
+        if not identity and not any(value is not None and str(value).strip() for key, value in row.items() if not key.startswith("_")):
+            continue
+        root = identity or f"missing-id-row-{index}"
+        seen = {root}
+        parent = str(row.get("parent_tx_id") or "").strip()
+        while parent:
+            if parent in seen:
+                raise ValueError("transactions: cyclic_parent_reference")
+            seen.add(parent)
+            root = parent
+            parent_row = row_by_id.get(parent)
+            parent = str(parent_row[1].get("parent_tx_id") or "").strip() if parent_row is not None else ""
+        groups.setdefault(root, []).append((int(row.get("_sheet_row_num", index + 2)), row))
+    return [sorted(group, key=lambda entry: bool(str(entry[1].get("parent_tx_id") or "").strip())) for group in groups.values()]
 
-    Money-out = deploying capital (current_value up); money-in = liquidating (current_value down).
-    Metadata columns (cost_basis, units, unit_value, unit_type) are carried forward unchanged.
-    """
+
+def retire_unused_references(conn: Any) -> None:
     with conn.cursor() as cursor:
         cursor.execute(
             """
-            SELECT id,
-                   current_value_local_value, current_value_base_value,
-                   cost_basis_local_value, cost_basis_base_value,
-                   units_held, unit_value_local_value, unit_value_base_value, unit_type
-            FROM account_market_investment_details
-            WHERE account_master_id = %s AND effective_to_dt IS NULL
-            """,
-            (account_master_id,),
+            UPDATE counterparty_master cp SET record_status = 'deleted', updated_at = now()
+            WHERE cp.record_status = 'active'
+              AND NOT EXISTS (SELECT 1 FROM transaction_master tm WHERE tm.counterparty_id = cp.id AND tm.record_status != 'deleted')
+              AND NOT EXISTS (SELECT 1 FROM subscription_master sm WHERE sm.counterparty_id = cp.id AND sm.record_status != 'deleted')
+            """
         )
-        current_row = cursor.fetchone()
-
-    if current_row is None:
-        logger.warning(
-            f"_update_market_investment_details: no_current_row entity=account_market_investment_details"
-            f" account_master_id={account_master_id} transaction_id={transaction_id!r}"
-            f" — opening row not yet seeded; skipping trail update"
-        )
-        return
-
-    (current_id, current_value_local, current_value_base,
-     cost_basis_local, cost_basis_base,
-     units_held, unit_value_local, unit_value_base, unit_type) = current_row
-
-    delta_local = tx_amount_local if tx_type == "money-out" else -tx_amount_local
-    delta_base = tx_amount_base if tx_type == "money-out" else -tx_amount_base
-    new_value_local = current_value_local + delta_local
-    new_value_base = current_value_base + delta_base
-
-    with conn.cursor() as cursor:
-        cursor.execute("SAVEPOINT before_market_investment_update")
-    try:
-        with conn.cursor() as cursor:
-            cursor.execute(
-                "UPDATE account_market_investment_details SET effective_to_dt = now() WHERE id = %s",
-                (current_id,),
-            )
-        with conn.cursor() as cursor:
-            cursor.execute(
-                """
-                INSERT INTO account_market_investment_details (
-                    account_master_id, entity_type, entity_id,
-                    current_value_local_value, current_value_base_value,
-                    cost_basis_local_value, cost_basis_base_value,
-                    units_held, unit_value_local_value, unit_value_base_value, unit_type,
-                    local_currency, base_currency, currency_rate_id,
-                    effective_from_dt, effective_to_dt
-                ) VALUES (%s, 'transaction', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now(), NULL)
-                """,
-                (
-                    account_master_id, tx_surrogate_id,
-                    new_value_local, new_value_base,
-                    cost_basis_local, cost_basis_base,
-                    units_held, unit_value_local, unit_value_base, unit_type,
-                    local_currency, _BASE_CURRENCY, currency_rate_id,
-                ),
-            )
-        with conn.cursor() as cursor:
-            cursor.execute("RELEASE SAVEPOINT before_market_investment_update")
-        logger.info(
-            f"_update_market_investment_details: updated entity=account_market_investment_details"
-            f" account_master_id={account_master_id} transaction_id={transaction_id!r}"
-            f" new_value_local={new_value_local}"
-        )
-    except (pg_errors.CheckViolation, pg_errors.UniqueViolation) as e:
-        with conn.cursor() as cursor:
-            cursor.execute("ROLLBACK TO SAVEPOINT before_market_investment_update")
-        logger.warning(
-            f"_update_market_investment_details: skipped entity=account_market_investment_details"
-            f" account_master_id={account_master_id} transaction_id={transaction_id!r}"
-            f" constraint={e.diag.constraint_name}"
-        )
-
-
-def _update_p2p_lending_details(
-    conn: Any,
-    account_master_id: Any,
-    tx_surrogate_id: Any,
-    tx_amount_local: int,
-    tx_amount_base: int,
-    local_currency: str,
-    currency_rate_id: Any | None,
-    tx_type: str,
-    transaction_id: str,
-) -> None:
-    """Close the current account_p2p_lending_details row and open a new one.
-
-    Money-out = deploying capital (current_value up); money-in = receiving repayment (current_value down).
-    principal_lent and rate metadata are carried forward unchanged.
-    """
-    with conn.cursor() as cursor:
         cursor.execute(
             """
-            SELECT id,
-                   current_value_local_value, current_value_base_value,
-                   principal_lent_local_value, principal_lent_base_value,
-                   interest_rate, rate_type
-            FROM account_p2p_lending_details
-            WHERE account_master_id = %s AND effective_to_dt IS NULL
-            """,
-            (account_master_id,),
-        )
-        current_row = cursor.fetchone()
-
-    if current_row is None:
-        logger.warning(
-            f"_update_p2p_lending_details: no_current_row entity=account_p2p_lending_details"
-            f" account_master_id={account_master_id} transaction_id={transaction_id!r}"
-            f" — opening row not yet seeded; skipping trail update"
-        )
-        return
-
-    (current_id, current_value_local, current_value_base,
-     principal_lent_local, principal_lent_base,
-     interest_rate, rate_type) = current_row
-
-    delta_local = tx_amount_local if tx_type == "money-out" else -tx_amount_local
-    delta_base = tx_amount_base if tx_type == "money-out" else -tx_amount_base
-    new_value_local = current_value_local + delta_local
-    new_value_base = current_value_base + delta_base
-
-    with conn.cursor() as cursor:
-        cursor.execute("SAVEPOINT before_p2p_update")
-    try:
-        with conn.cursor() as cursor:
-            cursor.execute(
-                "UPDATE account_p2p_lending_details SET effective_to_dt = now() WHERE id = %s",
-                (current_id,),
-            )
-        with conn.cursor() as cursor:
-            cursor.execute(
-                """
-                INSERT INTO account_p2p_lending_details (
-                    account_master_id, entity_type, entity_id,
-                    principal_lent_local_value, principal_lent_base_value,
-                    current_value_local_value, current_value_base_value,
-                    local_currency, base_currency, currency_rate_id,
-                    interest_rate, rate_type,
-                    effective_from_dt, effective_to_dt
-                ) VALUES (%s, 'transaction', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now(), NULL)
-                """,
-                (
-                    account_master_id, tx_surrogate_id,
-                    principal_lent_local, principal_lent_base,
-                    new_value_local, new_value_base,
-                    local_currency, _BASE_CURRENCY, currency_rate_id,
-                    interest_rate, rate_type,
-                ),
-            )
-        with conn.cursor() as cursor:
-            cursor.execute("RELEASE SAVEPOINT before_p2p_update")
-        logger.info(
-            f"_update_p2p_lending_details: updated entity=account_p2p_lending_details"
-            f" account_master_id={account_master_id} transaction_id={transaction_id!r}"
-            f" new_value_local={new_value_local}"
-        )
-    except (pg_errors.CheckViolation, pg_errors.UniqueViolation) as e:
-        with conn.cursor() as cursor:
-            cursor.execute("ROLLBACK TO SAVEPOINT before_p2p_update")
-        logger.warning(
-            f"_update_p2p_lending_details: skipped entity=account_p2p_lending_details"
-            f" account_master_id={account_master_id} transaction_id={transaction_id!r}"
-            f" constraint={e.diag.constraint_name}"
-        )
-
-
-def _update_property_details(
-    conn: Any,
-    account_master_id: Any,
-    tx_surrogate_id: Any,
-    tx_amount_local: int,
-    tx_amount_base: int,
-    local_currency: str,
-    currency_rate_id: Any | None,
-    tx_type: str,
-    transaction_id: str,
-) -> None:
-    """Close the current account_property_details row and open a new one.
-
-    Money-out = capital deployed into the property (current_value up, e.g. renovation);
-    money-in = proceeds received from the property (current_value down, e.g. partial sale).
-    All metadata columns are carried forward unchanged.
-    """
-    with conn.cursor() as cursor:
-        cursor.execute(
+            UPDATE beneficiaries_master bm SET record_status = 'deleted', updated_at = now()
+            WHERE bm.record_status = 'active'
+              AND NOT EXISTS (
+                SELECT 1 FROM transaction_beneficiaries tb JOIN transaction_master tm ON tm.id = tb.transaction_ref
+                WHERE tb.beneficiary_id = bm.id AND tm.record_status != 'deleted'
+              )
             """
-            SELECT id,
-                   current_value_local_value, current_value_base_value,
-                   purchase_price_local_value, purchase_price_base_value,
-                   monthly_rental_income_local_value, monthly_rental_income_base_value,
-                   purchase_date, property_address, is_rental
-            FROM account_property_details
-            WHERE account_master_id = %s AND effective_to_dt IS NULL
-            """,
-            (account_master_id,),
         )
-        current_row = cursor.fetchone()
+    conn.commit()
 
-    if current_row is None:
-        logger.warning(
-            f"_update_property_details: no_current_row entity=account_property_details"
-            f" account_master_id={account_master_id} transaction_id={transaction_id!r}"
-            f" — opening row not yet seeded; skipping trail update"
-        )
-        return
 
-    (current_id, current_value_local, current_value_base,
-     purchase_price_local, purchase_price_base,
-     rental_income_local, rental_income_base,
-     purchase_date, property_address, is_rental) = current_row
-
-    delta_local = tx_amount_local if tx_type == "money-out" else -tx_amount_local
-    delta_base = tx_amount_base if tx_type == "money-out" else -tx_amount_base
-    new_value_local = current_value_local + delta_local
-    new_value_base = current_value_base + delta_base
-
-    with conn.cursor() as cursor:
-        cursor.execute("SAVEPOINT before_property_update")
+def upsert_transactions(conn: Any, sheets_client: SheetsClient, rows: list[dict[str, Any]], account_map: dict[str, tuple[Any, str, str]]) -> int:
+    """Persist each standalone transaction/transfer atomically; return failed source rows."""
+    groups = _group_rows(rows)
+    decimal_places = load_decimal_places(conn)
+    write_backs = []
+    succeeded = failed = 0
+    logger.info(f"upsert_transactions: start total={len(rows)}")
     try:
-        with conn.cursor() as cursor:
-            cursor.execute(
-                "UPDATE account_property_details SET effective_to_dt = now() WHERE id = %s",
-                (current_id,),
-            )
-        with conn.cursor() as cursor:
-            cursor.execute(
-                """
-                INSERT INTO account_property_details (
-                    account_master_id, entity_type, entity_id,
-                    purchase_price_local_value, purchase_price_base_value,
-                    current_value_local_value, current_value_base_value,
-                    monthly_rental_income_local_value, monthly_rental_income_base_value,
-                    local_currency, base_currency, currency_rate_id,
-                    purchase_date, property_address, is_rental,
-                    effective_from_dt, effective_to_dt
-                ) VALUES (%s, 'transaction', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now(), NULL)
-                """,
-                (
-                    account_master_id, tx_surrogate_id,
-                    purchase_price_local, purchase_price_base,
-                    new_value_local, new_value_base,
-                    rental_income_local, rental_income_base,
-                    local_currency, _BASE_CURRENCY, currency_rate_id,
-                    purchase_date, property_address, is_rental,
-                ),
-            )
-        with conn.cursor() as cursor:
-            cursor.execute("RELEASE SAVEPOINT before_property_update")
-        logger.info(
-            f"_update_property_details: updated entity=account_property_details"
-            f" account_master_id={account_master_id} transaction_id={transaction_id!r}"
-            f" new_value_local={new_value_local}"
-        )
-    except (pg_errors.CheckViolation, pg_errors.UniqueViolation) as e:
-        with conn.cursor() as cursor:
-            cursor.execute("ROLLBACK TO SAVEPOINT before_property_update")
-        logger.warning(
-            f"_update_property_details: skipped entity=account_property_details"
-            f" account_master_id={account_master_id} transaction_id={transaction_id!r}"
-            f" constraint={e.diag.constraint_name}"
-        )
-
-def upsert_transactions(
-    conn: Any,
-    sheets_client: SheetsClient,
-    rows: list[dict[str, Any]],
-    account_map: dict[str, tuple[Any, str, str]],
-) -> None:
-    """Process all transaction rows and write sync results back to the sheet."""
-    in_sync_count = sum(1 for row in rows if row.get("sync_status") == "in-sync")
-    actionable_count = sum(1 for row in rows if row.get("sync_status") in _ACTIONABLE)
-    logger.info(f"upsert_transactions: start entity=transactions total={len(rows)} in_sync={in_sync_count} actionable={actionable_count}")
-
-    currency_decimal_places = _load_decimal_places(conn)
-
-    write_backs: list[sheets_transactions.WriteBack] = []
-    inserted = 0
-    updated = 0
-    failed = 0
-
-    try:
-        for row_index, row in enumerate(rows):
-            sheet_row_num = row_index + 2  # row 1 is the header
-
-            raw_id = row.get("id")
-            if raw_id is None or str(raw_id).strip() == "":
-                logger.warning(f"upsert_transactions: blank_id entity=transactions row={sheet_row_num} — skipping")
+        for group in groups:
+            actionable = [(number, row) for number, row in group if str(row.get("sync_status") or "").strip() != "in-sync"]
+            if not actionable:
                 continue
-
-            raw_sync_status = row.get("sync_status")
-            if raw_sync_status is None or str(raw_sync_status).strip() == "":
-                logger.warning(f"upsert_transactions: missing_sync_status entity=transactions row={sheet_row_num} — skipping")
-                continue
-            sync_status = str(raw_sync_status).strip()
-
-            if sync_status == "in-sync":
-                continue
-            if sync_status not in _VALID_SYNC_STATUSES:
-                logger.warning(f"upsert_transactions: unknown_sync_status entity=transactions row={sheet_row_num} sync_status={sync_status!r} — skipping")
-                continue
-
-            transaction_id = str(raw_id).strip()
-            failed_status = "create-failed" if sync_status in ("create-pending", "create-failed") else "update-failed"
-
             try:
-                typed = transactions_transform.transform(row)
-            except ValueError as e:
-                sync_dt = datetime.now(timezone.utc).isoformat()
-                logger.warning(f"upsert_transactions: transform_error entity=transactions row={sheet_row_num} transaction_id={transaction_id!r} error={e}")
-                write_backs.append(sheets_transactions.write_back_failure(sheet_row_num, failed_status, sync_dt, _to_sync_notes(e)))
-                failed += 1
+                typed_rows = []
+                for number, row in actionable:
+                    if str(row.get("sync_status") or "").strip() not in _ACTIONABLE:
+                        raise ValueError("transactions: invalid_sync_status")
+                    typed_rows.append((number, transactions_transform.transform(row)))
+                stored = [(number, _upsert_row(conn, typed, account_map, decimal_places)) for number, typed in typed_rows]
+                _validate_stored_relationships(conn, [typed["transaction_id"] for _number, typed in typed_rows])
+                conn.commit()
+            except (ValueError, pg_errors.IntegrityError, pg_errors.DataError) as error:
+                conn.rollback()
+                failed += len(actionable)
+                sync_date = datetime.now(timezone.utc).isoformat()
+                for number, row in actionable:
+                    status = "update-failed" if str(row.get("sync_status") or "").startswith("update-") else "create-failed"
+                    write_backs.append(sheets_transactions.write_back_failure(number, status, sync_date, _to_sync_notes(error)))
+                logger.warning(f"upsert_transactions: group_failed rows={len(actionable)} error_type={type(error).__name__}")
                 continue
-
-            account_id_sheet = typed["account_id_sheet"]
-            if account_id_sheet not in account_map:
-                sync_dt = datetime.now(timezone.utc).isoformat()
-                logger.warning(f"upsert_transactions: account_not_found entity=transactions row={sheet_row_num} transaction_id={transaction_id!r} account_id={account_id_sheet!r}")
-                write_backs.append(sheets_transactions.write_back_failure(sheet_row_num, failed_status, sync_dt, "account_not_found"))
-                failed += 1
-                continue
-
-            account_surrogate_id, local_currency, account_subtype = account_map[account_id_sheet]
-
-            if sync_status in ("create-pending", "create-failed"):
-                try:
-                    with conn.cursor() as cursor:
-                        cursor.execute("SAVEPOINT before_tx_insert")
-
-                    try:
-                        step_outcome = _run_insert_steps(
-                            conn=conn,
-                            typed=typed,
-                            transaction_id=transaction_id,
-                            sheet_row_num=sheet_row_num,
-                            account_surrogate_id=account_surrogate_id,
-                            local_currency=local_currency,
-                            account_subtype=account_subtype,
-                            currency_decimal_places=currency_decimal_places,
-                            write_backs=write_backs,
-                            created_at_override=None,
-                            failed_status="create-failed",
-                        )
-                    except pg_errors.UniqueViolation as e:
-                        with conn.cursor() as cursor:
-                            cursor.execute("ROLLBACK TO SAVEPOINT before_tx_insert")
-                        if e.diag.constraint_name != "uq_tm_transaction_id":
-                            sync_dt = datetime.now(timezone.utc).isoformat()
-                            logger.error(f"upsert_transactions: create_failed entity=transactions row={sheet_row_num} transaction_id={transaction_id!r} error={e}")
-                            write_backs.append(sheets_transactions.write_back_failure(sheet_row_num, "create-failed", sync_dt, _to_sync_notes(e)))
-                            failed += 1
-                            continue
-                        logger.info(f"upsert_transactions: unique_fallthrough entity=transactions row={sheet_row_num} transaction_id={transaction_id!r} — re-inserting via update path")
-                        step_outcome = _run_fallthrough_update(
-                            conn=conn,
-                            typed=typed,
-                            transaction_id=transaction_id,
-                            sheet_row_num=sheet_row_num,
-                            account_surrogate_id=account_surrogate_id,
-                            local_currency=local_currency,
-                            account_subtype=account_subtype,
-                            currency_decimal_places=currency_decimal_places,
-                            write_backs=write_backs,
-                        )
-                        if step_outcome is not None:
-                            inserted += 1
-                        else:
-                            failed += 1
-                        continue
-
-                    if step_outcome is None:
-                        failed += 1
-                        continue
-
-                    conn.commit()
-                    sync_dt = datetime.now(timezone.utc).isoformat()
-                    write_backs.append(sheets_transactions.write_back_success(sheet_row_num, "in-sync", sync_dt, "", sync_dt, sync_dt))
-                    inserted += 1
-                    logger.info(f"upsert_transactions: inserted entity=transactions transaction_id={transaction_id!r}")
-
-                except (
-                    pg_errors.ForeignKeyViolation,
-                    pg_errors.CheckViolation,
-                    pg_errors.NotNullViolation,
-                ) as e:
-                    conn.rollback()
-                    sync_dt = datetime.now(timezone.utc).isoformat()
-                    logger.error(f"upsert_transactions: create_failed entity=transactions row={sheet_row_num} transaction_id={transaction_id!r} error={e}")
-                    write_backs.append(sheets_transactions.write_back_failure(sheet_row_num, "create-failed", sync_dt, _to_sync_notes(e)))
-                    failed += 1
-                except Exception as e:
-                    conn.rollback()
-                    logger.error(f"upsert_transactions: unexpected_error entity=transactions row={sheet_row_num} transaction_id={transaction_id!r} error={e!r}")
-                    raise
-
-            elif sync_status in ("update-pending", "update-failed"):
-                try:
-                    with conn.cursor() as cursor:
-                        cursor.execute(
-                            "SELECT id, record_status, created_at FROM transaction_master WHERE transaction_id = %s",
-                            (transaction_id,),
-                        )
-                        existing = cursor.fetchone()
-
-                    if existing is None:
-                        sync_dt = datetime.now(timezone.utc).isoformat()
-                        logger.warning(f"upsert_transactions: transaction_not_found entity=transactions row={sheet_row_num} transaction_id={transaction_id!r}")
-                        write_backs.append(sheets_transactions.write_back_failure(sheet_row_num, "update-failed", sync_dt, "transaction_not_found"))
-                        failed += 1
-                        continue
-
-                    existing_surrogate_id, existing_record_status, existing_created_at = existing
-
-                    if existing_record_status == "locked":
-                        sync_dt = datetime.now(timezone.utc).isoformat()
-                        logger.warning(f"upsert_transactions: transaction_locked entity=transactions row={sheet_row_num} transaction_id={transaction_id!r}")
-                        write_backs.append(sheets_transactions.write_back_failure(sheet_row_num, "update-failed", sync_dt, "transaction_locked"))
-                        failed += 1
-                        continue
-
-                    if existing_record_status == "deleted":
-                        sync_dt = datetime.now(timezone.utc).isoformat()
-                        logger.warning(f"upsert_transactions: transaction_deleted entity=transactions row={sheet_row_num} transaction_id={transaction_id!r}")
-                        write_backs.append(sheets_transactions.write_back_failure(sheet_row_num, "update-failed", sync_dt, "transaction_deleted"))
-                        failed += 1
-                        continue
-
-                    created_at_override = existing_created_at.isoformat() if hasattr(existing_created_at, "isoformat") else str(existing_created_at)
-
-                    # Step 2 — delete beneficiary junction rows
-                    with conn.cursor() as cursor:
-                        cursor.execute(
-                            "DELETE FROM transaction_beneficiaries WHERE transaction_ref = %s",
-                            (existing_surrogate_id,),
-                        )
-
-                    # Step 3 — delete the transaction row
-                    with conn.cursor() as cursor:
-                        cursor.execute(
-                            "DELETE FROM transaction_master WHERE transaction_id = %s",
-                            (transaction_id,),
-                        )
-
-                    # Step 4 — re-insert via the shared insert steps
-                    step_outcome = _run_insert_steps(
-                        conn=conn,
-                        typed=typed,
-                        transaction_id=transaction_id,
-                        sheet_row_num=sheet_row_num,
-                        account_surrogate_id=account_surrogate_id,
-                        local_currency=local_currency,
-                        account_subtype=account_subtype,
-                        currency_decimal_places=currency_decimal_places,
-                        write_backs=write_backs,
-                        created_at_override=created_at_override,
-                        failed_status="update-failed",
-                    )
-
-                    if step_outcome is None:
-                        failed += 1
-                        continue
-
-                    conn.commit()
-                    sync_dt = datetime.now(timezone.utc).isoformat()
-                    write_backs.append(sheets_transactions.write_back_success(sheet_row_num, "in-sync", sync_dt, "", created_at_override, sync_dt))
-                    updated += 1
-                    logger.info(f"upsert_transactions: updated entity=transactions transaction_id={transaction_id!r}")
-
-                except (
-                    pg_errors.ForeignKeyViolation,
-                    pg_errors.CheckViolation,
-                    pg_errors.NotNullViolation,
-                    pg_errors.UniqueViolation,
-                ) as e:
-                    conn.rollback()
-                    sync_dt = datetime.now(timezone.utc).isoformat()
-                    logger.error(f"upsert_transactions: update_failed entity=transactions row={sheet_row_num} transaction_id={transaction_id!r} error={e}")
-                    write_backs.append(sheets_transactions.write_back_failure(sheet_row_num, "update-failed", sync_dt, _to_sync_notes(e)))
-                    failed += 1
-                except Exception as e:
-                    conn.rollback()
-                    logger.error(f"upsert_transactions: unexpected_error entity=transactions row={sheet_row_num} transaction_id={transaction_id!r} error={e!r}")
-                    raise
-
+            except Exception:
+                conn.rollback()
+                raise
+            sync_date = datetime.now(timezone.utc).isoformat()
+            for number, (_identity, created_at) in stored:
+                write_backs.append(sheets_transactions.write_back_success(number, "in-sync", sync_date, "", created_at.isoformat(), sync_date))
+            succeeded += len(stored)
     finally:
-        logger.info(f"upsert_transactions: done entity=transactions inserted={inserted} updated={updated} failed={failed}")
+        logger.info(f"upsert_transactions: done succeeded={succeeded} failed={failed}")
         sheets_transactions.flush(sheets_client, _SHEET_NAME, write_backs)
-
-    # Post-row soft-delete pass — counterparty_master
-    with conn.cursor() as cursor:
-        cursor.execute(
-            """
-            UPDATE counterparty_master SET record_status = 'deleted', updated_at = now()
-            WHERE id NOT IN (
-                SELECT DISTINCT counterparty_id FROM transaction_master
-                WHERE record_status = 'active' AND counterparty_id IS NOT NULL
-            )
-            AND record_status = 'active'
-            """
-        )
-        counterparty_deleted = cursor.rowcount
-    conn.commit()
-    logger.info(f"upsert_transactions: counterparty_soft_delete entity=transactions deleted={counterparty_deleted}")
-
-    # Post-row soft-delete pass — beneficiaries_master
-    with conn.cursor() as cursor:
-        cursor.execute(
-            """
-            UPDATE beneficiaries_master SET record_status = 'deleted', updated_at = now()
-            WHERE id NOT IN (
-                SELECT DISTINCT tb.beneficiary_id
-                FROM transaction_beneficiaries tb
-                JOIN transaction_master tm ON tm.id = tb.transaction_ref
-                WHERE tm.record_status = 'active'
-            )
-            AND record_status = 'active'
-            """
-        )
-        beneficiary_deleted = cursor.rowcount
-    conn.commit()
-    logger.info(f"upsert_transactions: beneficiary_soft_delete entity=transactions deleted={beneficiary_deleted}")
-
-
-def _run_fallthrough_update(
-    conn: Any,
-    typed: dict[str, Any],
-    transaction_id: str,
-    sheet_row_num: int,
-    account_surrogate_id: Any,
-    local_currency: str,
-    account_subtype: str,
-    currency_decimal_places: dict[str, int],
-    write_backs: list[sheets_transactions.WriteBack],
-) -> str | None:
-    """Handle the UNIQUE fallthrough: fetch existing created_at, delete, then re-insert.
-
-    Returns 'ok' on success, None on controlled failure (write_back already appended).
-    Raises on unexpected exceptions after rollback.
-    """
-    try:
-        with conn.cursor() as cursor:
-            cursor.execute(
-                "SELECT id, created_at FROM transaction_master WHERE transaction_id = %s",
-                (transaction_id,),
-            )
-            existing = cursor.fetchone()
-
-        if existing is None:
-            raise RuntimeError(f"UNIQUE fallthrough: expected existing row for transaction_id={transaction_id!r} but found none")
-
-        existing_surrogate_id, existing_created_at = existing
-        created_at_override = existing_created_at.isoformat() if hasattr(existing_created_at, "isoformat") else str(existing_created_at)
-
-        with conn.cursor() as cursor:
-            cursor.execute(
-                "DELETE FROM transaction_beneficiaries WHERE transaction_ref = %s",
-                (existing_surrogate_id,),
-            )
-
-        with conn.cursor() as cursor:
-            cursor.execute(
-                "DELETE FROM transaction_master WHERE transaction_id = %s",
-                (transaction_id,),
-            )
-
-        step_outcome = _run_insert_steps(
-            conn=conn,
-            typed=typed,
-            transaction_id=transaction_id,
-            sheet_row_num=sheet_row_num,
-            account_surrogate_id=account_surrogate_id,
-            local_currency=local_currency,
-            account_subtype=account_subtype,
-            currency_decimal_places=currency_decimal_places,
-            write_backs=write_backs,
-            created_at_override=created_at_override,
-            failed_status="create-failed",
-        )
-
-        if step_outcome is None:
-            return None
-
-        conn.commit()
-        sync_dt = datetime.now(timezone.utc).isoformat()
-        write_backs.append(sheets_transactions.write_back_success(sheet_row_num, "in-sync", sync_dt, "", created_at_override, sync_dt))
-        logger.info(f"upsert_transactions: fallthrough_inserted entity=transactions transaction_id={transaction_id!r}")
-        return "ok"
-
-    except (
-        pg_errors.ForeignKeyViolation,
-        pg_errors.CheckViolation,
-        pg_errors.NotNullViolation,
-        pg_errors.UniqueViolation,
-    ) as e:
-        conn.rollback()
-        sync_dt = datetime.now(timezone.utc).isoformat()
-        logger.error(f"upsert_transactions: fallthrough_failed entity=transactions row={sheet_row_num} transaction_id={transaction_id!r} error={e}")
-        write_backs.append(sheets_transactions.write_back_failure(sheet_row_num, "create-failed", sync_dt, _to_sync_notes(e)))
-        return None
-    except Exception as e:
-        conn.rollback()
-        logger.error(f"_run_fallthrough_update: unexpected_error entity=transactions row={sheet_row_num} transaction_id={transaction_id!r} error={e!r}")
-        raise
+    return failed
