@@ -7,21 +7,19 @@
 //   required           — fields that must be present and non-empty on every row
 //   enums              — { field: [allowed...] }; validated only when cell non-empty
 //   key_field          — the row's natural key, echoed back in each result entry
-//   account_sub_types  — the account sub_types a detail row's account_id may have
 //
-// 'accounts_master' is handled specially in import-core.gs (delegates to
+// 'account_master' is handled specially in import-core.gs (delegates to
 // createAccountsBulk); it still appears here so the file_type is recognised, but
 // its columns/required/enums are unused by the writer.
 // =============================================================================
 
 const IMPORT_REGISTRY = {
-  accounts_master: {
+  account_master: {
     sheet_name:        ACCOUNTS_SHEET,
-    columns:           [],   // unused — accounts_master delegates to createAccountsBulk
+    columns:           [],   // unused — account_master delegates to createAccountsBulk
     required:          [],
     enums:             {},
     key_field:         'account_name',
-    account_sub_types: [],
   },
 
   account_deposit: {
@@ -30,14 +28,15 @@ const IMPORT_REGISTRY = {
     columns: [
       'id', 'account_id', 'account_name', 'is_interest_paid', 'rate_type',
       'interest_payment_frequency', 'interest_rate',
+      'record_status', 'sync_status', 'sync_date', 'sync_notes', 'created_at', 'updated_at',
     ],
     required:  ['id', 'account_id'],
     enums: {
       rate_type:                  ['fixed', 'variable'],
       interest_payment_frequency: ['monthly', 'quarterly', 'annually', 'at_maturity'],
+      record_status:              ['active', 'inactive', 'deleted', 'locked'],
     },
     key_field:         'id',
-    account_sub_types: ['current', 'savings', 'cash'],
   },
 
   account_liability_credit_card: {
@@ -46,11 +45,11 @@ const IMPORT_REGISTRY = {
     columns: [
       'id', 'account_id', 'account_name', 'credit_limit_local', 'interest_rate',
       'payment_month_day', 'statement_month_day',
+      'record_status', 'sync_status', 'sync_date', 'sync_notes', 'created_at', 'updated_at',
     ],
     required:          ['id', 'account_id', 'credit_limit_local'],
-    enums:             {},
+    enums:             { record_status: ['active', 'inactive', 'deleted', 'locked'] },
     key_field:         'id',
-    account_sub_types: ['credit_card'],
   },
 
   account_liability_mortgage: {
@@ -60,13 +59,14 @@ const IMPORT_REGISTRY = {
       'id', 'account_id', 'account_name', 'linked_property_account_id',
       'original_principal_local', 'monthly_payment_local', 'interest_rate',
       'rate_type', 'term_months', 'maturity_date_local',
+      'record_status', 'sync_status', 'sync_date', 'sync_notes', 'created_at', 'updated_at',
     ],
     required: ['id', 'account_id', 'original_principal_local', 'term_months'],
     enums: {
       rate_type: ['fixed', 'variable'],
+      record_status: ['active', 'inactive', 'deleted', 'locked'],
     },
     key_field:         'id',
-    account_sub_types: ['mortgage'],
   },
 
   account_liability_personal_loan: {
@@ -75,11 +75,11 @@ const IMPORT_REGISTRY = {
     columns: [
       'id', 'account_id', 'account_name', 'original_principal_local',
       'monthly_payment_local', 'interest_rate', 'term_months', 'maturity_date_local',
+      'record_status', 'sync_status', 'sync_date', 'sync_notes', 'created_at', 'updated_at',
     ],
     required:          ['id', 'account_id', 'original_principal_local', 'term_months'],
-    enums:             {},
+    enums:             { record_status: ['active', 'inactive', 'deleted', 'locked'] },
     key_field:         'id',
-    account_sub_types: ['personal_loan'],
   },
 
   account_investment_property: {
@@ -90,16 +90,17 @@ const IMPORT_REGISTRY = {
       'is_rented', 'rent_frequency', 'rent_day', 'rent_month', 'current_value_local',
       'property_ownership_percentage', 'rent_amount_local', 'rent_ownership_percentage',
       'property_service_charge_frequency', 'property_service_charge_amount_local',
-      'current_value_evaluation_date', 'evaluation_currency_rate_id', 'property_address',
+      'current_value_evaluation_date', 'property_address',
+      'record_status', 'sync_status', 'sync_date', 'sync_notes', 'created_at', 'updated_at',
     ],
     required: ['id', 'account_id', 'acquisition_type'],
     enums: {
       acquisition_type:                  ['PURCHASED', 'INHERITED', 'GIFTED'],
       rent_frequency:                    ['MONTHLY', 'YEARLY'],
       property_service_charge_frequency: ['MONTHLY', 'QUARTERLY', 'YEARLY'],
+      record_status:                     ['active', 'inactive', 'deleted', 'locked'],
     },
     key_field:         'id',
-    account_sub_types: ['property'],
   },
 
   account_investment_stocks: {
@@ -112,6 +113,7 @@ const IMPORT_REGISTRY = {
       'current_value_local', 'price_asof_date', 'evaluation_currency_rate_id',
       'underlying_symbol', 'option_type', 'strike_price_local', 'expiry_date',
       'contract_multiplier', 'opening_date', 'record_status',
+      'sync_status', 'sync_date', 'sync_notes', 'created_at', 'updated_at',
     ],
     required: ['id', 'account_id', 'instrument_type'],
     enums: {
@@ -122,8 +124,8 @@ const IMPORT_REGISTRY = {
       record_status:   ['active', 'inactive', 'deleted', 'locked'],
     },
     key_field:         'id',
-    account_sub_types: ['stocks_shares'],
   },
+
 };
 
 // Returns the import spec for a file_type, or null if the file_type is unknown.

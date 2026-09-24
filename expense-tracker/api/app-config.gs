@@ -3,14 +3,23 @@
 // Shared across all other .gs files via GAS global scope.
 // =============================================================================
 
-const TRANSACTIONS_SHEET       = 'transactions';
-const CATEGORIES_SHEET         = 'categories';
-const ACCOUNTS_SHEET           = 'accounts';
+const TRANSACTIONS_SHEET       = 'transaction_master';
+const CATEGORIES_SHEET         = 'category_master';
+const ACCOUNTS_SHEET           = 'account_master';
+const ACCOUNT_TYPES_SHEET      = 'account_types';
 const RATES_SHEET              = 'rates';
-const SUBSCRIPTIONS_SHEET      = 'subscriptions';
+const SUBSCRIPTIONS_SHEET      = 'subscription_master';
 const AUDIT_SHEET              = 'audit_access';
 const ADVISOR_SHEET            = 'advisor_chat';
 const COMPUTED_INSIGHTS_SHEET  = 'computed_insights';
+
+// Explicit in-place migration; legacy data must never be hidden by a new empty tab.
+const MASTER_SHEET_RENAMES = [
+  { legacy_name: 'accounts', sheet_name: ACCOUNTS_SHEET },
+  { legacy_name: 'categories', sheet_name: CATEGORIES_SHEET },
+  { legacy_name: 'subscriptions', sheet_name: SUBSCRIPTIONS_SHEET },
+  { legacy_name: 'transactions', sheet_name: TRANSACTIONS_SHEET },
+];
 
 // Account data importer — detail sheets, one per non-master file_type.
 const ACCOUNT_DEPOSIT_SHEET                 = 'account_deposit';
@@ -40,5 +49,4 @@ const AUDIT_COLUMNS = [
 // VALID_TYPES removed — use VALID_TRANSACTION_TYPES from transaction-schema.gs
 // DEFAULT_RATES removed — defined in rate-core.gs
 
-// VALID_ACCOUNT_TYPES, ACCOUNT_LIABILITY_TYPES, ACCOUNT_LOAN_TYPES removed
-// — all defined in account-schema.gs
+// Account classifications, labels, loan flags and detail eligibility live in account_types.

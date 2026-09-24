@@ -1,13 +1,13 @@
 # Accounts
 
-The set of pools of money tracked in the app. Every transaction row references exactly one account (via `account_id`). A transfer between two accounts produces two linked rows — one per account. Account balances are computed at read time by `_buildAccountNetMap` in `account-core.gs`, which scans the transactions sheet on every `listAccounts` call and returns `current_value_local = opening_value_local + net`. No balance value is written back to the accounts sheet during transaction operations.
+The set of pools of money tracked in the app. Every transaction row references exactly one account (via `account_id`). A transfer between two accounts produces two linked rows — one per account. Account balances are computed at read time by `_buildAccountNetMap` in `account-core.gs`, which scans the `transaction_master` sheet on every `listAccounts` call and returns `current_value_local = opening_value_local + net`. No balance value is written back to the `account_master` sheet during transaction operations.
 
 Schema reference: [data-model.md § Account](data-model.md#account).
 
 ## Capabilities
 
-- Create, edit, deactivate, soft-delete, restore, and lock accounts (3 types — asset, investment, liability — with mandatory sub-types)
-- Net Worth summary: Total Assets, Total Liabilities, Net Worth, Liquid Cash (current + savings + cash) — always unfiltered (deleted accounts excluded; inactive and locked accounts included)
+- Create, edit, deactivate, soft-delete, restore, and lock accounts using the available Sheet-owned type/subtype pairs
+- Net Worth summary: Total Assets, Total Liabilities, Net Worth, Liquid Cash — always unfiltered (deleted accounts excluded; inactive and locked accounts included)
 - Filter panel: Type / Sub-type / Currency / Search / Record status — deferred model ([Search] applies)
 - Currency dropdown sourced from the rates table — no free-text currency entry
 - `local_timezone` auto-detected from the browser (`Intl.DateTimeFormat().resolvedOptions().timeZone`) — never a user-typed input
@@ -19,7 +19,7 @@ Schema reference: [data-model.md § Account](data-model.md#account).
 | Field | Applies to | Rule |
 |---|---|---|
 | `account_name` | All | Non-empty |
-| `type` | All | Must be one of: `asset`, `investment`, `liability` |
+| `type` | All | Group key of an available `account_types` row |
 | `sub_type` | All | Required for all accounts; valid values depend on type |
 | `account_currency_local` | create | Must exist in `rates` |
 | `account_opening_date_local` | create | Required; non-empty datetime string in local time (no UTC conversion) |
@@ -27,7 +27,7 @@ Schema reference: [data-model.md § Account](data-model.md#account).
 
 ### opening_value_local
 
-`opening_value_local` is required on create. If omitted, the backend returns `missing_opening_value_local`. If the provided value is not a finite number, the backend returns `invalid_opening_value_local`. For liability accounts, the backend negates the absolute value on write so liabilities are stored as negative numbers (balance logic applies the sign convention described below). `current_value_local` is never written at create time — it is computed at read time by `_buildAccountNetMap`.
+`opening_value_local` is required on create. If omitted, the backend returns `missing_opening_value_local`. Values must be finite decimal numbers or decimal/scientific-decimal strings; booleans, arrays and hexadecimal/binary/octal notation return `invalid_opening_value_local`. CSV/API decimal text is preserved instead of being converted through a JavaScript Number before storage. Signed asset/investment opening values are supported for overdrafts and net short positions. For liability accounts, the backend negates the absolute value on write so liabilities are stored as negative numbers (balance logic applies the sign convention described below). `current_value_local` is never written at create time — it is computed at read time by `_buildAccountNetMap`.
 
 ### Tracking start date
 
@@ -45,7 +45,7 @@ Liabilities are stored as negative values. The UI displays `abs(current_value_lo
 
 ### Account sub-types and loan_sub_types
 
-Each account type has a fixed set of valid sub-types driven by `get_account_schema`. `loan_sub_types` is a subset of liability sub-types that also qualify as loans (personal loan, mortgage, auto loan, heloc, student loan, medical loan, debt consolidation). These are surfaced separately so the UI and analytics can distinguish loan-type liabilities (where repayment transfers apply) from pure liabilities such as credit cards. All `loan_sub_types` values are also present in `liability_sub_types` — the split is a classification aid, not a separate type hierarchy.
+Account subtype choices and labels come from active or locked rows in the `account_types` Sheet, managed in [Configure → Account Types](account-types.md) and exposed by `get_account_schema`. The existing 22-row catalog is imported from its CSV; code contains no default subtype list and Configure cannot add new classifications. `loan_sub_types` is derived from the available rows whose `is_loan` flag is true. Detail eligibility comes from each row's `detail_sheet` value. Classification keys use hyphens; column names such as `sub_type` retain underscores.
 
 ### Immutable after creation
 
@@ -55,13 +55,13 @@ Each account type has a fixed set of valid sub-types driven by `get_account_sche
 
 `account_closing_date_local` is populated via `update_account` when an account is closed — set alongside `record_status: inactive`.
 
-Datetimes (`account_opening_date_local`, `account_closing_date_local`) are stored in local time as-is — no UTC conversion is applied, because the corresponding timezone is captured in `local_timezone`.
+Opening, closing and tracking dates accept valid ISO local dates/datetimes without a UTC offset, with up to six fractional-second digits. Invalid calendar dates and time rollovers are rejected; closing cannot precede the recorded opening date. Text is preserved without UTC conversion. `local_timezone` remains optional; when supplied, ledger-extract validates its IANA timezone meaning and any ambiguous/nonexistent local time.
 
 `record_status` can be changed to `active`, `inactive`, or `locked` via `update_account`. Setting it to `deleted` via `update_account` is rejected with `invalid_record_status` — the `deleted` state is set only via `delete_account`; restoring from `deleted` requires `restore_account`.
 
 ### current_value_local is computed, not stored
 
-There is no API to write `current_value_local` directly and no transaction operation writes it to the accounts sheet. The column does exist in the sheet (created by the schema for column-position ordering) but is always blank in the sheet — it is never written via `create_account` or `update_account`. `listAccounts` injects the computed value at read time as `opening_value_local + sum(eligible non-deleted transactions)` via `_buildAccountNetMap`. To correct a discrepancy between the computed balance and reality, record an `Adjustments / Balance correction` transaction (`money-in` to credit, `money-out` to debit). See [balance-lifecycle.md](balance-lifecycle.md) for the full computation model.
+There is no API to write `current_value_local` directly and no transaction operation writes it to the `account_master` sheet. The column does exist in the sheet (created by the schema for column-position ordering) but is always blank in the sheet — it is never written via `create_account` or `update_account`. `listAccounts` injects the computed value at read time as `opening_value_local + sum(eligible non-deleted transactions)` via `_buildAccountNetMap`. To correct a discrepancy between the computed balance and reality, record an `Adjustments / Balance correction` transaction (`money-in` to credit, `money-out` to debit). See [balance-lifecycle.md](balance-lifecycle.md) for the full computation model.
 
 ### Deletion semantics
 
@@ -72,7 +72,7 @@ There is no API to write `current_value_local` directly and no transaction opera
 
 ### Sync lifecycle
 
-On create, `sync_status` defaults to `create-pending`. The Python ledger-extract job transitions the account to `in-sync` once the record is confirmed persisted externally. If synchronisation fails, the status is set to `create-failed` or `update-failed`. The full set of valid values is: `create-pending | update-pending | in-sync | create-failed | update-failed`.
+On create, `sync_status` defaults to `create-pending`. Updates, imports, delete and restore operations clear stale sync date/notes and preserve the original creation timestamp. Direct Sheet business/lifecycle edits, including the tracking timestamp after the audit columns, also queue affected rows and refresh `updated_at`; audit-only edits do not requeue. The trigger writes only sync/audit cells. The Python ledger-extract job transitions the account to `in-sync` once the record is confirmed persisted externally. If synchronisation fails, the status is set to `create-failed` or `update-failed`. The full set of valid values is: `create-pending | update-pending | in-sync | create-failed | update-failed`.
 
 ### Deactivate (record_status = inactive)
 
@@ -94,8 +94,8 @@ Four cards above the table, always in the selected display currency and always u
 | Operation | Behaviour |
 |---|---|
 | `list_accounts` | Return all rows; no defaults seeded |
-| `create_account` | Validate required fields (including `opening_value_local`, `account_opening_date_local`); negate value for liabilities; assign UUID `id` (caller-supplied `body.id` is used if provided — useful for seed CSV import with pre-assigned UUIDs); store `local_timezone` as-is from the frontend (captured from browser); store `account_opening_date_local` as-is (no UTC conversion); write `opening_value_local` to sheet; stamp `created_at`, `sync_status = create-pending`; append. `current_value_local` is NOT written at create time — it is computed at read time by `_buildAccountNetMap`. Returns `{ ok: true, id: '<uuid>' }`. |
-| `create_accounts_bulk` | Accept `accounts[]`; validate and insert or replace each row by `id`; preserve `created_at` on replacement and advance `sync_status`. Return `{ ok, created, updated, failed, results }` with result entries `{ key, ok, action?, error? }` |
+| `create_account` | Validate required fields (including `opening_value_local`, `account_opening_date_local`); negate value for liabilities; assign UUID `id` (supplied IDs must be valid UUIDs; new values are written lowercase and an existing UUID returns `account_id_exists`); store `local_timezone` as-is from the frontend (captured from browser); store `account_opening_date_local` as-is (no UTC conversion); write `opening_value_local` to sheet; stamp `created_at`, `sync_status = create-pending`; append. `current_value_local` is NOT written at create time — it is computed at read time by `_buildAccountNetMap`. Returns `{ ok: true, id: '<uuid>' }`. |
+| `create_accounts_bulk` | Accept `accounts[]`; validate and insert or replace each row by `id`; match supplied UUIDs case-insensitively; preserve the existing UUID spelling, `created_at`, and omitted lifecycle status on replacement; advance `sync_status`. Existing duplicate UUIDs fail before row writes. Return `{ ok, created, updated, failed, results }` with result entries `{ key, ok, action?, error? }` |
 | `update_account` | Validate editable fields only; locked guard → `record_locked`; duplicate `account_name` check → `duplicate_account` (deleted accounts excluded from the collision check); advance `sync_status`; stamp `updated_at`. Editable fields: `account_name`, `sub_type`, `account_closing_date_local`, `description`, `record_status`. Valid `record_status` values for update: `active`, `inactive`, `locked` only — `deleted` is rejected with `invalid_record_status`. |
 | `delete_account` | Locked guard; FK check → `account_in_use`; soft-delete (`record_status → deleted`) |
 | `restore_account` | Verifies record is in `deleted` state; sets `record_status → active` |
@@ -113,7 +113,14 @@ Four cards above the table, always in the selected display currency and always u
 | `invalid_account_type` | create | Account type is not one of `asset`, `investment`, `liability` |
 | `unknown_currency` | create | `account_currency_local` is not present in the rates store (currency is immutable post-create) |
 | `missing_opening_value_local` | create | `opening_value_local` is absent or null |
-| `invalid_opening_value_local` | create | `opening_value_local` is present but not a finite number |
+| `invalid_opening_value_local` | create/import | Opening value is not a finite decimal number/string |
+| `invalid_id` | create/import | Supplied account ID is not a valid UUID |
+| `account_id_exists` | create | The UUID already exists; use the ID-based bulk import for replacement |
+| `duplicate_account_id` | bulk import | Existing Sheet rows share the same UUID, including differing letter casing |
+| `invalid_local_currency` | create/import | Currency code is not three ASCII letters |
+| `invalid_account_opening_date_local` | create/import | Opening date is not a valid ISO local date/datetime |
+| `invalid_account_closing_date_local` | create/import/update | Closing value is invalid or earlier than opening |
+| `invalid_tracking_start_date_local` | create/import | Tracking value is not a valid ISO local date/datetime |
 | `duplicate_account` | update | Another non-deleted account already has the same `account_name` (deleted accounts are excluded from the collision check) |
 | `invalid_record_status` | update | `record_status` is not one of `active`, `inactive`, `locked` |
 | `missing_row_num` | update, delete, restore | `row_num` not provided |
@@ -169,11 +176,11 @@ Column positions are append-only — never change an existing position.
 
 The Accounts import panel requires a file type and a CSV file. It sends `{ file_type, rows }` to `import_account_data`. See [account-imports.md](account-imports.md) for all supported types and detail-tab schemas.
 
-For `accounts_master`, these columns are supported:
+For `account_master`, these columns are supported:
 
 | Column | Required | Notes |
 |---|---|---|
-| `id` | No | Identifies the account to insert or replace. A missing ID creates a new UUID. |
+| `id` | No | Valid UUID; matches existing UUIDs case-insensitively. New IDs are lowercase; existing spelling is preserved to retain source references. A missing ID creates a new UUID. |
 | `account_name` | Yes | Display label; import matches IDs, not names. |
 | `legal_entity_name` | No | Institution name. |
 | `type`, `sub_type` | Yes | Must match the account taxonomy. |
@@ -182,10 +189,10 @@ For `accounts_master`, these columns are supported:
 | `account_opening_date_local` | Yes | Real-world opening date/time. |
 | `account_closing_date_local` | No | Real-world closing date/time. |
 | `tracking_start_date_local` | No | Opening balance snapshot timestamp. |
-| `opening_value_local` | Yes | Finite amount; liabilities are stored as negative magnitudes. Missing amounts are rejected. |
-| `record_status` | No | Supplied valid status is preserved; absent means `active`. |
+| `opening_value_local` | Yes | Finite decimal amount. Signed asset/investment values are retained; liabilities become negative magnitudes. Decimal strings retain precision. |
+| `record_status` | No | Supplied valid status is retained. Omitted/blank means `active` for new IDs and preserves the current status on replacement. |
 | `description` | No | Notes. |
 
-Audit fields are managed by the backend. `current_value_local` is computed and is never imported. Replacements overwrite the account fields, so include all values that must be retained, including fields immutable in the interactive edit form.
+IDs are validated before account writes. A single create cannot append an existing UUID; bulk import rejects ambiguous duplicate identities already present in the Sheet. Repeating an incoming UUID updates the same row and preserves the latest lifecycle state in that batch. Audit fields are managed by the backend. `current_value_local` is computed and is never imported. Replacements overwrite the account fields, so include all values that must be retained, including fields immutable in the interactive edit form.
 
 Results: `N created · M updated · K failed`. Each result contains `{ key, ok, action?, error? }`. Keep IDs stable for repeat imports; omitting IDs creates new records.

@@ -17,17 +17,11 @@ let _accDDCleanup  = null;   // cleanup fn for the currently open filter dropdow
 // Schema is loaded at boot into state.accountSchema — no hardcoded constants here.
 // All accessors assume schema is present; renderAccounts guards against absent schema.
 function _accountTypes()     { return state.accountSchema.types; }
-function _assetSubTypes()    { return state.accountSchema.asset_sub_types; }
-function _invSubTypes()      { return state.accountSchema.investment_sub_types; }
-function _liabSubTypes()     { return state.accountSchema.liability_sub_types; }
 function _loanSubSet()       { return new Set(state.accountSchema.loan_sub_types); }
 function _validTypes()       { return new Set(_accountTypes().map(t => t.value)); }
 
 function _subTypesForType(type) {
-  if (type === 'asset')      return _assetSubTypes();
-  if (type === 'investment') return _invSubTypes();
-  if (type === 'liability')  return _liabSubTypes();
-  return [];
+  return state.accountSchema.subtypes_by_type[type] ?? [];
 }
 
 function _isLiability(a)     { return a.type === 'liability'; }
@@ -38,7 +32,7 @@ const ALL_RECORD_STATUSES = ['active', 'inactive', 'deleted', 'locked'];
 
 // Import file types — [label, value]. Value is the backend file_type target table.
 const IMPORT_FILE_TYPES = [
-  ['Accounts (master)',   'accounts_master'],
+  ['Accounts (master)',   'account_master'],
   ['Deposit',             'account_deposit'],
   ['Credit card',         'account_liability_credit_card'],
   ['Mortgage',            'account_liability_mortgage'],
@@ -47,15 +41,10 @@ const IMPORT_FILE_TYPES = [
   ['Stock holdings',      'account_investment_stocks'],
 ];
 
-// Convert snake_case sub_type value to a readable label.
-function _subTypeLabel(v) {
-  if (v === undefined || v === null || v === '') return '—';
-  if (v === 'stocks_shares') return 'Stocks & Shares';
-  if (v === 'p2p_lending')   return 'P2P Lending';
-  if (v === 'pension_sipp')  return 'Pension / SIPP';
-  if (v === 'fixed_deposit') return 'Fixed Deposit';
-  if (v === 'isa')           return 'ISA';
-  return v.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+// Labels are owned by the configuration Sheet, including retired classifications.
+function _subTypeLabel(value) {
+  if (value === undefined || value === null || value === '') return '—';
+  return state.accountSchema.subtype_labels[value] ?? value;
 }
 
 function _fmtDateDisplay(raw) {
@@ -125,7 +114,7 @@ function _renderNetWorth() {
   const sym = getSymbol(state.quoteCurrency);
   const fmt = v => sym + Math.abs(v).toLocaleString('en-GB', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
 
-  const LIQUID_SUB_TYPES = new Set(['current', 'savings', 'cash']);
+  const liquidSubTypes = new Set(state.accountTypes.filter(type => type.detail_sheet === 'account_deposit').map(type => type.account_subtype_key));
 
   const totalAssets = state.accounts
     .filter(a => a.record_status !== 'deleted' && (a.type === 'asset' || a.type === 'investment'))
@@ -136,7 +125,7 @@ function _renderNetWorth() {
     .reduce((s, a) => { const v = toBase(parseFloat(a.current_value_local), a.account_currency_local, null); return Number.isFinite(v) ? s + Math.abs(v) : s; }, 0);
 
   const liquidCash = state.accounts
-    .filter(a => a.record_status !== 'deleted' && a.type === 'asset' && LIQUID_SUB_TYPES.has(a.sub_type))
+    .filter(a => a.record_status !== 'deleted' && a.type === 'asset' && liquidSubTypes.has(a.sub_type))
     .reduce((s, a) => { const v = toBase(parseFloat(a.current_value_local), a.account_currency_local, null); return Number.isFinite(v) ? s + v : s; }, 0);
 
   const netWorth = totalAssets - totalLiab;
@@ -206,7 +195,7 @@ function _renderAccFilterBar() {
 
   const rs = new Set(f.recordStatuses);
 
-  const typeLabel    = f.type === 'all' ? 'All types' : f.type.charAt(0).toUpperCase() + f.type.slice(1);
+  const typeLabel    = f.type === 'all' ? 'All types' : (state.accountSchema.type_labels[f.type] ?? f.type);
   const subTypeLabel = f.type === 'all' ? '— select type first —' : (f.subType === 'all' ? 'All sub-types' : _subTypeLabel(f.subType));
   const currLabel    = f.currency === 'all' ? 'All' : f.currency;
   const statusLabel  = rs.size === ALL_RECORD_STATUSES.length ? 'All' : rs.size === 0 ? 'None'
@@ -216,13 +205,13 @@ function _renderAccFilterBar() {
   const optStyle  = 'display:flex;align-items:center;gap:8px;font-size:var(--text-base);color:var(--ink);cursor:pointer';
 
   const radioRows = (name, opts, cur) => opts.map(([val, lbl]) =>
-    `<label style="${optStyle}"><input type="radio" name="${name}" value="${val}"${cur === val ? ' checked' : ''}> ${lbl}</label>`
+    `<label style="${optStyle}"><input type="radio" name="${name}" value="${esc(val)}"${cur === val ? ' checked' : ''}> ${esc(lbl)}</label>`
   ).join('');
 
   const dd = (triggerId, labelId, menuId, curLabel, items, disabled) => `
     <div style="flex:1;position:relative">
       <button type="button" id="${triggerId}"${disabled ? ' disabled' : ''} style="${trigStyle}${disabled ? ';opacity:0.5;cursor:not-allowed' : ''}">
-        <span id="${labelId}">${curLabel}</span>
+        <span id="${labelId}">${esc(curLabel)}</span>
         <span style="color:var(--muted);font-size:var(--text-2xs);margin-left:8px">▼</span>
       </button>
       <div id="${menuId}" style="display:none">${items}</div>
@@ -237,7 +226,7 @@ function _renderAccFilterBar() {
       <div class="filter-row">
         <label>Type</label>
         ${dd('accFTypeTrigger','accFTypeLabel','accFTypeMenu', typeLabel,
-          radioRows('accFTypeR', [['all','All types'],['asset','Asset'],['investment','Investment'],['liability','Liability']], f.type))}
+          radioRows('accFTypeR', [['all','All types'], ..._accountTypes().map(type => [type.value, type.label])], f.type))}
       </div>
       <div class="filter-row">
         <label>Sub-type</label>
@@ -573,17 +562,11 @@ function _groupHeader(label, total, sym, isLiab) {
   const sign = isLiab ? '−' : '';
   return `<tr class="acc-group-header">
     <td colspan="5" style="background:var(--canvas);padding:10px 12px 4px;font-size:11px;font-family:var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--muted);border-bottom:none">
-      ${label}
+      ${esc(label)}
       <span style="float:right;font-weight:600;color:${isLiab ? 'var(--ember)' : 'var(--teal)'}">${sign}${sym}${Math.abs(total).toLocaleString('en-GB', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}</span>
     </td>
   </tr>`;
 }
-
-const TABLE_GROUPS = [
-  { key: 'asset',      label: 'Assets',      isLiab: false },
-  { key: 'investment', label: 'Investments', isLiab: false },
-  { key: 'liability',  label: 'Liabilities', isLiab: true  },
-];
 
 function _renderTable(accounts) {
   if (accounts.length === 0) {
@@ -598,7 +581,8 @@ function _renderTable(accounts) {
     byGroup[a.type].push(a);
   });
 
-  const bodyRows = TABLE_GROUPS.flatMap(g => {
+  const groups = Object.keys(byGroup).map(key => ({ key, label: state.accountSchema.type_labels[key] ?? key, isLiab: _isLiability({ type: key }) }));
+  const bodyRows = groups.flatMap(g => {
     const accs = byGroup[g.key];
     if (accs === undefined || accs === null || accs.length === 0) return [];
     const countable = accs.filter(a => a.record_status !== 'deleted');
@@ -610,11 +594,11 @@ function _renderTable(accounts) {
 
   const hasActiveAccRow = state.accDeleteRow !== null;
 
-  const cardSections = TABLE_GROUPS.flatMap(g => {
+  const cardSections = groups.flatMap(g => {
     const accs = byGroup[g.key];
     if (accs === undefined || accs === null || accs.length === 0) return [];
     return [
-      `<div class="acc-card-group">${g.label}</div>`,
+      `<div class="acc-card-group">${esc(g.label)}</div>`,
       ...accs.map(a => {
         if (state.accDeleteRow === a._row) return '';
         const cardStyle = (a.record_status === 'deleted' || a.record_status === 'inactive') ? ' style="opacity:0.5"'
@@ -879,7 +863,7 @@ function _attachEvents() {
         const val = radio.value;
         if (_accDraft !== null) { _accDraft.type = val; _accDraft.subType = 'all'; }
         const lbl = el('accFTypeLabel');
-        if (lbl !== null) lbl.textContent = val === 'all' ? 'All types' : val.charAt(0).toUpperCase() + val.slice(1);
+        if (lbl !== null) lbl.textContent = val === 'all' ? 'All types' : (state.accountSchema.type_labels[val] ?? val);
         typeMenu.style.cssText = 'display:none';
         if (_accDDCleanup !== null) { _accDDCleanup(); _accDDCleanup = null; }
 
@@ -895,7 +879,7 @@ function _attachEvents() {
           if (subTrig !== null) { subTrig.disabled = false; subTrig.style.opacity = ''; subTrig.style.cursor = ''; }
           if (subLbl !== null)  subLbl.textContent = 'All sub-types';
           if (subMenu !== null) subMenu.innerHTML = [['all','All sub-types'], ...subs.map(s => [s, _subTypeLabel(s)])].map(([v, l]) =>
-            `<label style="${OPT_STYLE}"><input type="radio" name="accFSubR" value="${v}"${v === 'all' ? ' checked' : ''}> ${esc(l)}</label>`
+            `<label style="${OPT_STYLE}"><input type="radio" name="accFSubR" value="${esc(v)}"${v === 'all' ? ' checked' : ''}> ${esc(l)}</label>`
           ).join('');
         }
       });
@@ -996,8 +980,11 @@ async function _saveNew() {
 
   const ovStr = _v('accNewOpeningValue').trim();
   if (ovStr === '') { errEl.textContent = 'Opening value is required.'; return; }
-  const rawOV = parseFloat(ovStr);
-  if (Number.isFinite(rawOV) === false) { errEl.textContent = 'Opening value must be a finite number.'; return; }
+  const decimalPattern = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
+  if (decimalPattern.test(ovStr) === false || Number.isFinite(Number(ovStr)) === false) {
+    errEl.textContent = 'Opening value must be a finite number.';
+    return;
+  }
 
   // Capture browser timezone automatically — not a user input field.
   const local_timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -1014,7 +1001,8 @@ async function _saveNew() {
     account_opening_date_local,
     tracking_start_date_local: _v('accNewTrackingStart').trim().replace('T', ' '),
     description,
-    opening_value_local: rawOV,
+    // Keep the decimal text intact for the backend and ledger minor-unit conversion.
+    opening_value_local: ovStr,
   };
 
   const btn = el('accSaveNew');

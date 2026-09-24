@@ -12,10 +12,14 @@ import transforms.transactions as transactions
 from transforms.dates import local_datetime
 from transforms.financial import to_minor_units
 
+_PARENT_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+_CHILD_ID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+_SECOND_ID = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+
 
 def transaction_row(**changes: Any) -> dict[str, Any]:
     return {
-        "id": "parent",
+        "id": _PARENT_ID,
         "tx_date_local": "2026-09-23 10:20:30",
         "tx_timezone_local": "Europe/London",
         "parent_tx_id": "",
@@ -79,7 +83,7 @@ def test_invalid_coordinates_fail_before_sql(latitude: str, longitude: str) -> N
 
 def test_self_parent_is_rejected() -> None:
     with pytest.raises(ValueError, match="self_parent_reference"):
-        transactions.transform(transaction_row(parent_tx_id="parent"))
+        transactions.transform(transaction_row(parent_tx_id=_PARENT_ID))
 
 
 @pytest.mark.parametrize(
@@ -165,36 +169,39 @@ def test_beneficiaries_preserve_exact_total_at_database_precision() -> None:
 
 def test_child_is_ordered_after_parent_without_losing_physical_rows() -> None:
     parent = transaction_row(_sheet_row_num=19)
-    child = transaction_row(id="child", parent_tx_id="parent", account_id="22222222-2222-4222-8222-222222222222", tx_type="money-in", _sheet_row_num=3)
+    child = transaction_row(id=_CHILD_ID, parent_tx_id=_PARENT_ID, account_id="22222222-2222-4222-8222-222222222222", tx_type="money-in", _sheet_row_num=3)
     assert database_transactions._group_rows([child, parent]) == [[(19, parent), (3, child)]]
 
 
 def test_source_cycles_fail_before_database_writes() -> None:
     conn = Mock()
     with pytest.raises(ValueError, match="cyclic_parent_reference"):
-        database_transactions.upsert_transactions(conn, Mock(), [transaction_row(parent_tx_id="child"), transaction_row(id="child", parent_tx_id="parent")], {})
+        database_transactions.upsert_transactions(conn, Mock(), [transaction_row(parent_tx_id=_CHILD_ID), transaction_row(id=_CHILD_ID, parent_tx_id=_PARENT_ID)], {})
     conn.cursor.assert_not_called()
 
 
 def test_child_failure_rolls_back_parent_and_marks_both_rows_failed(monkeypatch: pytest.MonkeyPatch) -> None:
     conn = Mock()
     monkeypatch.setattr(database_transactions, "load_decimal_places", lambda _conn: {"GBP": 2, "XAU": 9})
+    monkeypatch.setattr(database_transactions, "_load_stored_parent_links", lambda _conn: {})
+    monkeypatch.setattr(database_transactions, "_lock_group", lambda _conn, rows, **_kwargs: [row["id"] for row in rows])
+    monkeypatch.setattr(database_transactions, "_load_locked_accounts", lambda *_args: {})
     monkeypatch.setattr(database_transactions, "retire_unused_references", lambda _conn: None)
     visited = []
 
     def upsert(_conn: Any, typed: dict[str, Any], _accounts: dict[str, Any], _decimals: dict[str, int]) -> tuple[str, datetime]:
         visited.append(typed["transaction_id"])
-        if typed["transaction_id"] == "child":
+        if typed["transaction_id"] == _CHILD_ID:
             raise ValueError("transactions: currency_rate_not_found")
         return "parent-id", datetime.now(timezone.utc)
 
     monkeypatch.setattr(database_transactions, "_upsert_row", upsert)
     flushed = Mock()
     monkeypatch.setattr(database_transactions.sheets_transactions, "flush", flushed)
-    child = transaction_row(id="child", parent_tx_id="parent", tx_type="money-in", account_id="22222222-2222-4222-8222-222222222222")
+    child = transaction_row(id=_CHILD_ID, parent_tx_id=_PARENT_ID, tx_type="money-in", account_id="22222222-2222-4222-8222-222222222222")
     failures = database_transactions.upsert_transactions(conn, Mock(), [child, transaction_row()], {})
     assert failures == 2
-    assert visited == ["parent", "child"]
+    assert visited == [_PARENT_ID, _CHILD_ID]
     conn.commit.assert_not_called()
     conn.rollback.assert_called_once()
     assert len(flushed.call_args.args[2]) == 2
@@ -203,12 +210,15 @@ def test_child_failure_rolls_back_parent_and_marks_both_rows_failed(monkeypatch:
 def test_unexpected_database_error_still_flushes_completed_results(monkeypatch: pytest.MonkeyPatch) -> None:
     conn = Mock()
     monkeypatch.setattr(database_transactions, "load_decimal_places", lambda _conn: {})
+    monkeypatch.setattr(database_transactions, "_load_stored_parent_links", lambda _conn: {})
+    monkeypatch.setattr(database_transactions, "_lock_group", lambda _conn, rows, **_kwargs: [row["id"] for row in rows])
+    monkeypatch.setattr(database_transactions, "_load_locked_accounts", lambda *_args: {})
     monkeypatch.setattr(database_transactions, "_validate_stored_relationships", lambda *_args: None)
     monkeypatch.setattr(database_transactions, "_upsert_row", Mock(side_effect=[("id", datetime.now(timezone.utc)), RuntimeError("connection lost")]))
     flushed = Mock()
     monkeypatch.setattr(database_transactions.sheets_transactions, "flush", flushed)
     with pytest.raises(RuntimeError, match="connection lost"):
-        database_transactions.upsert_transactions(conn, Mock(), [transaction_row(), transaction_row(id="second")], {})
+        database_transactions.upsert_transactions(conn, Mock(), [transaction_row(), transaction_row(id=_SECOND_ID)], {})
     conn.commit.assert_called_once()
     conn.rollback.assert_called_once()
     assert len(flushed.call_args.args[2]) == 1
@@ -223,6 +233,55 @@ def test_account_reference_uuid_is_canonicalized() -> None:
     uppercase = "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA"
     typed = transactions.transform(transaction_row(account_id=uppercase))
     assert typed["account_id_sheet"] == uppercase.lower()
+
+
+def test_source_and_parent_uuid_casing_is_canonicalized_without_changing_identity() -> None:
+    typed = transactions.transform(transaction_row(id=f" {_CHILD_ID.upper()} ", parent_tx_id=f" {_PARENT_ID.upper()} "))
+    assert typed["transaction_id"] == _CHILD_ID
+    assert typed["parent_tx_id"] == _PARENT_ID
+
+
+@pytest.mark.parametrize("field, code", [("id", "invalid_transaction_id"), ("parent_tx_id", "invalid_parent_tx_id")])
+@pytest.mark.parametrize("value", ["not-a-uuid", 123, False])
+def test_malformed_transaction_identity_is_a_validation_error(field: str, code: str, value: Any) -> None:
+    with pytest.raises(ValueError, match=code):
+        transactions.transform(transaction_row(**{field: value}))
+
+
+def test_self_parent_is_rejected_across_uuid_casing() -> None:
+    with pytest.raises(ValueError, match="self_parent_reference"):
+        transactions.transform(transaction_row(parent_tx_id=_PARENT_ID.upper()))
+
+
+@pytest.mark.parametrize("timezone_value", [False, 0, "Unknown/Timezone"])
+def test_nonblank_invalid_timezone_never_defaults_to_london(timezone_value: Any) -> None:
+    with pytest.raises(ValueError, match="invalid_timezone"):
+        transactions.transform(transaction_row(tx_timezone_local=timezone_value))
+
+
+def test_transform_preserves_decimal_precision_without_binary_float_conversion() -> None:
+    typed = transactions.transform(transaction_row(tx_amount_local="1234567890.123456789", user_location_latitude="12.123456789", user_location_longitude="-45.123456789"))
+    assert typed["tx_amount_local"] == Decimal("1234567890.123456789")
+    assert typed["user_location_latitude"] == Decimal("12.123456789")
+    assert typed["user_location_longitude"] == Decimal("-45.123456789")
+
+
+@pytest.mark.parametrize("status", ["active", "inactive", "deleted", "locked"])
+def test_all_source_lifecycle_states_are_preserved(status: str) -> None:
+    row = transaction_row(record_status=status, created_at="source-created-at", updated_at="source-updated-at", sync_date="source-sync-date", sync_notes="source-note")
+    typed = transactions.transform(row)
+    assert typed["record_status"] == status
+    assert not {"created_at", "updated_at", "sync_date", "sync_notes"}.intersection(typed)
+    assert row["record_status"] == status
+    assert row["created_at"] == "source-created-at"
+
+
+def test_local_timestamp_retains_microseconds_and_cross_year_utc_date() -> None:
+    typed = transactions.transform(transaction_row(tx_date_local="2027-01-01T00:15:00.123456", tx_timezone_local="Asia/Kathmandu"))
+    assert typed["tx_date_time_base"] == datetime(2026, 12, 31, 18, 30, 0, 123456, tzinfo=timezone.utc)
+    local_time, utc_day, local_day = database_transactions._extract_datetime_fields(typed["tx_date_time_base"], typed["tx_timezone_local"])
+    assert local_time == datetime(2027, 1, 1, 0, 15, 0, 123456)
+    assert (utc_day, local_day) == ("THURSDAY", "FRIDAY")
 
 
 def test_invalid_account_reference_is_a_validation_error() -> None:

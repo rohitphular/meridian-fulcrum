@@ -4,13 +4,13 @@ How `account.current_value_local` is derived and how it changes when a transacti
 
 ## Computation model
 
-Account balances are **computed at read time**, not maintained incrementally. The sheet stores only `opening_value_local` for each account. When `listAccounts` is called, `_buildAccountNetMap` scans the transactions sheet and returns a `{ accountId → net }` map; the response value `current_value_local` is then assembled as:
+Account balances are **computed at read time**, not maintained incrementally. The sheet stores only `opening_value_local` for each account. When `listAccounts` is called, `_buildAccountNetMap` scans the `transaction_master` sheet and returns a `{ accountId → net }` map; the response value `current_value_local` is then assembled as:
 
 ```
 current_value_local = opening_value_local + net
 ```
 
-`current_value_local` is never written back to the sheet after initial account creation. No transaction create/update/delete touches the accounts sheet.
+`current_value_local` is never written back to the sheet after initial account creation. No transaction create/update/delete touches the `account_master` sheet.
 
 There is no `adjustAccountBalance` function — it was removed in Round 5. The `workflow-engine.gs` file that previously hosted it is now an empty comment stub.
 
@@ -40,7 +40,7 @@ Each transaction row touches exactly **one** account via `account_id`. A transfe
 
 ## Effect of transaction operations on computed balance
 
-Because `current_value_local` is derived, any change to the transactions sheet is automatically reflected the next time `listAccounts` is called. The logical effects are:
+Because `current_value_local` is derived, any change to the `transaction_master` sheet is automatically reflected the next time `listAccounts` is called. The logical effects are:
 
 ### Create
 
@@ -76,11 +76,11 @@ For transfers, apply the same reversal logic independently to both legs before c
 
 ### Delete (soft)
 
-Setting `record_status = deleted` causes `_buildAccountNetMap` to skip the row (the map excludes deleted rows). The row's contribution is removed from all future `current_value_local` computations without any write to the accounts sheet.
+Setting `record_status = deleted` causes `_buildAccountNetMap` to skip the row (the map excludes deleted rows). The row's contribution is removed from all future `current_value_local` computations without any write to the `account_master` sheet.
 
 ## Idempotency
 
-The computed model is naturally idempotent for reads — `listAccounts` always derives the correct balance from the current state of the transactions sheet. Mutations to transactions must still avoid double-submission; writing the same transaction row twice would cause its amount to be counted twice in `net`.
+The computed model is naturally idempotent for reads — `listAccounts` always derives the correct balance from the current state of the `transaction_master` sheet. Mutations to transactions must still avoid double-submission; writing the same transaction row twice would cause its amount to be counted twice in `net`.
 
 ## Concurrency
 
@@ -109,7 +109,7 @@ Effective exchange rate: `52500 / 500 = 105 INR per GBP`. Recoverable at any tim
 
 ## Worked example — edit of a money-out row
 
-Before edit, transactions sheet has: `tx_type = 'money-out'`, `account_id = gbp_current`, `tx_amount_local = 150`.
+Before edit, `transaction_master` sheet has: `tx_type = 'money-out'`, `account_id = gbp_current`, `tx_amount_local = 150`.
 
 `listAccounts` returns: `gbp_current.current_value_local = opening − 150`.
 

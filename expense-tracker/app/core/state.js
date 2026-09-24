@@ -1,4 +1,18 @@
 export const state = {
+  accountTypes: [],
+  accountTypeSchema: null,
+  accountTypesOpen: false,
+  accountTypeFilterOpen: false,
+  accountTypeFilterType: 'all',
+  accountTypeFilterDraft: null,
+  accountTypePanel: null,
+  accountTypeDraft: {},
+  accountTypeViewId: null,
+  accountTypeDeleteId: null,
+  accountTypeSearch: '',
+  accountTypeStatus: 'all',
+  accountTypeImport: null,
+  accountTypeBusy: false,
   transactions:  [],
   categories:    [],
   accounts:      [],
@@ -48,9 +62,10 @@ export const state = {
   rateDeleteCurrency: null,
   rateDeleteBlocked:  null,   // { error, referenced_count } when delete is refused — paired with rateDeleteCurrency
 
-  accountSchema:      null,  // { types, asset_sub_types, investment_sub_types, liability_sub_types, loan_sub_types }
+  accountSchema:      null,  // Sheet-derived types, subtypes_by_type, labels and loan_sub_types
   transactionSchema:  null,  // { types, categorisation_fields, transfer_fields }
   categorySchema:     null,  // { types, account_types }
+  subscriptionSchema: null, // { frequencies, tx_types, record_statuses, default_timezone }
 
   accAddOpen:       false,
   accImportOpen:    false,
@@ -69,6 +84,9 @@ export const state = {
   },
 
   catImportOpen:  false,
+  catImportPreview: null,
+  catImportReport: null,
+  catImportBusy: false,
 
   txAddOpen:      false,
   txImportOpen:   false,

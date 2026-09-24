@@ -1,7 +1,27 @@
 """Current GAS sheet contract; regression-tested against its schema registry."""
 
+from core.account_detail_contracts import CONTRACTS
+
+DETAIL_HEADERS = {name: contract.headers for name, contract in CONTRACTS.items()}
+
 HEADERS = {
-    "categories": (
+    "account_types": (
+        "id",
+        "account_type_key",
+        "account_type_label",
+        "account_subtype_key",
+        "account_subtype_label",
+        "description",
+        "is_loan",
+        "detail_sheet",
+        "record_status",
+        "sync_status",
+        "sync_date",
+        "sync_notes",
+        "created_at",
+        "updated_at",
+    ),
+    "category_master": (
         "id",
         "tx_type_key",
         "tx_type_label",
@@ -24,7 +44,7 @@ HEADERS = {
         "created_at",
         "updated_at",
     ),
-    "accounts": (
+    "account_master": (
         "id",
         "account_name",
         "legal_entity_name",
@@ -45,7 +65,7 @@ HEADERS = {
         "updated_at",
         "tracking_start_date_local",
     ),
-    "transactions": (
+    "transaction_master": (
         "id",
         "tx_date_local",
         "tx_timezone_local",
@@ -71,7 +91,7 @@ HEADERS = {
         "created_at",
         "updated_at",
     ),
-    "subscriptions": (
+    "subscription_master": (
         "id",
         "subscription_name",
         "counterparty_name",
@@ -94,4 +114,5 @@ HEADERS = {
         "subscription_end_date_local",
         "subscription_timezone_local",
     ),
+    **DETAIL_HEADERS,
 }

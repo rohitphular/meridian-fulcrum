@@ -17,7 +17,7 @@ categorised flows.
 
 **Dual capture model:** You can add transactions directly from the app (preferred
 for mobile use), or type rows straight into the Google Sheet — both paths land in
-the same `transactions` tab and are equally valid. The sheet is the source of
+the same `transaction_master` tab and are equally valid. The sheet is the source of
 truth; the app is both a capture tool and an analysis platform.
 
 ---
@@ -32,8 +32,8 @@ truth; the app is both a capture tool and an analysis platform.
 | Rates | `rates` sheet tab, editable from app | Standard Forge rates handling |
 | Charts | Chart.js 4.x via CDN | Lightweight, no build step |
 | Write capability | Yes — add transactions from the app | Capture happens where the user is |
-| Categories | 3-level controlled hierarchy in a `categories` tab | Dependent dropdowns in Sheet; cascade in app form |
-| Accounts | Named accounts in an `accounts` sheet tab | Dropdown in the add-transaction form |
+| Categories | 3-level controlled hierarchy in a `category_master` tab | Dependent dropdowns in Sheet; cascade in app form |
+| Accounts | Named accounts in an `account_master` sheet tab | Dropdown in the add-transaction form |
 | Base currency | GBP default, switchable in the header | Forge convention |
 | Pagination | Client-side; 50 rows per page | Transactions can grow large |
 | Export | CSV + JSON of the filtered view | For future database import |
@@ -67,7 +67,7 @@ forge/expense-tracker/
 
 ## 4. Sheet tabs
 
-### 4.1 `transactions`
+### 4.1 `transaction_master`
 
 Row 1 is the header (map by name; tolerate extra/blank columns):
 
@@ -82,9 +82,9 @@ id | date | transaction_type | amount | currency | account | major_category | mi
 | `transaction_type` | enum | yes | `money-out` | `money-in` / `money-out` / `money-transfer`. Carries direction. |
 | `amount` | number | yes | `42.50` | Always **positive**. |
 | `currency` | text | yes | `GBP` | ISO code. Must exist in the rates tab (warn if missing). |
-| `account` | text | yes | `HDFC Savings` | Must match a name in the `accounts` tab. |
-| `major_category` | text | yes | `Food` | Controlled by `categories` tab (depends on transaction_type). |
-| `minor_category` | text | yes | `Groceries` | Controlled by `categories` tab (depends on major_category). |
+| `account` | text | yes | `HDFC Savings` | Must match a name in the `account_master` tab. |
+| `major_category` | text | yes | `Food` | Controlled by `category_master` tab (depends on transaction_type). |
+| `minor_category` | text | yes | `Groceries` | Controlled by `category_master` tab (depends on major_category). |
 | `counterparty` | text | no | `Tesco` | Payee / payer. Use the lender name for debt-related rows. |
 | `notes` | text | no | `weekly shop` | Free text. |
 | `tags` | text | no | `reimbursable;work` | Semicolon-separated. |
@@ -107,7 +107,7 @@ shown separately as account flows. The app enforces this by checking
 - If a currency is missing from the `rates` tab: show a warning, treat the rate
   as 1:1, never drop the row.
 
-### 4.2 `categories`
+### 4.2 `category_master`
 
 One row per leaf node:
 
@@ -162,7 +162,7 @@ app's add-transaction form (fetched via API).
 > payment`. Pick one convention and stick to it — mixing the two causes double-
 > counting.
 
-### 4.3 `accounts`
+### 4.3 `account_master`
 
 ```
 name | currency | type | notes
@@ -175,7 +175,7 @@ name | currency | type | notes
 | `type` | text | `savings` | `savings` / `current` / `credit` / `cash` / `investment` / other. |
 | `notes` | text | `primary India account` | Optional. |
 
-The `accounts` tab is managed directly in the Sheet. The app fetches it to
+The `account_master` tab is managed directly in the Sheet. The app fetches it to
 populate the account dropdown in the add-transaction form and the account filter.
 
 ### 4.4 `rates`
@@ -230,7 +230,7 @@ PIN attempts locks the IP; unlock by setting `is_locked` to FALSE in the sheet.
 
 | `action` | Payload | Effect |
 |---|---|---|
-| `create_transaction` | Transaction fields | Appends a row to `transactions`; generates `id` as `YYYY-MM-DD-NNN` (sequential per date) |
+| `create_transaction` | Transaction fields | Appends a row to `transaction_master`; generates `id` as `YYYY-MM-DD-NNN` (sequential per date) |
 | `upsert_rate` | `{ currency, rate, symbol }` | Updates or inserts a row in `rates` |
 
 > `create_transaction` is the only write action in v1. Edit and delete of
@@ -243,8 +243,8 @@ crashes on a bad response.
 
 ### `onEdit` cascade (for direct Sheet editing)
 
-When a user edits the `transaction_type` cell in the `transactions` tab, the
-`major_category` dropdown is rebuilt from the matching rows in `categories`.
+When a user edits the `transaction_type` cell in the `transaction_master` tab, the
+`major_category` dropdown is rebuilt from the matching rows in `category_master`.
 When `major_category` changes, `minor_category` is rebuilt. This keeps direct
 Sheet entry consistent with the controlled hierarchy.
 
@@ -258,7 +258,7 @@ Five tabs:
 |---|---|
 | **Insight** | Summary cards + charts. Date-range and base-currency controls pinned to the header. |
 | **Transactions** | Add-transaction form + filterable/paginated transaction table. |
-| **Accounts** | Read-only list of accounts from the `accounts` tab (name, currency, type). |
+| **Accounts** | Read-only list of accounts from the `account_master` tab (name, currency, type). |
 | **Categories** | Read-only tree view of the categories hierarchy (for reference). |
 | **Rates** | Exchange rate table, editable inline. Quote-currency picker. |
 
@@ -332,7 +332,7 @@ Fields:
 |---|---|---|---|
 | Date | date picker | yes | Defaults to today |
 | Transaction type | select (money-in / money-out / money-transfer) | yes | Drives category cascade |
-| Account | select (from `accounts` tab) | yes | — |
+| Account | select (from `account_master` tab) | yes | — |
 | Amount | number | yes | Positive |
 | Currency | select (from `rates` tab) | yes | Defaults to selected account's currency |
 | Major category | select | yes | Options filtered by transaction_type |
@@ -476,13 +476,13 @@ wrapped in `try/finally` on every async call.
 |---|---|
 | `doGet(e)` | Routes GET actions: verify, list_transactions, list_categories, list_accounts, list_rates |
 | `doPost(e)` | Routes POST actions: create_transaction, upsert_rate |
-| `listTransactions()` | Reads `transactions` tab, maps by header, returns all rows |
+| `listTransactions()` | Reads `transaction_master` tab, maps by header, returns all rows |
 | `createTransaction(body)` | Validates, generates `id`, appends row |
-| `listCategories()` | Reads `categories` tab, returns all rows |
-| `listAccounts()` | Reads `accounts` tab, returns all rows |
+| `listCategories()` | Reads `category_master` tab, returns all rows |
+| `listAccounts()` | Reads `account_master` tab, returns all rows |
 | `listRates()` | Reads `rates` tab; seeds defaults on first call |
 | `upsertRate(body)` | Updates or inserts a rate row |
-| `onEdit(e)` | Cascade: rebuilds major/minor dropdowns in `transactions` when transaction_type or major_category changes |
+| `onEdit(e)` | Cascade: rebuilds major/minor dropdowns in `transaction_master` when transaction_type or major_category changes |
 | `getOrCreateSheet(name, columns)` | Gets the named tab or creates it with the given headers; migrates missing columns |
 | `checkPin(pin)` | PIN validation against Script Property |
 | `verifyTotp(token)` | RFC 6238 TOTP, ±1 window |
@@ -510,9 +510,9 @@ to find the highest NNN for that date and increments.
    Anyone → Deploy → copy the `/exec` URL.
 5. **Configure the app:** copy `config.example.js` → `config.js`; paste the URL.
 6. **Seed the categories:** paste the seed tree rows (from §4.2 above) into the
-   `categories` tab; or run the provided `seedCategories()` helper function in
+   `category_master` tab; or run the provided `seedCategories()` helper function in
    Apps Script once.
-7. **Add your accounts:** add rows to the `accounts` tab manually before first use.
+7. **Add your accounts:** add rows to the `account_master` tab manually before first use.
 8. **Open the app locally** and verify auth works.
 9. **Subsequent backend deployments:** Deploy → Manage deployments → Edit → New
    version → Deploy. URL unchanged.

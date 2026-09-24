@@ -251,22 +251,20 @@ function _isCatSubEligible(tx) {
   return cat.is_subscription_eligible === true;
 }
 
-function _normTags(str) {
-  return new Set(
-    String(str !== undefined && str !== null ? str : '').split(';').map(t => t.trim().toLowerCase()).filter(v => v !== '')
-  );
-}
-
 function _isAlreadySubscribed(tx) {
   const normCp = (tx.counterparty_name !== undefined && tx.counterparty_name !== null ? tx.counterparty_name : '').trim().toLowerCase();
   if (normCp === '') return false;
-  const txTags = _normTags(tx.tx_tags);
   return state.subscriptions.some(s => {
+    if (s.record_status === 'deleted') return false;
     const sCp = (s.counterparty_name !== undefined && s.counterparty_name !== null ? s.counterparty_name : '').trim().toLowerCase();
     if (sCp !== normCp) return false;
-    const sTags = _normTags(s.tags);
-    // Match if both have no tags, OR at least one tag overlaps
-    return (txTags.size === 0 && sTags.size === 0) || [...txTags].some(t => sTags.has(t));
+    if (String(s.source_account ?? '').toLowerCase() !== String(tx.account_id ?? '').toLowerCase()) return false;
+    // Subscriptions have no tags or transaction FK. Use the shared business
+    // fields as a suggestion heuristic; optional classification is a wildcard.
+    return ['tx_type', 'major_category', 'minor_category'].every(key => {
+      const selected = String(s[key] ?? '').trim();
+      return selected === '' || selected === String(tx[key] ?? '').trim();
+    });
   });
 }
 
@@ -1587,9 +1585,7 @@ function _renderSuggestionsPanel() {
 
 // ── Filter bar ────────────────────────────────────────────────────────────────
 
-const _ACC_TYPE_LABEL = { asset: 'Asset', investment: 'Investment', liability: 'Liability' };
-
-function _fmtAccType(t) { return (_ACC_TYPE_LABEL[t] !== undefined && _ACC_TYPE_LABEL[t] !== null) ? _ACC_TYPE_LABEL[t] : t; }
+function _fmtAccType(type) { return state.accountSchema?.type_labels?.[type] ?? type; }
 
 function _accountsForTypeSel() {
   if (_accTypeSel.size === 0) return state.accounts;
@@ -1879,7 +1875,7 @@ function _renderTxImportPanel() {
       <div class="field form-grid-span-2">
         <label for="txImportFile">CSV file</label>
         <input type="file" id="txImportFile" accept=".csv">
-        <div class="field-hint">Columns: id (optional), tx_date_local, tx_timezone_local, tx_type, source_account, target_account, source_amount_local, target_amount_local, major_category, minor_category, description, counterparty_name, tx_tags, beneficiaries, user_location_area, user_location_city, user_location_country, user_location_latitude, user_location_longitude</div>
+        <div class="field-hint">Columns: id (optional), tx_date_local, tx_timezone_local, tx_type, source_account, target_account, source_amount_local, target_amount_local, major_category, minor_category, description, counterparty_name, tx_tags, beneficiaries, user_location_area, user_location_city, user_location_country, user_location_latitude, user_location_longitude, record_status (optional; leave blank to preserve existing status)</div>
       </div>
     </div>
     <div id="txImportStatus">${_txImportResult !== null ? _txImportResult : ''}</div>
@@ -1913,6 +1909,26 @@ function _parseTxCsv(text) {
     if (row.source_amount_local === '' && row.target_amount_local === '') rowErrors.push('missing amount (source_amount_local or target_amount_local)');
     if (row.major_category === '')  rowErrors.push('missing major_category');
     if (row.minor_category === '')  rowErrors.push('missing minor_category');
+    const numericValues = {};
+    for (const field of ['source_amount_local', 'target_amount_local', 'user_location_latitude', 'user_location_longitude']) {
+      const value = row[field];
+      numericValues[field] = '';
+      if (value === undefined || value === '') continue;
+      if (!/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(value) || !Number.isFinite(Number(value))) {
+        rowErrors.push(`invalid ${field}: expected a finite decimal number without grouping separators`);
+        continue;
+      }
+      numericValues[field] = Number(value);
+    }
+    const hasRecordStatus = row.record_status !== undefined && row.record_status !== '';
+    if (hasRecordStatus) {
+      const recordStatuses = state.transactionSchema?.record_statuses;
+      if (!Array.isArray(recordStatuses) || recordStatuses.length === 0) {
+        rowErrors.push('record_status cannot be validated: transaction status schema is unavailable; reload after updating the backend');
+      } else if (!recordStatuses.includes(row.record_status)) {
+        rowErrors.push(`invalid record_status: "${row.record_status}" (expected ${recordStatuses.join(', ')})`);
+      }
+    }
 
     let sourceId = '';
     let targetId = '';
@@ -1931,6 +1947,7 @@ function _parseTxCsv(text) {
 
     transactions.push({
       id:                      row.id,
+      ...(hasRecordStatus ? { record_status: row.record_status } : {}),
       tx_date_local:            row.tx_date_local.replace('T', ' '),
       tx_timezone_local:        (row.tx_timezone_local        !== undefined && row.tx_timezone_local        !== null && row.tx_timezone_local        !== '') ? row.tx_timezone_local        : '',
       tx_type:                  row.tx_type,
@@ -1939,10 +1956,10 @@ function _parseTxCsv(text) {
       user_location_area:       (row.user_location_area       !== undefined && row.user_location_area       !== null && row.user_location_area       !== '') ? row.user_location_area       : '',
       user_location_city:       (row.user_location_city       !== undefined && row.user_location_city       !== null && row.user_location_city       !== '') ? row.user_location_city       : '',
       user_location_country:    (row.user_location_country    !== undefined && row.user_location_country    !== null && row.user_location_country    !== '') ? row.user_location_country    : '',
-      user_location_latitude:   (row.user_location_latitude   !== undefined && row.user_location_latitude   !== null && row.user_location_latitude   !== '') ? parseFloat(row.user_location_latitude)  : '',
-      user_location_longitude:  (row.user_location_longitude  !== undefined && row.user_location_longitude  !== null && row.user_location_longitude  !== '') ? parseFloat(row.user_location_longitude) : '',
-      source_amount_local:      (row.source_amount_local !== undefined && row.source_amount_local !== null && row.source_amount_local !== '') ? parseFloat(row.source_amount_local) : '',
-      target_amount_local:      (row.target_amount_local !== undefined && row.target_amount_local !== null && row.target_amount_local !== '') ? parseFloat(row.target_amount_local) : '',
+      user_location_latitude:   numericValues.user_location_latitude,
+      user_location_longitude:  numericValues.user_location_longitude,
+      source_amount_local:      numericValues.source_amount_local,
+      target_amount_local:      numericValues.target_amount_local,
       major_category:           row.major_category,
       minor_category:           row.minor_category,
       description:              (row.description       !== undefined && row.description       !== null && row.description       !== '') ? row.description       : '',

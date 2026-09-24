@@ -11,9 +11,11 @@ Part of the **[Fulcrum Forge](../)** family of static web apps backed by Google 
 - **Multi-currency** — per-account currency with FX rates against a configurable base currency (default GBP); per-transaction `fx_rate` override for cross-currency transfers
 - **Classify** — two-level category taxonomy (`major → minor`) scoped per transaction type
 - **Analyse** — insight section with income/expense/net/savings-rate cards, monthly trend, drillable category breakdown, per-account spend
-- **Manage accounts** — 13 account types across Asset and Liability groups with type-specific fields (loan terms, credit limit, overdraft, investment platform, …)
+- **Manage accounts** — account choices, loan classification and detail eligibility come from the existing `account_types` Sheet catalog
 
 Full capability list and out-of-scope items: **[_docs/overview.md](_docs/overview.md)**.
+
+The final **Configure** tab contains [Account Types](_docs/account-types.md): maintenance of the existing 22 classifications, 14-column CSV import/export and Sheet-to-database synchronization. The Sheet is authoritative; application code contains no default catalog seed, and new classifications cannot be added.
 
 ## Architecture
 
@@ -26,7 +28,7 @@ Browser  ──HTTPS──>  Google Apps Script Web App  ──Sheets API──>
 
 - **Frontend**: vanilla JS ES modules; loads `index.html` and runs as-is — no bundler.
 - **Backend**: Google Apps Script V8 runtime; ~22 `.gs` modules organised by domain (accounts, transactions, categories, rates, advisor).
-- **Store**: a single Google Sheet with one tab per entity (`transactions`, `accounts`, `categories`, `rates`, `_audit`).
+- **Store**: a single Google Sheet with one tab per entity (`transaction_master`, `account_master`, `category_master`, `subscription_master`, `account_types`, `rates`, `audit_access`). Master CSV and PostgreSQL names match their Sheet tabs; existing installations use the [master-tab migration](_docs/master-sheet-names.md).
 - **Auth**: PIN + optional TOTP gate with IP-based rate limiting.
 
 ## Repository structure

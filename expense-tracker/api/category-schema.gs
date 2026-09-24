@@ -2,7 +2,7 @@
 // FULCRUM FORGE — Category Schema: field registry
 // Single source of truth for column positions, UI labels, types, and groups.
 // No magic column numbers anywhere else in the codebase.
-// Depends on: VALID_ACCOUNT_TYPES (account-schema.gs)
+// Account-type hint options come from the account_types Sheet.
 // =============================================================================
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -306,6 +306,7 @@ function getCategorySchemaForClient() {
       };
     }),
     record_statuses: CATEGORY_SCHEMA.record_status.enum_values,
+    account_type_hints: getCategoryAccountTypeHints(),
   };
 }
 

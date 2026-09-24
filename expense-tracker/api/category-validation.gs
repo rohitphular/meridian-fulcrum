@@ -9,6 +9,33 @@ const VALID_CATEGORY_TX_TYPES = CATEGORY_SCHEMA.tx_type_key.enum_values;
 // Derived from CATEGORY_SCHEMA to avoid a cross-file dependency on VALID_RECORD_STATUSES.
 var VALID_CATEGORY_RECORD_STATUSES = CATEGORY_SCHEMA.record_status.enum_values;
 
+// CSV upserts preserve lifecycle state; interactive create intentionally starts active.
+function validateCategoryImport(body, context) {
+  if (body === null || typeof body !== 'object' || Array.isArray(body))
+    return { ok: false, error: 'invalid_category_row', field: 'row' };
+  const id = strField(body.id);
+  if (id !== '' && (typeof body.id !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)))
+    return { ok: false, error: 'invalid_id', field: 'id', invalid_values: [id] };
+  if (!VALID_CATEGORY_TX_TYPES.includes(strField(body.tx_type_key)))
+    return { ok: false, error: 'invalid_transaction_type', field: 'tx_type_key', invalid_values: [strField(body.tx_type_key)] };
+  for (const field of ['major_category_label', 'minor_category_label']) {
+    if (typeof body[field] !== 'string' || strField(body[field]) === '')
+      return { ok: false, error: 'missing_' + field.replace('_label', ''), field: field };
+    if (slugify(body[field]) === '')
+      return { ok: false, error: 'invalid_category_label', field: field, invalid_values: [body[field]] };
+  }
+  const status = strField(body.record_status);
+  if (status !== '' && !VALID_CATEGORY_RECORD_STATUSES.includes(status))
+    return { ok: false, error: 'invalid_record_status', field: 'record_status', invalid_values: [status] };
+  for (const field of ['source_account_mandatory', 'target_account_mandatory', 'is_subscription_eligible']) {
+    const value = body[field];
+    if (value !== undefined && value !== null && strField(value) !== '' && typeof value !== 'boolean' &&
+        (typeof value !== 'string' || !['true', 'false'].includes(value.trim().toLowerCase())))
+      return { ok: false, error: 'invalid_boolean', field: field, invalid_values: [strField(value)] };
+  }
+  return validateCategoryAccountTypeHints(body, context);
+}
+
 function validateCategoryCreate(body) {
   const type = (body.tx_type_key !== undefined && body.tx_type_key !== null) ? String(body.tx_type_key).trim() : '';
   if (VALID_CATEGORY_TX_TYPES.indexOf(type) === -1)
@@ -32,7 +59,7 @@ function validateCategoryCreate(body) {
   if (majKeyTest === '') return { ok: false, error: 'invalid_category_label' };
   const minKeyTest = slugify(String(body.minor_category_label).trim());
   if (minKeyTest === '') return { ok: false, error: 'invalid_category_label' };
-  return { ok: true };
+  return validateCategoryAccountTypeHints(body);
 }
 
 function validateCategoryUpdate(body) {
@@ -56,5 +83,5 @@ function validateCategoryUpdate(body) {
   if (majKeyTest === '') return { ok: false, error: 'invalid_category_label' };
   const minKeyTest = slugify(String(body.minor_category_label).trim());
   if (minKeyTest === '') return { ok: false, error: 'invalid_category_label' };
-  return { ok: true };
+  return validateCategoryAccountTypeHints(body);
 }

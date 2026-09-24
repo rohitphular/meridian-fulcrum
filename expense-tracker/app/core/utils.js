@@ -35,14 +35,12 @@ const ET_COLS  = [
   'description', 'counterparty_name', 'tx_tags', 'beneficiaries',
 ];
 const ACC_COLS = ['id', 'account_name', 'legal_entity_name', 'type', 'sub_type', 'account_currency_local', 'local_timezone', 'account_opening_date_local', 'account_closing_date_local', 'tracking_start_date_local', 'opening_value_local', 'description', 'record_status'];
-// SUB_COLS intentionally excludes sync fields (sync_status, sync_date, sync_notes).
-// Those fields are system-internal pipeline state that would be meaningless or misleading
-// on re-import — a re-imported row would always start as create-pending regardless of the
-// exported sync state, so exporting them serves no purpose and could confuse callers.
-// subscription_name is used instead of name so the exported CSV matches the import format.
+// Preserve the complete Sheet contract and original audit timestamps on export.
+// Import accepts metadata columns but the server owns their values.
 const SUB_COLS = ['id', 'subscription_name', 'counterparty_name', 'subscription_amount_local', 'frequency', 'day_of_month', 'day_of_week',
-  'source_account', 'tx_type', 'major_category', 'minor_category', 'record_status', 'description',
-  'created_at', 'subscription_start_date_local', 'subscription_end_date_local', 'subscription_timezone_local', 'updated_at'];
+  'source_account', 'tx_type', 'major_category', 'minor_category', 'description', 'record_status', 'created_at',
+  'sync_status', 'sync_date', 'sync_notes', 'updated_at',
+  'subscription_start_date_local', 'subscription_end_date_local', 'subscription_timezone_local'];
 const CAT_COLS = [
   'id',
   'tx_type_key', 'tx_type_label',
@@ -125,12 +123,10 @@ export const exportData = (format, rows) => {
 
   return _exportData(format, exported, 'expenses', ET_COLS);
 };
-export const exportAccounts      = (format, rows) => _exportData(format, rows, 'accounts', ACC_COLS);
-export const exportSubscriptions = (format, rows) => {
-  const normalised = rows.map(r => ({ ...r, created_at: utcToLocalInput(r.created_at) }));
-  return _exportData(format, normalised, 'subscriptions', SUB_COLS);
-};
-export const exportCategories    = (format, rows) => _exportData(format, rows, 'categories', CAT_COLS);
+export const exportAccounts      = (format, rows) => _exportData(format, rows, 'account_master', ACC_COLS);
+export const exportSubscriptions = (format, rows) => _exportData(format, rows, 'subscription_master', SUB_COLS);
+export const exportCategories    = (format, rows) => _exportData(format, rows, 'category_master', CAT_COLS);
+export const exportAccountTypes = rows => _exportData('csv', rows, 'account_types', state.accountTypeSchema.columns);
 
 // ── Status icons (shared across all entity tables) ───────────────────────────
 

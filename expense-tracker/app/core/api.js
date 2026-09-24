@@ -1,5 +1,11 @@
 /* global SheetsClient */
 export const ExpenseAPI = {
+  listAccountTypes:        () => SheetsClient.get({ action: 'list_account_types' }),
+  getAccountTypeSchema:    () => SheetsClient.get({ action: 'get_account_type_schema' }),
+  updateAccountType:       f => SheetsClient.post({ action: 'update_account_type', ...f }),
+  deleteAccountType:       f => SheetsClient.post({ action: 'delete_account_type', ...f }),
+  restoreAccountType:      f => SheetsClient.post({ action: 'restore_account_type', ...f }),
+  createAccountTypesBulk:  f => SheetsClient.post({ action: 'create_account_types_bulk', ...f }),
   verify:            totp => SheetsClient.get({ action: 'verify', totp }),
   listTransactions:  ()   => SheetsClient.get({ action: 'list_transactions' }),
   listCategories:    ()   => SheetsClient.get({ action: 'list_categories' }),

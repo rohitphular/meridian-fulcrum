@@ -49,8 +49,8 @@ def test_investment_hint_expands_all_investment_subtypes_without_duplicates() ->
     cursor = conn.cursor.return_value.__enter__.return_value
     cursor.fetchall.side_effect = [[("shares",), ("pension",)], [("shares",)]]
     assert categories._resolve_account_types(conn, "investment, stocks_shares, investment") == ["shares", "pension"]
-    assert "account_type = %s" in cursor.execute.call_args_list[0].args[0]
-    assert "account_subtype = %s" in cursor.execute.call_args_list[1].args[0]
+    assert "account_type_key = %s" in cursor.execute.call_args_list[0].args[0]
+    assert "account_subtype_key = %s" in cursor.execute.call_args_list[1].args[0]
 
 
 def test_unknown_hint_fails_atomically_and_reports_failure(category_row: dict) -> None:
@@ -61,6 +61,7 @@ def test_unknown_hint_fails_atomically_and_reports_failure(category_row: dict) -
     conn.rollback.assert_called_once()
     conn.commit.assert_not_called()
     assert not any("INSERT" in call.args[0] or "DELETE" in call.args[0] for call in cursor.execute.call_args_list)
+    assert sheet.batch_update_rows.call_args.args[0] == "category_master"
     assert sheet.batch_update_rows.call_args.args[1][0][2][0] == "create-failed"
 
 
@@ -111,3 +112,41 @@ def test_unreferenced_category_keys_can_change_without_changing_identity(categor
     assert categories._insert_category(conn, transform(category_row)) == CATEGORY_ID
     assert cursor.execute.call_args.args[1][0] == CATEGORY_ID
     assert cursor.execute.call_args.args[1][5] == "market"
+
+
+@pytest.mark.parametrize("raw", ["stocks_shares", " STOCKS_SHARES "])
+def test_legacy_hint_resolves_only_to_eligible_canonical_catalog_key(raw: str) -> None:
+    conn = MagicMock()
+    cursor = conn.cursor.return_value.__enter__.return_value
+    cursor.fetchall.side_effect = [[], [("shares",)]]
+    assert categories._resolve_account_types(conn, raw) == ["shares"]
+    assert cursor.execute.call_args.args[1] == ("stocks-shares",)
+    for call in cursor.execute.call_args_list:
+        assert "is_sheet_managed" in call.args[0]
+        assert "sync_status='in-sync'" in call.args[0]
+        assert "record_status IN ('active','locked')" in call.args[0]
+
+
+def test_unknown_legacy_hint_is_not_silently_dropped() -> None:
+    conn = MagicMock()
+    cursor = conn.cursor.return_value.__enter__.return_value
+    cursor.fetchall.return_value = []
+    with pytest.raises(ValueError, match="unknown, inactive, or unsynced"):
+        categories._resolve_account_types(conn, "unknown_type")
+
+
+def test_legacy_and_canonical_hints_produce_one_reference() -> None:
+    conn = MagicMock()
+    cursor = conn.cursor.return_value.__enter__.return_value
+    cursor.fetchall.side_effect = [[], [("shares",)], [("shares",)]]
+    assert categories._resolve_account_types(conn, "stocks_shares, stocks-shares") == ["shares"]
+
+
+def test_unchanged_dependency_check_releases_locks_without_sheet_ack(category_row: dict, monkeypatch: pytest.MonkeyPatch) -> None:
+    conn, sheet = MagicMock(), MagicMock()
+    category_row["sync_status"] = "in-sync"
+    monkeypatch.setattr(categories, "_investment_mapping_changed", lambda conn, row: False)
+    assert categories.upsert_categories(conn, sheet, [category_row], 1) == 0
+    conn.rollback.assert_called_once()
+    conn.commit.assert_not_called()
+    sheet.batch_update_rows.assert_not_called()

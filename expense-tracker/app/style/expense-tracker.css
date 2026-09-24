@@ -1405,3 +1405,18 @@ td.td-keywords { max-width: 220px; }
   .home-income-stats,
   .home-dti-stats   { grid-template-columns: repeat(2, 1fr) !important; }
 }
+/* Configure modules reuse the entity toolbar, filters, forms, tables and cards. */
+.configure-module { overflow: visible; }
+.configure-actions { display: flex; gap: 8px; margin-left: auto; }
+.configure-panel { margin-bottom: 20px; }
+.configure-panel .form-actions { margin-top: 16px; }
+.configure-row-actions { display: flex; align-items: center; justify-content: flex-end; gap: 5px; }
+.configure-description { max-width: 420px; white-space: normal; overflow-wrap: anywhere; }
+.configure-archived { opacity: .5; }
+.configure-module .cat-card .row-actions { margin-top: 10px; }
+.configure-module .cat-keywords { margin-top: 6px; overflow-wrap: anywhere; }
+
+/* Keep row-level category import diagnostics readable on both layouts. */
+.cat-import-report { margin-top: 16px; }
+.cat-import-report .table-wrap { max-height: 420px; overflow: auto; }
+.cat-import-reason { min-width: 260px; max-width: 520px; white-space: normal; overflow-wrap: anywhere; }

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from datetime import datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation, localcontext
 from typing import Any
+from uuid import UUID
 from zoneinfo import ZoneInfo
 
 import psycopg2.errors as pg_errors
@@ -16,7 +18,7 @@ from transforms.financial import to_minor_units
 
 logger = get_logger(__name__)
 
-_SHEET_NAME = "transactions"
+_SHEET_NAME = "transaction_master"
 _ACTIONABLE = {"create-pending", "create-failed", "update-pending", "update-failed"}
 _BASE_CURRENCY = "XAU"
 _XAU_DECIMAL_PLACES = 9
@@ -25,7 +27,7 @@ _DAY_NAMES = ("MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY"
 
 def load_decimal_places(conn: Any) -> dict[str, int]:
     with conn.cursor() as cursor:
-        cursor.execute("SELECT currency_code, decimal_places FROM currency_master")
+        cursor.execute("SELECT currency_code, decimal_places FROM currency_master ORDER BY currency_code FOR SHARE")
         rows = cursor.fetchall()
     return {row[0].strip(): row[1] for row in rows}
 
@@ -45,6 +47,7 @@ def lookup_category(conn: Any, tx_type: str, major_category: str, minor_category
             """
             SELECT id FROM category_master
             WHERE tx_type_key = %s AND major_category_key = %s AND minor_category_key = %s
+            FOR SHARE
             """,
             (tx_type, major_category, minor_category),
         )
@@ -161,6 +164,7 @@ def _resolve_amount(conn: Any, tx_amount: Decimal, local_currency: str, tx_date:
             """
             SELECT id, rate_value FROM currency_rates
             WHERE quote_currency_code = %s AND rate_date = %s AND base_currency_code = 'XAU'
+            FOR SHARE
             """,
             (local_currency, tx_date),
         )
@@ -209,10 +213,10 @@ def _validate_parent(conn: Any, typed: dict[str, Any], account_id: Any) -> None:
         parent = cursor.fetchone()
     if parent is None:
         raise ValueError("transactions: parent_tx_not_found")
-    if parent[0] is not None:
-        raise ValueError("transactions: nested_parent_reference")
     # Deleted child rows are tombstones and may reflect a former relationship.
     if typed["record_status"] != "deleted":
+        if parent[0] is not None:
+            raise ValueError("transactions: nested_parent_reference")
         if str(parent[1]) == str(account_id) or parent[2] == typed["tx_type"]:
             raise ValueError("transactions: invalid_transfer_pair")
         if parent[3] == "deleted":
@@ -332,31 +336,112 @@ def _upsert_row(conn: Any, typed: dict[str, Any], account_map: dict[str, tuple[A
     return transaction[0], transaction[1]
 
 
-def _group_rows(rows: list[dict[str, Any]]) -> list[list[tuple[int, dict[str, Any]]]]:
-    """Keep physical row numbers while grouping transfers and ordering parents first."""
+def _source_identity(value: Any) -> str:
+    """Canonicalize UUID case for grouping; invalid identities fail in transform."""
+    identity = str(value or "").strip()
+    try:
+        return str(UUID(identity))
+    except ValueError:
+        return identity
+
+
+def _load_stored_parent_links(conn: Any) -> dict[str, str]:
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT transaction_id, parent_tx_id FROM transaction_master WHERE parent_tx_id IS NOT NULL")
+        return {_source_identity(identity): _source_identity(parent) for identity, parent in cursor.fetchall()}
+
+
+def _lock_group(conn: Any, rows: list[dict[str, Any]], *, expected_parent_links: dict[str, str]) -> list[str]:
+    """Keep pair validation stable, including absent/new siblings, through commit.
+
+    The job already takes a session advisory lock. This short table lock also
+    serializes non-job writers; row locks alone cannot protect absent children.
+    """
+    with conn.cursor() as cursor:
+        cursor.execute("LOCK TABLE transaction_master IN SHARE ROW EXCLUSIVE MODE")
+    identities = {_source_identity(row.get("id")) for row in rows}
+    identities.update(_source_identity(row.get("parent_tx_id")) for row in rows)
+    identities.discard("")
+    links = _load_stored_parent_links(conn)
+    while True:
+        related = {identity for child, parent in links.items() if child in identities or parent in identities for identity in (child, parent)}
+        if related <= identities:
+            break
+        identities.update(related)
+    expected = {child: parent for child, parent in expected_parent_links.items() if child in identities or parent in identities}
+    current = {child: parent for child, parent in links.items() if child in identities or parent in identities}
+    if expected != current:
+        raise RuntimeError("transactions: database_transfer_relationships_changed_retry")
+    with conn.cursor() as cursor:
+        # Legacy TEXT identities accepted all spellings recognized by UUID,
+        # including uppercase, braces and unhyphenated forms. Do not create a
+        # second logical identity when replay now uses the canonical UUID.
+        cursor.execute("SELECT transaction_id FROM transaction_master")
+        if any(identity != _source_identity(identity) and _source_identity(identity) in identities for (identity,) in cursor.fetchall()):
+            raise ValueError("transactions: database_transaction_identity_requires_reconciliation")
+        # Existing unchanged legs participate in final validation, so protect
+        # their category direction against concurrent category edits as well.
+        cursor.execute(
+            """SELECT cm.id FROM category_master cm
+               WHERE cm.id IN (SELECT category_id FROM transaction_master WHERE transaction_id = ANY(%s))
+               ORDER BY cm.id FOR SHARE""",
+            (sorted(identities),),
+        )
+        cursor.fetchall()
+    return sorted(identities)
+
+
+def _load_locked_accounts(conn: Any, typed_rows: list[tuple[int, dict[str, Any]]]) -> dict[str, tuple[Any, str, str]]:
+    """Read valuation currencies from locked rows, never from a stale job cache."""
+    identities = sorted({typed["account_id_sheet"] for _number, typed in typed_rows})
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT id, local_currency, account_subtype FROM account_master WHERE id = ANY(%s::uuid[]) ORDER BY id FOR SHARE", (identities,))
+        return {str(identity): (identity, currency.strip(), subtype) for identity, currency, subtype in cursor.fetchall()}
+
+
+def _group_rows(rows: list[dict[str, Any]], stored_parent_links: dict[str, str] | None = None) -> list[list[tuple[int, dict[str, Any]]]]:
+    """Group the union of old/new links so reparenting cannot partially commit."""
     row_by_id = {}
     for index, row in enumerate(rows):
-        identity = str(row.get("id") or "").strip()
+        identity = _source_identity(row.get("id"))
         if identity:
             if identity in row_by_id:
                 raise ValueError("transactions: duplicate_source_id")
             row_by_id[identity] = (int(row.get("_sheet_row_num", index + 2)), row)
-    groups: dict[str, list[tuple[int, dict[str, Any]]]] = {}
+    roots: dict[str, str] = {}
+
+    def root_of(identity: str) -> str:
+        roots.setdefault(identity, identity)
+        while roots[identity] != identity:
+            roots[identity] = roots[roots[identity]]
+            identity = roots[identity]
+        return identity
+
+    def join(left: str, right: str) -> None:
+        roots[root_of(left)] = root_of(right)
+
+    for child, parent in (stored_parent_links or {}).items():
+        join(child, parent)
+    numbered_rows = []
     for index, row in enumerate(rows):
-        identity = str(row.get("id") or "").strip()
+        identity = _source_identity(row.get("id"))
         if not identity and not any(value is not None and str(value).strip() for key, value in row.items() if not key.startswith("_")):
             continue
         root = identity or f"missing-id-row-{index}"
         seen = {root}
-        parent = str(row.get("parent_tx_id") or "").strip()
+        parent = _source_identity(row.get("parent_tx_id"))
         while parent:
             if parent in seen:
                 raise ValueError("transactions: cyclic_parent_reference")
             seen.add(parent)
+            join(root, parent)
             root = parent
             parent_row = row_by_id.get(parent)
-            parent = str(parent_row[1].get("parent_tx_id") or "").strip() if parent_row is not None else ""
-        groups.setdefault(root, []).append((int(row.get("_sheet_row_num", index + 2)), row))
+            parent = _source_identity(parent_row[1].get("parent_tx_id")) if parent_row is not None else ""
+        numbered_rows.append((identity or f"missing-id-row-{index}", int(row.get("_sheet_row_num", index + 2)), row))
+    groups: dict[str, list[tuple[int, dict[str, Any]]]] = {}
+    for identity, number, row in numbered_rows:
+        groups.setdefault(root_of(identity), []).append((number, row))
     return [sorted(group, key=lambda entry: bool(str(entry[1].get("parent_tx_id") or "").strip())) for group in groups.values()]
 
 
@@ -383,10 +468,18 @@ def retire_unused_references(conn: Any) -> None:
     conn.commit()
 
 
-def upsert_transactions(conn: Any, sheets_client: SheetsClient, rows: list[dict[str, Any]], account_map: dict[str, tuple[Any, str, str]]) -> int:
+def upsert_transactions(
+    conn: Any,
+    sheets_client: SheetsClient,
+    rows: list[dict[str, Any]],
+    account_map: dict[str, tuple[Any, str, str]],
+    *,
+    before_commit: Callable[[], None] | None = None,
+) -> int:
     """Persist each standalone transaction/transfer atomically; return failed source rows."""
-    groups = _group_rows(rows)
-    decimal_places = load_decimal_places(conn)
+    _group_rows(rows)  # Reject duplicate/cyclic source identities before database work.
+    stored_parent_links = _load_stored_parent_links(conn)
+    groups = _group_rows(rows, stored_parent_links)
     write_backs = []
     succeeded = failed = 0
     logger.info(f"upsert_transactions: start total={len(rows)}")
@@ -395,17 +488,32 @@ def upsert_transactions(conn: Any, sheets_client: SheetsClient, rows: list[dict[
             actionable = [(number, row) for number, row in group if str(row.get("sync_status") or "").strip() != "in-sync"]
             if not actionable:
                 continue
+            checking_source = False
             try:
                 typed_rows = []
                 for number, row in actionable:
                     if str(row.get("sync_status") or "").strip() not in _ACTIONABLE:
                         raise ValueError("transactions: invalid_sync_status")
                     typed_rows.append((number, transactions_transform.transform(row)))
-                stored = [(number, _upsert_row(conn, typed, account_map, decimal_places)) for number, typed in typed_rows]
-                _validate_stored_relationships(conn, [typed["transaction_id"] for _number, typed in typed_rows])
+                relationship_ids = _lock_group(conn, [row for _number, row in group], expected_parent_links=stored_parent_links)
+                decimal_places = load_decimal_places(conn)
+                current_accounts = _load_locked_accounts(conn, typed_rows)
+                stored = [(number, _upsert_row(conn, typed, current_accounts, decimal_places)) for number, typed in typed_rows]
+                _validate_stored_relationships(conn, relationship_ids)
+                if before_commit is not None:
+                    checking_source = True
+                    before_commit()
+                    checking_source = False
                 conn.commit()
+                for _number, typed in typed_rows:
+                    if typed["parent_tx_id"] is None:
+                        stored_parent_links.pop(typed["transaction_id"], None)
+                    else:
+                        stored_parent_links[typed["transaction_id"]] = typed["parent_tx_id"]
             except (ValueError, pg_errors.IntegrityError, pg_errors.DataError) as error:
                 conn.rollback()
+                if checking_source:
+                    raise
                 failed += len(actionable)
                 sync_date = datetime.now(timezone.utc).isoformat()
                 for number, row in actionable:

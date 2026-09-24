@@ -4,34 +4,6 @@
 // applicability rules. No magic column numbers anywhere else in the codebase.
 // =============================================================================
 
-const VALID_ACCOUNT_TYPES = ['asset', 'investment', 'liability'];
-
-const ASSET_SUB_TYPES = ['current', 'savings', 'cash'];
-
-const INVESTMENT_SUB_TYPES = [
-  'stocks_shares', 'isa', 'pension_sipp', 'crypto',
-  'fixed_deposit', 'bonds', 'property', 'commodities', 'p2p_lending', 'other',
-];
-
-const LIABILITY_SUB_TYPES = [
-  'personal_loan', 'credit_card', 'mortgage', 'auto_loan', 'heloc',
-  'student_loan', 'medical_loan', 'debt_consolidation', 'overdraft',
-];
-
-// Liability sub_types that represent loans (excludes credit_card and overdraft)
-const LOAN_SUB_TYPES = [
-  'personal_loan', 'mortgage', 'auto_loan', 'heloc',
-  'student_loan', 'medical_loan', 'debt_consolidation',
-];
-
-// Maps each account type key to its valid sub-type array.
-// Used by validation — avoids repeated ternary chains across validate functions.
-var ACCOUNT_TYPE_SUB_TYPES = {
-  'asset':      ASSET_SUB_TYPES,
-  'investment': INVESTMENT_SUB_TYPES,
-  'liability':  LIABILITY_SUB_TYPES,
-};
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Schema — 19 columns in column-position order
 // Column positions are append-only — never change an existing position.
@@ -84,7 +56,7 @@ const ACCOUNT_SCHEMA = {
     sheet_column_position: 4,
     ui_label:              'Type',
     type:                  'enum',
-    enum_values:           VALID_ACCOUNT_TYPES,
+    enum_values:           null, // available families come from account_types
     group:                 'core',
     applies_to:            null,
     required_for:          null,
@@ -292,26 +264,26 @@ const ACCOUNT_SCHEMA = {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function getAccountSchemaForClient() {
-  const TYPE_LABELS = {
-    asset:       'Asset',
-    investment:  'Investment',
-    liability:   'Liability',
-  };
-  const TYPE_GROUPS = {
-    asset:       'asset',
-    investment:  'investment',
-    liability:   'liability',
-  };
+  const rows = getAvailableAccountTypes();
+  const byType = Object.create(null);
+  const labels = Object.create(null);
+  const familyLabels = Object.create(null);
+  listAccountTypes().forEach(function(row) {
+    labels[row.account_subtype_key] = row.account_subtype_label;
+    familyLabels[row.account_type_key] = row.account_type_label;
+  });
+  rows.forEach(function(row) {
+    if (byType[row.account_type_key] === undefined) byType[row.account_type_key] = [];
+    byType[row.account_type_key].push(row.account_subtype_key);
+  });
   return {
-    types: VALID_ACCOUNT_TYPES.map(function(v) {
-      if (TYPE_LABELS[v] === undefined) throw new Error('[account-schema] TYPE_LABELS missing entry for type: ' + v);
-      if (TYPE_GROUPS[v] === undefined) throw new Error('[account-schema] TYPE_GROUPS missing entry for type: ' + v);
-      return { value: v, label: TYPE_LABELS[v], group: TYPE_GROUPS[v] };
-    }),
-    asset_sub_types:       ASSET_SUB_TYPES,
-    investment_sub_types:  INVESTMENT_SUB_TYPES,
-    liability_sub_types:   LIABILITY_SUB_TYPES,
-    loan_sub_types:        LOAN_SUB_TYPES,
+    types: Object.keys(byType).map(function(key) { return { value: key, label: familyLabels[key], group: key }; }),
+    subtypes_by_type: byType,
+    asset_sub_types: byType.asset === undefined ? [] : byType.asset,
+    investment_sub_types: byType.investment === undefined ? [] : byType.investment,
+    liability_sub_types: byType.liability === undefined ? [] : byType.liability,
+    loan_sub_types: rows.filter(function(row) { return row.is_loan === true; }).map(function(row) { return row.account_subtype_key; }),
+    subtype_labels: labels, type_labels: familyLabels,
   };
 }
 
@@ -344,4 +316,3 @@ function acctColIndex(name) { return getColIndex(ACCOUNT_SCHEMA, name); }
 function isLiabilityType(type) {
   return type === 'liability';
 }
-

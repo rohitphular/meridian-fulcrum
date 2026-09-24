@@ -4,10 +4,13 @@ Reverse-engineered, language-agnostic specification for the Expense Tracker app.
 
 ## Read in this order
 
+For an existing installation, first follow [master tab naming and migration](master-sheet-names.md) to align the master CSVs, Sheet tabs and database names.
+
 1. **[overview.md](overview.md)** — What the app is, the domain model, the capabilities, what's out of scope
 2. **[data-model.md](data-model.md)** — Entity shapes (Account, Transaction, Category, Rate, Subscription, AuditEntry) and their cross-entity invariants
 3. **[APP-AUTH-PIN-TOTP.md](../../building-standards/documents/standards/APP-AUTH-PIN-TOTP.md)** — Single-user authentication with PIN + optional TOTP, IP rate limiting, session model (shared Forge doc)
 4. **[accounts.md](accounts.md)** — Account types, balance conventions, derived fields, net-worth and utilisation calculations
+   - **[account-types.md](account-types.md)** — Configure tab, the existing Sheet-owned catalog, import/export, policy fields and sync
    - **[account-imports.md](account-imports.md)** — Current master/detail import contracts and extractor boundary
 5. **[transactions.md](transactions.md)** — The two transaction types (money-in, money-out), single-leg model, required fields, filters, sort, export, malformed-row handling
 6. **[balance-lifecycle.md](balance-lifecycle.md)** — How `current_value_local` is derived at read time via `_buildAccountNetMap`, and the post-reversal formula used when validating edits
@@ -19,7 +22,7 @@ Reverse-engineered, language-agnostic specification for the Expense Tracker app.
 
 ## Historical
 
-- **[raw-requirement.md](raw-requirement.md)** — Original product brief. Preserved as-is for traceability. Specifications above supersede it where they differ.
+- **[raw-requirement.md](raw-requirement.md)** — Original product brief. Retained for traceability, with storage names updated to the current convention. Specifications above supersede it where they differ.
 
 ## Building this in any language
 

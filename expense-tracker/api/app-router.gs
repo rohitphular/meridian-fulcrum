@@ -11,10 +11,7 @@ function doGet(e) {
   try {
     return _dispatchGet(e);
   } catch (error) {
-    const schemaMismatch = error !== null && error !== undefined && typeof error.message === 'string' && error.message.indexOf('sheet_header_mismatch:') === 0;
-    console.error('doGet: error=' + (schemaMismatch ? error.message : 'request_failed'));
-    if (schemaMismatch) return json({ ok: false, error: 'sheet_header_mismatch' });
-    return json({ ok: false, error: 'request_failed' });
+    return _sheetRequestFailure('doGet', error);
   }
 }
 
@@ -50,6 +47,8 @@ function _dispatchGet(e) {
   if (action === 'list_transactions')  { return json({ ok: true, data: listTransactions() }); }
   if (action === 'list_categories')    { return json({ ok: true, data: listCategories() }); }
   if (action === 'list_accounts')      { return json({ ok: true, data: listAccounts() }); }
+  if (action === 'list_account_types') return json({ ok: true, data: listAccountTypes() });
+  if (action === 'get_account_type_schema') return json({ ok: true, data: getAccountTypeSchemaForClient() });
   if (action === 'list_rates')         { return json({ ok: true, data: listRates() }); }
   if (action === 'get_account_schema')      return json({ ok: true, data: getAccountSchemaForClient() });
   if (action === 'get_transaction_schema')  return json({ ok: true, data: getTransactionSchemaForClient() });
@@ -89,13 +88,29 @@ function doPost(e) {
   try {
     return _dispatchPost(body);
   } catch (error) {
-    const schemaMismatch = error !== null && error !== undefined && typeof error.message === 'string' && error.message.indexOf('sheet_header_mismatch:') === 0;
-    console.error('doPost: error=' + (schemaMismatch ? error.message : 'request_failed'));
-    if (schemaMismatch) return json({ ok: false, error: 'sheet_header_mismatch' });
-    return json({ ok: false, error: 'request_failed' });
+    return _sheetRequestFailure('doPost', error);
   } finally {
     lock.releaseLock();
   }
+}
+
+// Expose only known repair actions; unexpected service errors stay sanitized.
+function _sheetRequestFailure(handler, error) {
+  const message = error !== null && error !== undefined && typeof error.message === 'string' ? error.message : '';
+  if (message === 'legacy_master_sheet_name') {
+    console.error(handler + ': error=legacy_master_sheet_name action=migrateMasterSheetNames');
+    return json({ ok: false, error: message, detail: 'Run migrateMasterSheetNames() in the Apps Script editor before retrying.' });
+  }
+  if (message === 'master_sheet_name_collision') {
+    console.error(handler + ': error=master_sheet_name_collision');
+    return json({ ok: false, error: message, detail: 'Both legacy and canonical master tabs exist. Resolve the duplicate tabs, then run migrateMasterSheetNames().' });
+  }
+  if (message.indexOf('sheet_header_mismatch:') === 0) {
+    console.error(handler + ': error=' + message);
+    return json({ ok: false, error: 'sheet_header_mismatch' });
+  }
+  console.error(handler + ': error=request_failed');
+  return json({ ok: false, error: 'request_failed' });
 }
 
 function _dispatchPost(body) {
@@ -111,6 +126,11 @@ function _dispatchPost(body) {
   if (body.action === 'update_category')    return json(updateCategory(body));
   if (body.action === 'delete_category')    return json(deleteCategory(body));
   if (body.action === 'create_account')      return json(createAccount(body));
+  if (body.action === 'create_account_type') return json(createAccountType(body));
+  if (body.action === 'update_account_type') return json(updateAccountType(body));
+  if (body.action === 'delete_account_type') return json(deleteAccountType(body));
+  if (body.action === 'restore_account_type') return json(restoreAccountType(body));
+  if (body.action === 'create_account_types_bulk') return json(createAccountTypesBulk(body));
   if (body.action === 'create_accounts_bulk') return json(createAccountsBulk(body));
   if (body.action === 'import_account_data') return json(importAccountData(body));
   if (body.action === 'update_account')     return json(updateAccount(body));

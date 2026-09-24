@@ -64,7 +64,7 @@ Script exits → trap fires → `.clasp.json` back to `${SCRIPT_ID_PLACEHOLDER}`
 
 Do this once for `dev`, then again for `prod`.
 
-1. **Sheet** — create a Google Sheet (e.g. `Expense Tracker — DEV`). Tabs (`transactions`, `categories`, `accounts`, `rates`, `audit_access`) auto-create on first request.
+1. **Sheet** — create a Google Sheet (e.g. `Expense Tracker — DEV`). Normal entity tabs initialize through their APIs. `account_types` has no automatic seed: import the supplied 14-column catalog through Configure before creating accounts or using category hints.
 2. **Apps Script** — in the Sheet: Extensions → Apps Script. Note the **Script ID** in Project Settings → IDs. Enable the manifest in **Project Settings → Show "appsscript.json"**, then paste:
    ```json
    {
@@ -130,3 +130,11 @@ clasp deploy --deploymentId "<paste from envs.json>" --description "your descrip
 Compare existing tab headers, in order, with the current schema getters and `IMPORT_REGISTRY`. Missing trailing columns can be appended automatically. Renamed or reordered columns return `sheet_header_mismatch` before any data write; migrate those headers and corresponding data explicitly first. In particular, older account currency/date names and subscription layouts must not simply have duplicate new headers appended.
 
 The local regression suite does not inspect live sheet layouts. Run `node --test expense-tracker/tests/*.cjs` from the repository root, then validate the intended environment separately.
+
+For an existing spreadsheet with plural master tab names, deploy this version and run `migrateMasterSheetNames()` before resuming extraction. See [master Sheet naming](../_docs/master-sheet-names.md) for collision checks and the rollout order.
+
+### Account Types configuration
+
+Deploy the updated `account-type-*.gs` implementation and frontend; there is no catalog seed file. Then use Configure → Account Types → Import with the complete `local/files/account_types.csv`. The 14-column file preserves the existing 22 UUIDs and adds `is_loan`/`detail_sheet` before metadata. Classification keys use hyphens. An absent/empty catalog stays empty until this explicit import; an established catalog cannot accept additional identities.
+
+For an existing 12-column Sheet, the same full CSV import validates identities, key equivalence, policy values and dependent account/category references before writing. It upgrades the catalog and dependent keys/hints, marking changed rows pending. The explicit Apps Script alternative is `migrateAccountTypeKeys(catalogRows)` with the parsed full CSV objects. Multi-tab updates are not atomic; retry the same full CSV after an interrupted migration. Apply the current ledger migrations, including `0020`, before extraction. See the [Account Types guide](../_docs/account-types.md) for the full rollout and dependency rules.

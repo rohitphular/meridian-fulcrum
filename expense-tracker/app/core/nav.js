@@ -8,8 +8,9 @@ import { renderCategories } from '../sections/categories.js';
 import { renderRates } from '../sections/rates.js';
 import { renderAdvisor } from '../sections/advisor.js';
 import { renderSubscriptions } from '../sections/subscriptions.js';
+import { renderConfigure } from '../sections/configure.js';
 
-const SECTIONS = ['home', 'insight', 'accounts', 'transactions', 'subscriptions', 'categories', 'rates', 'advisor'];
+const SECTIONS = ['home', 'insight', 'accounts', 'transactions', 'subscriptions', 'categories', 'rates', 'advisor', 'configure'];
 
 document.addEventListener('et:show-section', e => showSection(e.detail));
 
@@ -30,4 +31,5 @@ export function showSection(id) {
   if (id === 'rates')         renderRates();
   if (id === 'advisor')       renderAdvisor();
   if (id === 'subscriptions') renderSubscriptions();
+  if (id === 'configure')     renderConfigure();
 }

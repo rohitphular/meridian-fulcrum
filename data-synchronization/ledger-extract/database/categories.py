@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import Any
 
@@ -12,7 +13,7 @@ import transforms.categories as categories_transform
 
 logger = get_logger(__name__)
 
-_SHEET_NAME = "categories"
+_SHEET_NAME = "category_master"
 _ACTIONABLE = {"create-pending", "create-failed", "update-pending", "update-failed"}
 _JOIN_TABLES = {"category_source_account_types", "category_target_account_types"}
 
@@ -32,7 +33,7 @@ def _to_sync_notes(exc: Exception) -> str:
 
 
 def _resolve_account_types(conn: Any, raw_field: Any) -> list[Any]:
-    """Resolve every hint before writing; GAS 'investment' means all investment subtypes."""
+    """Resolve hints against eligible catalog rows, including GAS legacy-key aliases."""
     if raw_field is None or str(raw_field).strip() == "":
         return []
     tokens = dict.fromkeys(token.strip().lower() for token in str(raw_field).split(",") if token.strip())
@@ -40,12 +41,24 @@ def _resolve_account_types(conn: Any, raw_field: Any) -> list[Any]:
     with conn.cursor() as cursor:
         for token in tokens:
             if token == "investment":
-                cursor.execute("SELECT id FROM account_types WHERE account_type = %s AND record_status = 'active'", (token,))
+                cursor.execute("SELECT id FROM account_types WHERE account_type_key = %s AND is_sheet_managed AND sync_status='in-sync' AND record_status IN ('active','locked') FOR SHARE", (token,))
             else:
-                cursor.execute("SELECT id FROM account_types WHERE account_subtype = %s AND record_status = 'active'", (token,))
+                cursor.execute(
+                    "SELECT id FROM account_types WHERE account_subtype_key = %s AND is_sheet_managed AND sync_status='in-sync' AND record_status IN ('active','locked') FOR SHARE", (token,)
+                )
             matched = cursor.fetchall()
+            # GAS accepts legacy CSV hints only if their canonical key exists in
+            # the eligible Sheet catalog. Do not invent aliases for unknown keys.
+            if not matched and "_" in token:
+                cursor.execute(
+                    "SELECT id FROM account_types WHERE account_subtype_key = %s AND is_sheet_managed AND sync_status='in-sync' AND record_status IN ('active','locked') FOR SHARE",
+                    (token.replace("_", "-"),),
+                )
+                matched = cursor.fetchall()
+            if token != "investment" and len(matched) > 1:
+                raise ValueError("categories: ambiguous account subtype hint; use distinct subtype keys across groups")
             if not matched:
-                raise ValueError(f"categories: unknown or inactive account type hint {token!r}; check source_account_types/target_account_types")
+                raise ValueError(f"categories: unknown, inactive, or unsynced account type hint {token!r}; sync account_types first and check source_account_types/target_account_types")
             resolved.update((account_type_id, None) for (account_type_id,) in matched)
     return list(resolved)
 
@@ -124,7 +137,22 @@ def _replace_join_rows(conn: Any, category_id: str, account_type_ids: list[Any],
             cursor.execute(f"INSERT INTO {table_name} (category_id, account_type_id) VALUES (%s, %s)", (category_id, account_type_id))
 
 
-def upsert_categories(conn: Any, sheets_client: SheetsClient, rows: list[dict[str, Any]], row_start: int) -> int:
+def _investment_mapping_changed(conn: Any, row: dict[str, Any]) -> bool:
+    """Compare only dynamic group hints; unchanged in-sync categories still skip."""
+    for field, table in (("source_account_types", "category_source_account_types"), ("target_account_types", "category_target_account_types")):
+        tokens = {token.strip().lower() for token in str(row.get(field) or "").split(",")}
+        if "investment" not in tokens:
+            continue
+        expected = {str(identity) for identity in _resolve_account_types(conn, row[field])}
+        with conn.cursor() as cursor:
+            cursor.execute(f"SELECT account_type_id FROM {table} WHERE category_id=%s", (row["id"],))
+            stored = {str(identity) for (identity,) in cursor.fetchall()}
+        if expected != stored:
+            return True
+    return False
+
+
+def upsert_categories(conn: Any, sheets_client: SheetsClient, rows: list[dict[str, Any]], row_start: int, *, before_dependency_commit: Callable[[], None] | None = None) -> int:
     """Commit master and both hint mappings together; report all failed rows."""
     logger.info(f"upsert_categories: batch_start row_start={row_start} total={len(rows)}")
     write_backs: list[sheets_categories.WriteBack] = []
@@ -133,23 +161,32 @@ def upsert_categories(conn: Any, sheets_client: SheetsClient, rows: list[dict[st
         for row_index, row in enumerate(rows):
             sheet_row_num = row.get("_sheet_row_num", row_start + row_index + 1)
             sync_status = str(row.get("sync_status") or "").strip()
-            if sync_status == "in-sync":
-                continue
-            if sync_status not in _ACTIONABLE:
+            dependency_refresh = sync_status == "in-sync"
+            if not dependency_refresh and sync_status not in _ACTIONABLE:
                 failed += 1
                 logger.warning(f"upsert_categories: invalid_sync_status row={sheet_row_num}")
                 continue
             failed_status = "create-failed" if sync_status.startswith("create-") else "update-failed"
+            checking_source = False
             try:
+                if dependency_refresh and not _investment_mapping_changed(conn, row):
+                    conn.rollback()  # Release read locks from an unchanged dependency check.
+                    continue
                 typed = categories_transform.transform(row)
                 source_ids = _resolve_account_types(conn, row.get("source_account_types"))
                 target_ids = _resolve_account_types(conn, row.get("target_account_types"))
                 category_id = _insert_category(conn, typed)
                 _replace_join_rows(conn, category_id, source_ids, "category_source_account_types")
                 _replace_join_rows(conn, category_id, target_ids, "category_target_account_types")
+                if dependency_refresh and before_dependency_commit is not None:
+                    checking_source = True
+                    before_dependency_commit()
+                    checking_source = False
                 conn.commit()
             except (ValueError, pg_errors.UniqueViolation, pg_errors.ForeignKeyViolation, pg_errors.CheckViolation, pg_errors.NotNullViolation) as exc:
                 conn.rollback()
+                if checking_source:
+                    raise
                 failed += 1
                 logger.warning(f"upsert_categories: row_failed row={sheet_row_num} error_type={type(exc).__name__}")
                 write_backs.append(sheets_categories.write_back(sheet_row_num, failed_status, datetime.now(timezone.utc).isoformat(), _to_sync_notes(exc)))

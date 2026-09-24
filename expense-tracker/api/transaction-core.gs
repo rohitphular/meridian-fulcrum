@@ -252,6 +252,7 @@ function updateTransaction(body) {
 
   const currentSyncStatus = String(oldRow[txColIndex('sync_status')]);
   updatedRow[getTransactionSchemaField('sync_status').sheet_column_position - 1] = computeSyncStatus(currentSyncStatus);
+  updatedRow[txColIndex('sync_date')] = '';
   updatedRow[getTransactionSchemaField('sync_notes').sheet_column_position  - 1] = '';
   updatedRow[getTransactionSchemaField('updated_at').sheet_column_position  - 1] = new Date().toISOString();
 
@@ -290,6 +291,7 @@ function deleteTransaction(body) {
   const updatedRow = rowData.slice();
   updatedRow[rstatCol      - 1] = 'deleted';
   updatedRow[syncStatusCol - 1] = computeSyncStatus(currentSyncStatus);
+  updatedRow[txColIndex('sync_date')] = '';
   updatedRow[syncNotesCol  - 1] = '';
   updatedRow[updatedAtCol  - 1] = new Date().toISOString();
 
@@ -325,6 +327,7 @@ function restoreTransaction(body) {
   const updatedRow = rowData.slice();
   updatedRow[rstatCol      - 1] = 'active';
   updatedRow[syncStatusCol - 1] = computeSyncStatus(currentSyncStatus);
+  updatedRow[txColIndex('sync_date')] = '';
   updatedRow[syncNotesCol  - 1] = '';
   updatedRow[updatedAtCol  - 1] = new Date().toISOString();
 
@@ -388,24 +391,37 @@ function createTransactionsBulk(body) {
 
   // created_at lookup by leg id — used to preserve created_at when a leg is replaced.
   const createdAtById = Object.create(null);
+  const existingRowById = Object.create(null);
   // Set of ids addressable by an existing row (its own id, or a parent_tx_id it points
   // to) — a CSV id in this set means the incoming row REPLACES existing leg(s).
   const existingAddressableIds = Object.create(null);
   const childIdByParentId = Object.create(null);
   const existingChildIds = Object.create(null);
-  existingRows.forEach(function(r) {
-    const rowId    = String(r[idColIdx]).trim();
-    const parentId = String(r[parentColIdx]).trim();
-    if (rowId !== '') {
-      createdAtById[rowId]           = r[createdAtColIdx];
-      existingAddressableIds[rowId]  = true;
-    }
+  for (let index = 0; index < existingRows.length; index++) {
+    const row = existingRows[index];
+    if (row.every(function(value) { return value === '' || value === null || value === undefined; })) continue;
+    const rowId = _transactionUuid(row[idColIdx]);
+    const rawParentId = String(row[parentColIdx] === undefined || row[parentColIdx] === null ? '' : row[parentColIdx]).trim();
+    const parentId = rawParentId === '' ? '' : _transactionUuid(rawParentId);
+    if (rowId === null) return { ok: false, error: 'invalid_existing_transaction_id', row_num: index + 2 };
+    if (parentId === null) return { ok: false, error: 'invalid_existing_parent_tx_id', row_num: index + 2 };
+    if (existingRowById[rowId] !== undefined) return { ok: false, error: 'duplicate_existing_transaction_id', row_num: index + 2 };
+    createdAtById[rowId] = row[createdAtColIdx];
+    existingRowById[rowId] = row;
+    existingAddressableIds[rowId] = true;
     if (parentId !== '') {
       existingAddressableIds[parentId] = true;
-      childIdByParentId[parentId] = rowId;
       existingChildIds[rowId] = true;
+      const previousChild = childIdByParentId[parentId];
+      if (previousChild !== undefined && String(existingRowById[previousChild][txColIndex('record_status')]) !== 'deleted') {
+        if (String(row[txColIndex('record_status')]) !== 'deleted') {
+          return { ok: false, error: 'multiple_live_transfer_children', row_num: index + 2 };
+        }
+      } else {
+        childIdByParentId[parentId] = rowId;
+      }
     }
-  });
+  }
 
   // Build one sheet-row array without touching the sheet.
   function buildRow(b, id) {
@@ -432,14 +448,14 @@ function createTransactionsBulk(body) {
     setC('user_location_country',   b.user_location_country   !== undefined && b.user_location_country   !== null ? String(b.user_location_country)   : '');
     setC('user_location_latitude',  b.user_location_latitude  !== undefined && b.user_location_latitude  !== null ? b.user_location_latitude          : '');
     setC('user_location_longitude', b.user_location_longitude !== undefined && b.user_location_longitude !== null ? b.user_location_longitude         : '');
-    setC('record_status',           'active');
+    setC('record_status',           b.record_status);
     setC('sync_status',             SYNC_STATUS_CREATE_PENDING);
     setC('sync_date',               '');
     setC('sync_notes',              '');
     setC('updated_at',              now);
     // created_at: preserve when this leg's own id matches an existing (replaced) row;
     // otherwise stamp now. Reimported transfer children retain their IDs.
-    const preserved = createdAtById[id];
+    const preserved = createdAtById[_transactionUuid(id)];
     setC('created_at', preserved !== undefined ? preserved : now);
     // sync_status: a replaced leg advances to update-pending via computeSyncStatus.
     if (preserved !== undefined) {
@@ -475,7 +491,12 @@ function createTransactionsBulk(body) {
 
     // Resolve the leg id for this CSV row: caller-supplied id, else a generated uuid.
     const hasId = txBody.id !== undefined && txBody.id !== null && String(txBody.id).trim() !== '';
-    const csvId = hasId ? String(txBody.id).trim() : Utilities.getUuid();
+    const csvId = _transactionUuid(hasId ? txBody.id : Utilities.getUuid());
+    if (csvId === null) {
+      results.push({ key: hasId ? String(txBody.id) : '', ok: false, error: 'invalid_id' });
+      failed += 1;
+      return;
+    }
     if (existingChildIds[csvId] === true) {
       results.push({ key: csvId, ok: false, error: 'transfer_child_id_requires_parent' });
       failed += 1;
@@ -486,10 +507,25 @@ function createTransactionsBulk(body) {
       failed += 1;
       return;
     }
-    batchIds[csvId] = true;
     // Replace vs insert is decided by whether this id already addresses existing legs.
     const isReplace = existingAddressableIds[csvId] === true;
     const action    = isReplace ? 'updated' : 'created';
+    const previous = existingRowById[csvId];
+    const rawStatus = txBody.record_status === undefined || txBody.record_status === null ? '' : String(txBody.record_status).trim();
+    const recordStatus = rawStatus !== '' ? rawStatus : previous === undefined ? 'active' : String(previous[txColIndex('record_status')]);
+    if (getTransactionSchemaField('record_status').enum_values.indexOf(recordStatus) === -1) {
+      results.push({ key: csvId, ok: false, error: 'invalid_record_status' });
+      failed += 1;
+      return;
+    }
+    const existingChildId = childIdByParentId[csvId];
+    const previousChild = existingChildId === undefined ? undefined : existingRowById[existingChildId];
+    if ((previous !== undefined && String(previous[txColIndex('record_status')]) === 'locked') ||
+        (previousChild !== undefined && String(previousChild[txColIndex('record_status')]) === 'locked')) {
+      results.push({ key: csvId, ok: false, error: 'record_locked' });
+      failed += 1;
+      return;
+    }
 
     const catKey     = txBody.tx_type + '|' + txBody.major_category + '|' + txBody.minor_category;
     const cat        = catMap[catKey];
@@ -510,12 +546,30 @@ function createTransactionsBulk(body) {
         childAcct  = txBody.source_account; childAmt  = srcAmt; childType  = 'money-out';
       }
 
-      const parentId = csvId;                 // parent leg id = CSV id
-      const childId  = childIdByParentId[parentId] !== undefined ? childIdByParentId[parentId] : Utilities.getUuid();
+      // Match UUIDs canonically while preserving existing source spellings and links.
+      const parentId = previous === undefined ? csvId : String(previous[idColIdx]).trim();
+      const childId = previousChild === undefined ? _transactionUuid(Utilities.getUuid()) : String(previousChild[idColIdx]).trim();
+      if (childId === null || _transactionUuid(childId) === csvId || batchIds[_transactionUuid(childId)] === true ||
+          (previousChild === undefined && existingAddressableIds[_transactionUuid(childId)] === true)) {
+        results.push({ key: csvId, ok: false, error: 'duplicate_generated_transaction_id' });
+        failed += 1;
+        return;
+      }
+      // An omitted lifecycle field retains each existing leg's lifecycle. An
+      // explicit lifecycle applies to the complete pair, including restoration.
+      const childStatus = rawStatus !== '' || previousChild === undefined ? recordStatus : String(previousChild[txColIndex('record_status')]);
+      if (getTransactionSchemaField('record_status').enum_values.indexOf(childStatus) === -1 ||
+          (recordStatus === 'deleted' && childStatus !== 'deleted')) {
+        results.push({ key: csvId, ok: false, error: 'invalid_transfer_lifecycle' });
+        failed += 1;
+        return;
+      }
 
       const shared = _txSharedFields(txBody);
-      newRows.push(buildRow(Object.assign({}, shared, { tx_type: parentType, account_id: parentAcct, tx_amount_local: parentAmt, parent_tx_id: '' }), parentId));
-      newRows.push(buildRow(Object.assign({}, shared, { tx_type: childType,  account_id: childAcct,  tx_amount_local: childAmt,  parent_tx_id: parentId }), childId));
+      newRows.push(buildRow(Object.assign({}, shared, { tx_type: parentType, account_id: parentAcct, tx_amount_local: parentAmt, parent_tx_id: '', record_status: recordStatus }), parentId));
+      newRows.push(buildRow(Object.assign({}, shared, { tx_type: childType,  account_id: childAcct,  tx_amount_local: childAmt,  parent_tx_id: parentId, record_status: childStatus }), childId));
+      batchIds[csvId] = true;
+      batchIds[_transactionUuid(childId)] = true;
       results.push({ key: csvId, ok: true, action: action });
       if (isReplace) updated += 1; else created += 1;
       return;
@@ -526,8 +580,9 @@ function createTransactionsBulk(body) {
     const amt  = cat.source_account_mandatory ? Number(txBody.source_amount_local) : Number(txBody.target_amount_local);
 
     newRows.push(buildRow(Object.assign(_txSharedFields(txBody), {
-      tx_type: txBody.tx_type, account_id: acct, tx_amount_local: amt, parent_tx_id: '',
-    }), csvId));
+      tx_type: txBody.tx_type, account_id: acct, tx_amount_local: amt, parent_tx_id: '', record_status: recordStatus,
+    }), previous === undefined ? csvId : String(previous[idColIdx]).trim()));
+    batchIds[csvId] = true;
     results.push({ key: csvId, ok: true, action: action });
     if (isReplace) updated += 1; else created += 1;
   });
@@ -536,11 +591,11 @@ function createTransactionsBulk(body) {
   // Drop any existing row whose own id, or whose parent_tx_id, is a CSV id in this
   // batch. Everything else is kept as-is.
   const newLegIds = Object.create(null);
-  newRows.forEach(function(row) { newLegIds[String(row[idColIdx])] = true; });
+  newRows.forEach(function(row) { newLegIds[_transactionUuid(row[idColIdx])] = true; });
   const keptRows = [];
   existingRows.forEach(function(r) {
-    const rowId = String(r[idColIdx]).trim();
-    const parentId = String(r[parentColIdx]).trim();
+    const rowId = _transactionUuid(r[idColIdx]);
+    const parentId = _transactionUuid(r[parentColIdx]);
     if (batchIds[rowId] !== true && batchIds[parentId] !== true) {
       keptRows.push(r);
       return;
@@ -551,6 +606,7 @@ function createTransactionsBulk(body) {
     if (String(tombstone[txColIndex('record_status')]) !== 'deleted') {
       tombstone[txColIndex('record_status')] = 'deleted';
       tombstone[txColIndex('sync_status')] = computeSyncStatus(String(tombstone[txColIndex('sync_status')]));
+      tombstone[txColIndex('sync_date')] = '';
       tombstone[txColIndex('sync_notes')] = '';
       tombstone[txColIndex('updated_at')] = now;
     }
@@ -592,9 +648,63 @@ function createTransactionsBulk(body) {
 function _txSyncStatusForId(existingRows, idColIdx, id) {
   const syncStatusColIdx = getTransactionSchemaField('sync_status').sheet_column_position - 1;
   for (var i = 0; i < existingRows.length; i++) {
-    if (String(existingRows[i][idColIdx]).trim() === id) return String(existingRows[i][syncStatusColIdx]);
+    if (_transactionUuid(existingRows[i][idColIdx]) === _transactionUuid(id)) return String(existingRows[i][syncStatusColIdx]);
   }
   return '';
+}
+
+function _transactionUuid(value) {
+  if (typeof value !== 'string') return null;
+  const identity = value.trim().toLowerCase();
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(identity) ? identity : null;
+}
+
+// Sheet business/lifecycle edits must enter normal sync. Metadata-only edits do
+// not requeue rows. Multi-row pastes update only sync cells and updated_at.
+function markTransactionEditPending(event) {
+  const editedSheet = event.range.getSheet();
+  if (editedSheet.getName() !== TRANSACTIONS_SHEET) return false;
+  _assertMasterSheetNameReady(SpreadsheetApp.getActiveSpreadsheet(), TRANSACTIONS_SHEET);
+  const firstColumn = event.range.getColumn();
+  const lastColumn = firstColumn + event.range.getNumColumns() - 1;
+  const lifecycleColumn = txColIndex('record_status') + 1;
+  if (firstColumn > lifecycleColumn || lastColumn < 1) return true;
+  const firstRow = Math.max(2, event.range.getRow());
+  const lastRow = Math.min(editedSheet.getLastRow(), event.range.getRow() + event.range.getNumRows() - 1);
+  if (firstRow > lastRow) return true;
+  const columns = getTransactionSheetColumns();
+  const headers = editedSheet.getRange(1, 1, 1, editedSheet.getLastColumn()).getValues()[0];
+  if (headers.length !== columns.length || headers.some(function(header, index) { return header !== columns[index]; })) {
+    throw new Error('sheet_header_mismatch');
+  }
+  const sheet = getOrCreateSheet(TRANSACTIONS_SHEET, columns);
+  const rows = sheet.getDataRange().getValues();
+  const now = new Date().toISOString();
+  const syncValues = [];
+  const updateValues = [];
+  let queued = 0;
+  for (let rowNum = firstRow; rowNum <= lastRow; rowNum++) {
+    const row = rows[rowNum - 1];
+    if (row.every(function(value) { return value === '' || value === null || value === undefined; })) {
+      // Retain interior blank rows without creating phantom pending records.
+      syncValues.push(['', '', '']);
+      updateValues.push(['']);
+      continue;
+    }
+    const rawStatus = row[txColIndex('sync_status')];
+    const currentStatus = rawStatus === undefined || rawStatus === null ? '' : String(rawStatus).trim();
+    syncValues.push([computeSyncStatus(currentStatus), '', '']);
+    updateValues.push([now]);
+    queued += 1;
+  }
+  if (queued === 0) return true;
+  // Two range writes keep large pastes within the simple-trigger time budget.
+  // Queue status first so a later audit-write failure cannot leave edited rows in-sync.
+  if (firstRow < 2 || lastRow > sheet.getLastRow()) throw new Error('invalid_row');
+  sheet.getRange(firstRow, txColIndex('sync_status') + 1, syncValues.length, 3).setValues(syncValues);
+  if (firstRow < 2 || lastRow > sheet.getLastRow()) throw new Error('invalid_row');
+  sheet.getRange(firstRow, txColIndex('updated_at') + 1, updateValues.length, 1).setValues(updateValues);
+  return true;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

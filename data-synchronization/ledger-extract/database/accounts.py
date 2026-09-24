@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import date, datetime, timezone
 from decimal import Decimal, localcontext
 from typing import Any
@@ -10,11 +11,12 @@ from py_logging import get_logger
 
 import sheets.accounts as sheets_accounts
 import transforms.accounts as accounts_transform
+from database.account_details import validate_account_change
 from transforms.financial import to_minor_units
 
 logger = get_logger(__name__)
 
-_SHEET_NAME = "accounts"
+_SHEET_NAME = "account_master"
 _ACTIONABLE = {"create-pending", "create-failed", "update-pending", "update-failed"}
 _BASE_CURRENCY = "XAU"
 _XAU_DECIMAL_PLACES = 9
@@ -96,9 +98,12 @@ def _store_account(conn: Any, typed: dict[str, Any], decimal_places: dict[str, i
         raise ValueError("accounts: currency_master.decimal_places for XAU must be 9")
     local_minor = to_minor_units(typed["opening_amount_local_value"], places, "opening_value_local")
     with conn.cursor() as cursor:
-        cursor.execute("SELECT id FROM account_types WHERE account_type = %s AND account_subtype = %s", (typed["account_type"], typed["account_subtype"]))
+        cursor.execute(
+            "SELECT id FROM account_types WHERE account_type_key = %s AND account_subtype_key = %s AND is_sheet_managed AND sync_status='in-sync' AND record_status IN ('active','locked') FOR SHARE",
+            (typed["account_type"], typed["account_subtype"]),
+        )
         if cursor.fetchone() is None:
-            raise ValueError("accounts: unknown type/sub_type combination; check account_types")
+            raise ValueError("accounts: unknown, inactive, or unsynced type/sub_type; sync account_types first")
         cursor.execute(
             """SELECT legal_entity_name, account_type, local_timezone, opening_date_local,
                       tracking_start_date_local, opening_amount_local_value, local_currency
@@ -135,6 +140,7 @@ def _store_account(conn: Any, typed: dict[str, Any], decimal_places: dict[str, i
     applied_rate_value = Decimal(1) if currency == _BASE_CURRENCY else (rate_lookup[1] if rate_lookup is not None else None)
     with conn.cursor() as cursor:
         if existing is not None:
+            validate_account_change(conn, typed["id"], typed["account_subtype"])
             cursor.execute(
                 """UPDATE account_master SET account_name = %s, account_subtype = %s,
                    closing_date_local = %s, account_description = %s, record_status = %s,
@@ -188,7 +194,7 @@ def _store_account(conn: Any, typed: dict[str, Any], decimal_places: dict[str, i
             raise ValueError("accounts: account was inserted concurrently; retry after reconciling its immutable fields")
 
 
-def upsert_accounts(conn: Any, sheets_client: SheetsClient, rows: list[dict[str, Any]], row_start: int) -> int:
+def upsert_accounts(conn: Any, sheets_client: SheetsClient, rows: list[dict[str, Any]], row_start: int, *, before_commit: Callable[[], None] | None = None) -> int:
     """Persist each row atomically; return failure count so the job cannot claim success."""
     logger.info(f"upsert_accounts: batch_start row_start={row_start} total={len(rows)}")
     decimal_places = _load_decimal_places(conn)
@@ -205,12 +211,21 @@ def upsert_accounts(conn: Any, sheets_client: SheetsClient, rows: list[dict[str,
                 logger.warning(f"upsert_accounts: invalid_sync_status row={sheet_row_num}")
                 continue
             failed_status = "create-failed" if sync_status.startswith("create-") else "update-failed"
+            checking_source = False
             try:
                 typed = accounts_transform.transform(row)
                 _store_account(conn, typed, decimal_places)
+                if before_commit is not None:
+                    checking_source = True
+                    before_commit()
+                    checking_source = False
                 conn.commit()
             except (ValueError, pg_errors.UniqueViolation, pg_errors.ForeignKeyViolation, pg_errors.CheckViolation, pg_errors.NotNullViolation) as exc:
                 conn.rollback()
+                # Snapshot/header failures invalidate the run, not this account.
+                # Preserve their exception and never queue a stale acknowledgement.
+                if checking_source:
+                    raise
                 failed += 1
                 logger.warning(f"upsert_accounts: row_failed row={sheet_row_num} error_type={type(exc).__name__}")
                 write_backs.append(sheets_accounts.write_back(sheet_row_num, failed_status, datetime.now(timezone.utc).isoformat(), _to_sync_notes(exc)))

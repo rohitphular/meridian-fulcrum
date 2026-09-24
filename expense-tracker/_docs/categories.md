@@ -32,9 +32,9 @@ A category row may carry four extra columns used for required-account validation
 | Column | Type | Meaning |
 |---|---|---|
 | `source_account_mandatory` | boolean | If true, transactions of this category MUST specify a source account |
-| `source_account_types` | string | Comma-and-space-separated allowed source account types (e.g. `current, savings`) |
+| `source_account_types` | string | Comma-and-space-separated allowed source subtype keys from the `account_types` Sheet; key values use hyphens |
 | `target_account_mandatory` | boolean | If true, transactions of this category MUST specify a target account |
-| `target_account_types` | string | Comma-and-space-separated allowed target account types |
+| `target_account_types` | string | Comma-and-space-separated allowed target subtype keys from the same Sheet catalog |
 
 When a category with these hints is used on a transaction:
 
@@ -57,13 +57,13 @@ No automatic seeding exists. Categories must be populated via the bulk CSV impor
 |---|---|
 | `list_categories` | Return all rows |
 | `create_category` | Validate required fields; duplicate check → `duplicate_category`; append; stamps `created_at`, `updated_at`, `sync_status = create-pending`, and a UUID `id`. If `body.id` is provided (e.g. from a seeded CSV import), that value is used; otherwise a UUID is generated. `record_status` is always written as `active` on create — passing any other value (including `'inactive'`) returns `invalid_record_status`. The add form therefore only offers `active` as a choice. Returns `{ ok: true, id: '<uuid>' }`. |
-| `create_categories_bulk` | Accept `categories[]`; insert or replace by `id`, generating a UUID when absent; preserve `created_at` on replacement and advance sync status; return `{ ok, created, updated, failed, results }` |
+| `create_categories_bulk` | Accept `categories[]`; validate and match UUIDs case-insensitively, generating a UUID when absent. Preserve lifecycle and existing `created_at`; queue sync status. Locked rows accept an identical retry only. Return `{ ok, created, updated, skipped, failed, results }` with row-specific diagnostics. |
 | `update_category` | Validate required fields (including optional `record_status` if present); locked guard; FK check if composite key is changing (see below); overwrite the row; stamps `updated_at`. `record_status` is written only if present in the request body — if absent, the existing status is preserved. To restore a deleted category, pass `record_status: 'active'` via this action. Optional parameter: `force` (boolean). |
 | `delete_category` | Locked guard; soft-delete (`record_status → deleted`); stamps `updated_at` |
 
 ### `update_category` — FK check on key-changing edits
 
-When `tx_type_key`, `major_category_label`, or `minor_category_label` changes such that the composite key `(tx_type_key, major_category_key, minor_category_key)` changes, the backend scans the transactions sheet and subscriptions sheet for rows that reference the old key (matching on `tx_type`, `major_category`, `minor_category`).
+When `tx_type_key`, `major_category_label`, or `minor_category_label` changes such that the composite key `(tx_type_key, major_category_key, minor_category_key)` changes, the backend scans the `transaction_master` sheet and `subscription_master` sheet for rows that reference the old key (matching on `tx_type`, `major_category`, `minor_category`).
 
 - If any dependent rows exist and `body.force !== true`, the update is rejected: `{ ok: false, error: 'category_key_change_has_dependents', count: N }` where `N` is the total number of matching rows across both sheets.
 - If `body.force: true` is passed, or no dependent rows are found, the rename proceeds normally. The caller accepts responsibility for updating dependent rows — the backend does not cascade the rename.
@@ -74,6 +74,22 @@ When `tx_type_key`, `major_category_label`, or `minor_category_label` changes su
 If `record_status` is present in the request body, it is validated against the allowed set `['active', 'inactive', 'deleted', 'locked']`. An unrecognised value returns `{ ok: false, error: 'invalid_record_status' }`. If `record_status` is absent from the body, validation passes and the existing status is preserved.
 
 **Asymmetry with `create_category`:** `create_category` only accepts `'active'` — any other value returns `invalid_record_status`. `update_category` accepts the full set.
+
+### `create_categories_bulk` — prerequisites, retries, and diagnostics
+
+The backend reads and validates `account_types` once before a hinted import. A missing or empty catalog returns `account_types_missing`; a legacy 12-column catalog or underscore classification keys returns `account_types_migration_required`. Neither condition creates or changes `category_master`. Deploy the current backend and import the complete 14-column `account_types.csv` through **Configure → Account Types** before retrying categories. See [Account Types migration](account-types.md). Invalid catalog headers, policies, or identities return `invalid_account_types`.
+
+Hints must resolve to active or locked catalog subtypes, or the existing broad `investment` hint. A legacy CSV token such as `credit_card` becomes `credit-card` only when that canonical value exists in the eligible Sheet catalog. Unknown or unavailable tokens are rejected, never silently removed. Both individual investment subtypes and the broad investment hint retain their meaning.
+
+The complete batch is validated before writes begin. Valid rows can import while invalid rows are reported. Every row result contains zero-based `index`, UUID `key`, and `ok`; an integer `csv_row_num` supplied by the caller is echoed. Successful results have `action: created`, `updated`, or `unchanged`. Failures contain an error code, `field`, `reason`, and `invalid_values` where applicable. For example:
+
+```json
+{"index":4,"csv_row_num":9,"key":"<uuid>","ok":false,"error":"invalid_target_account_types","field":"target_account_types","invalid_values":["unknown-subtype"],"reason":"invalid_target_account_types"}
+```
+
+Imports preserve valid `record_status` values (`active`, `inactive`, `deleted`, `locked`); blank or omitted status retains an existing row's status and defaults a new row to active. Imported audit and sync values are ignored: creation uses server timestamps, replacement preserves `created_at`, and every write queues sync and clears the previous sync date/notes. An identical locked retry is counted in `skipped` and makes no write; any modification of a locked row is rejected. Duplicate UUIDs within the same upload are rejected for every duplicate occurrence. Replacements recheck the physical row's UUID immediately before writing.
+
+Changing an existing category's derived composite key is rejected when transactions or subscriptions reference it. Bulk import does not accept the interactive `force` override. Each write failure is reported as `category_write_failed`; successfully imported rows remain saved. Retry the same UUID-bearing file to complete remaining rows without creating duplicate identities.
 
 ## Error codes
 
@@ -89,8 +105,16 @@ If `record_status` is present in the request body, it is validated against the a
 | `duplicate_category` | `create_category`, `update_category` | Composite key `(tx_type_key, major_category_key, minor_category_key)` already exists on a different row |
 | `record_locked` | `update_category`, `delete_category` | The target row has `record_status = locked` |
 | `category_key_change_has_dependents` | `update_category` | Composite key is changing and `count` dependent rows exist across transactions and subscriptions; `force` is not true. Response includes `count: N`. |
-| `fk_scan_error` | `update_category` | An unexpected exception occurred while scanning the transactions/subscriptions sheets for dependent rows during a composite-key-changing edit |
+| `fk_scan_error` | `update_category` | An unexpected exception occurred while scanning the `transaction_master`/`subscription_master` sheets for dependent rows during a composite-key-changing edit |
 | `missing_categories` | `create_categories_bulk` | `body.categories` is absent or empty |
+| `account_types_missing` | Category validation / bulk import | Hints were supplied but the Account Types catalog is absent or empty; import it through Configure first |
+| `account_types_migration_required` | Category validation / bulk import | Account Types still has 12 columns or legacy underscore keys; deploy and import the complete current catalog |
+| `invalid_account_types` | Category validation / bulk import | Catalog header, identity, or policy validation failed |
+| `invalid_source_account_types`, `invalid_target_account_types` | Category validation / bulk import | `field` and `invalid_values` identify unrecognised or unavailable hints |
+| `invalid_id`, `duplicate_id_in_import` | Bulk import | Supplied UUID is malformed, or appears more than once in the batch |
+| `invalid_boolean` | Bulk import | Named boolean field contains a value other than true, false, or blank |
+| `invalid_existing_category_id` | Bulk import | Existing category identities are malformed or duplicated; response identifies the Sheet row |
+| `stale_row`, `category_write_failed` | Bulk import | Row identity changed after validation, or the Sheet write failed; retry after resolving the reported cause |
 
 ## CSV import
 
@@ -99,7 +123,7 @@ The import panel (accessible via the **Import** button in the section header) ac
 | Column | Required | Notes |
 |---|---|---|
 | `id` | No | UUID identifying the row to insert or replace. Omit to create a new UUID. |
-| `tx_type_key` | Yes | Must be exactly `money-in` or `money-out`. Invalid values are rejected as parse errors before submission — the row is skipped and reported in the preview error list. |
+| `tx_type_key` | Yes | Must match a transaction type from the category schema. Invalid values are reported before submission. |
 | `major_category_label` | Yes | |
 | `minor_category_label` | Yes | |
 | `description` | No | |
@@ -110,13 +134,17 @@ The import panel (accessible via the **Import** button in the section header) ac
 | `source_account_mandatory` | No | `true` / `false` |
 | `target_account_mandatory` | No | `true` / `false` |
 | `is_subscription_eligible` | No | `true` / `false` |
-| `record_status` | No | Bulk validation uses the create contract: only `active` is accepted when supplied; accepted imports write `active`. |
+| `record_status` | No | Any status allowed by the category schema. Blank or omitted retains an existing row's status and defaults new rows to active. |
 
-An `id` column is optional in the CSV. When present, the value is used as the UUID for newly created rows, allowing pre-assigned UUIDs from seed files to be preserved (useful for cross-entity FK references in seed data). A matching `id` selects the replacement row. Re-imports without IDs create new rows. Audit columns (`sync_status`, `sync_date`, `sync_notes`, `created_at`, `updated_at`) are stamped by the backend on import and must not be present in the CSV.
+An `id` column is optional in the CSV. When present, the value is used as the UUID for newly created rows, allowing pre-assigned UUIDs from seed files to be preserved (useful for cross-entity FK references in seed data). A matching `id` selects the replacement row. Re-imports without IDs create new rows. Audit columns (`sync_status`, `sync_date`, `sync_notes`, `created_at`, `updated_at`) are accepted in exported CSVs but ignored on import; the backend manages these values and preserves an existing row's `created_at`.
 
 Derived columns (`tx_type_label`, `major_category_key`, `minor_category_key`) are computed by the backend from the label fields via `slugify` and `TX_TYPE_LABEL_MAP` — they are never read from the CSV. If present in the file (e.g. exported CSVs that include all sheet columns), they are silently ignored by the parser.
 
-Preview is shown before submission. Results summary: `N imported · M updated · K failed`.
+The preview supports quoted commas, escaped quotes, and multiline fields, and identifies physical CSV row numbers. Missing or duplicate headers, inconsistent row widths, invalid UUIDs, and invalid boolean/status values block submission until the file is corrected. Boolean values must be `true`, `false`, or blank, case-insensitively.
+
+Before submission, the panel checks that Account Types is populated and upgraded. If the dev Sheet still uses underscore keys or the old 12-column layout, deploy the updated backend, reload the app, then import the complete updated `local/files/account_types.csv` through **Configure → Account Types**. Afterwards import `local/files/category_master.csv`. Matching UUIDs update the rows already imported and preserve identity.
+
+After submission, the panel stays open with created, updated, unchanged, and failed counts. Every rejected row remains visible with its CSV row number, category, field, explanation, and backend error code. **Retry failed rows** submits only the rejected rows. Successful mutations dispatch `et:reload`, and their report survives that refresh. A connection failure or malformed response leaves the outcome uncertain: reload and reselect the UUID-bearing CSV before retrying. Choosing another file or closing the panel clears the previous report.
 
 ## Column positions
 

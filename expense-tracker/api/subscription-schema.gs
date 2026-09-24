@@ -275,7 +275,10 @@ const SUBSCRIPTION_SCHEMA = {
 
 function getSubscriptionSchemaForClient() {
   return {
-    frequencies: VALID_FREQUENCIES,
+    frequencies: VALID_FREQUENCIES.slice(),
+    tx_types: SUBSCRIPTION_SCHEMA.tx_type.enum_values.slice(),
+    record_statuses: SUBSCRIPTION_SCHEMA.record_status.enum_values.slice(),
+    default_timezone: 'Europe/London',
   };
 }
 

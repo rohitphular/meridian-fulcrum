@@ -253,146 +253,162 @@ function deleteCategory(body) {
   return { ok: true };
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Bulk create/replace — id-based upsert.
-//
-// Dedup rule: each incoming row carries an `id` (uuid). One sheet read at the
-// start builds a map of id → 1-based sheet row number. For each incoming row:
-//   - id absent          → generate a uuid and INSERT (append).
-//   - id not in the map  → INSERT (append).
-//   - id present in map   → REPLACE that row in place (overwrite all columns),
-//                          preserving created_at and setting sync_status to
-//                          update-pending.
-// No duplicate_* short-circuits remain in this path.
-// ─────────────────────────────────────────────────────────────────────────────
+// CSV import is an ID-based upsert. Preflight all rows before starting writes;
+// individual validation failures remain in results while valid rows can import.
 function createCategoriesBulk(body) {
   if (!Array.isArray(body.categories) || body.categories.length === 0)
     return { ok: false, error: 'missing_categories' };
+  const incoming = body.categories;
+  const usesHints = incoming.some(function(cat) {
+    return cat !== null && typeof cat === 'object' &&
+      (splitToList(cat.source_account_types).length > 0 || splitToList(cat.target_account_types).length > 0);
+  });
+  const context = usesHints ? _categoryHintContext() : { ok: true, valid: new Set() };
+  if (!context.ok) return Object.assign({ created: 0, updated: 0, skipped: 0, failed: 0, results: [] }, context);
 
-  const cols    = getCategorySheetColumns();
-  const sheet   = getOrCreateSheet(CATEGORIES_SHEET, cols);
-  const numCols = cols.length;
-
-  // One sheet read → map id → 1-based sheet row number.
-  const ciId   = catColIndex('id');
-  const values = sheet.getDataRange().getValues();
-  const rowNumById = {};
-  for (let i = 1; i < values.length; i++) {
-    const existingId = String(values[i][ciId]).trim();
-    if (existingId !== '') rowNumById[existingId] = i + 1;
+  const cols = getCategorySheetColumns();
+  const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet;
+  let values;
+  try {
+    _assertMasterSheetNameReady(spreadsheet, CATEGORIES_SHEET);
+    sheet = spreadsheet.getSheets().find(function(candidate) { return candidate.getName() === CATEGORIES_SHEET; });
+    values = sheet === undefined || sheet.getLastRow() === 0 ? [cols] : sheet.getDataRange().getValues();
+    if (values[0].length !== cols.length || values[0].some(function(column, index) { return column !== cols[index]; }))
+      return { ok: false, error: 'sheet_header_mismatch', field: 'category_master' };
+  } catch (error) {
+    const allowed = ['legacy_master_sheet_name', 'master_sheet_name_collision'];
+    return { ok: false, error: allowed.includes(error.message) ? error.message : 'category_sheet_unavailable', field: 'category_master' };
   }
-
-  const createdAtIdx  = getCategorySchemaField('created_at').sheet_column_position - 1;
-  const syncStatusIdx = getCategorySchemaField('sync_status').sheet_column_position - 1;
-
-  const results = [];
+  const rowNumById = new Map();
+  for (let index = 1; index < values.length; index++) {
+    if (values[index].every(function(value) { return strField(value) === ''; })) continue;
+    const id = strField(values[index][catColIndex('id')]).toLowerCase();
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id) || rowNumById.has(id))
+      return { ok: false, error: 'invalid_existing_category_id', field: 'id', row_num: index + 1 };
+    rowNumById.set(id, index + 1);
+  }
+  const inputIds = new Map();
+  incoming.forEach(function(cat) {
+    if (cat === null || typeof cat !== 'object') return;
+    const id = strField(cat.id).toLowerCase();
+    if (id !== '') inputIds.set(id, (inputIds.get(id) === undefined ? 0 : inputIds.get(id)) + 1);
+  });
+  const results = new Array(incoming.length);
+  const plans = [];
   let created = 0;
   let updated = 0;
-  let failed  = 0;
-
-  body.categories.forEach(function(cat) {
-    const validation = validateCategoryCreate(cat);
-    if (!validation.ok) {
-      results.push({ key: cat.id, ok: false, error: validation.error });
-      failed += 1;
-      return;
+  let skipped = 0;
+  incoming.forEach(function(cat, index) {
+    const fail = function(error) { results[index] = _categoryImportResult(cat, index, error); };
+    const validation = validateCategoryImport(cat, context);
+    if (!validation.ok) { fail(validation); return; }
+    const suppliedId = strField(cat.id).toLowerCase();
+    if (suppliedId !== '' && inputIds.get(suppliedId) > 1) {
+      fail({ ok: false, error: 'duplicate_id_in_import', field: 'id', invalid_values: [suppliedId] }); return;
     }
-
-    const majKey = slugify(String(cat.major_category_label).trim());
-    const minKey = slugify(String(cat.minor_category_label).trim());
-    if (majKey === '' || minKey === '') {
-      results.push({ key: cat.id, ok: false, error: 'invalid_category_label' });
-      failed += 1;
-      return;
+    const id = suppliedId === '' ? Utilities.getUuid().toLowerCase() : suppliedId;
+    const rowNum = rowNumById.get(id);
+    const previous = rowNum === undefined ? null : values[rowNum - 1];
+    const row = new Array(cols.length).fill('');
+    function setCol(key, value) { row[catColIndex(key)] = value; }
+    setCol('id', id);
+    setCol('tx_type_key', strField(cat.tx_type_key));
+    setCol('tx_type_label', TX_TYPE_LABEL_MAP[strField(cat.tx_type_key)]);
+    for (const field of ['major_category_label', 'minor_category_label', 'description']) setCol(field, strField(cat[field]));
+    setCol('major_category_key', slugify(strField(cat.major_category_label)));
+    setCol('minor_category_key', slugify(strField(cat.minor_category_label)));
+    setCol('tag_keywords', normaliseKeywords(strField(cat.tag_keywords)));
+    setCol('counterparty_examples', normaliseCandidates(strField(cat.counterparty_examples)));
+    for (const field of ['source_account_types', 'target_account_types']) setCol(field, normaliseAccountTypes(strField(cat[field]), context));
+    for (const field of ['source_account_mandatory', 'target_account_mandatory', 'is_subscription_eligible'])
+      setCol(field, toBool(strField(cat[field])));
+    const suppliedStatus = strField(cat.record_status);
+    setCol('record_status', suppliedStatus === '' ? (previous === null ? 'active' : previous[catColIndex('record_status')]) : suppliedStatus);
+    if (previous !== null && strField(previous[catColIndex('record_status')]) === 'locked') {
+      const same = cols.slice(0, catColIndex('sync_status')).every(function(field) {
+        if (field === 'id') return strField(previous[catColIndex(field)]).toLowerCase() === id;
+        if (CATEGORY_SCHEMA[field].type === 'boolean') return toBool(previous[catColIndex(field)]) === row[catColIndex(field)];
+        return strField(previous[catColIndex(field)]) === row[catColIndex(field)];
+      });
+      if (!same) { fail({ ok: false, error: 'record_locked', field: 'record_status' }); return; }
+      results[index] = _categoryImportResult(cat, index, { ok: true, key: id, action: 'unchanged' });
+      skipped++; return;
     }
-
+    if (previous !== null && ['tx_type_key', 'major_category_key', 'minor_category_key'].some(function(field) { return previous[catColIndex(field)] !== row[catColIndex(field)]; })) {
+      try {
+        const count = _countCategoryKeyReferences(previous);
+        if (count > 0) { fail({ ok: false, error: 'category_key_change_has_dependents', field: 'category_key', count: count }); return; }
+      } catch (_) { fail({ ok: false, error: 'fk_scan_error', field: 'category_key' }); return; }
+    }
     const now = new Date().toISOString();
-    const hasId = cat.id !== undefined && cat.id !== null && String(cat.id).trim() !== '';
-    const id = hasId ? String(cat.id).trim() : Utilities.getUuid();
-    const existingRowNum = rowNumById[id];
-    const isReplace = existingRowNum !== undefined;
-
-    const row = new Array(numCols).fill('');
-    function setC(key, value) {
-      const field = getCategorySchemaField(key);
-      if (field) row[field.sheet_column_position - 1] = (value === undefined || value === null) ? '' : value;
-    }
-
-    setC('id',                        id);
-    setC('tx_type_key',               String(cat.tx_type_key).trim());
-    setC('tx_type_label',             TX_TYPE_LABEL_MAP[String(cat.tx_type_key).trim()]);
-    setC('major_category_label',      String(cat.major_category_label).trim());
-    setC('major_category_key',        majKey);
-    setC('minor_category_label',      String(cat.minor_category_label).trim());
-    setC('minor_category_key',        minKey);
-    setC('description',               strField(cat.description));
-    setC('record_status',             'active');
-    setC('tag_keywords',              normaliseKeywords(strField(cat.tag_keywords)));
-    setC('counterparty_examples',     normaliseCandidates(strField(cat.counterparty_examples)));
-    setC('source_account_types',      normaliseAccountTypes(strField(cat.source_account_types)));
-    setC('target_account_types',      normaliseAccountTypes(strField(cat.target_account_types)));
-    setC('source_account_mandatory',  cat.source_account_mandatory === true || cat.source_account_mandatory === 'true');
-    setC('target_account_mandatory',  cat.target_account_mandatory === true || cat.target_account_mandatory === 'true');
-    setC('is_subscription_eligible',  cat.is_subscription_eligible === true || cat.is_subscription_eligible === 'true');
-    setC('sync_date',                 '');
-    setC('sync_notes',                '');
-    setC('updated_at',                now);
-
-    if (isReplace) {
-      // Preserve created_at from the existing row; advance sync_status.
-      const existingRow = values[existingRowNum - 1];
-      row[createdAtIdx]  = existingRow[createdAtIdx];
-      row[syncStatusIdx] = computeSyncStatus(String(existingRow[syncStatusIdx]));
-      sheet.getRange(existingRowNum, 1, 1, numCols).setValues([row]);
-      results.push({ key: id, ok: true, action: 'updated' });
-      updated += 1;
-    } else {
-      row[createdAtIdx]  = now;
-      row[syncStatusIdx] = SYNC_STATUS_CREATE_PENDING;
-      sheet.appendRow(row);
-      // Record the new row so a repeated id later in this batch replaces it.
-      rowNumById[id] = sheet.getLastRow();
-      values[rowNumById[id] - 1] = row; // keep values[] aligned for created_at preservation
-      results.push({ key: id, ok: true, action: 'created' });
-      created += 1;
-    }
+    setCol('created_at', previous === null ? now : previous[catColIndex('created_at')]);
+    setCol('updated_at', now);
+    setCol('sync_status', previous === null ? SYNC_STATUS_CREATE_PENDING : computeSyncStatus(strField(previous[catColIndex('sync_status')])));
+    setCol('sync_date', '');
+    setCol('sync_notes', '');
+    plans.push({ index: index, cat: cat, row: row, row_num: rowNum, id: id });
   });
-
-  console.log('createCategoriesBulk: input=' + body.categories.length
-    + ' created=' + created + ' updated=' + updated + ' failed=' + failed);
-
-  return {
-    ok:      failed === 0,
-    created: created,
-    updated: updated,
-    failed:  failed,
-    results: results,
-  };
+  for (const plan of plans) {
+    try {
+      if (sheet === undefined || sheet.getLastRow() === 0) sheet = getOrCreateSheet(CATEGORIES_SHEET, cols);
+      if (plan.row_num === undefined) {
+        sheet.appendRow(plan.row); created++;
+      } else {
+        if (plan.row_num < 2 || plan.row_num > sheet.getLastRow() ||
+            strField(sheet.getRange(plan.row_num, catColIndex('id') + 1).getValues()[0][0]).toLowerCase() !== plan.id) {
+          results[plan.index] = _categoryImportResult(plan.cat, plan.index, { ok: false, error: 'stale_row', field: 'id' }); continue;
+        }
+        sheet.getRange(plan.row_num, 1, 1, cols.length).setValues([plan.row]); updated++;
+      }
+      results[plan.index] = _categoryImportResult(plan.cat, plan.index, { ok: true, key: plan.id, action: plan.row_num === undefined ? 'created' : 'updated' });
+    } catch (_) {
+      console.error('createCategoriesBulk: index=' + plan.index + ' error=category_write_failed');
+      results[plan.index] = _categoryImportResult(plan.cat, plan.index, { ok: false, error: 'category_write_failed', field: 'row' });
+    }
+  }
+  const failed = results.filter(function(result) { return !result.ok; }).length;
+  console.log('createCategoriesBulk: input=' + incoming.length + ' created=' + created + ' updated=' + updated + ' skipped=' + skipped + ' failed=' + failed);
+  return { ok: failed === 0, created: created, updated: updated, skipped: skipped, failed: failed, results: results };
 }
 
-// onEdit cascade — rebuilds category dropdowns in the transactions sheet when
+// onEdit cascade — rebuilds category dropdowns in transaction_master when
 // the user edits transaction_type or major_category directly in the sheet.
 function onEdit(e) {
-  const sheet = e.source.getActiveSheet();
-  if (sheet.getName() !== TRANSACTIONS_SHEET) return;
+  if (markAccountTypeEditPending(e)) return;
+  if (markAccountDetailEditPending(e)) return;
+  if (markAccountMasterEditPending(e)) return;
+  const sheet = e.range.getSheet();
+  if (sheet.getName() !== TRANSACTIONS_SHEET) {
+    markSubscriptionEditPending(e);
+    return;
+  }
+
+  const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  _assertMasterSheetNameReady(spreadsheet, TRANSACTIONS_SHEET);
+  _assertMasterSheetNameReady(spreadsheet, CATEGORIES_SHEET);
+  markTransactionEditPending(e);
 
   const row = e.range.getRow();
   const col = e.range.getColumn();
   if (row <= 1) return;
+  // A pasted block already contains its chosen categories. Queue all its rows,
+  // but do not clear pasted category values with the single-cell dropdown flow.
+  if (e.range.getNumRows() !== 1 || e.range.getNumColumns() !== 1) return;
 
   // Derive column positions from transaction schema — never hardcode column numbers.
   const TYPE_COL  = TRANSACTION_SCHEMA['tx_type'].sheet_column_position;
   const MAJOR_COL = TRANSACTION_SCHEMA['major_category'].sheet_column_position;
   const MINOR_COL = TRANSACTION_SCHEMA['minor_category'].sheet_column_position;
 
-  // onEdit trigger — using getSheetByName intentionally; getOrCreateSheet is inappropriate for trigger context
-  const catSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(CATEGORIES_SHEET);
-  if (!catSheet) return;
+  // Read an existing category tab only; refuse stale or conflicting master names.
+  const catSheet = spreadsheet.getSheets().find(function(candidate) { return candidate.getName() === CATEGORIES_SHEET; });
+  if (catSheet === undefined) return;
   const catData = catSheet.getDataRange().getValues().slice(1);
 
   // Column indices into catData (0-based) — use catColIndex to avoid hardcoding.
   // NOTE: dropdowns show keys (major_category_key / minor_category_key) so that the stored
-  // value in the transactions sheet matches what _buildCategoryMap keys on.
+  // value in transaction_master matches what _buildCategoryMap keys on.
   // Labels are shown via Sheets column-header context; storing keys keeps API and sheet-edit
   // paths consistent.
   const CI_TYPE   = catColIndex('tx_type_key');

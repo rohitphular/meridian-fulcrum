@@ -18,7 +18,7 @@ function listAccounts() {
   });
 }
 
-// Scans the transactions sheet and returns a map of { accountId → net change }.
+// Scans transaction_master and returns a map of { accountId → net change }.
 // tx_amount_local is always stored as a positive value; tx_type (money-in / money-out)
 // determines the sign applied to the running balance.
 function _buildAccountNetMap(accounts) {
@@ -39,7 +39,7 @@ function _buildAccountNetMap(accounts) {
   const statIdx = txColIndex('record_status');
   const dateIdx = txColIndex('tx_date_local');
 
-  // Index by account ID — that is what the transactions sheet stores in account_id
+  // Index by account ID — transaction_master stores that UUID in account_id.
   const validIds = {};
   accounts.forEach(function(a) { validIds[a.id] = true; });
 
@@ -74,16 +74,18 @@ function createAccount(body) {
 
   // Use caller-supplied id (seed CSV import) when provided; otherwise generate a UUID.
   const id  = (body.id !== undefined && body.id !== null && String(body.id).trim() !== '')
-    ? String(body.id).trim()
+    ? String(body.id).trim().toLowerCase()
     : Utilities.getUuid();
+  const idColumn = acctColIndex('id');
+  if (sheet.getDataRange().getValues().slice(1).some(function(existingRow) {
+    return String(existingRow[idColumn]).trim().toLowerCase() === id;
+  })) return { ok: false, error: 'account_id_exists' };
   const now = new Date().toISOString();
   const type = String(body.type).trim();
-  const isLiabilityAccount = isLiabilityType(type);
 
   // Liabilities stored as negative; user always inputs positive.
   // opening_value presence and numeric validity already checked by validateAccountCreate.
-  const rawOV = Number(body.opening_value_local);
-  const openingValue = isLiabilityAccount ? -(Math.abs(rawOV)) : rawOV;
+  const openingValue = accountOpeningValue(body.opening_value_local, type);
 
   const row = new Array(cols.length).fill('');
 
@@ -127,11 +129,21 @@ function createAccount(body) {
 //   - id present in map   → REPLACE that row in place (overwrite all columns),
 //                          preserving created_at and setting sync_status to
 //                          update-pending.
-// No duplicate_* short-circuits remain in this path.
+// Existing UUID collisions fail before writes; repeated incoming UUIDs replace the same row.
 // ─────────────────────────────────────────────────────────────────────────────
 function createAccountsBulk(body) {
   if (Array.isArray(body.accounts) === false || body.accounts.length === 0)
     return { ok: false, error: 'missing_accounts' };
+
+  const prepared = body.accounts.map(function(account) { return { account: account, validation: validateAccountCreate(account) }; });
+  if (prepared.every(function(entry) { return entry.validation.ok === false; })) {
+    return {
+      ok: false, created: 0, updated: 0, failed: prepared.length,
+      results: prepared.map(function(entry) {
+        return { key: entry.account !== null && typeof entry.account === 'object' ? entry.account.id : '', ok: false, error: entry.validation.error };
+      }),
+    };
+  }
 
   const cols    = getAccountSheetColumns();
   const sheet   = getOrCreateSheet(ACCOUNTS_SHEET, cols);
@@ -142,8 +154,10 @@ function createAccountsBulk(body) {
   const existingData = sheet.getDataRange().getValues();
   const rowNumById   = Object.create(null);
   for (let i = 1; i < existingData.length; i++) {
-    const existingId = String(existingData[i][idColIdx]).trim();
-    if (existingId !== '') rowNumById[existingId] = i + 1;
+    const existingId = String(existingData[i][idColIdx]).trim().toLowerCase();
+    if (existingId === '') continue;
+    if (rowNumById[existingId] !== undefined) return { ok: false, error: 'duplicate_account_id' };
+    rowNumById[existingId] = i + 1;
   }
 
   const createdAtIdx  = getAccountSchemaField('created_at').sheet_column_position - 1;
@@ -154,8 +168,9 @@ function createAccountsBulk(body) {
   let updated = 0;
   let failed  = 0;
 
-  body.accounts.forEach(function(acct) {
-    const validation = validateAccountCreate(acct);
+  prepared.forEach(function(entry) {
+    const acct = entry.account;
+    const validation = entry.validation;
     if (validation.ok === false) {
       results.push({ key: acct !== null && typeof acct === 'object' ? acct.id : '', ok: false, error: validation.error });
       failed += 1;
@@ -164,15 +179,13 @@ function createAccountsBulk(body) {
 
     const now  = new Date().toISOString();
     const type = String(acct.type).trim();
-    const isLiabilityAccount = isLiabilityType(type);
     const normCurrency = String(acct.account_currency_local).trim().toUpperCase();
 
     // Liabilities stored as negative; user always inputs positive.
-    const rawOV = Number(acct.opening_value_local);
-    const openingValue = isLiabilityAccount ? -(Math.abs(rawOV)) : rawOV;
+    const openingValue = accountOpeningValue(acct.opening_value_local, type);
 
     const hasId = acct.id !== undefined && acct.id !== null && String(acct.id).trim() !== '';
-    const id = hasId ? String(acct.id).trim() : Utilities.getUuid();
+    const id = hasId ? String(acct.id).trim().toLowerCase() : Utilities.getUuid();
     const existingRowNum = rowNumById[id];
     const isReplace = existingRowNum !== undefined;
 
@@ -193,8 +206,8 @@ function createAccountsBulk(body) {
     setCol('account_closing_date_local', acct.account_closing_date_local  !== undefined && acct.account_closing_date_local  !== null ? String(acct.account_closing_date_local).trim()  : '');
     setCol('tracking_start_date_local',  acct.tracking_start_date_local   !== undefined && acct.tracking_start_date_local   !== null ? String(acct.tracking_start_date_local).trim()   : '');
     setCol('opening_value_local', openingValue);
-    // Honor a supplied record_status (seed import may bring closed/inactive accounts);
-    // absent → 'active'. Validity already enforced by validateAccountCreate.
+    // Honor an explicit lifecycle status. New IDs default to active; replacement
+    // of an existing ID preserves omitted status below.
     setCol('record_status',      (acct.record_status !== undefined && acct.record_status !== null && String(acct.record_status).trim() !== '') ? String(acct.record_status).trim() : 'active');
     setCol('description',        acct.description         !== undefined && acct.description         !== null ? String(acct.description).trim()         : '');
     setCol('sync_date',          '');
@@ -202,11 +215,29 @@ function createAccountsBulk(body) {
     setCol('updated_at',         now);
 
     if (isReplace) {
+      if (!Number.isInteger(existingRowNum) || existingRowNum < 2 || existingRowNum > sheet.getLastRow()) {
+        results.push({ key: id, ok: false, error: 'invalid_row' });
+        failed += 1;
+        return;
+      }
       // Preserve created_at from the existing row; advance sync_status.
       const existingRow = existingData[existingRowNum - 1];
+      // Existing transaction/subscription references may use the original UUID
+      // spelling. Match UUIDs canonically without rewriting that stored identity.
+      row[idColIdx] = existingRow[idColIdx];
+      if (acct.record_status === undefined || acct.record_status === null || String(acct.record_status).trim() === '') {
+        const previousStatus = String(existingRow[acctColIndex('record_status')]).trim();
+        if (getAccountSchemaField('record_status').enum_values.indexOf(previousStatus) === -1) {
+          results.push({ key: id, ok: false, error: 'invalid_record_status' });
+          failed += 1;
+          return;
+        }
+        row[acctColIndex('record_status')] = previousStatus;
+      }
       row[createdAtIdx]  = existingRow[createdAtIdx];
       row[syncStatusIdx] = computeSyncStatus(String(existingRow[syncStatusIdx]));
       sheet.getRange(existingRowNum, 1, 1, numCols).setValues([row]);
+      existingData[existingRowNum - 1] = row;
       results.push({ key: id, ok: true, action: 'updated' });
       updated += 1;
     } else {
@@ -248,7 +279,7 @@ function updateAccount(body) {
 
   const currentType = String(allRows[rowNum - 1][acctColIndex('type')]);
 
-  const validation = validateAccountUpdate(body, currentType);
+  const validation = validateAccountUpdate(body, currentType, allRows[rowNum - 1][acctColIndex('account_opening_date_local')]);
   if (validation.ok === false) return validation;
 
   // Duplicate name guard — reject if a different non-deleted row already has the same account_name
@@ -292,6 +323,7 @@ function updateAccount(body) {
   const updatedAtColIdx   = acctColIndex('updated_at');
   const currentSyncStatus = String(allRows[rowNum - 1][syncStatusColIdx]);
   updatedRow[syncStatusColIdx] = computeSyncStatus(currentSyncStatus);
+  updatedRow[acctColIndex('sync_date')] = '';
   updatedRow[syncNotesColIdx]  = '';
   updatedRow[updatedAtColIdx]  = new Date().toISOString();
 
@@ -342,6 +374,7 @@ function deleteAccount(body) {
   const currentSyncStatus = String(row[syncStatusColIdx]);
   row[recordStatusColIdx] = 'deleted';
   row[syncStatusColIdx]   = computeSyncStatus(currentSyncStatus);
+  row[acctColIndex('sync_date')] = '';
   row[syncNotesColIdx]    = '';
   row[updatedAtColIdx]    = new Date().toISOString();
   sheet.getRange(rowNum, 1, 1, row.length).setValues([row]);
@@ -388,6 +421,7 @@ function restoreAccount(body) {
   const currentSyncStatus = String(row[syncStatusColIdx]);
   row[recordStatusColIdx] = 'active';
   row[syncStatusColIdx]   = computeSyncStatus(currentSyncStatus);
+  row[acctColIndex('sync_date')] = '';
   row[syncNotesColIdx]    = '';
   row[updatedAtColIdx]    = new Date().toISOString();
   sheet.getRange(rowNum, 1, 1, row.length).setValues([row]);
@@ -395,3 +429,34 @@ function restoreAccount(body) {
   return { ok: true };
 }
 
+// Master business/lifecycle edits must re-enter normal sync, including the
+// appended tracking timestamp after the audit block. Write only sync/audit cells.
+function markAccountMasterEditPending(e) {
+  const editedSheet = e.range.getSheet();
+  if (editedSheet.getName() !== ACCOUNTS_SHEET) return false;
+  const firstColumn = e.range.getColumn();
+  const lastColumn = firstColumn + e.range.getNumColumns() - 1;
+  const businessEdit = Object.keys(ACCOUNT_SCHEMA).some(function(key) {
+    const field = ACCOUNT_SCHEMA[key];
+    return (field.group === 'core' || key === 'id' || key === 'record_status')
+      && key !== 'current_value_local'
+      && field.sheet_column_position >= firstColumn && field.sheet_column_position <= lastColumn;
+  });
+  if (businessEdit === false) return true;
+  const firstRow = Math.max(2, e.range.getRow());
+  const lastRow = Math.min(editedSheet.getLastRow(), e.range.getRow() + e.range.getNumRows() - 1);
+  if (firstRow > lastRow) return true;
+  const sheet = getOrCreateSheet(ACCOUNTS_SHEET, getAccountSheetColumns());
+  const values = sheet.getDataRange().getValues();
+  const now = new Date().toISOString();
+  for (let rowNum = firstRow; rowNum <= lastRow; rowNum++) {
+    if (rowNum < 2 || rowNum > sheet.getLastRow()) throw new Error('invalid_row');
+    const row = values[rowNum - 1];
+    if (row[acctColIndex('id')] === undefined || String(row[acctColIndex('id')]).trim() === '') continue;
+    const rawStatus = row[acctColIndex('sync_status')];
+    const currentStatus = rawStatus === undefined || rawStatus === null ? '' : String(rawStatus).trim();
+    sheet.getRange(rowNum, acctColIndex('sync_status') + 1, 1, 3).setValues([[computeSyncStatus(currentStatus), '', '']]);
+    sheet.getRange(rowNum, acctColIndex('updated_at') + 1).setValue(now);
+  }
+  return true;
+}

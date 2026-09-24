@@ -1,6 +1,6 @@
 # Transactions
 
-The core ledger. Every money movement is one row.
+The core ledger. Every money movement is one row in the `transaction_master` Sheet tab. Ledger-extract uses the same entity key and database table name. Existing `transactions` tabs use the [master-tab migration](master-sheet-names.md).
 
 Schema reference: [data-model.md § Transaction](data-model.md#transaction). Balance arithmetic: [balance-lifecycle.md](balance-lifecycle.md). Hard-block rules: [financial-rules.md](financial-rules.md).
 
@@ -43,7 +43,7 @@ Both rows are created together and linked via the child's `parent_tx_id`. Either
 | `major_category`, `minor_category` | Always (both types are categorised) |
 | `parent_tx_id` | Not accepted in CSV import — the backend auto-generates the parent-child transfer relationship. Present in the data model for linked transfer rows but not user-supplied. |
 
-For a transfer, **two rows are required** — one money-out and one money-in. Both must be submitted together. Only the child carries the parent's `id` as its `parent_tx_id`; the parent link is empty. Either direction may be the parent, depending on the initiating type.
+For a transfer, **two Sheet rows are stored** — one money-out and one money-in. The UI or CSV submits one request row containing both accounts and amounts; the backend creates both legs together. Only the child carries the parent's `id` as its `parent_tx_id`; the parent link is empty. Either direction may be the parent, depending on the initiating type.
 
 The currency of any row is derived at runtime from the linked account (`account_id → account.account_currency_local`). It is not user-input and is not stored on the transaction row.
 
@@ -63,9 +63,7 @@ When a category with these hints is selected:
 1. Backend validates that the transfer legs are present (if `mandatory`).
 2. Frontend filters the account dropdowns to the allowed types and shows hints indicating the expected account type. Account type constraints are not enforced server-side.
 
-Examples from the default seed:
-- *Credit card payment*: source account must be `current` or `savings`; target account must be `credit_card`.
-- *Loan repayment*: source account must be `current`/`savings`; target account must be one of the 7 loan sub-types.
+The category's stored hints determine eligible account choices. Hint values use the catalog's hyphenated subtype keys; `investment` is the shorthand for available investment rows. Loan classification is derived from `account_types.is_loan`. The `account_types` Sheet is authoritative; there is no default catalog seed in application code.
 
 ## Hard-block rules
 
@@ -156,11 +154,21 @@ The export operates on the **currently filtered rows** — the same set visible 
 
 ### Transfer atomicity
 
-For transfers (`create_transaction` where both a source and target account are required by the category), both the parent leg and the child leg are duplicate-checked BEFORE any row is written to the sheet. If either leg would be a duplicate, the entire transfer is rejected and no rows are written. Both built rows are written together in one `setValues` call. POST dispatch serializes mutations with a script lock; this is not a cross-request or cross-sheet database transaction.
+Transfers require distinct accounts and an active category with the same major/minor keys in the opposite direction. A missing reverse category returns `missing_reverse_transfer_category` before either the interactive or bulk path writes a transaction; no classification is invented for the child.
+
+For interactive transfers, both the parent leg and the child leg are duplicate-checked BEFORE any row is written to the sheet. If either leg would be a duplicate, the entire transfer is rejected and no rows are written. Both built rows are written together in one `setValues` call. POST dispatch serializes mutations with a script lock; this is not a cross-request or cross-sheet database transaction.
+
+Interactive update/delete/restore still changes one selected leg. Ledger-extract rejects a live child whose root is deleted, a same-account pair, same-direction pair, or multiple live children. Complete intended lifecycle changes on both affected rows before extraction; it never silently deletes or restores another leg. See [the extraction contract](../../data-synchronization/ledger-extract/_docs/transaction-master.md#time-and-transfer-semantics).
 
 ### Bulk replacement and sync
 
 A supplied CSV ID selects the standalone or parent row to replace. Existing child IDs and creation timestamps are retained. If a transfer becomes standalone, the displaced child remains as a `deleted` sync tombstone instead of disappearing from the sheet. Repeating a transaction ID within one batch returns `duplicate_id_in_batch`; addressing an existing child ID directly returns `transfer_child_id_requires_parent`.
+
+UUID matching is case-insensitive. Newly supplied UUIDs are stored in lowercase; existing stored UUID spelling and parent links are preserved on a matching retry. Malformed incoming UUIDs fail their row. Malformed/duplicate existing UUIDs or multiple live children abort the rewrite before any data write. Existing deleted child tombstones do not replace the live child's identity when selecting a pair to update.
+
+An omitted `record_status` retains each existing leg's status; new legs default to `active` or inherit the parent status. An explicit valid status applies to the complete imported pair. Existing locked parent or child rows reject replacement with `record_locked`. Imports cannot silently reactivate deleted/inactive transactions or overwrite `created_at`. Rebuilding a deleted parent with a still-live child returns `invalid_transfer_lifecycle`; explicitly apply the intended lifecycle to the pair before retrying.
+
+API mutations clear old sync date/notes and advance pending status. Direct Sheet business/lifecycle edits now do the same through `onEdit`, including multirow pastes, while preserving business values and `created_at`. Metadata-only edits do not queue a row. The single-cell category cascade remains; pasted blocks keep their supplied category values. An old edit made before deploying this hook still requires hard-sync or an explicit pending status.
 
 ### Amount validation
 
@@ -174,7 +182,7 @@ The internal `_writeSingleTransaction` function also guards against a non-finite
 
 ### Transaction ID format and uniqueness
 
-Both the single-row path (`create_transaction`) and the bulk path (`create_transactions_bulk`) generate IDs using `Utilities.getUuid()` — a full UUID, no date prefix, no counter. `generateTransactionId()` in `transaction-utils.gs` wraps this call and is used by both paths.
+Both the single-row path (`create_transaction`) and the bulk path (`create_transactions_bulk`) generate IDs using `Utilities.getUuid()` — a full UUID, no date prefix, no counter. The interactive writer uses the `generateTransactionId()` wrapper; bulk import preserves supplied valid UUIDs and generates only missing identities.
 
 Each transaction row's `id` is globally unique by UUID collision-resistant generation. The `id` field is `editable: false` — it is set once on creation and never changed.
 
@@ -198,7 +206,7 @@ Error code strings carry no embedded values. Where additional context is needed 
 | `duplicate_transaction` | create, update | Row with same `(tx_date_local, tx_type, account_id, tx_amount_local)` already exists (non-deleted) | — |
 | `missing_row_num` | update, delete, restore | `row_num` not provided | — |
 | `invalid_row` | update, delete, restore | `row_num` is out of bounds | — |
-| `record_locked` | update, delete | Transaction is locked | — |
+| `record_locked` | update, delete, bulk create | Transaction or an existing imported transfer leg is locked | — |
 | `transaction_deleted` | update | Attempted to update a soft-deleted transaction | — |
 | `invalid_amount` | update | `tx_amount_local` is not a positive finite number | — |
 | `missing_account_id` | update | `account_id` not provided | — |
@@ -206,6 +214,15 @@ Error code strings carry no embedded values. Where additional context is needed 
 | `not_deleted` | restore | Transaction is not in `deleted` state | — |
 | `missing_transactions` | bulk create | `transactions[]` array missing or empty | — |
 | `transaction_already_deleted` | delete | Attempted to soft-delete a transaction that is already in `deleted` state | — |
+| `missing_reverse_transfer_category` | create, bulk create | No active category exists for the child direction with the same major/minor keys | — |
+| `same_transfer_account` | create, bulk create | Source and target identify the same account | — |
+| `invalid_id` | bulk create | Supplied transaction ID is not a hyphenated UUID | — |
+| `invalid_record_status` | bulk create | Lifecycle is not one of the transaction schema statuses | — |
+| `invalid_transfer_lifecycle` | bulk create | A deleted imported parent would retain a live child, or a child's status is invalid | — |
+| `invalid_existing_transaction_id`, `invalid_existing_parent_tx_id` | bulk create | Existing Sheet identity/reference is malformed; rewrite aborted | `row_num` |
+| `duplicate_existing_transaction_id`, `multiple_live_transfer_children` | bulk create | Existing identities or transfer relationships are ambiguous; rewrite aborted | `row_num` |
+| `duplicate_id_in_batch` | bulk create | The same UUID appears again in this request, including a case variant | — |
+| `transfer_child_id_requires_parent` | bulk create | Import addresses an existing child; use the initiating parent's UUID | — |
 | `invalid_tx_amount_local` | create, bulk create | `tx_amount_local` resolved to a non-finite number before the sheet write (`_writeSingleTransaction` guard) | — |
 
 ## CSV import
@@ -233,14 +250,16 @@ The import panel accepts a CSV file. Canonical column names (no aliases):
 | `user_location_country` | No | |
 | `user_location_latitude` | No | |
 | `user_location_longitude` | No | |
-| `record_status` | No | System field — accepted in header but silently ignored on import |
+| `record_status` | No | Optional schema lifecycle (`active`, `inactive`, `deleted`, `locked`). Omitted preserves an existing row/leg status; explicit values apply to the complete imported pair. Existing locked legs cannot be overwritten. |
 | `sync_status` | No | System field — accepted in header but silently ignored on import |
 | `sync_date` | No | System field — accepted in header but silently ignored on import |
 | `sync_notes` | No | System field — accepted in header but silently ignored on import |
 | `created_at` | No | System field — accepted in header but silently ignored on import |
 | `updated_at` | No | System field — accepted in header but silently ignored on import |
 
-The system fields (`record_status`, `sync_status`, `sync_date`, `sync_notes`, `created_at`, `updated_at`) are accepted in the CSV header row but are silently ignored on import — the backend always assigns its own values for system fields.
+Sync/audit fields (`sync_status`, `sync_date`, `sync_notes`, `created_at`, `updated_at`) are accepted in the CSV header row but ignored as input. The backend preserves existing `created_at`, stamps `updated_at`, clears stale acknowledgements and queues sync. `record_status` is a validated optional lifecycle field; leaving it blank cannot reactivate a historical row.
+
+Amount and coordinate fields must contain a complete finite decimal number. Decimal exponent notation is accepted; suffixes such as `12bad`, grouping commas such as `1,234.56`, hexadecimal values, and non-finite values fail their row instead of being partially parsed. Blank optional fields stay blank, and zero coordinates remain valid numeric values.
 
 `parent_tx_id` is not accepted as a CSV column. The backend auto-generates the parent-child transfer relationship from the `source_account` and `target_account` columns — do not include it in the CSV file.
 

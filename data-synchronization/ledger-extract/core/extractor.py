@@ -7,24 +7,32 @@ from py_db_migrate.adapters.postgres import get_client
 from py_db_migrate.core.config import ConnectionConfig
 from py_logging import get_logger
 
+import database.account_details as account_details_db
+import database.account_types as account_types_db
 import database.accounts as accounts_db
 import database.categories as categories_db
 import database.subscriptions as subscriptions_db
 import database.transactions as transactions_db
+from core.account_detail_contracts import CONTRACTS, SYNC_DETAIL_SHEETS
 from database.job_execution_details import bootstrap_job_execution_details, upsert_job_execution_details
 from sheets.client import SnapshotSheetsClient
 
 logger = get_logger(__name__)
-_ENTITIES = ("categories", "accounts", "transactions", "subscriptions")
+_ENTITIES = ("account_types", "category_master", "account_master", *CONTRACTS, "transaction_master", "subscription_master")
 _ID_COLUMNS = {
-    "categories": ("category_master", "id"),
-    "accounts": ("account_master", "id"),
-    "transactions": ("transaction_master", "transaction_id"),
-    "subscriptions": ("subscription_master", "subscription_id"),
+    "account_types": ("account_types", "id"),
+    "category_master": ("category_master", "id"),
+    "account_master": ("account_master", "id"),
+    "transaction_master": ("transaction_master", "transaction_id"),
+    "subscription_master": ("subscription_master", "subscription_id"),
+    **{name: (CONTRACTS[name].target_table, "id") for name in SYNC_DETAIL_SHEETS},
 }
 
 
 def entity_enabled(entity: str, config: dict[str, Any]) -> bool:
+    # Older configs retain their existing scope until new source tabs are opted in.
+    if (entity in CONTRACTS or entity == "account_types") and entity not in config["entities"]:
+        return False
     enabled = config["entities"][entity]["enabled"]
     if not isinstance(enabled, bool):
         raise ValueError(f"entity_enabled_must_be_boolean:{entity}")
@@ -63,21 +71,25 @@ class LedgerExtractJob:
                         for row in rows:
                             if str(row["sync_status"]).strip() == "in-sync":
                                 row["sync_status"] = "update-pending"
-                    if name == "categories":
-                        failures = categories_db.upsert_categories(conn, sheets_client, rows, 1)
-                    elif name == "accounts":
-                        failures = accounts_db.upsert_accounts(conn, sheets_client, rows, 1)
+                    if name in SYNC_DETAIL_SHEETS:
+                        failures = account_details_db.upsert_details(conn, sheets_client, name, rows, reprocess=reprocess, before_commit=sheets_client.assert_unchanged)
+                    elif name == "account_types":
+                        failures = account_types_db.upsert_account_types(conn, sheets_client, rows, before_commit=sheets_client.assert_unchanged)
+                    elif name == "category_master":
+                        failures = categories_db.upsert_categories(conn, sheets_client, rows, 1, before_dependency_commit=sheets_client.assert_unchanged)
+                    elif name == "account_master":
+                        failures = accounts_db.upsert_accounts(conn, sheets_client, rows, 1, before_commit=sheets_client.assert_unchanged)
                     else:
                         if account_map is None:
                             account_map = transactions_db.load_account_map(conn)
-                        if name == "transactions":
-                            failures = transactions_db.upsert_transactions(conn, sheets_client, rows, account_map)
+                        if name == "transaction_master":
+                            failures = transactions_db.upsert_transactions(conn, sheets_client, rows, account_map, before_commit=sheets_client.assert_unchanged)
                         else:
-                            failures = subscriptions_db.upsert_subscriptions(conn, sheets_client, rows, account_map)
+                            failures = subscriptions_db.upsert_subscriptions(conn, sheets_client, rows, account_map, before_commit=sheets_client.assert_unchanged)
                     if failures:
                         logger.warning(f"run: entity={name} failed_rows={failures}")
                         raise RuntimeError(f"entity_rows_failed:{name}")
-                if "transactions" in enabled or "subscriptions" in enabled:
+                if "transaction_master" in enabled or "subscription_master" in enabled:
                     transactions_db.retire_unused_references(conn)
             finally:
                 sheets_client.flush_pending()
@@ -96,7 +108,15 @@ class LedgerExtractJob:
         """Recreate source in-sync records missing after DB restore or fresh setup."""
         table, column = _ID_COLUMNS[name]
         with conn.cursor() as cursor:
-            cursor.execute(f"SELECT {column} FROM {table}")
+            if name == "account_types":
+                # Unsynchronized seeds must be claimed even when source IDs match.
+                cursor.execute("SELECT id FROM account_types WHERE is_sheet_managed AND sync_status = 'in-sync'")
+            elif name in SYNC_DETAIL_SHEETS:
+                # An identically named legacy or different-source row is not a
+                # synchronized source record: replay must expose that collision.
+                cursor.execute(f"SELECT {column} FROM {table} WHERE source_sheet = %s", (name,))
+            else:
+                cursor.execute(f"SELECT {column} FROM {table}")
             present = {str(record[0]) for record in cursor.fetchall()}
         for row in rows:
             if str(row["sync_status"]).strip() == "in-sync" and str(UUID(str(row["id"]).strip())) not in present:

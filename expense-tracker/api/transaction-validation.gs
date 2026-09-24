@@ -95,6 +95,19 @@ function validateTransactionRecord(body, catMap, accountMap) {
       return { ok: false, error: 'missing_target_amount' };
   }
 
+  if (cat.source_account_mandatory && cat.target_account_mandatory) {
+    if (String(body.source_account).trim().toLowerCase() === String(body.target_account).trim().toLowerCase()) {
+      return { ok: false, error: 'same_transfer_account' };
+    }
+    // A child retains the initiating category keys while reversing direction.
+    // Require that exact classification before either leg can reach the Sheet.
+    const reverseType = body.tx_type === 'money-out' ? 'money-in' : 'money-out';
+    const reverseKey = reverseType + '|' + body.major_category + '|' + body.minor_category;
+    if (catMap[reverseKey] === undefined) {
+      return { ok: false, error: 'missing_reverse_transfer_category' };
+    }
+  }
+
   // The single-leg writer selects the target whenever source is not mandatory.
   // Validate that selected leg even for categories with both flags false.
   if (cat.source_account_mandatory !== true && cat.target_account_mandatory !== true) {
@@ -201,4 +214,3 @@ function _loadAccountMap(opts) {
   });
   return out;
 }
-

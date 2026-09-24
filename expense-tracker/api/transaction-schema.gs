@@ -265,6 +265,7 @@ function getTransactionSchemaForClient() {
     'money-out': 'Money Out',
   };
   return {
+    record_statuses: TRANSACTION_SCHEMA.record_status.enum_values.slice(),
     types: VALID_TRANSACTION_TYPES.map(function(v) {
       return { value: v, label: TYPE_LABELS[v] !== undefined ? TYPE_LABELS[v] : v };
     }),

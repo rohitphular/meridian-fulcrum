@@ -36,15 +36,11 @@ Transactions use a **single-leg model**: each row represents one account movemen
 
 Transfers use two `money-out` / `money-in` rows linked via `parent_tx_id`. Cross-currency transactions require an FX rate.
 
-## Account groups
+## Account classification
 
-| Type | Sub-types | Balance convention |
-|---|---|---|
-| **asset** | current, savings, cash | Positive = funds held |
-| **investment** | stocks_shares, isa, pension_sipp, crypto, fixed_deposit, bonds, property, commodities, p2p_lending, other | Positive = funds held |
-| **liability** | personal_loan, credit_card, mortgage, auto_loan, heloc, student_loan, medical_loan, debt_consolidation, overdraft | Stored **negative** (double-entry convention); UI displays `abs(current_value_local)` labelled "owed" — user always inputs and sees positive numbers |
+The `account_types` Sheet owns the existing 22 classifications, their display labels, loan flags and supported detail tabs. Account choices and category hints read that configuration; the application does not seed or maintain a second subtype catalog. See [Account Types](account-types.md) for the 14-column contract and the initial CSV import.
 
-Liabilities are modelled as accounts with negative balances. There is no separate debt entity.
+Asset and investment balances retain their supplied sign. Liabilities are modelled as accounts with negative balances; the UI displays the amount owed as a magnitude. There is no separate debt entity.
 
 ## Capabilities
 

@@ -1,6 +1,6 @@
 # Expense Tracker — Current project state
 
-Updated: 2026-09-23. This snapshot supersedes the historical review notes below.
+Updated: 2026-09-24. This snapshot supersedes the historical review notes below.
 
 ## Architecture and local use
 
@@ -17,13 +17,16 @@ From `expense-tracker/`, backend deployment uses `bash cicd/deploy.sh <env> "des
 
 ## Current model
 
+Master CSV filenames, Sheet tab names and PostgreSQL table names now align as `account_master`, `category_master`, `transaction_master` and `subscription_master`. Existing spreadsheets need the deployed `migrateMasterSheetNames()` helper before extraction; it preserves existing tabs/data and refuses old/new name collisions. See [_docs/master-sheet-names.md](_docs/master-sheet-names.md).
+
+- Configure: final navigation tab maintains the existing 22 account classifications through a 14-column `account_types` Sheet/CSV. UUIDs are preserved. `is_loan` and `detail_sheet` are business columns before the six metadata fields; keys use hyphens while field/tab names retain underscores. The Sheet supplies account/category choices, loan flags and detail eligibility. There is no application catalog seed and adding new classifications is disabled. Active and locked rows are available. Import the supplied catalog before use; see [_docs/account-types.md](_docs/account-types.md).
 - Accounts: 19 columns, including `account_currency_local`, real-world `account_opening_date_local` / `account_closing_date_local`, and appended `tracking_start_date_local`.
 - Opening balance is a snapshot at the tracking timestamp. Current balances are recomputed from eligible non-deleted movements on or after that timestamp; blank tracking date retains all history.
-- Transactions: 24-column single-leg ledger. Transfers have a parent and child; only the child stores `parent_tx_id`. Either direction may initiate the pair. IDs are UUIDs; bulk imports preserve supplied IDs.
-- Subscriptions: 21 columns, `subscription_name`, `subscription_amount_local`, start/end dates suffixed `_local`, and `subscription_timezone_local`. No subscription `tags` field. Schedule calculation still uses server local time; quarterly/annual schedules lack a fixed month anchor.
-- Categories: 21 columns; interactive duplicate checks use the composite category key, bulk imports use ID.
+- Transactions: 24-column single-leg ledger. Transfers have a parent and child; only the child stores `parent_tx_id`. Either direction may initiate the pair, with a matching category for both directions. IDs are UUIDs; bulk imports match UUIDs case-insensitively and preserve identities, lifecycle and creation timestamps. Direct Sheet business/lifecycle edits queue sync. Ledger transaction extraction is enabled, validates old/new transfer relationships atomically, and checks source content before commit.
+- Subscriptions: 21 columns, `subscription_name`, `subscription_amount_local`, start/end dates suffixed `_local`, and `subscription_timezone_local`. No subscription `tags` field. Schema-driven UI and UUID-based import preserve lifecycle/audit values. Schedule reads use row timezone and inclusive boundaries; quarterly/annual cycles require a start-month anchor. Reads never expire lifecycle state. Direct Sheet edits queue sync; extraction is enabled with source-before-commit/reference guards.
+- Categories: 21 columns; interactive duplicate checks use the composite category key, bulk imports use ID. Import checks the Account Types upgrade first, preserves lifecycle/UUIDs, and retains per-row failure reasons with a failed-rows-only retry in the panel. The current CSV requires the hyphenated catalog; an old dev catalog rejects 73 of its 102 rows. See [_docs/categories.md](_docs/categories.md#csv-import).
 - Rates: API rates use XAU (one gram of gold) as base, XAU=1. Legacy GBP-relative rows are normalised on read without rewriting; explicit upsert persists all rows on the XAU basis together. The display currency is selectable.
-- Account master/detail imports: one master plus six detail types, described in [_docs/account-imports.md](_docs/account-imports.md). These differ from the Python extractor's older seven-extension design.
+- Account master/detail imports: UI and backend support one master plus six detail types, as described in [_docs/account-imports.md](_docs/account-imports.md). Each detail tab maps to a database table with the same name; mortgage and personal loans have separate tables. Fixed-income/P2P detail contracts and extraction have been removed, while account-master subtypes remain available. Detail UUIDs are validated and preserved on re-import. All six detail tabs include record_status, sync_status, sync_date, sync_notes, created_at and updated_at; the importer owns sync/audit state and direct Sheet edits queue reprocessing. Property has removed the source evaluation_currency_rate_id and derives valuation rates from its evaluation date.
 
 ## Review fixes and validation
 
@@ -37,15 +40,18 @@ Run local regression checks from the repository root:
 node --test expense-tracker/tests/*.cjs
 ```
 
+The account/extension ETL review also fixes UUID casing on master retries, preserves omitted lifecycle status, queues direct master edits, rejects detail account reassignment, and preserves decimal text. Ledger migration 0017 now accepts signed asset/investment openings while retaining liability sign checks. Master commits recheck the source and detail references are locked through commit.
+
 Tests mock the browser/GAS boundary; they do not certify a live deployment.
 
 ## Deployment and integration prerequisites
 
-- Existing sheet headers must match the positional schema. Missing trailing columns may append; renamed/reordered headers fail with `sheet_header_mismatch` before data writes. Explicitly migrate legacy sheets before deploying against them. Source CSVs and live sheets were not changed by this review.
-- The Python ledger extractor now maps the current account master fields and tracking snapshot date. It imports categories, account masters, transactions and subscriptions with guarded sync-only acknowledgements; see `data-synchronization/ledger-extract/README.md`. The six account-detail tabs still need a separately designed extraction path; historical extension balances are not maintained. Ledger migrations 0011–0013 and a reviewed reprocessing run are needed to adopt the new snapshot metadata in an existing database.
+- Account Types now has 14 columns and no automatic seed. Deploy GAS/frontend, then import the complete local `account_types.csv` through Configure. This explicitly upgrades a legacy 12-column catalog and matching account/category key references while preserving UUIDs. Missing catalogs remain empty until import; existing catalogs reject new identities. `migrateAccountTypeKeys(catalogRows)` is the editor alternative with parsed CSV rows. Retry the full CSV after an interrupted multi-tab migration; see [_docs/account-types.md](_docs/account-types.md).
+- Existing sheet headers must match the positional schema. Missing trailing columns may append; renamed/reordered headers fail with `sheet_header_mismatch` before data writes. Explicitly migrate legacy sheets before deploying against them. The six local detail CSVs now include the appended metadata headers with existing values preserved. Local stock details also include the approved Trading212 GBP CASH placeholder, with amounts and quantities blank. Live sheets have not been changed: deploy and run `migrateAccountPropertyRateColumn()` for an old property layout, then `migrateAccountDetailMetadata()` for remaining metadata upgrades. Use hard-sync once after the property-column migration to refresh the valuation policy.
+- The Python ledger extractor now maps the current account master fields and tracking snapshot date. It imports account types, categories, account masters, transactions and subscriptions with guarded sync-only acknowledgements; see `data-synchronization/ledger-extract/README.md`. Six account-detail tabs have source-UUID extraction with atomic tab writes, pending/in-sync controls and normal/hard sync. Apply ledger migrations through 0021 before running the updated code to align database names, account-type keys/policies, the current detail tables and optional subscription classification. Extension history is not maintained from transactions. Create/import desired detail tabs before enabling their extractor toggles; live deployment and data migration have not been performed by this code review.
 - Financial policy enforcement is partial: UI balance and loan checks are not server-side guarantees; credit limits are not enforced. See [_docs/financial-rules.md](_docs/financial-rules.md).
 - TOTP protects the login handshake; subsequent API calls use the PIN. Browser sessions expire locally after six hours. IP metadata is client-supplied, so IP lockout is not a trusted network perimeter.
-- Subscription schedules have no fixed quarterly/annual month anchor and do not use each row's timezone. See [_docs/subscriptions.md](_docs/subscriptions.md).
+- Subscriptions with dates require explicit IANA timezones. The local 21-row CSV has a new blank timezone column for the user to complete per row; no zones were inferred. Deploy the updated backend/frontend and import corrected data before dev hard-sync. See [_docs/subscriptions.md](_docs/subscriptions.md).
 
 ## Reading map
 
@@ -584,7 +590,7 @@ Cross-referenced every doc claim against the five schema files (`account-schema.
 
 ### Codebase fixes (Round 5)
 - **Workflow engine deleted.** `workflow-engine.gs` had all functions removed — it is now a comment stub. `executeWorkflow`, `reverseWorkflow`, and `adjustAccountBalance` no longer exist.
-- **Balance model changed to read-time.** `adjustAccountBalance` was deleted from `transaction-utils.gs`. Account `current_value` is now computed on every `listAccounts` call via `_buildAccountNetMap` (`opening_value + net from transactions`). No transaction operation writes to the accounts sheet.
+- **Balance model changed to read-time.** `adjustAccountBalance` was deleted from `transaction-utils.gs`. Account `current_value` is now computed on every `listAccounts` call via `_buildAccountNetMap` (`opening_value + net from transactions`). No transaction operation writes to the `account_master` sheet.
 - **Subscription column migration.** Columns 15 and 16 in the subscriptions schema were swapped (`record_status` moved to 15, `created_at` to 16). `migrateSubscriptionColumnOrder()` added to `subscription-core.gs` to fix pre-existing sheets; it is idempotent and must be run once after schema deployment.
 - **Fallback sweep (BE).** Bare `||` fallbacks eliminated across `subscription-schema.gs`, `subscription-core.gs`, `subscription-validation.gs`, `account-schema.gs`, `account-core.gs`, `account-validation.gs`, `category-core.gs`, `transaction-core.gs`, `transaction-validation.gs`.
 - **`getSheetByName` violation fixed.** `category-core.gs` `onEdit` handler was calling `getSheetByName` directly; replaced with `getOrCreateSheet`.

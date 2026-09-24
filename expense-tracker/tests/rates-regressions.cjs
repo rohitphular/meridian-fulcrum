@@ -17,7 +17,7 @@ function runtime(initial) {
     getDataRange() { return { getValues: () => [columns, ...rows] }; },
     deleteRow(row) { rows.splice(row - 2, 1); writes++; },
   };
-  const ctx = vm.createContext({console, RATES_SHEET: 'rates', ACCOUNTS_SHEET: 'accounts', getRateSheetColumns: () => columns,
+  const ctx = vm.createContext({console, RATES_SHEET: 'rates', ACCOUNTS_SHEET: 'account_master', getRateSheetColumns: () => columns,
     getOrCreateSheet: () => sheet, sheetToObjects: () => rows.map(row => Object.fromEntries(columns.map((column, index) => [column, row[index]]))),
     rateColIndex: field => columns.indexOf(field),
   });

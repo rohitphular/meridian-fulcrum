@@ -13,21 +13,39 @@ TABLE = "public.account_types"
 
 COLS = [
     "id",
-    "type",
-    "sub_type",
-    "is_deleted",
+    "account_type_key",
+    "account_subtype_key",
+    "description",
+    "record_status",
     "created_at",
-    "deleted_at",
+    "updated_at",
+    "account_type_label",
+    "account_subtype_label",
+    "is_sheet_managed",
+    "sync_status",
+    "sync_date",
+    "sync_notes",
+    "is_loan",
+    "detail_sheet",
 ]
 
 
 class Row(TypedDict):
     id: str
-    type: str
-    sub_type: str
-    is_deleted: bool
+    account_type_key: str
+    account_subtype_key: str
+    description: str | None
+    record_status: str
     created_at: datetime
-    deleted_at: datetime | None
+    updated_at: datetime
+    account_type_label: str
+    account_subtype_label: str
+    is_sheet_managed: bool
+    sync_status: str | None
+    sync_date: datetime | None
+    sync_notes: str | None
+    is_loan: bool
+    detail_sheet: str | None
 
 
 def to_row(record: Row) -> list:

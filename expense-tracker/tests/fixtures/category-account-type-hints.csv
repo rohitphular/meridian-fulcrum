@@ -1,0 +1,5 @@
+source_account_types,target_account_types
+fund-position,investment
+investment,fund-position
+everyday-wallet,bank-loan
+reserve-cash,fund-position

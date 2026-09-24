@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import Any
+from uuid import UUID
 
 import psycopg2.errors as pg_errors
 from py_google_workspace.gsheets import SheetsClient
@@ -19,8 +21,33 @@ from transforms.financial import to_minor_units
 
 logger = get_logger(__name__)
 
-_SHEET_NAME = "subscriptions"
+_SHEET_NAME = "subscription_master"
 _ACTIONABLE = {"create-pending", "create-failed", "update-pending", "update-failed"}
+
+
+def _source_identity(value: Any) -> str:
+    identity = str(value).strip() if value is not None else ""
+    try:
+        return str(UUID(identity))
+    except ValueError:
+        return identity  # Invalid identities fail in the row transform.
+
+
+def _lock_identity(conn: Any, identity: str) -> None:
+    """Serialize upserts and reject ambiguous legacy TEXT identity spellings."""
+    with conn.cursor() as cursor:
+        cursor.execute("LOCK TABLE subscription_master IN SHARE ROW EXCLUSIVE MODE")
+        cursor.execute("SELECT subscription_id FROM subscription_master")
+        if any(stored != identity and _source_identity(stored) == identity for (stored,) in cursor.fetchall()):
+            raise ValueError("subscriptions: database_subscription_identity_requires_reconciliation")
+
+
+def _load_locked_account(conn: Any, identity: str) -> dict[str, tuple[Any, str, str]]:
+    """Read authoritative currency under a lock that survives through commit."""
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT id, local_currency, account_subtype FROM account_master WHERE id = %s FOR SHARE", (identity,))
+        row = cursor.fetchone()
+    return {} if row is None else {str(row[0]): (row[0], row[1].strip(), row[2])}
 
 
 def _to_sync_notes(error: Exception) -> str:
@@ -43,9 +70,11 @@ def _resolve_dependencies(conn: Any, typed: dict[str, Any], account_map: dict[st
     amount_local = to_minor_units(typed["amount_local"], currency_decimal_places[currency], "subscriptions: amount_local")
     if amount_local <= 0:
         raise ValueError("subscriptions: amount_rounds_to_zero")
-    category_id = lookup_category(conn, typed["tx_type"], typed["major_category"], typed["minor_category"])
-    if category_id is None:
-        raise ValueError("subscriptions: category_not_found")
+    category_id = None
+    if all(typed[field] is not None for field in ("tx_type", "major_category", "minor_category")):
+        category_id = lookup_category(conn, typed["tx_type"], typed["major_category"], typed["minor_category"])
+        if category_id is None:
+            raise ValueError("subscriptions: category_not_found")
     counterparty_id = resolve_counterparty(conn, typed["counterparty_name"], typed["subscription_id"])
     return {"account_surrogate_id": account_id, "amount_local": amount_local, "category_id": category_id, "counterparty_id": counterparty_id}
 
@@ -58,10 +87,10 @@ def _do_upsert(conn: Any, typed: dict[str, Any], deps: dict[str, Any]) -> tuple[
             INSERT INTO subscription_master (
                 subscription_id, name, counterparty_id, amount_local,
                 frequency, day_of_month, day_of_week,
-                account_id, category_id, description,
+                account_id, category_id, tx_type, major_category, minor_category, description,
                 subscription_start_date_local, subscription_end_date_local, subscription_timezone_local,
                 record_status, created_at, updated_at
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now(), now())
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, now(), now())
             ON CONFLICT (subscription_id) DO UPDATE SET
                 name                            = EXCLUDED.name,
                 counterparty_id                 = EXCLUDED.counterparty_id,
@@ -71,6 +100,9 @@ def _do_upsert(conn: Any, typed: dict[str, Any], deps: dict[str, Any]) -> tuple[
                 day_of_week                     = EXCLUDED.day_of_week,
                 account_id                      = EXCLUDED.account_id,
                 category_id                     = EXCLUDED.category_id,
+                tx_type                         = EXCLUDED.tx_type,
+                major_category                  = EXCLUDED.major_category,
+                minor_category                  = EXCLUDED.minor_category,
                 description                     = EXCLUDED.description,
                 subscription_start_date_local   = EXCLUDED.subscription_start_date_local,
                 subscription_end_date_local     = EXCLUDED.subscription_end_date_local,
@@ -89,6 +121,9 @@ def _do_upsert(conn: Any, typed: dict[str, Any], deps: dict[str, Any]) -> tuple[
                 typed["day_of_week"],
                 deps["account_surrogate_id"],
                 deps["category_id"],
+                typed["tx_type"],
+                typed["major_category"],
+                typed["minor_category"],
                 typed["description"],
                 typed["subscription_start_date_local"],
                 typed["subscription_end_date_local"],
@@ -102,12 +137,18 @@ def _do_upsert(conn: Any, typed: dict[str, Any], deps: dict[str, Any]) -> tuple[
     return pk_row[0], pk_row[1]
 
 
-def upsert_subscriptions(conn: Any, sheets_client: SheetsClient, rows: list[dict[str, Any]], account_map: dict[str, tuple[Any, str, str]]) -> int:
+def upsert_subscriptions(
+    conn: Any,
+    sheets_client: SheetsClient,
+    rows: list[dict[str, Any]],
+    account_map: dict[str, tuple[Any, str, str]],
+    *,
+    before_commit: Callable[[], None] | None = None,
+) -> int:
     """Mirror source state, including restored/deleted rows, preserving DB identity on retry."""
-    identities = [str(row.get("id") or "").strip() for row in rows if str(row.get("id") or "").strip()]
+    identities = [_source_identity(row.get("id")) for row in rows if _source_identity(row.get("id"))]
     if len(identities) != len(set(identities)):
         raise ValueError("subscriptions: duplicate_source_id")
-    currency_decimal_places = load_decimal_places(conn)
     write_backs = []
     succeeded = failed = 0
     logger.info(f"upsert_subscriptions: start total={len(rows)}")
@@ -119,15 +160,25 @@ def upsert_subscriptions(conn: Any, sheets_client: SheetsClient, rows: list[dict
             sync_status = str(row.get("sync_status") or "").strip()
             if sync_status == "in-sync":
                 continue
+            checking_source = False
             try:
                 if sync_status not in _ACTIONABLE:
                     raise ValueError("subscriptions: invalid_sync_status")
                 typed = subscriptions_transform.transform(row)
-                dependencies = _resolve_dependencies(conn, typed, account_map, currency_decimal_places)
+                _lock_identity(conn, typed["subscription_id"])
+                current_accounts = _load_locked_account(conn, typed["account_id_sheet"])
+                currency_decimal_places = load_decimal_places(conn)
+                dependencies = _resolve_dependencies(conn, typed, current_accounts, currency_decimal_places)
                 _, created_at = _do_upsert(conn, typed, dependencies)
+                if before_commit is not None:
+                    checking_source = True
+                    before_commit()
+                    checking_source = False
                 conn.commit()
             except (ValueError, pg_errors.IntegrityError, pg_errors.DataError) as error:
                 conn.rollback()
+                if checking_source:
+                    raise
                 failed += 1
                 sync_date = datetime.now(timezone.utc).isoformat()
                 failed_status = "update-failed" if sync_status.startswith("update-") else "create-failed"

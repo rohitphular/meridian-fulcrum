@@ -20,21 +20,30 @@ def transform(row: dict[str, Any]) -> dict[str, Any]:
     raw_id = row.get("id")
     if raw_id is None or str(raw_id).strip() == "":
         raise ValueError("transactions: field=id is required but got empty/None")
-    transaction_id = str(raw_id).strip()
+    try:
+        transaction_id = str(UUID(str(raw_id).strip()))
+    except ValueError as error:
+        raise ValueError("transactions: invalid_transaction_id") from error
 
     # Column 2 — tx_date_local
     raw_tx_date_local = row.get("tx_date_local")
     if raw_tx_date_local is None or str(raw_tx_date_local).strip() == "":
         raise ValueError(f"transactions: transaction_id={transaction_id!r} field=tx_date_local is required but got empty/None")
     # Keep the documented legacy default for rows created without a timezone.
-    tx_timezone_local = str(row.get("tx_timezone_local") or "").strip() or "Europe/London"
+    raw_timezone = row.get("tx_timezone_local")
+    tx_timezone_local = "" if raw_timezone is None else str(raw_timezone).strip()
+    if tx_timezone_local == "":
+        tx_timezone_local = "Europe/London"
     tx_timezone_base = "UTC"
     tx_date_time_base = local_datetime(raw_tx_date_local, tx_timezone_local, "transactions: tx_date_local").astimezone(timezone.utc)
 
     # Column 4 — parent_tx_id
     raw_parent_tx_id = row.get("parent_tx_id")
     if raw_parent_tx_id is not None and str(raw_parent_tx_id).strip() != "":
-        parent_tx_id: str | None = str(raw_parent_tx_id).strip()
+        try:
+            parent_tx_id: str | None = str(UUID(str(raw_parent_tx_id).strip()))
+        except ValueError as error:
+            raise ValueError("transactions: invalid_parent_tx_id") from error
     else:
         parent_tx_id = None
 

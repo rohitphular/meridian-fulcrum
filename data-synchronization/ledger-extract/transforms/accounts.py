@@ -9,8 +9,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from transforms.dates import local_datetime
 
-_VALID_ACCOUNT_TYPES = {"asset", "investment", "liability"}
 _VALID_RECORD_STATUSES = {"active", "inactive", "deleted", "locked"}
+_DECIMAL = re.compile(r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
 
 
 def _to_optional_str(raw: Any) -> str | None:
@@ -50,8 +50,10 @@ def transform(row: dict[str, Any]) -> dict[str, Any]:
     except ValueError as exc:
         raise ValueError("accounts: field=id must be a valid UUID") from exc
     account_type = _required(row, "type")
-    if account_type not in _VALID_ACCOUNT_TYPES:
-        raise ValueError("accounts: field=type must be asset, investment, or liability")
+    account_subtype = _required(row, "sub_type")
+    for field, key in (("type", account_type), ("sub_type", account_subtype)):
+        if re.fullmatch(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*", key) is None:
+            raise ValueError(f"accounts: field={field} must be a hyphenated key")
     local_currency = _required(row, "account_currency_local").upper()
     if len(local_currency) != 3 or not local_currency.isascii() or not local_currency.isalpha():
         raise ValueError("accounts: field=account_currency_local must be a three-letter currency code")
@@ -66,14 +68,19 @@ def transform(row: dict[str, Any]) -> dict[str, Any]:
     tracking_date = _local_date(row.get("tracking_start_date_local"), "tracking_start_date_local", local_timezone)
     if opening_date is not None and closing_date is not None and datetime.fromisoformat(closing_date) < datetime.fromisoformat(opening_date):
         raise ValueError("accounts: account_closing_date_local precedes account_opening_date_local")
+    opening_text = _required(row, "opening_value_local")
+    # Match the source's ASCII decimal grammar; Decimal itself also accepts
+    # underscores and Unicode digits, which are not valid source amounts.
+    if isinstance(row["opening_value_local"], bool) or _DECIMAL.fullmatch(opening_text) is None:
+        raise ValueError("accounts: field=opening_value_local must be a finite decimal number")
     try:
-        opening_amount = Decimal(_required(row, "opening_value_local"))
+        opening_amount = Decimal(opening_text)
     except InvalidOperation as exc:
         raise ValueError("accounts: field=opening_value_local must be a decimal number") from exc
     if not opening_amount.is_finite():
         raise ValueError("accounts: field=opening_value_local must be finite")
-    if (account_type == "liability" and opening_amount > 0) or (account_type != "liability" and opening_amount < 0):
-        raise ValueError("accounts: opening value must be nonpositive for liabilities and nonnegative for assets/investments")
+    if account_type == "liability" and opening_amount > 0:
+        raise ValueError("accounts: opening value must be nonpositive for liabilities")
     record_status = _required(row, "record_status")
     if record_status not in _VALID_RECORD_STATUSES:
         raise ValueError("accounts: field=record_status must be active, inactive, deleted, or locked")
@@ -82,7 +89,7 @@ def transform(row: dict[str, Any]) -> dict[str, Any]:
         "account_name": _required(row, "account_name"),
         "legal_entity_name": _to_optional_str(row.get("legal_entity_name")),
         "account_type": account_type,
-        "account_subtype": _required(row, "sub_type"),
+        "account_subtype": account_subtype,
         "local_currency": local_currency,
         "local_timezone": local_timezone,
         "opening_date_local": opening_date,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from decimal import Decimal, InvalidOperation
 from typing import Any
 from uuid import UUID
@@ -22,7 +23,10 @@ def transform(row: dict[str, Any]) -> dict[str, Any]:
     raw_id = row.get("id")
     if raw_id is None or str(raw_id).strip() == "":
         raise ValueError("subscriptions: id_required")
-    subscription_id = str(raw_id).strip()
+    try:
+        subscription_id = str(UUID(str(raw_id).strip()))
+    except ValueError as error:
+        raise ValueError("subscriptions: invalid_id") from error
 
     # Column 2 — subscription_name → name
     raw_name = row.get("subscription_name")
@@ -41,6 +45,8 @@ def transform(row: dict[str, Any]) -> dict[str, Any]:
     raw_amount = row.get("subscription_amount_local")
     if raw_amount is None or str(raw_amount).strip() == "":
         raise ValueError(f"subscriptions: subscription_id={subscription_id!r} field=subscription_amount_local is required but got empty/None")
+    if re.fullmatch(r"[+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?", str(raw_amount).strip()) is None:
+        raise ValueError("subscriptions: invalid_subscription_amount_local")
     try:
         amount_local = Decimal(str(raw_amount).strip())
     except InvalidOperation:
@@ -61,6 +67,8 @@ def transform(row: dict[str, Any]) -> dict[str, Any]:
     # Column 6 — day_of_month
     raw_day_of_month = row.get("day_of_month")
     raw_day_of_month_str = str(raw_day_of_month).strip() if raw_day_of_month is not None else ""
+    if raw_day_of_month_str and re.fullmatch(r"\d+", raw_day_of_month_str) is None:
+        raise ValueError("subscriptions: invalid_day_of_month")
     day_of_month: int | None
 
     if frequency in _MONTHLY_FREQUENCIES:
@@ -87,6 +95,8 @@ def transform(row: dict[str, Any]) -> dict[str, Any]:
     # Column 7 — day_of_week
     raw_day_of_week = row.get("day_of_week")
     raw_day_of_week_str = str(raw_day_of_week).strip() if raw_day_of_week is not None else ""
+    if raw_day_of_week_str and re.fullmatch(r"\d+", raw_day_of_week_str) is None:
+        raise ValueError("subscriptions: invalid_day_of_week")
     day_of_week: int | None
 
     if frequency == "weekly":
@@ -119,25 +129,17 @@ def transform(row: dict[str, Any]) -> dict[str, Any]:
     except ValueError as error:
         raise ValueError("subscriptions: invalid_source_account") from error
 
-    # Column 9 — tx_type
-    raw_tx_type = row.get("tx_type")
-    if raw_tx_type is None or str(raw_tx_type).strip() == "":
-        raise ValueError(f"subscriptions: subscription_id={subscription_id!r} tx_type_required")
-    tx_type = str(raw_tx_type).strip()
-    if tx_type not in _VALID_TX_TYPES:
+    # Columns 9–11 are independently optional in the source contract. Preserve
+    # supplied keys even when there is not enough information to resolve a FK.
+    classification: dict[str, str | None] = {}
+    for field in ("tx_type", "major_category", "minor_category"):
+        value = row.get(field)
+        classification[field] = str(value).strip() if value is not None and str(value).strip() else None
+    tx_type = classification["tx_type"]
+    if tx_type is not None and tx_type not in _VALID_TX_TYPES:
         raise ValueError(f"subscriptions: subscription_id={subscription_id!r} invalid_tx_type value={tx_type!r} — must be money-in or money-out")
-
-    # Column 10 — major_category
-    raw_major_category = row.get("major_category")
-    if raw_major_category is None or str(raw_major_category).strip() == "":
-        raise ValueError(f"subscriptions: subscription_id={subscription_id!r} major_category_required")
-    major_category = str(raw_major_category).strip()
-
-    # Column 11 — minor_category
-    raw_minor_category = row.get("minor_category")
-    if raw_minor_category is None or str(raw_minor_category).strip() == "":
-        raise ValueError(f"subscriptions: subscription_id={subscription_id!r} minor_category_required")
-    minor_category = str(raw_minor_category).strip()
+    major_category = classification["major_category"]
+    minor_category = classification["minor_category"]
 
     # Column 12 — description (optional)
     raw_description = row.get("description")
@@ -175,6 +177,8 @@ def transform(row: dict[str, Any]) -> dict[str, Any]:
             dates[field] = local_datetime(raw_date, subscription_timezone_local, f"subscriptions: {field}")
     subscription_start_date_local = dates["subscription_start_date_local"]
     subscription_end_date_local = dates["subscription_end_date_local"]
+    if frequency in {"quarterly", "annual"} and subscription_start_date_local is None:
+        raise ValueError("subscriptions: missing_subscription_start_date_local")
     if subscription_start_date_local is not None and subscription_end_date_local is not None and subscription_end_date_local < subscription_start_date_local:
         raise ValueError("subscriptions: end_before_start")
 

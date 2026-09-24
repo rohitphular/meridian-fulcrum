@@ -6,7 +6,7 @@ import { showLoading, hideLoading, showMsg } from './core/ui.js';
 import { showSection } from './core/nav.js';
 import { renderTransactions } from './sections/transactions.js';
 import { showPinGate, hidePinGate, fetchGeo, submitPin, readSession, clearSession } from './core/auth.js';
-import { loadAccountSchema, loadTransactionSchema, loadCategorySchema } from './core/schema.js';
+import { loadAccountSchema, loadTransactionSchema, loadCategorySchema, loadAccountTypeSchema, loadSubscriptionSchema } from './core/schema.js';
 
 // ── Quote currency ────────────────────────────────────────────────────────────
 
@@ -46,6 +46,9 @@ async function loadAll() {
       ['transaction schema', loadTransactionSchema],
       ['category schema', loadCategorySchema],
       ['subscriptions', () => ExpenseAPI.listSubscriptions()],
+      ['account types', () => ExpenseAPI.listAccountTypes()],
+      ['account type schema', loadAccountTypeSchema],
+      ['subscription schema', loadSubscriptionSchema],
     ];
     const responses = await Promise.allSettled(requests.map(([, request]) => Promise.resolve().then(request)));
     const failures = [];
@@ -55,6 +58,13 @@ async function loadAll() {
         failures.push({ entity, code: response.reason?.code ?? 'connection_error' });
       } else if (index >= 4 && index <= 6) {
         if (response.value === null || !Array.isArray(response.value?.types)) failures.push({ entity, code: 'invalid_schema' });
+      } else if (entity === 'account type schema') {
+        if (!['fields', 'types', 'record_statuses', 'columns'].every(key => Array.isArray(response.value?.[key]))) failures.push({ entity, code: 'invalid_schema' });
+      } else if (entity === 'subscription schema') {
+        if (!['frequencies', 'tx_types', 'record_statuses'].every(key => Array.isArray(response.value?.[key]) && response.value[key].length > 0)
+          || typeof response.value?.default_timezone !== 'string' || response.value.default_timezone === '') {
+          failures.push({ entity, code: 'invalid_schema' });
+        }
       } else if (response.value?.ok !== true || !Array.isArray(response.value.data)) {
         failures.push({ entity, code: response.value?.error ?? 'invalid_response' });
       }
@@ -72,7 +82,7 @@ async function loadAll() {
       return;
     }
 
-    const [txRes, catRes, accRes, ratesRes, schemaRes, txSchemaRes, catSchemaRes, subRes] = responses.map(response => response.value);
+    const [txRes, catRes, accRes, ratesRes, schemaRes, txSchemaRes, catSchemaRes, subRes, accountTypesRes, accountTypeSchemaRes, subSchemaRes] = responses.map(response => response.value);
     const toBool = value => value === true || String(value).toLowerCase() === 'true';
     const snapshot = {
       transactions: txRes.data,
@@ -90,6 +100,9 @@ async function loadAll() {
       transactionSchema: txSchemaRes,
       categorySchema: catSchemaRes,
       subscriptions: subRes.data,
+      subscriptionSchema: subSchemaRes,
+      accountTypes: accountTypesRes.data,
+      accountTypeSchema: accountTypeSchemaRes,
     };
     // Commit only after every dependency and derived collection is ready.
     Object.assign(state, snapshot);

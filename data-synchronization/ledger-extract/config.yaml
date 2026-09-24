@@ -1,9 +1,23 @@
 entities:
-  categories:
+  account_types:
     enabled: true
-  accounts:
-    enabled: false
-  transactions:
-    enabled: false
-  subscriptions:
-    enabled: false
+  category_master:
+    enabled: true
+  account_master:
+    enabled: true
+  account_deposit:
+    enabled: true
+  account_liability_credit_card:
+    enabled: true
+  account_liability_mortgage:
+    enabled: true
+  account_liability_personal_loan:
+    enabled: true
+  account_investment_property:
+    enabled: true
+  account_investment_stocks:
+    enabled: true
+  transaction_master:
+    enabled: true
+  subscription_master:
+    enabled: true

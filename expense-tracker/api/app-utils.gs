@@ -4,6 +4,7 @@
 
 function getOrCreateSheet(name, columns) {
   const ss    = SpreadsheetApp.getActiveSpreadsheet();
+  _assertMasterSheetNameReady(ss, name);
   let   sheet = ss.getSheetByName(name);
   if (!sheet) {
     sheet = ss.insertSheet(name);
@@ -24,6 +25,17 @@ function getOrCreateSheet(name, columns) {
     if (!headers.includes(col)) sheet.getRange(1, lastCol + ++added).setValue(col);
   });
   return sheet;
+}
+
+// Read-only guard shared by regular access and the edit trigger. This runs before
+// getOrCreateSheet can create a replacement tab or append headers to a collision.
+function _assertMasterSheetNameReady(spreadsheet, name) {
+  const rename = MASTER_SHEET_RENAMES.find(function(candidate) { return candidate.sheet_name === name; });
+  if (rename === undefined) return;
+  const names = spreadsheet.getSheets().map(function(sheet) { return sheet.getName(); });
+  if (names.indexOf(rename.legacy_name) === -1) return;
+  if (names.indexOf(rename.sheet_name) !== -1) throw new Error('master_sheet_name_collision');
+  throw new Error('legacy_master_sheet_name');
 }
 
 function sheetToObjects(sheet) {

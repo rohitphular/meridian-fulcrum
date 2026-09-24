@@ -5,10 +5,11 @@
 
 function validateAccountCreate(body) {
   if (body === null || typeof body !== 'object' || Array.isArray(body)) return { ok: false, error: 'invalid_row' };
-  const type = (body.type !== undefined && body.type !== null) ? String(body.type).trim() : '';
-  if (VALID_ACCOUNT_TYPES.indexOf(type) === -1) {
-    return { ok: false, error: 'invalid_account_type' };
+  if (body.id !== undefined && body.id !== null && String(body.id).trim() !== '' && isAccountUuid(body.id) === false) {
+    return { ok: false, error: 'invalid_id' };
   }
+  const type = (body.type !== undefined && body.type !== null) ? String(body.type).trim() : '';
+  if (type === '') return { ok: false, error: 'invalid_account_type' };
   if (body.account_name === undefined || body.account_name === null || String(body.account_name).trim() === '')         return { ok: false, error: 'missing_account_name' };
   if (body.account_currency_local === undefined || body.account_currency_local === null || String(body.account_currency_local).trim() === '') return { ok: false, error: 'missing_local_currency' };
 
@@ -16,42 +17,26 @@ function validateAccountCreate(body) {
   const subType = (body.sub_type !== undefined && body.sub_type !== null) ? String(body.sub_type).trim() : '';
   if (subType === '') return { ok: false, error: 'missing_sub_type' };
 
-  // sub_type must be from the correct set for the given type
-  if (ACCOUNT_TYPE_SUB_TYPES[type] === undefined) {
-    return { ok: false, error: 'invalid_account_type' };
-  }
-  const validSubTypes = ACCOUNT_TYPE_SUB_TYPES[type];
-
-  if (validSubTypes.indexOf(subType) === -1) {
-    return { ok: false, error: 'invalid_sub_type' };
-  }
-
-  // Cross-entity: account_currency_local must exist in the rates sheet.
-  // listRates() auto-seeds defaults (GBP, INR, USD, EUR, AED) on an empty sheet.
-  const normCurrency    = String(body.account_currency_local).trim().toUpperCase();
-  const ratesData       = listRates();
-  const knownCurrencies = {};
-  ratesData.forEach(function(r) {
-    if (r.currency !== undefined && r.currency !== null && String(r.currency).trim() !== '') knownCurrencies[String(r.currency).trim().toUpperCase()] = true;
-  });
-  if (knownCurrencies[normCurrency] !== true) {
-    return { ok: false, error: 'unknown_currency' };
-  }
-
   if (body.opening_value_local === undefined || body.opening_value_local === null || String(body.opening_value_local).trim() === '') {
     return { ok: false, error: 'missing_opening_value_local' };
   }
-  if (Number.isFinite(Number(body.opening_value_local)) === false) {
+  if (isAccountDecimal(body.opening_value_local) === false) {
     return { ok: false, error: 'invalid_opening_value_local' };
   }
 
   if (body.account_opening_date_local === undefined || body.account_opening_date_local === null || String(body.account_opening_date_local).trim() === '') {
     return { ok: false, error: 'missing_opening_date_local' };
   }
+  const openingDate = accountLocalDateTimeKey(body.account_opening_date_local);
+  if (openingDate === null) return { ok: false, error: 'invalid_account_opening_date_local' };
+  if (body.account_closing_date_local !== undefined && body.account_closing_date_local !== null && String(body.account_closing_date_local).trim() !== '') {
+    const closingDate = accountLocalDateTimeKey(body.account_closing_date_local);
+    if (closingDate === null || closingDate < openingDate) return { ok: false, error: 'invalid_account_closing_date_local' };
+  }
 
   if (body.tracking_start_date_local !== undefined && body.tracking_start_date_local !== null
       && String(body.tracking_start_date_local).trim() !== ''
-      && sheetDateTimeToDate(body.tracking_start_date_local) === null)
+      && accountLocalDateTimeKey(body.tracking_start_date_local) === null)
     return { ok: false, error: 'invalid_tracking_start_date_local' };
 
   // record_status is optional on create (defaults to 'active'); when supplied (e.g. seed
@@ -61,10 +46,23 @@ function validateAccountCreate(body) {
     return { ok: false, error: 'invalid_record_status' };
   }
 
+  // Reference lookup is last, after pure validation has rejected malformed rows.
+  const availableTypes = getAvailableAccountTypes();
+  if (availableTypes.some(function(row) { return row.account_type_key === type; }) === false) return { ok: false, error: 'invalid_account_type' };
+  if (availableTypes.some(function(row) { return row.account_type_key === type && row.account_subtype_key === subType; }) === false)
+    return { ok: false, error: 'invalid_sub_type' };
+  const normCurrency = String(body.account_currency_local).trim().toUpperCase();
+  if (/^[A-Z]{3}$/.test(normCurrency) === false) return { ok: false, error: 'invalid_local_currency' };
+  const knownCurrencies = Object.create(null);
+  listRates().forEach(function(rate) {
+    if (rate.currency !== undefined && rate.currency !== null) knownCurrencies[String(rate.currency).trim().toUpperCase()] = true;
+  });
+  if (knownCurrencies[normCurrency] !== true) return { ok: false, error: 'unknown_currency' };
+
   return { ok: true };
 }
 
-function validateAccountUpdate(body, currentType) {
+function validateAccountUpdate(body, currentType, currentOpeningDate) {
   if (body.row_num === undefined || body.row_num === null) return { ok: false, error: 'missing_row_num' };
   if (body.account_name === undefined || body.account_name === null || String(body.account_name).trim() === '') return { ok: false, error: 'missing_account_name' };
 
@@ -80,11 +78,7 @@ function validateAccountUpdate(body, currentType) {
   // Validate sub_type when provided
   if (body.sub_type !== undefined && body.sub_type !== null) {
     const subType = String(body.sub_type).trim();
-    if (ACCOUNT_TYPE_SUB_TYPES[currentType] === undefined) {
-      return { ok: false, error: 'invalid_account_type' };
-    }
-    const validSubTypes = ACCOUNT_TYPE_SUB_TYPES[currentType];
-    if (validSubTypes.indexOf(subType) === -1) {
+    if (getAvailableAccountTypes().some(function(row) { return row.account_type_key === currentType && row.account_subtype_key === subType; }) === false) {
       return { ok: false, error: 'invalid_sub_type' };
     }
   }
@@ -94,6 +88,11 @@ function validateAccountUpdate(body, currentType) {
     if (VALID_RS.indexOf(String(body.record_status).trim()) === -1) {
       return { ok: false, error: 'invalid_record_status' };
     }
+  }
+  if (body.account_closing_date_local !== undefined && body.account_closing_date_local !== null && String(body.account_closing_date_local).trim() !== '') {
+    const closingDate = accountLocalDateTimeKey(body.account_closing_date_local);
+    const openingDate = accountLocalDateTimeKey(currentOpeningDate);
+    if (closingDate === null || (openingDate !== null && closingDate < openingDate)) return { ok: false, error: 'invalid_account_closing_date_local' };
   }
 
   return { ok: true };

@@ -1,16 +1,122 @@
 import { state } from '../core/state.js';
-import { el, esc, getSymbol, toBase, exportSubscriptions, openContextMenu, closeContextMenu, syncStatusIcon, recordStatusIcon, parseCsvRow } from '../core/utils.js';
+import { el, esc, getSymbol, toBase, exportSubscriptions, openContextMenu, syncStatusIcon, recordStatusIcon } from '../core/utils.js';
 import { showLoading, hideLoading, showMsg } from '../core/ui.js';
 import { ExpenseAPI } from '../core/api.js';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const FREQUENCIES = [
-  { value: 'weekly',    label: 'Weekly'    },
-  { value: 'monthly',   label: 'Monthly'   },
-  { value: 'quarterly', label: 'Quarterly' },
-  { value: 'annual',    label: 'Annual'    },
-];
+function _schemaReady() {
+  return ['frequencies', 'tx_types', 'record_statuses'].every(key =>
+    Array.isArray(state.subscriptionSchema?.[key]) && state.subscriptionSchema[key].length > 0
+  );
+}
+
+function _frequencies() {
+  return state.subscriptionSchema.frequencies.map(value => ({
+    value, label: value.charAt(0).toUpperCase() + value.slice(1),
+  }));
+}
+
+function _recordStatuses() { return state.subscriptionSchema.record_statuses; }
+
+function _decimalNumber(value) {
+  const text = String(value ?? '').trim();
+  if (!/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i.test(text)) return NaN;
+  return Number(text);
+}
+
+function _dateValid(value) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value) || Number(value.slice(0, 4)) < 1) return false;
+  const parsed = new Date(value + 'T00:00:00Z');
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+}
+
+function _localTimestamp(value) {
+  const text = String(value ?? '').trim().replace('T', ' ');
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text + ' 00:00:00';
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(text)) return text + ':00';
+  return text;
+}
+
+function _timestampValid(value) {
+  const match = /^(\d{4}-\d{2}-\d{2}) (\d{2}):(\d{2}):(\d{2})(?:\.\d{1,6})?$/.exec(value);
+  return match !== null && _dateValid(match[1]) && Number(match[2]) < 24 && Number(match[3]) < 60 && Number(match[4]) < 60;
+}
+
+function _timestampOrder(value) {
+  return value.slice(0, 19) + '.' + (value.split('.')[1] ?? '').padEnd(6, '0');
+}
+
+function _isScheduled(sub) {
+  return sub.record_status === 'active' && ['current', 'upcoming'].includes(sub.schedule_status);
+}
+
+function _dueDays(nextDate, timezone, now = new Date()) {
+  try {
+    const parts = Object.fromEntries(new Intl.DateTimeFormat('en-GB', {
+      timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit',
+    }).formatToParts(now).map(part => [part.type, part.value]));
+    const today = `${parts.year}-${parts.month}-${parts.day}`;
+    if (!_dateValid(nextDate) || !_dateValid(today)) return null;
+    return Math.round((Date.parse(nextDate + 'T00:00:00Z') - Date.parse(today + 'T00:00:00Z')) / 86400000);
+  } catch (_) { return null; }
+}
+
+function _dateInputValue(value) {
+  // Native datetime inputs support milliseconds; preserve any finer source
+  // precision in _collectLocalTimestamp when the displayed value is unchanged.
+  return String(value ?? '').replace(' ', 'T').slice(0, 23);
+}
+
+function _collectLocalTimestamp(id, key) {
+  const value = _localTimestamp(el(id).value);
+  const existing = state.subEditRow === null ? undefined : state.subscriptions.find(sub => sub._row === state.subEditRow);
+  const original = existing?.[key];
+  if (original !== undefined && _timestampOrder(value) === _timestampOrder(_localTimestamp(_dateInputValue(original)))) return _localTimestamp(original);
+  return value;
+}
+
+function _subscriptionErrors(row) {
+  const errors = [];
+  const value = key => String(row[key] ?? '').trim();
+  for (const field of ['subscription_name', 'subscription_amount_local', 'frequency', 'source_account']) {
+    if (value(field) === '') errors.push(`${field} is required`);
+  }
+  const amount = _decimalNumber(row.subscription_amount_local);
+  if (value('subscription_amount_local') !== '' && (!Number.isFinite(amount) || amount <= 0)) {
+    errors.push('subscription_amount_local must be a positive finite decimal number');
+  }
+  if (!state.subscriptionSchema.frequencies.includes(value('frequency'))) errors.push('invalid frequency');
+  const dayField = value('frequency') === 'weekly' ? 'day_of_week' : 'day_of_month';
+  const day = Number(value(dayField));
+  const maxDay = dayField === 'day_of_week' ? 7 : 31;
+  if (!/^\d+$/.test(value(dayField)) || !Number.isInteger(day) || day < 1 || day > maxDay) {
+    errors.push(`${dayField} must be a whole number from 1 to ${maxDay}`);
+  }
+  const optionalDay = dayField === 'day_of_week' ? 'day_of_month' : 'day_of_week';
+  const optionalMax = optionalDay === 'day_of_week' ? 7 : 31;
+  if (value(optionalDay) !== '' && (!/^\d+$/.test(value(optionalDay)) || Number(value(optionalDay)) < 1 || Number(value(optionalDay)) > optionalMax)) {
+    errors.push(`${optionalDay} must be a whole number from 1 to ${optionalMax}`);
+  }
+  if (value('tx_type') !== '' && !state.subscriptionSchema.tx_types.includes(value('tx_type'))) errors.push('invalid tx_type');
+  if (value('record_status') !== '' && !_recordStatuses().includes(value('record_status'))) errors.push('invalid record_status');
+  const start = value('subscription_start_date_local'), end = value('subscription_end_date_local');
+  for (const field of ['subscription_start_date_local', 'subscription_end_date_local']) {
+    if (value(field) !== '' && !_timestampValid(value(field))) errors.push(`${field} must be a real local date and time (YYYY-MM-DD HH:MM:SS)`);
+  }
+  if (start !== '' && end !== '' && _timestampValid(start) && _timestampValid(end) && _timestampOrder(end) < _timestampOrder(start)) errors.push('end date must not precede start date');
+  if (['quarterly', 'annual'].includes(value('frequency')) && start === '') errors.push('start date is required to anchor quarterly or annual payments');
+  const timezone = value('subscription_timezone_local');
+  if ((start !== '' || end !== '') && timezone === '') errors.push('subscription_timezone_local is required when dates are supplied');
+  if (timezone !== '') {
+    try {
+      if (/^[+-]/.test(timezone)) throw new Error('invalid_timezone');
+      new Intl.DateTimeFormat('en-GB', { timeZone: timezone });
+    }
+    catch (_) { errors.push('invalid subscription_timezone_local'); }
+  }
+  return errors;
+}
 
 const DOW_LABELS = [
   { value: '1', label: 'Monday'    },
@@ -25,7 +131,7 @@ const DOW_LABELS = [
 // ── Category helpers ──────────────────────────────────────────────────────────
 
 function _txTypeOpts(selected = '') {
-  const types = state.transactionSchema?.types;
+  const types = state.subscriptionSchema?.tx_types;
   if (types === undefined || types === null || types.length === 0) return `<option value="">— select —</option>`;
   return `<option value="">— select —</option>` +
     types.map(t => {
@@ -34,15 +140,22 @@ function _txTypeOpts(selected = '') {
     }).join('');
 }
 
+function _storedCategoryOption(selectedVal) {
+  return selectedVal === undefined || selectedVal === null || selectedVal === '' ? '' :
+    `<option value="${esc(selectedVal)}" selected disabled>${esc(selectedVal)} (stored)</option>`;
+}
+
 function _majorOpts(txType, selectedVal = '') {
-  if (txType === undefined || txType === null || txType === '') return `<option value="">— select type first —</option>`;
+  if (txType === undefined || txType === null || txType === '') {
+    return `<option value="">— select type first —</option>` + _storedCategoryOption(selectedVal);
+  }
   const cats = state.categories.filter(c =>
-    c.is_subscription_eligible === true && c.tx_type_key === txType
+    (c.is_subscription_eligible === true || c.major_category_key === selectedVal) && c.tx_type_key === txType
   );
   const seen = new Map();
   cats.forEach(c => {
     if (!seen.has(c.major_category_key)) {
-      const active = cats.some(x => x.major_category_key === c.major_category_key && x.record_status === 'active');
+      const active = cats.some(x => x.major_category_key === c.major_category_key && x.record_status === 'active' && x.is_subscription_eligible === true);
       seen.set(c.major_category_key, { active, label: c.major_category_label });
     }
   });
@@ -52,32 +165,34 @@ function _majorOpts(txType, selectedVal = '') {
       return active
         ? `<option value="${esc(key)}" ${sel}>${esc(label)}</option>`
         : `<option value="${esc(key)}" ${sel} disabled style="color:var(--muted)">${esc(label)} (archived)</option>`;
-    }).join('');
+    }).join('') + (seen.has(selectedVal) ? '' : _storedCategoryOption(selectedVal));
 }
 
 function _minorOpts(txType, major, selectedVal = '') {
-  if (major === undefined || major === null || major === '') return `<option value="">— select major first —</option>`;
+  if (txType === undefined || txType === null || txType === '' || major === undefined || major === null || major === '') {
+    return `<option value="">— select type and major first —</option>` + _storedCategoryOption(selectedVal);
+  }
   const cats = state.categories.filter(c =>
-    c.is_subscription_eligible === true && c.tx_type_key === txType && c.major_category_key === major
+    (c.is_subscription_eligible === true || c.minor_category_key === selectedVal) && c.tx_type_key === txType && c.major_category_key === major
   );
   return `<option value="">— select —</option>` +
     cats.map(c => {
       const sel = selectedVal === c.minor_category_key ? 'selected' : '';
-      return c.record_status === 'active'
+      return c.record_status === 'active' && c.is_subscription_eligible === true
         ? `<option value="${esc(c.minor_category_key)}" ${sel}>${esc(c.minor_category_label)}</option>`
         : `<option value="${esc(c.minor_category_key)}" ${sel} disabled style="color:var(--muted)">${esc(c.minor_category_label)} (archived)</option>`;
-    }).join('');
+    }).join('') + (cats.some(c => c.minor_category_key === selectedVal) ? '' : _storedCategoryOption(selectedVal));
 }
 
 // ── Monthly-cost estimate ─────────────────────────────────────────────────────
 
 function _toMonthly(amount, frequency) {
-  const n = parseFloat(amount);
-  if (frequency === 'weekly')    return n * 4.33;
+  const n = _decimalNumber(amount);
+  if (frequency === 'weekly')    return n * 52 / 12;
   if (frequency === 'monthly')   return n;
   if (frequency === 'quarterly') return n / 3;
   if (frequency === 'annual')    return n / 12;
-  return n;
+  return NaN;
 }
 
 // ── Day field HTML ─────────────────────────────────────────────────────────────
@@ -111,16 +226,17 @@ function _renderForm(sub = null) {
   const dayVal         = isEdit ? (sub.frequency === 'weekly' ? sub.day_of_week : sub.day_of_month) : '';
   const startDateVal   = isEdit ? sub.subscription_start_date_local : '';
   const endDateVal     = isEdit ? sub.subscription_end_date_local   : '';
+  const timezoneVal    = isEdit ? sub.subscription_timezone_local : Intl.DateTimeFormat().resolvedOptions().timeZone;
 
-  const freqOpts = FREQUENCIES.map(f =>
+  const freqOpts = _frequencies().map(f =>
     `<option value="${esc(f.value)}" ${freqVal === f.value ? 'selected' : ''}>${esc(f.label)}</option>`
   ).join('');
 
   // Active accounts for source account dropdown
-  const activeAccounts = state.accounts.filter(a => a.record_status === 'active');
+  const activeAccounts = state.accounts.filter(a => a.record_status === 'active' || a.id === srcAccVal);
   const accOpts = `<option value="">— select —</option>` +
     activeAccounts.map(a =>
-      `<option value="${esc(a.id)}" ${a.id === srcAccVal ? 'selected' : ''}>${esc(a.account_name)} (${esc(a.account_currency_local)})</option>`
+      `<option value="${esc(a.id)}" ${a.id === srcAccVal ? 'selected' : ''}>${esc(a.account_name)} (${esc(a.account_currency_local)})${a.record_status === 'active' ? '' : ' — ' + esc(a.record_status)}</option>`
     ).join('');
 
   const header = isEdit ? `Editing: ${esc(sub.subscription_name)}` : 'New subscription';
@@ -139,7 +255,7 @@ function _renderForm(sub = null) {
       </div>
       <div class="field form-grid-span-2">
         <label for="subAmount">Amount *</label>
-        <input type="number" id="subAmount" min="0.01" step="0.01" placeholder="0.00" value="${esc(String(amountVal))}">
+        <input type="number" id="subAmount" min="0" step="any" placeholder="0.00" value="${esc(String(amountVal))}">
       </div>
       <div class="field form-grid-span-2">
         <label for="subFrequency">Frequency *</label>
@@ -150,11 +266,17 @@ function _renderForm(sub = null) {
       </div>
       <div class="field form-grid-span-2">
         <label for="subStartDate">Start date</label>
-        <input type="date" id="subStartDate" value="${esc(String(startDateVal))}">
+        <input type="datetime-local" step="any" id="subStartDate" value="${esc(_dateInputValue(startDateVal))}">
+        <div class="field-hint">Required for quarterly and annual payments; its month anchors the schedule.</div>
       </div>
       <div class="field form-grid-span-2">
         <label for="subEndDate">End date</label>
-        <input type="date" id="subEndDate" value="${esc(String(endDateVal))}">
+        <input type="datetime-local" step="any" id="subEndDate" value="${esc(_dateInputValue(endDateVal))}">
+      </div>
+      <div class="field form-grid-span-2">
+        <label for="subTimezone">Timezone</label>
+        <input type="text" id="subTimezone" value="${esc(timezoneVal ?? '')}" placeholder="${esc(state.subscriptionSchema.default_timezone ?? '')}">
+        <div class="field-hint">Payments follow this timezone. Required when start or end dates are supplied.</div>
       </div>
       <div class="field form-grid-span-2">
         <label for="subSourceAccount">Source account *</label>
@@ -174,7 +296,7 @@ function _renderForm(sub = null) {
       </div>
       <div class="field form-grid-span-4">
         <label for="subDescription">Notes</label>
-        <input type="text" id="subDescription" value="${esc(descriptionVal)}" placeholder="Optional note">
+        <textarea id="subDescription" placeholder="Optional note">${esc(descriptionVal)}</textarea>
       </div>
     </div>
     <div class="form-actions">
@@ -197,7 +319,7 @@ function _freqShort(f) {
 function _subFilterCount() {
   const f = state.subFilters;
   let n = 0;
-  if (f.recordStatuses.length < 4) n++;
+  if (f.recordStatuses.length < _recordStatuses().length) n++;
   if (f.majorCategory !== 'all') n++;
   if (f.frequency !== 'all') n++;
   if (f.search !== undefined && f.search !== null && f.search !== '') n++;
@@ -207,7 +329,7 @@ function _subFilterCount() {
 function _applySubFilters(subs) {
   const f = state.subFilters;
   return subs.filter(s => {
-    if (f.recordStatuses.length < 4 && !f.recordStatuses.includes(s.record_status)) return false;
+    if (!f.recordStatuses.includes(s.record_status)) return false;
     if (f.majorCategory !== 'all' && s.major_category !== f.majorCategory) return false;
     if (f.frequency !== 'all' && s.frequency !== f.frequency) return false;
     if (f.search !== undefined && f.search !== null && f.search !== '') {
@@ -264,8 +386,8 @@ function _renderSubFilterBar() {
       <div class="filter-row">
         <label>Status</label>
         <div style="display:flex;flex-wrap:wrap;gap:12px">
-          ${['active','inactive','deleted','locked'].map(s =>
-            `<label style="${optStyle}"><input type="checkbox" data-sub-filter-rstat="${esc(s)}"${rs.has(s) ? ' checked' : ''}> ${s.charAt(0).toUpperCase() + s.slice(1)}</label>`
+          ${_recordStatuses().map(s =>
+            `<label style="${optStyle}"><input type="checkbox" data-sub-filter-rstat="${esc(s)}"${rs.has(s) ? ' checked' : ''}> ${esc(s.charAt(0).toUpperCase() + s.slice(1))}</label>`
           ).join('')}
         </div>
       </div>
@@ -280,7 +402,7 @@ function _renderSubFilterBar() {
         <label>Frequency</label>
         <select id="subFFrequency" style="flex:1">
           <option value="all">All</option>
-          ${FREQUENCIES.map(fr => `<option value="${esc(fr.value)}"${f.frequency === fr.value ? ' selected' : ''}>${esc(fr.label)}</option>`).join('')}
+          ${_frequencies().map(fr => `<option value="${esc(fr.value)}"${f.frequency === fr.value ? ' selected' : ''}>${esc(fr.label)}</option>`).join('')}
         </select>
       </div>
       <div class="filter-row">
@@ -302,34 +424,34 @@ function _renderSubRow(sub, sym) {
       <td colspan="5">
         <span class="confirm-text">Delete <strong>${esc(sub.subscription_name)}</strong>?</span>
         <span style="display:inline-flex;gap:8px;margin-left:16px">
-          <button class="btn-link danger" data-action="sub-confirm-delete" data-row="${row}">Yes, delete</button>
+          <button class="btn-link danger" data-action="sub-confirm-delete" data-row="${esc(row)}">Yes, delete</button>
           <button class="btn-link" data-action="sub-cancel-delete">Cancel</button>
         </span>
       </td>
     </tr>`;
   }
 
-  const isActive    = sub.record_status === 'active';
+  const isActive    = _isScheduled(sub);
   const subCcy      = (state.accountMap[sub.source_account] !== undefined && state.accountMap[sub.source_account] !== null) ? state.accountMap[sub.source_account].account_currency_local : '';
   const amtFmt      = `${getSymbol(subCcy)}${parseFloat(sub.subscription_amount_local).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}/${_freqShort(sub.frequency)}`;
   const isForeign   = subCcy !== '' && subCcy !== state.quoteCurrency;
   const _baseVal    = isForeign ? toBase(_toMonthly(parseFloat(sub.subscription_amount_local), sub.frequency), subCcy, null) : 0;
   const baseAmt     = isForeign
-    ? `<span class="td-base-amt">${!Number.isFinite(_baseVal) ? '—' : `${sym}${_baseVal.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}/mo`}</span>`
+    ? `<span class="td-base-amt">${!Number.isFinite(_baseVal) ? '—' : `${esc(sym)}${esc(_baseVal.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 }))}/mo`}</span>`
     : '';
 
-  let nextCell = '—';
+  let nextCell = sub.schedule_status === 'expired' ? 'Expired' : sub.schedule_status === 'invalid' ? 'Invalid schedule' : '—';
   if (isActive && sub.next_payment_date !== undefined && sub.next_payment_date !== null && sub.next_payment_date !== '') {
     const [ny, nm, nd] = sub.next_payment_date.split('-').map(Number);
     const nextDate = new Date(ny, nm - 1, nd);
     const nextFmt  = nextDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
-    const today    = new Date(); today.setHours(0, 0, 0, 0);
-    const diffDays = Math.round((nextDate - today) / 86400000);
+    const timezone = sub.subscription_timezone_local !== undefined && sub.subscription_timezone_local !== null && sub.subscription_timezone_local !== '' ? sub.subscription_timezone_local : state.subscriptionSchema.default_timezone;
+    const diffDays = _dueDays(sub.next_payment_date, timezone);
     const duePart  = diffDays === 0 ? 'today'
                    : diffDays === 1 ? 'tomorrow'
                    : diffDays  >  0 ? `in ${diffDays}d`
                    : `${Math.abs(diffDays)}d overdue`;
-    nextCell = `${esc(nextFmt)} <span class="sub-card-due">(${esc(duePart)})</span>`;
+    nextCell = esc(nextFmt) + (diffDays === null ? '' : ` <span class="sub-card-due">(${esc(duePart)})</span>`);
   }
 
   const _accEntry = state.accountMap[sub.source_account];
@@ -343,7 +465,7 @@ function _renderSubRow(sub, sym) {
     <td style="text-align:right;white-space:nowrap">
       ${recordStatusIcon(sub.record_status)}
       ${syncStatusIcon(sub.sync_status)}
-      <button class="tx-menu-trigger" data-action="sub-menu" data-row="${row}" title="Actions">⋮</button>
+      <button class="tx-menu-trigger" data-action="sub-menu" data-row="${esc(row)}" title="Actions">⋮</button>
     </td>
   </tr>`;
 }
@@ -361,28 +483,28 @@ function _renderTable(subs) {
     return `<p class="placeholder">No subscriptions match the current filters.</p>`;
   }
 
-  const total   = state.subscriptions.length;
-  const active  = state.subscriptions.filter(s => s.record_status === 'active').length;
-  const estMonthly = state.subscriptions
-    .filter(s => s.record_status === 'active')
-    .reduce((sum, s) => {
-      const sCcy = (state.accountMap[s.source_account] !== undefined && state.accountMap[s.source_account] !== null) ? state.accountMap[s.source_account].account_currency_local : '';
-      const v = toBase(_toMonthly(s.subscription_amount_local, s.frequency), sCcy, null);
-      return sum + (Number.isFinite(v) ? v : 0);
-    }, 0);
+  const total = state.subscriptions.length;
+  const scheduled = state.subscriptions.filter(_isScheduled);
+  let missingRates = 0;
+  const estMonthly = scheduled.reduce((sum, sub) => {
+    const currency = state.accountMap[sub.source_account]?.account_currency_local ?? '';
+    const amount = toBase(_toMonthly(sub.subscription_amount_local, sub.frequency), currency, null);
+    if (!Number.isFinite(amount)) { missingRates++; return sum; }
+    return sum + amount;
+  }, 0);
 
   return `
     <div class="summary-grid" style="margin-bottom:20px">
       <div class="summary-card">
-        <div class="summary-card-label">Active / Total</div>
-        <div class="summary-card-value">${active} / ${total}</div>
+        <div class="summary-card-label">Scheduled / Total</div>
+        <div class="summary-card-value">${scheduled.length} / ${total}</div>
       </div>
       <div class="summary-card">
-        <div class="summary-card-label">Est. monthly cost</div>
-        <div class="summary-card-value">${sym}${estMonthly.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+        <div class="summary-card-label">Est. monthly amount</div>
+        <div class="summary-card-value">${esc(sym)}${esc(estMonthly.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 }))}${missingRates > 0 ? ' (partial)' : ''}</div>
       </div>
     </div>
-    <p class="field-hint" style="margin-bottom:12px">Amounts converted to ${esc(state.quoteCurrency)}. Quarterly ÷ 3, Annual ÷ 12, Weekly × 4.33.</p>
+    <p class="field-hint" style="margin-bottom:12px">Amounts converted to ${esc(state.quoteCurrency)}. Quarterly ÷ 3, Annual ÷ 12, Weekly × 52 ÷ 12. Includes incoming and outgoing scheduled amounts.${missingRates > 0 ? ` ${missingRates} subscription(s) could not be converted; check account currencies and rates.` : ''}</p>
     <div class="table-wrap acc-table-wrap${state.subDeleteRow !== null ? ' acc-has-active' : ''}">
       <table class="acc-table">
         <thead><tr>
@@ -397,145 +519,206 @@ function _renderTable(subs) {
     </div>`;
 }
 
-let _importParsed    = null;
-let _subMenuKey      = null;
+let _importParsed = null;
+let _subMenuKey = null;
 let _subImportResult = null;
+let _subImportBusy = false;
+let _subImportRetry = false;
+let _subImportRead = 0;
 
 // ── CSV import ────────────────────────────────────────────────────────────────
 
 function _renderImportPanel() {
   return `
-  <div class="card" style="margin-bottom:20px">
+  <div class="card">
     <div class="cat-form-header">Import subscriptions from CSV</div>
-    <div class="form-grid" style="margin-bottom:16px;align-items:start">
+    <div class="form-grid">
       <div class="field form-grid-span-2">
         <label for="subImportFile">CSV file</label>
-        <input type="file" id="subImportFile" accept=".csv">
-        <div class="field-hint">Columns: subscription_name, counterparty_name, subscription_amount_local, frequency, day_of_month, day_of_week, source_account, tx_type, major_category, minor_category, description, subscription_start_date_local, subscription_end_date_local, subscription_timezone_local</div>
+        <input type="file" id="subImportFile" accept=".csv"${_subImportBusy ? ' disabled' : ''}>
+        <div class="field-hint">Required: subscription_name, subscription_amount_local, frequency, source_account, and the applicable day_of_week or day_of_month. Optional: id, counterparty_name, tx_type, major_category, minor_category, description, record_status, subscription_start_date_local, subscription_end_date_local, subscription_timezone_local. Start date is required for quarterly and annual schedules. Dates require a timezone. Sync and audit columns are accepted; the server manages their values.</div>
       </div>
     </div>
-    <div id="subImportStatus">${_subImportResult !== null ? _subImportResult : ''}</div>
-    <div class="form-actions" style="margin-top:16px">
-      <button class="btn btn-primary" id="subImportConfirm" disabled>Import</button>
-      <button class="btn btn-secondary" id="subImportCancel">Cancel</button>
+    <div id="subImportStatus">${_subImportResult ?? ''}</div>
+    <div class="form-actions">
+      <button class="btn btn-primary" id="subImportConfirm"${_subImportBusy || _importParsed === null ? ' disabled' : ''}>${_subImportBusy ? 'Importing…' : _subImportRetry ? 'Retry failed rows' : 'Import'}</button>
+      <button class="btn btn-secondary" id="subImportCancel"${_subImportBusy ? ' disabled' : ''}>Close</button>
     </div>
-    <div class="pin-error" id="subImportError"></div>
+    <div class="pin-error" id="subImportError" role="alert"></div>
   </div>`;
 }
 
+// Preserve quoted newlines and physical CSV line numbers in import diagnostics.
+function _subscriptionCsvRecords(source) {
+  const text = source.replace(/^\uFEFF/, '');
+  const records = [];
+  let values = [], value = '', quoted = false, closed = false, line = 1, rowLine = 1;
+  for (let index = 0; index < text.length; index++) {
+    const char = text[index];
+    if (quoted) {
+      if (char === '"' && text[index + 1] === '"') { value += '"'; index++; }
+      else if (char === '"') { quoted = false; closed = true; }
+      else { value += char; if (char === '\n' || (char === '\r' && text[index + 1] !== '\n')) line++; }
+    } else if (char === '"' && value === '' && !closed) quoted = true;
+    else if (char === ',' || char === '\n' || char === '\r') {
+      values.push(value); value = ''; closed = false;
+      if (char !== ',') {
+        if (values.some(cell => cell.trim() !== '')) records.push({ values, line: rowLine });
+        values = []; line++; rowLine = line;
+        if (char === '\r' && text[index + 1] === '\n') index++;
+      }
+    } else if (closed || char === '"') return { records: [], errors: [`Row ${line}: invalid characters after a quoted CSV field.`] };
+    else value += char;
+  }
+  if (quoted) return { records: [], errors: [`Row ${rowLine}: a quoted CSV field is not closed.`] };
+  values.push(value);
+  if (values.some(cell => cell.trim() !== '')) records.push({ values, line: rowLine });
+  return { records, errors: [] };
+}
+
 function _parseSubscriptionsCsv(text) {
-  const lines = text.split(/\r?\n/).filter(l => l.trim());
-  if (lines.length === 0) return { subscriptions: [], errors: ['File is empty.'] };
-
-  const headers = parseCsvRow(lines[0]).map(h => h.toLowerCase().replace(/\s+/g, '_'));
-  const subscriptions = [];
-  const errors        = [];
-
-  for (let i = 1; i < lines.length; i++) {
-    const vals = parseCsvRow(lines[i]);
-    const row  = {};
-    headers.forEach((h, idx) => { row[h] = (vals[idx] !== undefined ? vals[idx] : '').trim(); });
-
-    if (String(row.subscription_name).trim() === '')               { errors.push(`Row ${i + 1}: missing name`);                        continue; }
-    if (String(row.subscription_amount_local).trim() === '') { errors.push(`Row ${i + 1}: missing subscription_amount_local`); continue; }
-    if (String(row.frequency).trim() === '')                       { errors.push(`Row ${i + 1}: missing frequency`);                     continue; }
-
-    const subscription_amount_local = parseFloat(row.subscription_amount_local);
-    if (!Number.isFinite(subscription_amount_local) || subscription_amount_local <= 0) {
-      errors.push(`Row ${i + 1}: invalid subscription_amount_local "${row.subscription_amount_local}"`);
+  if (!_schemaReady()) return { subscriptions: [], errors: ['Subscription configuration is unavailable. Reload after deploying the updated backend.'] };
+  const parsed = _subscriptionCsvRecords(text);
+  if (parsed.errors.length > 0) return { subscriptions: [], errors: parsed.errors };
+  if (parsed.records.length === 0) return { subscriptions: [], errors: ['File is empty.'] };
+  const headers = parsed.records.shift().values.map(header => header.trim().toLowerCase().replace(/\s+/g, '_'));
+  if (new Set(headers).size !== headers.length) return { subscriptions: [], errors: ['CSV contains duplicate column headers.'] };
+  const required = ['subscription_name', 'subscription_amount_local', 'frequency', 'source_account'];
+  const missing = required.filter(header => !headers.includes(header));
+  if (missing.length > 0) return { subscriptions: [], errors: [`Missing required headers: ${missing.join(', ')}.`] };
+  const subscriptions = [], errors = [], seenIds = new Set();
+  const fields = ['id', ...required, 'record_status', 'subscription_timezone_local', 'counterparty_name', 'day_of_month', 'day_of_week',
+    'tx_type', 'major_category', 'minor_category', 'description', 'subscription_start_date_local', 'subscription_end_date_local'];
+  const acceptedHeaders = new Set([...fields, 'sync_status', 'sync_date', 'sync_notes', 'created_at', 'updated_at']);
+  const unknown = headers.filter(header => !acceptedHeaders.has(header));
+  if (unknown.length > 0) return { subscriptions: [], errors: [`Unknown CSV headers: ${unknown.map(header => header === '' ? '[blank]' : header).join(', ')}.`] };
+  for (const record of parsed.records) {
+    if (record.values.length !== headers.length) {
+      errors.push(`Row ${record.line}: expected ${headers.length} columns, found ${record.values.length}.`);
       continue;
     }
-
-    subscriptions.push({
-      id:                           row.id,
-      record_status:                row.record_status,
-      subscription_timezone_local:  row.subscription_timezone_local,
-      subscription_name:             row.subscription_name,
-      counterparty_name:             row.counterparty_name,
-      subscription_amount_local,
-      frequency:                     row.frequency,
-      day_of_month:                  row.day_of_month,
-      day_of_week:                   row.day_of_week,
-      source_account:                row.source_account,
-      tx_type:                       row.tx_type,
-      major_category:                row.major_category,
-      minor_category:                row.minor_category,
-      description:                   row.description,
-      subscription_start_date_local: row.subscription_start_date_local,
-      subscription_end_date_local:   row.subscription_end_date_local,
+    const row = Object.fromEntries(headers.map((header, index) => [header, record.values[index].trim()]));
+    for (const field of ['subscription_start_date_local', 'subscription_end_date_local']) {
+      if (row[field] !== undefined) row[field] = _localTimestamp(row[field]);
+    }
+    const rowErrors = _subscriptionErrors(row);
+    for (const field of ['id', 'source_account']) {
+      if (row[field] !== undefined && row[field] !== '' && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(row[field])) rowErrors.push(`${field} must be a UUID`);
+    }
+    if (row.id !== undefined && row.id !== '') {
+      row.id = row.id.toLowerCase();
+      if (seenIds.has(row.id)) rowErrors.push('duplicate id in CSV');
+      seenIds.add(row.id);
+    }
+    if (rowErrors.length > 0) {
+      errors.push(`Row ${record.line}: ${rowErrors.join('; ')}.`);
+      continue;
+    }
+    const subscription = { csv_row_num: record.line };
+    fields.forEach(field => {
+      if (row[field] !== undefined && !(row[field] === '' && ['id', 'record_status'].includes(field))) subscription[field] = row[field];
     });
+    subscription.source_account = subscription.source_account.toLowerCase();
+    subscription.subscription_amount_local = row.subscription_amount_local;
+    subscriptions.push(subscription);
   }
-
   return { subscriptions, errors };
 }
 
-function _renderImportStatus(parsed) {
-  const { subscriptions, errors } = parsed;
-  const errHtml = errors.length
-    ? `<div class="pin-error" style="margin-bottom:8px">${errors.map(e => esc(e)).join('<br>')}</div>`
-    : '';
-  if (subscriptions.length === 0) return errHtml + '<p class="placeholder">No valid rows found.</p>';
-  return `${errHtml}<p style="font-size:13px;color:var(--muted);margin:0">${subscriptions.length} subscription${subscriptions.length !== 1 ? 's' : ''} ready to import</p>`;
+function _renderImportStatus({ subscriptions, errors }) {
+  if (errors.length > 0) return `<div class="pin-error" role="alert">${errors.map(error => esc(error)).join('<br>')}</div><p class="field-hint">Correct the CSV errors and select the file again before importing.</p>`;
+  if (subscriptions.length === 0) return '<p class="placeholder">No rows ready to import.</p>';
+  return `<p class="field-hint">${subscriptions.length} subscription${subscriptions.length !== 1 ? 's' : ''} ready to import</p>`;
+}
+
+function _refreshImportPanel() {
+  const status = el('subImportStatus');
+  if (status !== null) status.innerHTML = _subImportResult ?? '';
+  const button = el('subImportConfirm');
+  if (button !== null) {
+    button.disabled = _subImportBusy || _importParsed === null;
+    button.textContent = _subImportBusy ? 'Importing…' : _subImportRetry ? 'Retry failed rows' : 'Import';
+  }
+  for (const id of ['subImportFile', 'subImportCancel', 'subImportBtn', 'subAddBtn']) {
+    const node = el(id);
+    if (node !== null) node.disabled = _subImportBusy;
+  }
+}
+
+async function _readSubscriptionImport(file) {
+  if (_subImportBusy) return;
+  const read = ++_subImportRead;
+  _importParsed = null;
+  _subImportRetry = false;
+  _subImportResult = '<p class="field-hint">Reading CSV…</p>';
+  const error = el('subImportError');
+  if (error !== null) error.textContent = '';
+  _refreshImportPanel();
+  try {
+    const parsed = _parseSubscriptionsCsv(await file.text());
+    if (read !== _subImportRead || !state.subImportOpen) return;
+    _importParsed = parsed.errors.length === 0 && parsed.subscriptions.length > 0 ? parsed.subscriptions : null;
+    _subImportResult = `<p class="field-hint">${esc(file.name)}</p>` + _renderImportStatus(parsed);
+  } catch (_) {
+    if (read !== _subImportRead) return;
+    _subImportResult = '<p class="pin-error">Unable to read the CSV. Select the file again.</p>';
+  }
+  _refreshImportPanel();
 }
 
 async function _submitImport(subscriptions) {
-  const btn   = el('subImportConfirm');
-  const errEl = el('subImportError');
-  if (btn)   { btn.disabled = true; btn.textContent = 'Importing…'; }
-  if (errEl) errEl.textContent = '';
+  if (_subImportBusy || !Array.isArray(subscriptions) || subscriptions.length === 0) return;
+  _subImportBusy = true;
+  _refreshImportPanel();
+  const error = el('subImportError');
+  if (error !== null) error.textContent = '';
   showLoading();
   try {
     const res = await ExpenseAPI.createSubscriptionsBulk({ subscriptions });
-
-    if (!res.ok && (res.results === undefined || res.results === null)) {
-      console.warn('[subscriptions] _submitImport failed:', res?.error);
-      if (errEl) errEl.textContent = 'Error: ' + (res.error !== undefined && res.error !== null ? res.error : '[no error code]');
-      if (btn)   { btn.disabled = false; btn.textContent = 'Import'; }
+    if (res?.ok === false && typeof res.error === 'string' && (!Array.isArray(res.results) || res.results.length === 0)) {
+      const uncertain = res.error === 'request_failed';
+      if (uncertain) {
+        _importParsed = null;
+        document.dispatchEvent(new CustomEvent('et:reload'));
+      }
+      _subImportResult = `<p class="pin-error" role="alert">Import failed: ${esc(res.error)}${uncertain ? '. Some rows may have been saved. Reload and check before importing again.' : ''}</p>`;
+      showMsg('Import failed: ' + res.error, 'warn');
       return;
     }
-
-    const created = res.created;
-    const updated = res.updated;
-    const failed  = res.failed;
-
-    if (failed === 0) {
+    const results = res?.results;
+    const indexed = Array.isArray(results) ? results.map((result, position) => ({ result, index: result?.index ?? position })) : [];
+    if (indexed.length !== subscriptions.length || new Set(indexed.map(item => item.index)).size !== subscriptions.length ||
+      indexed.some(({ result, index }) => !Number.isInteger(index) || subscriptions[index] === undefined || typeof result?.ok !== 'boolean')) {
       _importParsed = null;
-      state.subImportOpen = false;
-      const parts = [];
-      if (created) parts.push(`${created} created`);
-      if (updated) parts.push(`${updated} updated`);
-      const msg = parts.length > 0 ? parts.join(' · ') : 'Nothing to import.';
-      showMsg(msg);
+      _subImportResult = '<p class="pin-error" role="alert">The server returned an incomplete import result. Some rows may have been saved. Reload and check before importing again.</p>';
       document.dispatchEvent(new CustomEvent('et:reload'));
-    } else {
-      const resultRows = (res.results !== undefined && res.results !== null ? res.results : []).map(r => `
-        <tr>
-          <td>${esc((r.key !== undefined && r.key !== null) ? String(r.key) : '—')}</td>
-          <td>${r.ok
-            ? `<span class="badge badge-et-in">${esc(r.action !== undefined && r.action !== null ? r.action : 'ok')}</span>`
-            : `<span class="badge badge-et-out">${esc(r.error !== undefined && r.error !== null ? r.error : '[no error code]')}</span>`}
-          </td>
-        </tr>`).join('');
-      _subImportResult = `
-        <div style="margin-bottom:8px;font-size:13px">${created} created · ${updated} updated · <span style="color:var(--ember)">${failed} failed</span></div>
-        <div class="table-wrap" style="margin-bottom:8px">
-          <table class="acc-table">
-            <thead><tr><th>Name</th><th>Result</th></tr></thead>
-            <tbody>${resultRows}</tbody>
-          </table>
-        </div>`;
-      const status = el('subImportStatus');
-      if (status) status.innerHTML = _subImportResult;
-      _importParsed = null;
-      if (btn) { btn.disabled = true; btn.textContent = 'Import'; }
-      if (created > 0 || updated > 0) { document.dispatchEvent(new CustomEvent('et:reload')); }
-      showMsg(`${created} created · ${updated} updated · ${failed} failed`, 'warn');
+      return;
     }
-  } catch (err) {
-    console.error('[subscriptions] _submitImport failed:', err);
-    if (errEl) errEl.textContent = 'Connection error.';
-    if (btn)   { btn.disabled = false; btn.textContent = 'Import'; }
+    const failed = indexed.filter(({ result }) => !result.ok);
+    const created = indexed.filter(({ result }) => result.ok && result.action === 'created').length;
+    const updated = indexed.filter(({ result }) => result.ok && result.action === 'updated').length;
+    const unchanged = indexed.filter(({ result }) => result.ok && result.action === 'unchanged').length;
+    const summary = `${created} created · ${updated} updated · ${unchanged} unchanged · ${failed.length} failed`;
+    const rows = failed.map(({ result, index }) => {
+      const row = subscriptions[index];
+      return `<tr><td>${esc(row.csv_row_num ?? index + 2)}</td><td>${esc(row.subscription_name)}</td><td>${esc(result.error ?? 'unknown_error')}</td></tr>`;
+    }).join('');
+    _subImportResult = `<p class="field-hint">${esc(summary)}</p>` + (rows === '' ? '' :
+      `<div class="table-wrap"><table class="acc-table"><thead><tr><th>CSV row</th><th>Name</th><th>Reason</th></tr></thead><tbody>${rows}</tbody></table></div>`);
+    _importParsed = failed.length > 0 ? failed.map(({ index }) => subscriptions[index]) : null;
+    _subImportRetry = failed.length > 0;
+    state.subImportOpen = true;
+    showMsg(summary, failed.length > 0 ? 'warn' : 'success');
+    if (created + updated > 0) document.dispatchEvent(new CustomEvent('et:reload'));
+  } catch (_) {
+    _importParsed = null;
+    _subImportRetry = false;
+    _subImportResult = '<p class="pin-error" role="alert">Connection error. Some rows may have been saved. Reload and check before importing again.</p>';
+    console.warn('[subscriptions] _submitImport: error=connection_error');
+    document.dispatchEvent(new CustomEvent('et:reload'));
   } finally {
+    _subImportBusy = false;
+    _refreshImportPanel();
     hideLoading();
   }
 }
@@ -545,6 +728,11 @@ async function _submitImport(subscriptions) {
 export function renderSubscriptions() {
   _subMenuKey = null;
   const content      = el('subscriptionsContent');
+  if (content === null) return;
+  if (!_schemaReady()) {
+    content.innerHTML = '<p class="pin-error" role="alert">Subscription configuration is unavailable. Reload after deploying the updated backend.</p>';
+    return;
+  }
   const anyFormOpen  = state.subAddOpen || state.subEditRow !== null;
   const addBtnText   = anyFormOpen ? '× Close' : '+ Add';
   const impBtnText   = state.subImportOpen ? '× Close' : '↑ Import';
@@ -564,10 +752,11 @@ export function renderSubscriptions() {
       ? (state.subscriptions.find(s => s._row === state.subEditRow) !== undefined ? state.subscriptions.find(s => s._row === state.subEditRow) : null)
       : null) : ''}
     ${_renderSubFilterBar()}
-    ${_renderTable(filtered)}
+    <div id="subTableResults">${_renderTable(filtered)}</div>
   `;
 
   _attachEvents();
+  _refreshImportPanel();
 }
 
 // ── Event attachment ──────────────────────────────────────────────────────────
@@ -583,12 +772,15 @@ function _attachEvents() {
   if (content === null) return;
 
   el('subImportBtn')?.addEventListener('click', () => {
+    if (_subImportBusy) return;
+    _subImportRead++;
     if (state.subImportOpen) {
       state.subImportOpen = false;
       _importParsed = null;
       _subImportResult = null;
     } else {
       state.subImportOpen = true;
+      state.subDeleteRow = null;
       state.subAddOpen    = false;
       state.subEditRow    = null;
       state.subPrefill    = null;
@@ -596,27 +788,18 @@ function _attachEvents() {
     renderSubscriptions();
   }, { signal });
 
-  el('subImportFile')?.addEventListener('change', e => {
-    const file = e.target.files[0];
-    if (file === undefined || file === null) return;
-    _subImportResult = null;
-    const reader = new FileReader();
-    reader.onload = ev => {
-      const parsed = _parseSubscriptionsCsv(ev.target.result);
-      _importParsed = parsed.subscriptions.length ? parsed.subscriptions : null;
-      const status = el('subImportStatus');
-      if (status) status.innerHTML = _renderImportStatus(parsed);
-      const btn = el('subImportConfirm');
-      if (btn) btn.disabled = !_importParsed;
-    };
-    reader.readAsText(file);
+  el('subImportFile')?.addEventListener('change', event => {
+    const file = event.target.files[0];
+    if (file !== undefined) _readSubscriptionImport(file);
   }, { signal });
 
   el('subImportConfirm')?.addEventListener('click', () => {
-    if (_importParsed) _submitImport(_importParsed);
+    if (_importParsed !== null) _submitImport(_importParsed);
   }, { signal });
 
   el('subImportCancel')?.addEventListener('click', () => {
+    if (_subImportBusy) return;
+    _subImportRead++;
     state.subImportOpen = false;
     _importParsed = null;
     _subImportResult = null;
@@ -624,12 +807,15 @@ function _attachEvents() {
   }, { signal });
 
   el('subAddBtn')?.addEventListener('click', () => {
+    if (_subImportBusy) return;
+    _subImportRead++;
     if (state.subAddOpen || state.subEditRow !== null) {
       state.subAddOpen  = false;
       state.subEditRow  = null;
       state.subPrefill  = null;
     } else {
       state.subAddOpen    = true;
+      state.subDeleteRow  = null;
       state.subImportOpen = false;
       _importParsed       = null;
     }
@@ -660,6 +846,15 @@ function _attachEvents() {
   }, { signal });
 
   content.addEventListener('click', e => {
+    if (_subImportBusy) return;
+    const sort = e.target.closest('th[data-sub-sort]');
+    if (sort !== null) {
+      const col = sort.dataset.subSort;
+      state.subSort.dir = state.subSort.col === col && state.subSort.dir === 'asc' ? 'desc' : 'asc';
+      state.subSort.col = col;
+      renderSubscriptions();
+      return;
+    }
     const btn = e.target.closest('[data-action]');
     if (btn === null) return;
     const action = btn.dataset.action;
@@ -694,9 +889,9 @@ function _attachEvents() {
             ];
       openContextMenu(btn, menuItems, async key => {
         _subMenuKey = null;
-        if (key === 'edit')   { state.subEditRow = row; state.subAddOpen = false; state.subPrefill = null; renderSubscriptions(); }
+        if (key === 'edit')   { state.subEditRow = row; state.subAddOpen = false; state.subImportOpen = false; state.subDeleteRow = null; state.subPrefill = null; renderSubscriptions(); }
         if (key === 'toggle') { _toggle(row); }
-        if (key === 'delete') { state.subDeleteRow = row; renderSubscriptions(); }
+        if (key === 'delete') { state.subDeleteRow = row; state.subAddOpen = false; state.subEditRow = null; renderSubscriptions(); }
         if (key === 'restore') {
           showLoading();
           try {
@@ -736,21 +931,8 @@ function _attachEvents() {
     openContextMenu(el('subExportBtn'), [
       { key: 'csv',  label: 'CSV'  },
       { key: 'json', label: 'JSON' },
-    ], key => exportSubscriptions(key, state.subscriptions));
+    ], key => exportSubscriptions(key, _sortSubs(_applySubFilters(state.subscriptions))));
   }, { signal });
-
-  content.querySelectorAll('th[data-sub-sort]').forEach(th => {
-    th.addEventListener('click', () => {
-      const col = th.dataset.subSort;
-      if (state.subSort.col === col) {
-        state.subSort.dir = state.subSort.dir === 'asc' ? 'desc' : 'asc';
-      } else {
-        state.subSort.col = col;
-        state.subSort.dir = col === 'next_payment_date' ? 'asc' : 'desc';
-      }
-      renderSubscriptions();
-    }, { signal });
-  });
 
   el('subFilterToggle')?.addEventListener('click', () => {
     state.subFilterOpen = !state.subFilterOpen;
@@ -781,11 +963,12 @@ function _attachEvents() {
 
   el('subFSearch')?.addEventListener('input', e => {
     state.subFilters.search = e.target.value;
-    renderSubscriptions();
+    const table = el('subTableResults');
+    if (table !== null) table.innerHTML = _renderTable(_sortSubs(_applySubFilters(state.subscriptions)));
   }, { signal });
 
   el('subFilterClear')?.addEventListener('click', () => {
-    state.subFilters = { recordStatuses: ['active','inactive','deleted','locked'], majorCategory: 'all', frequency: 'all', search: '' };
+    state.subFilters = { recordStatuses: [..._recordStatuses()], majorCategory: 'all', frequency: 'all', search: '' };
     renderSubscriptions();
   }, { signal });
 }
@@ -794,13 +977,15 @@ function _attachEvents() {
 
 function _collectForm() {
   const freq       = el('subFrequency').value;
-  const dayOfWeek  = freq === 'weekly' ? el('subDayOfWeek').value  : '';
-  const dayOfMonth = freq !== 'weekly' ? el('subDayOfMonth').value : '';
+  const current = state.subEditRow === null ? undefined : state.subscriptions.find(sub => sub._row === state.subEditRow);
+  const sameFrequency = current?.frequency === freq;
+  const dayOfWeek  = freq === 'weekly' ? el('subDayOfWeek').value : sameFrequency ? current.day_of_week ?? '' : '';
+  const dayOfMonth = freq !== 'weekly' ? el('subDayOfMonth').value : sameFrequency ? current.day_of_month ?? '' : '';
 
   return {
     subscription_name:             el('subName').value.trim(),
     counterparty_name:             el('subCounterparty').value.trim(),
-    subscription_amount_local:     parseFloat(el('subAmount').value),
+    subscription_amount_local:     el('subAmount').value.trim(),
     frequency:                     freq,
     day_of_week:                   dayOfWeek,
     day_of_month:                  dayOfMonth,
@@ -809,11 +994,9 @@ function _collectForm() {
     major_category:                el('subMajor').value,
     minor_category:                el('subMinor').value,
     description:                   el('subDescription').value.trim(),
-    subscription_timezone_local: state.subEditRow !== null
-      ? state.subscriptions.find(sub => sub._row === state.subEditRow)?.subscription_timezone_local ?? ''
-      : Intl.DateTimeFormat().resolvedOptions().timeZone,
-    subscription_start_date_local: el('subStartDate').value,
-    subscription_end_date_local:   el('subEndDate').value,
+    subscription_timezone_local:  el('subTimezone').value.trim(),
+    subscription_start_date_local: _collectLocalTimestamp('subStartDate', 'subscription_start_date_local'),
+    subscription_end_date_local:   _collectLocalTimestamp('subEndDate', 'subscription_end_date_local'),
   };
 }
 
@@ -824,23 +1007,15 @@ async function _saveAdd() {
   if (errEl) errEl.textContent = '';
 
   const body = _collectForm();
-
-  if (body.subscription_name === undefined || body.subscription_name === null || String(body.subscription_name).trim() === '') {
-    if (errEl) errEl.textContent = 'Name is required.';
-    return;
-  }
-  if (!Number.isFinite(body.subscription_amount_local) || body.subscription_amount_local <= 0) {
-    if (errEl) errEl.textContent = 'Enter a positive amount.';
-    return;
-  }
-  if (body.source_account === undefined || body.source_account === null || String(body.source_account).trim() === '') {
-    if (errEl) errEl.textContent = 'Source account is required.';
+  const errors = _subscriptionErrors(body);
+  if (errors.length > 0) {
+    if (errEl) errEl.textContent = errors.join('; ');
     return;
   }
 
   // FE duplicate check by name
   const norm = body.subscription_name.toLowerCase();
-  const nameDupe = state.subscriptions.find(s => s.subscription_name !== undefined && s.subscription_name !== null && s.subscription_name.toLowerCase() === norm);
+  const nameDupe = state.subscriptions.find(s => s.subscription_name !== undefined && s.subscription_name !== null && s.subscription_name.toLowerCase() === norm && s.record_status !== 'deleted');
   if (nameDupe) {
     if (errEl) errEl.textContent = `A subscription named "${nameDupe.subscription_name}" already exists.`;
     return;
@@ -877,17 +1052,9 @@ async function _saveEdit(row) {
   if (errEl) errEl.textContent = '';
 
   const body = _collectForm();
-
-  if (body.subscription_name === undefined || body.subscription_name === null || String(body.subscription_name).trim() === '') {
-    if (errEl) errEl.textContent = 'Name is required.';
-    return;
-  }
-  if (!Number.isFinite(body.subscription_amount_local) || body.subscription_amount_local <= 0) {
-    if (errEl) errEl.textContent = 'Enter a positive amount.';
-    return;
-  }
-  if (body.source_account === undefined || body.source_account === null || String(body.source_account).trim() === '') {
-    if (errEl) errEl.textContent = 'Source account is required.';
+  const errors = _subscriptionErrors(body);
+  if (errors.length > 0) {
+    if (errEl) errEl.textContent = errors.join('; ');
     return;
   }
 
@@ -921,20 +1088,6 @@ async function _toggle(row) {
   try {
     const res = await ExpenseAPI.updateSubscription({
       row_num:                       row,
-      subscription_name:             sub.subscription_name,
-      counterparty_name:             sub.counterparty_name,
-      subscription_amount_local:     sub.subscription_amount_local,
-      frequency:                     sub.frequency,
-      day_of_month:                  sub.day_of_month,
-      day_of_week:                   sub.day_of_week,
-      source_account:                sub.source_account,
-      tx_type:                       sub.tx_type,
-      major_category:                sub.major_category,
-      minor_category:                sub.minor_category,
-      description:                   sub.description,
-      subscription_timezone_local:  sub.subscription_timezone_local,
-      subscription_start_date_local: sub.subscription_start_date_local,
-      subscription_end_date_local:   sub.subscription_end_date_local,
       record_status:                 newStatus,
     });
     if (res.ok) {
