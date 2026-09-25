@@ -67,6 +67,8 @@ Key constraints:
 Key constraints:
 - `uq_cr_quote_currency_date`: one rate per currency per day
 - `chk_cr_rate_positive`: `rate_value > 0`
+- `chk_cr_rate_finite`: rejects NUMERIC `NaN` and infinities (PostgreSQL's positive comparison alone admits `NaN`)
+- `chk_cr_xau_identity`: XAU quoted against itself is exactly `1`
 - `chk_cr_base_is_xau`: `base_currency_code = 'XAU'`
 
 ### Seeded currencies (18)
@@ -84,6 +86,7 @@ All 18 have `minor_unit_name` seeded. Any future addition must also include `min
 | `0003_update_xau_decimal_places.py` | Widen CHECK to BETWEEN 0 AND 9; add pinned constraint for XAU=9; UPDATE XAU decimal_places 2→9 |
 | `0004_add_minor_unit_name.py` | ADD `minor_unit_name TEXT`; seed all 18 rows; SET NOT NULL |
 | `0005_update_rate_value_precision.py` | Drop unused views `v_latest_rates` and `v_rates_to_gbp`; change the scale of `currency_rates.rate_value` NUMERIC(19,6) → NUMERIC(19,8) |
+| `0006_enforce_finite_identity_rates.py` | Enforce finite rates and XAU=1 for every writer; refuse existing violations without automatic historical repair |
 
 Migrations run in numeric order. Each migration follows the pattern:
 ```python
@@ -99,7 +102,7 @@ def upgrade(client: Any) -> None:
 
 **Historical mode** — loads fiat rates from locally downloaded CSV files (stooq format), then fetches tracked crypto over the imported date range through today from Yahoo Finance. Run once to backfill before the daily job takes over.
 
-Fiat rates are fetched for 14 currencies (all except XAU, BTC, ETH, SOL). Crypto rates are fetched from Yahoo Finance tickers. XAU identity rows with rate_value=1 and rate_source=synthetic are stored for each date in the requested range. Fiat gaps alone are forward-filled; crypto rows retain actual matching gold/crypto dates. Both currency types respect is_tracked. Job writes commit atomically and source-date watermarks never regress.
+Fiat rates are fetched for 14 currencies (all except XAU, BTC, ETH, SOL). Crypto rates are fetched from Yahoo Finance tickers. A daily run shares one gold snapshot across these conversions; its rolling range ends on the current UTC date. XAU identity rows with rate_value=1 and rate_source=synthetic are stored for each date in the requested range. Fiat gaps alone are forward-filled; crypto rows retain actual matching gold/crypto dates. Both currency types respect is_tracked. Job writes commit atomically and source-date watermarks never regress. A transaction advisory lock prevents overlapping daily/historical jobs; a second run fails before fetching. Startup validates configuration before migrations.
 
 ### Triggering the sync job
 

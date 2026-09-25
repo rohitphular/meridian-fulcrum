@@ -12,7 +12,7 @@ import shutil
 import subprocess
 import tempfile
 from collections.abc import Iterator
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -124,6 +124,23 @@ def test_forward_fill_scopes_tracked_fiat_and_never_uses_future_closes(database_
         assert (code, saturday) not in rates
 
 
+@pytest.mark.parametrize(
+    ("zone", "first", "last"),
+    [
+        ("UTC", date(2026, 9, 5), date(2026, 9, 9)),
+        ("America/Santiago", date(2026, 9, 5), date(2026, 9, 9)),
+        ("Pacific/Apia", date(2011, 12, 29), date(2012, 1, 2)),
+    ],
+)
+def test_forward_fill_preserves_every_calendar_date_across_timezone_jumps(database_client: Any, zone: str, first: date, last: date) -> None:
+    with database_client.cursor() as cursor:
+        cursor.execute("SET LOCAL TIME ZONE %s", (zone,))
+    upsert.upsert_rates(database_client, [("USD", first, Decimal(100), "yfinance")])
+    upsert.forward_fill_rates(database_client, first, last, ["USD"])
+    expected_dates = {first + timedelta(days=offset) for offset in range((last - first).days + 1)}
+    assert {rate_date for code, rate_date in _stored_rates(database_client) if code == "USD"} == expected_dates
+
+
 def test_watermark_advances_from_null_and_does_not_regress(database_client: Any) -> None:
     currency_master.update_last_fetched(database_client, {"USD": date(2026, 9, 20)})
     currency_master.update_last_fetched(database_client, {"USD": date(2026, 9, 18)})
@@ -162,3 +179,57 @@ def test_migrations_seed_expected_schema(database_client: Any) -> None:
 def test_migration_constraints_reject_invalid_rows(database_client: Any, statement: str) -> None:
     with pytest.raises(psycopg2.IntegrityError), database_client.cursor() as cursor:
         cursor.execute(statement)
+
+
+@pytest.mark.parametrize(("code", "rate"), [("USD", "NaN"), ("XAU", "2")])
+def test_nonfinite_and_invalid_gold_identity_rates_fail_even_outside_job(database_client: Any, code: str, rate: str) -> None:
+    with pytest.raises(psycopg2.IntegrityError), database_client.cursor() as cursor:
+        cursor.execute("INSERT INTO currency_rates (quote_currency_code, rate_date, rate_value, rate_source) VALUES (%s, '2026-09-18', %s, 'manual')", (code, rate))
+
+
+@pytest.mark.parametrize(("code", "rate", "constraint"), [("USD", "NaN", "chk_cr_rate_finite"), ("XAU", "2", "chk_cr_xau_identity")])
+def test_rate_constraint_migration_refuses_legacy_corruption_without_rewriting_it(database_client: Any, code: str, rate: str, constraint: str) -> None:
+    path = Path(__file__).resolve().parents[2] / "migrations" / "0006_enforce_finite_identity_rates.py"
+    spec = importlib.util.spec_from_file_location("review_rate_constraints", path)
+    assert spec is not None and spec.loader is not None
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    with database_client.cursor() as cursor:
+        cursor.execute("ALTER TABLE currency_rates DROP CONSTRAINT chk_cr_rate_finite, DROP CONSTRAINT chk_cr_xau_identity")
+        cursor.execute("INSERT INTO currency_rates (quote_currency_code, rate_date, rate_value, rate_source) VALUES (%s, '2026-09-18', %s, 'legacy')", (code, rate))
+        cursor.execute("SAVEPOINT before_constraint_review")
+    with pytest.raises(psycopg2.IntegrityError) as raised:
+        migration.upgrade(database_client)
+    assert raised.value.diag.constraint_name == constraint
+    with database_client.cursor() as cursor:
+        cursor.execute("ROLLBACK TO SAVEPOINT before_constraint_review")
+        cursor.execute("SELECT rate_value::text, rate_source FROM currency_rates WHERE quote_currency_code=%s", (code,))
+        assert cursor.fetchone() == ("NaN" if rate == "NaN" else "2.00000000", "legacy")
+
+
+def test_daily_and_historical_jobs_cannot_hold_the_same_write_transaction(database_client: Any) -> None:
+    from database.locking import claim_job
+
+    second = psycopg2.connect(database_client.dsn)
+    try:
+        claim_job(database_client)
+        with pytest.raises(RuntimeError, match="currency_rates_job_already_running"):
+            claim_job(second)
+        second.rollback()
+        database_client.rollback()
+        claim_job(second)
+    finally:
+        second.rollback()
+        second.close()
+
+
+def test_replayed_source_rates_preserve_uuid_and_creation_time(database_client: Any) -> None:
+    rate_date = date(2026, 9, 18)
+    upsert.upsert_rates(database_client, [("USD", rate_date, Decimal(100), "stooq")])
+    with database_client.cursor() as cursor:
+        cursor.execute("SELECT id, created_at FROM currency_rates")
+        before = cursor.fetchone()
+    upsert.upsert_rates(database_client, [("USD", rate_date, Decimal(110), "yfinance")])
+    with database_client.cursor() as cursor:
+        cursor.execute("SELECT id, created_at, rate_value, rate_source FROM currency_rates")
+        assert cursor.fetchone() == (*before, Decimal("110.00000000"), "yfinance")

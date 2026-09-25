@@ -76,7 +76,7 @@ function transactions() {
   return { ctx, sheet, transfer };
 }
 function detailImporter(fileType, subType, existingRows = []) {
-  const ctx = runtime(['app-config.gs', 'sync-utils.gs', 'import-registry.gs', 'import-core.gs']);
+  const ctx = runtime(['app-config.gs', 'sync-utils.gs', 'app-utils.gs', 'account-utils.gs', 'import-registry.gs', 'import-core.gs']);
   const spec = ctx.getImportSpec(fileType);
   const sheet = new Sheet([spec.columns, ...existingRows]);
   sheet.name = spec.sheet_name;
@@ -282,6 +282,18 @@ test('POST shape guard and lock release on dispatch exception', () => {
   assert.equal(ctx.doPost({ postData: { contents: '{"action":"create_transaction"}' } }).error, 'request_failed');
   assert.equal(released, 1);
 });
+
+test('POST pre-dispatch audit and lock-service failures still return sanitized JSON', () => {
+  for (const failingStep of ['checkLocked', 'recordAccess', 'lock']) {
+    const ctx = runtime(['app-router.gs'], {
+      json: value => value, extractMeta: () => ({ ip: 'test' }), checkLocked: () => false, checkPin: () => true, recordAccess() {},
+      LockService: { getScriptLock: () => ({ tryLock: () => true, releaseLock() {} }) },
+    });
+    const fail = () => { throw new Error('private service failure'); };
+    if (failingStep === 'lock') ctx.LockService.getScriptLock = fail; else ctx[failingStep] = fail;
+    assert.equal(ctx.doPost({ postData: { contents: '{"action":"create_transaction"}' } }).error, 'request_failed');
+  }
+});
 test('incorrect TOTP records failed access', () => {
   const attempts = [];
   const ctx = runtime(['app-router.gs'], { json: value => value, extractMeta: () => ({ ip: 'test' }), checkLocked: () => false, checkPin: () => true, verifyTotp: () => false, recordAccess: (_, success) => attempts.push(success) });
@@ -328,7 +340,7 @@ test('balance includes cutoff timestamp and skips corrupt amount and earlier his
     ['a', 'bad', 'money-out', 'active', '2026-02-02 00:00:00'],
     ['a', 3, 'money-out', 'deleted', '2026-02-02 00:00:00'],
   ]);
-  const ctx = runtime(['app-utils.gs', 'account-core.gs'], { TRANSACTIONS_SHEET: 'transaction_master', getTransactionSheetColumns: () => sheet.rows[0], txColIndex: name => sheet.rows[0].indexOf(name) });
+  const ctx = runtime(['app-utils.gs', 'account-utils.gs', 'account-core.gs'], { TRANSACTIONS_SHEET: 'transaction_master', getTransactionSheetColumns: () => sheet.rows[0], txColIndex: name => sheet.rows[0].indexOf(name) });
   ctx.getOrCreateSheet = () => sheet;
   assert.equal(ctx._buildAccountNetMap([{ id: 'a', tracking_start_date_local: '2026-02-01 00:00:00' }]).a, 20);
   assert.equal(ctx._buildAccountNetMap([{ id: 'a', tracking_start_date_local: '' }]).a, 120);
@@ -342,7 +354,7 @@ test('subscription amount must be finite', () => {
   assert.equal(ctx.validateSubscriptionCreate({ subscription_name: 'Example', subscription_amount_local: Infinity }).error, 'invalid_subscription_amount_local');
 });
 test('registry keys exclude prototype and detail rows normalize stored IDs', () => {
-  const ctx = runtime(['app-config.gs', 'sync-utils.gs', 'import-registry.gs', 'import-core.gs']);
+  const ctx = runtime(['app-config.gs', 'sync-utils.gs', 'app-utils.gs', 'account-utils.gs', 'import-registry.gs', 'import-core.gs']);
   assert.equal(ctx.getImportSpec('constructor'), null);
   const spec = ctx.getImportSpec('account_deposit');
   const sheet = new Sheet([spec.columns]);
@@ -379,7 +391,7 @@ test('importing transfer child as parent is rejected without changing pair', () 
   assert.equal(JSON.stringify(sheet.rows), snapshot);
 });
 test('detail numeric validation rejects malformed values before writes', () => {
-  const ctx = runtime(['app-config.gs', 'sync-utils.gs', 'import-registry.gs', 'import-core.gs']);
+  const ctx = runtime(['app-config.gs', 'sync-utils.gs', 'app-utils.gs', 'account-utils.gs', 'import-registry.gs', 'import-core.gs']);
   const spec = ctx.getImportSpec('account_liability_credit_card');
   const sheet = new Sheet([spec.columns]);
   const result = ctx._importRow(sheet, spec, { id: DETAIL_ID, account_id: DETAIL_ACCOUNT_ID, credit_limit_local: 'not-a-number' }, { [DETAIL_ACCOUNT_ID]: 'credit-card' }, Object.create(null), sheet.rows.slice());
@@ -387,7 +399,7 @@ test('detail numeric validation rejects malformed values before writes', () => {
   assert.equal(sheet.writes, 0);
 });
 test('removed detail types are rejected before any Sheet access', () => {
-  const ctx = runtime(['app-config.gs', 'sync-utils.gs', 'import-registry.gs', 'import-core.gs']);
+  const ctx = runtime(['app-config.gs', 'sync-utils.gs', 'app-utils.gs', 'account-utils.gs', 'import-registry.gs', 'import-core.gs']);
   ctx.getOrCreateSheet = () => { throw new Error('removed import type reached Sheets'); };
   ctx.SpreadsheetApp = { getActiveSpreadsheet: () => { throw new Error('removed import type reached Sheets'); } };
   for (const fileType of ['account_investment_fixed_income', 'account_investment_p2p_lending']) {
@@ -407,14 +419,15 @@ test('loan detail contracts require principal and accept omitted optional fields
     const row = { id: DETAIL_ID, account_id: DETAIL_ACCOUNT_ID, term_months: 24 };
     assert.equal(ctx.importAccountData({ file_type: fileType, rows: [row] }).results[0].error, 'missing_' + requiredField);
     assert.equal(sheet.writes, 0);
-    assert.equal(ctx.importAccountData({ file_type: fileType, rows: [{ ...row, [requiredField]: 0 }] }).ok, true);
-    assert.equal(sheet.rows[1][spec.columns.indexOf(requiredField)], 0);
+    assert.equal(ctx.importAccountData({ file_type: fileType, rows: [{ ...row, [requiredField]: 0 }] }).results[0].error, 'invalid_' + requiredField);
+    assert.equal(ctx.importAccountData({ file_type: fileType, rows: [{ ...row, [requiredField]: 100 }] }).ok, true);
+    assert.equal(sheet.rows[1][spec.columns.indexOf(requiredField)], 100);
     assert.equal(sheet.rows[1][spec.columns.indexOf('record_status')], 'active');
     assert.equal(sheet.rows[1][spec.columns.indexOf('monthly_payment_local')], '');
   }
 });
 test('detail UUIDs are validated before any Sheet access', () => {
-  const ctx = runtime(['app-config.gs', 'sync-utils.gs', 'import-registry.gs', 'import-core.gs']);
+  const ctx = runtime(['app-config.gs', 'sync-utils.gs', 'app-utils.gs', 'account-utils.gs', 'import-registry.gs', 'import-core.gs']);
   ctx.getOrCreateSheet = () => { throw new Error('invalid UUID reached Sheets'); };
   for (const [fileType, base, fields] of [
     ['account_liability_mortgage', { original_principal_local: 1000, term_months: 24 }, ['id', 'account_id', 'linked_property_account_id']],
@@ -493,18 +506,18 @@ test('detail numeric text accepts decimal notation only and preserves precision'
   const fileType = 'account_liability_credit_card';
   const { ctx, sheet, spec } = detailImporter(fileType, 'credit-card');
   const row = { id: DETAIL_ID, account_id: DETAIL_ACCOUNT_ID };
-  for (const amount of ['0x10', '0b10', '0o10', '1_000', '1.2.3']) {
+  for (const amount of ['0x10', '0b10', '0o10', '1_000', '1.2.3', '-2.5E-2']) {
     const result = ctx.importAccountData({ file_type: fileType, rows: [{ ...row, credit_limit_local: amount }] });
     assert.equal(result.results[0].error, 'invalid_credit_limit_local');
     assert.equal(sheet.writes, 0);
   }
-  for (const amount of ['12345678901234567890.123456789012345678', '1.25e+3', '+.5', '2.', '-2.5E-2']) {
+  for (const amount of ['12345678901234567890.123456789012345678', '1.25e+3', '+.5', '2.']) {
     assert.equal(ctx.importAccountData({ file_type: fileType, rows: [{ ...row, credit_limit_local: amount }] }).ok, true);
     assert.equal(sheet.rows[1][spec.columns.indexOf('credit_limit_local')], amount);
   }
 });
 test('six detail contracts append audit columns without moving existing positions', () => {
-  const ctx = runtime(['app-config.gs', 'sync-utils.gs', 'import-registry.gs', 'import-core.gs']);
+  const ctx = runtime(['app-config.gs', 'sync-utils.gs', 'app-utils.gs', 'account-utils.gs', 'import-registry.gs', 'import-core.gs']);
   for (const [fileType, , , oldCount] of AUDITED_DETAIL_CASES) {
     const spec = ctx.getImportSpec(fileType);
     const originalPrefix = oldCount - (fileType === 'account_investment_stocks' ? 1 : 0);
@@ -556,7 +569,7 @@ test('detail retry states and explicit lifecycle transitions remain syncable', (
   }
 });
 test('invalid detail record status fails before accessing Sheets', () => {
-  const ctx = runtime(['app-config.gs', 'sync-utils.gs', 'import-registry.gs', 'import-core.gs']);
+  const ctx = runtime(['app-config.gs', 'sync-utils.gs', 'app-utils.gs', 'account-utils.gs', 'import-registry.gs', 'import-core.gs']);
   ctx.getOrCreateSheet = () => { throw new Error('invalid status reached Sheets'); };
   for (const [fileType, , fields] of AUDITED_DETAIL_CASES) {
     const result = ctx.importAccountData({ file_type: fileType, rows: [{ id: DETAIL_ID, account_id: DETAIL_ACCOUNT_ID, ...fields, record_status: 'unknown' }] });
@@ -569,7 +582,7 @@ test('invalid account references cannot create or initialize detail target tabs'
     [{ account_id: DETAIL_ACCOUNT_ID }, [{ id: DETAIL_ACCOUNT_ID, sub_type: 'cash' }], 'sub_type_mismatch'],
     [{ account_id: DETAIL_ACCOUNT_ID, linked_property_account_id: PROPERTY_ACCOUNT_ID }, [{ id: DETAIL_ACCOUNT_ID, sub_type: 'mortgage' }, { id: PROPERTY_ACCOUNT_ID, sub_type: 'cash' }], 'invalid_linked_property'],
   ]) {
-    const ctx = runtime(['app-config.gs', 'sync-utils.gs', 'import-registry.gs', 'import-core.gs']);
+    const ctx = runtime(['app-config.gs', 'sync-utils.gs', 'app-utils.gs', 'account-utils.gs', 'import-registry.gs', 'import-core.gs']);
     ctx.getAccountSheetColumns = () => ['id', 'sub_type'];
     ctx.sheetToObjects = () => accountRows;
     ctx.getOrCreateSheet = name => { assert.equal(name, 'account_master', 'invalid references accessed target tab'); return {}; };
@@ -628,10 +641,10 @@ test('initialized detail metadata and unknown creation timestamps survive migrat
   const before = JSON.stringify(sheet.rows);
   assert.equal(ctx._initializeAccountDetailMetadata(sheet, spec).initialized, 0);
   assert.equal(JSON.stringify(sheet.rows), before);
-  ctx.importAccountData({ file_type: 'account_deposit', rows: [{ id: DETAIL_ID, account_id: DETAIL_ACCOUNT_ID }] });
+  assert.equal(ctx.importAccountData({ file_type: 'account_deposit', rows: [{ id: DETAIL_ID, account_id: DETAIL_ACCOUNT_ID }] }).results[0].error, 'record_locked');
   assert.equal(sheet.rows[1][spec.columns.indexOf('created_at')], '');
   assert.equal(sheet.rows[1][spec.columns.indexOf('record_status')], 'locked');
-  assert.equal(sheet.rows[1][spec.columns.indexOf('sync_status')], 'update-pending');
+  assert.equal(sheet.rows[1][spec.columns.indexOf('sync_status')], 'update-failed');
 });
 test('direct Sheet multirow edits queue pending sync and preserve financial values', () => {
   const { ctx, sheet, spec } = detailImporter('account_deposit', 'cash');
@@ -1009,6 +1022,12 @@ test('legacy sheet layout fails before any header write', () => {
   assert.throws(() => ctx.getOrCreateSheet('account_master', ['id', 'account_currency_local']), /sheet_header_mismatch/);
 });
 
+test('unknown trailing source columns fail before reads can accept an ETL-incompatible layout', () => {
+  const sheet = { getLastColumn: () => 3, getRange: () => ({ getValues: () => [['id', 'account_name', 'retired_field']] }) };
+  const ctx = runtime(['app-config.gs', 'app-utils.gs'], { SpreadsheetApp: { getActiveSpreadsheet: () => ({ getSheetByName: () => sheet, getSheets: () => [] }) } });
+  assert.throws(() => ctx.getOrCreateSheet('account_master', ['id', 'account_name']), /sheet_header_mismatch/);
+});
+
 test('cross-currency transfer requires target amount in interactive and bulk paths', () => {
   for (const bulk of [false, true]) {
     const { ctx, sheet, transfer } = transactions();
@@ -1019,6 +1038,307 @@ test('cross-currency transfer requires target amount in interactive and bulk pat
     assert.equal(sheet.writes, 0);
   }
 });
+
+test('transaction source rejects ETL-invalid dates, zones and coordinates before writes', () => {
+  const invalidCases = [
+    [{ tx_date_local: '2026-02-30 12:00:00' }, 'invalid_tx_date_local'],
+    [{ tx_date_local: '2026-09-24T12:00:00Z' }, 'invalid_tx_date_local'],
+    [{ tx_timezone_local: 'Not/A_Zone' }, 'invalid_tx_timezone_local'],
+    [{ tx_timezone_local: '+01:00' }, 'invalid_tx_timezone_local'],
+    [{ tx_date_local: '2026-03-29 01:30:00', tx_timezone_local: 'Europe/London' }, 'nonexistent_local_time'],
+    [{ tx_date_local: '2026-10-25 01:30:00', tx_timezone_local: 'Europe/London' }, 'ambiguous_local_time'],
+    [{ user_location_latitude: '91', user_location_longitude: '0' }, 'latitude_out_of_range'],
+    [{ user_location_latitude: '0', user_location_longitude: '-181' }, 'longitude_out_of_range'],
+    [{ user_location_latitude: '0' }, 'incomplete_location_coordinates'],
+    [{ user_location_latitude: true, user_location_longitude: '0' }, 'invalid_user_location_latitude'],
+  ];
+  for (const [override, error] of invalidCases) {
+    for (const bulk of [false, true]) {
+      const { ctx, sheet, transfer } = transactions();
+      const body = { ...transfer, ...override };
+      const result = bulk ? ctx.createTransactionsBulk({ transactions: [body] }).results[0] : ctx.createTransaction(body);
+      assert.equal(result.error, error);
+      assert.equal(sheet.writes, 0);
+    }
+  }
+});
+
+test('transaction writers retain exact decimal text and reject coercible non-decimals', () => {
+  for (const bulk of [false, true]) {
+    const { ctx, sheet, transfer } = transactions();
+    const body = { ...transfer, source_amount_local: '9007199254740993.005', target_amount_local: '0.100000000000000005' };
+    assert.equal(bulk ? ctx.createTransactionsBulk({ transactions: [body] }).ok : ctx.createTransaction(body).ok, true);
+    assert.equal(sheet.rows[1][ctx.txColIndex('tx_amount_local')], body.source_amount_local);
+    assert.equal(sheet.rows[2][ctx.txColIndex('tx_amount_local')], body.target_amount_local);
+    const update = { row_num: 2, tx_type: 'money-out', tx_date_local: body.tx_date_local, account_id: 'a',
+      major_category: 'transfer', minor_category: 'bank', tx_amount_local: '9007199254740993.015' };
+    assert.equal(ctx.updateTransaction(update).ok, true);
+    assert.equal(sheet.rows[1][ctx.txColIndex('tx_amount_local')], update.tx_amount_local);
+  }
+  for (const amount of [true, [12], '0x10', '12abc', 'Infinity']) {
+    const { ctx, sheet, transfer } = transactions();
+    assert.equal(ctx.createTransaction({ ...transfer, source_amount_local: amount }).error, 'missing_source_amount');
+    assert.equal(sheet.writes, 0);
+  }
+});
+
+test('transaction updates validate retained timezone, category and edited context', () => {
+  const { ctx, sheet, transfer } = transactions();
+  assert.equal(ctx.createTransaction({ ...transfer, tx_timezone_local: 'Europe/London' }).ok, true);
+  const update = { row_num: 2, tx_type: 'money-out', tx_date_local: transfer.tx_date_local, account_id: 'a', tx_amount_local: 15,
+    major_category: 'transfer', minor_category: 'bank' };
+  const before = JSON.stringify(sheet.rows);
+  for (const [override, error] of [
+    [{ major_category: undefined, minor_category: undefined }, 'missing_category'],
+    [{ tx_date_local: '2026-10-25 01:30:00' }, 'ambiguous_local_time'],
+    [{ user_location_longitude: 0 }, 'incomplete_location_coordinates'],
+    [{ tx_amount_local: true }, 'invalid_amount'],
+  ]) assert.equal(ctx.updateTransaction({ ...update, ...override }).error, error);
+  assert.equal(JSON.stringify(sheet.rows), before);
+});
+
+test('interactive transfer changes preserve extractable pair state without changing another leg', () => {
+  const { ctx, sheet, transfer } = transactions();
+  assert.equal(ctx.createTransaction(transfer).ok, true);
+  const before = JSON.stringify(sheet.rows);
+  assert.equal(ctx.deleteTransaction({ row_num: 2 }).error, 'transfer_parent_deleted');
+  assert.equal(ctx.updateTransaction({ row_num: 2, tx_type: 'money-in', tx_date_local: transfer.tx_date_local,
+    account_id: 'a', tx_amount_local: 15, major_category: 'transfer', minor_category: 'bank' }).error, 'invalid_transfer_pair');
+  assert.equal(ctx.updateTransaction({ row_num: 2, tx_type: 'money-out', tx_date_local: transfer.tx_date_local,
+    account_id: 'b', tx_amount_local: 15, major_category: 'transfer', minor_category: 'bank' }).error, 'invalid_transfer_pair');
+  assert.equal(JSON.stringify(sheet.rows), before);
+  assert.equal(ctx.deleteTransaction({ row_num: 3 }).ok, true);
+  assert.equal(ctx.deleteTransaction({ row_num: 2 }).ok, true);
+  assert.equal(ctx.restoreTransaction({ row_num: 3 }).error, 'transfer_parent_deleted');
+  assert.equal(ctx.restoreTransaction({ row_num: 2 }).ok, true);
+  assert.equal(ctx.restoreTransaction({ row_num: 3 }).ok, true);
+});
+
+test('account source validates timezone and DST for opening, closing and tracking times', () => {
+  for (const [override, error] of [
+    [{ local_timezone: 'Not/A_Zone' }, 'invalid_local_timezone'],
+    [{ local_timezone: '+01:00' }, 'invalid_local_timezone'],
+    [{ account_opening_date_local: '2026-03-29 01:30:00' }, 'nonexistent_local_time'],
+    [{ account_closing_date_local: '2026-10-25 01:30:00' }, 'ambiguous_local_time'],
+    [{ tracking_start_date_local: '2026-10-25 01:30:00' }, 'ambiguous_local_time'],
+  ]) {
+    const { ctx, sheet, account } = accountImporter();
+    assert.equal(ctx.createAccount({ ...account, ...override }).error, error);
+    assert.equal(sheet.writes, 0);
+  }
+  const { ctx, sheet, account } = accountImporter();
+  assert.equal(ctx.createAccount(account).ok, true);
+  const before = JSON.stringify(sheet.rows);
+  assert.equal(ctx.updateAccount({ row_num: 2, account_name: account.account_name, account_closing_date_local: '2026-10-25 01:30:00' }).error, 'ambiguous_local_time');
+  assert.equal(JSON.stringify(sheet.rows), before);
+});
+
+test('all row mutations reject a stale expected UUID before changing the replacement row', () => {
+  const files = fs.readdirSync(api).filter(file => file.endsWith('.gs')).sort();
+  const ctx = runtime(files);
+  ctx.validateCategoryUpdate = ctx.validateSubscriptionUpdate = () => ({ ok: true });
+  for (const [schema, methods] of [
+    ['Account', ['updateAccount', 'deleteAccount', 'restoreAccount']],
+    ['Category', ['updateCategory', 'deleteCategory']],
+    ['Transaction', ['updateTransaction', 'deleteTransaction', 'restoreTransaction']],
+    ['Subscription', ['updateSubscription', 'deleteSubscription', 'restoreSubscription']],
+    ['AccountType', ['updateAccountType', 'deleteAccountType', 'restoreAccountType']],
+  ]) {
+    const columns = ctx['get' + schema + 'SheetColumns']();
+    const stored = columns.map(key => key === 'id' ? DETAIL_ID.toUpperCase() : key === 'record_status' ? 'active' : '');
+    const sheet = new Sheet([columns, stored]);
+    ctx.getOrCreateSheet = () => sheet;
+    ctx._readAccountTypeState = () => ({ sheet, requires_migration: false, rows: [{ id: DETAIL_ID }] });
+    for (const method of methods) {
+      assert.equal(ctx[method]({ row_num: 2, expected_id: DETAIL_ACCOUNT_ID }).error, 'stale_record', method);
+      assert.equal(ctx[method]({ row_num: 2, expected_id: DETAIL_ID, expected_updated_at: 'outdated-version' }).error, 'stale_record', method);
+    }
+    assert.equal(sheet.writes, 0, schema);
+    assert.equal(ctx.matchesExpectedRecord({ expected_id: ' ' + DETAIL_ID + ' ' }, DETAIL_ID.toUpperCase()), true);
+    assert.equal(ctx.matchesExpectedRecord({ expected_id: DETAIL_ID, expected_updated_at: '2026-09-25T10:00:00.000Z' }, DETAIL_ID, new Date('2026-09-25T10:00:00Z')), true);
+  }
+});
+
+test('balance tracking compares actual instants for zoned accounts and preserves the unzoned wall-clock contract', () => {
+  const columns = ['account_id', 'tx_amount_local', 'tx_type', 'record_status', 'tx_date_local', 'tx_timezone_local'];
+  const sheet = new Sheet([columns,
+    ['a', 10, 'money-in', 'active', '2026-09-24 03:00:00', 'Asia/Kolkata'], // previous UTC day
+    ['a', 20, 'money-in', 'active', '2026-09-24 00:00:00', 'Europe/London'], // exact snapshot
+    ['a', 30, 'money-in', 'active', '2026-09-23 23:30:00', 'America/New_York'], // after snapshot despite prior local date
+    ['a', 40, 'money-in', 'active', '2026-09-24 00:00:00', ''], // legacy default London
+  ]);
+  const ctx = runtime(['app-utils.gs', 'account-utils.gs', 'account-core.gs'], {
+    TRANSACTIONS_SHEET: 'transaction_master', getTransactionSheetColumns: () => columns, txColIndex: key => columns.indexOf(key),
+    getOrCreateSheet: () => sheet,
+  });
+  const account = { id: 'a', local_timezone: 'Europe/London', tracking_start_date_local: '2026-09-24 00:00:00' };
+  ctx.getOrCreateSheet = () => sheet;
+  assert.equal(ctx._buildAccountNetMap([account]).a, 90);
+  assert.equal(ctx._buildAccountNetMap([{ ...account, local_timezone: '' }]).a, 70);
+  assert.equal(ctx._buildAccountNetMap([{ ...account, tracking_start_date_local: '' }]).a, 100);
+  assert.throws(() => ctx._buildAccountNetMap([{ ...account, tracking_start_date_local: '2026-10-25 01:30:00' }]), /invalid_account_tracking_start/);
+  assert.equal(ctx.localDateTimeUtcKey('2026-09-24 00:00:00.000001', 'Europe/London'), '2026-09-23 23:00:00.000001');
+});
+
+test('transaction decimal duplicate checks distinguish amounts beyond Number precision', () => {
+  const { ctx, sheet, transfer } = transactions();
+  const base = { ...transfer, major_category: 'expense', minor_category: 'food', target_account: undefined, target_amount_local: undefined };
+  assert.equal(ctx.createTransaction({ ...base, source_amount_local: '9007199254740993.005' }).ok, true);
+  assert.equal(ctx.createTransaction({ ...base, source_amount_local: '9007199254740993.015' }).ok, true);
+  assert.equal(ctx.createTransaction({ ...base, source_amount_local: '9007199254740993005e-3' }).error, 'duplicate_transaction');
+  assert.equal(sheet.rows.length, 3);
+});
+
+test('accepted timezone aliases/casing are stored canonically for Python zoneinfo', () => {
+  const { ctx, sheet, transfer } = transactions();
+  assert.equal(ctx.createTransaction({ ...transfer, tx_timezone_local: 'europe/london' }).ok, true);
+  assert.equal(sheet.rows[1][ctx.txColIndex('tx_timezone_local')], 'Europe/London');
+  const master = accountImporter();
+  assert.equal(master.ctx.createAccount({ ...master.account, local_timezone: 'europe/london' }).ok, true);
+  assert.equal(master.sheet.rows[1][master.ctx.acctColIndex('local_timezone')], 'Europe/London');
+});
+
+test('local Sheet dates retain displayed wall time in transaction list responses', () => {
+  const { ctx, sheet, transfer } = transactions();
+  assert.equal(ctx.createTransaction(transfer).ok, true);
+  sheet.rows[1][ctx.txColIndex('tx_date_local')] = new Date('2026-09-24T11:00:00Z');
+  ctx.SpreadsheetApp = { getActiveSpreadsheet: () => ({ getSpreadsheetTimeZone: () => 'Europe/London' }) };
+  ctx.Utilities.formatDate = (value, zone, format) => {
+    assert.equal(zone, 'Europe/London');
+    assert.equal(format, 'yyyy-MM-dd HH:mm:ss.SSS');
+    assert.equal(value.toISOString(), '2026-09-24T11:00:00.000Z');
+    return '2026-09-24 12:00:00.000';
+  };
+  assert.equal(ctx.listTransactions()[0].tx_date_local, '2026-09-24 12:00:00.000');
+});
+
+test('legacy computed insights cannot surface metrics from retired source fields', () => {
+  const ctx = runtime(['insights-core.gs'], { COMPUTED_INSIGHTS_SHEET: 'computed_insights', getOrCreateSheet: () => ({}) });
+  const row = { insight_id: 'networth', period_key: '2026', computed_at: '2026-09-24', insight_payload: '{}' };
+  ctx.sheetToObjects = () => [row];
+  assert.equal(ctx.getComputedInsights({ insight_id: 'networth', period_key: '2026' }).error, 'legacy_insights_contract_requires_upgrade');
+  row.insight_payload = JSON.stringify({ source_contract: 'single-leg-master-v1', stat_cards: [] });
+  assert.equal(ctx.getComputedInsights({ insight_id: 'networth', period_key: '2026' }).ok, true);
+});
+
+test('locked account master and extension rows cannot be overwritten through CSV import', () => {
+  const master = accountImporter();
+  assert.equal(master.ctx.createAccountsBulk({ accounts: [{ ...master.account, record_status: 'locked' }] }).ok, true);
+  const beforeMaster = JSON.stringify(master.sheet.rows);
+  assert.equal(master.ctx.createAccountsBulk({ accounts: [{ ...master.account, record_status: 'active', opening_value_local: '999' }] }).results[0].error, 'record_locked');
+  assert.equal(JSON.stringify(master.sheet.rows), beforeMaster);
+  for (const [fileType, subType, fields] of AUDITED_DETAIL_CASES) {
+    const { ctx, sheet } = detailImporter(fileType, subType);
+    const row = { id: DETAIL_ID, account_id: DETAIL_ACCOUNT_ID, ...fields, record_status: 'locked' };
+    assert.equal(ctx.importAccountData({ file_type: fileType, rows: [row] }).ok, true);
+    const before = JSON.stringify(sheet.rows);
+    assert.equal(ctx.importAccountData({ file_type: fileType, rows: [{ ...row, record_status: 'active' }] }).results[0].error, 'record_locked');
+    assert.equal(JSON.stringify(sheet.rows), before);
+  }
+});
+
+test('account imports cannot change immutable financial identity or snapshot semantics', () => {
+  for (const [field, changed] of [
+    ['legal_entity_name', 'Different provider'], ['type', 'investment'], ['local_timezone', 'Asia/Kolkata'],
+    ['account_opening_date_local', '2025-01-01'], ['tracking_start_date_local', '2026-02-01'],
+    ['opening_value_local', '101.005'], ['account_currency_local', 'XAU'],
+  ]) {
+    const { ctx, sheet, account } = accountImporter();
+    assert.equal(ctx.createAccount(account).ok, true);
+    const before = JSON.stringify(sheet.rows);
+    const supplied = { ...account, [field]: changed };
+    if (field === 'type') supplied.sub_type = 'stocks-shares';
+    const result = ctx.createAccountsBulk({ accounts: [supplied] }).results[0];
+    assert.equal(result.error, 'field_not_editable', field);
+    assert.equal(result.field, field);
+    assert.equal(JSON.stringify(sheet.rows), before);
+  }
+});
+
+test('account replacement preserves equivalent immutable values and inherits omitted optional fields', () => {
+  const { ctx, sheet, account } = accountImporter();
+  assert.equal(ctx.createAccount({ ...account, local_timezone: 'America/New_York', legal_entity_name: 'Original provider' }).ok, true);
+  // Existing valid IANA aliases are retained verbatim after a semantically equal import.
+  sheet.rows[1][ctx.acctColIndex('local_timezone')] = 'US/Eastern';
+  const original = sheet.rows[1].slice();
+  assert.equal(ctx.createAccountsBulk({ accounts: [{ ...account, local_timezone: 'America/New_York',
+    opening_value_local: '+100005e-3', account_opening_date_local: '2026-01-01T00:00:00.000000',
+    tracking_start_date_local: undefined, legal_entity_name: undefined, account_name: 'Renamed account', description: 'Updated' }] }).ok, true);
+  for (const field of ['local_timezone', 'opening_value_local', 'account_opening_date_local', 'tracking_start_date_local', 'legal_entity_name'])
+    assert.equal(sheet.rows[1][ctx.acctColIndex(field)], original[ctx.acctColIndex(field)], field);
+  assert.equal(sheet.rows[1][ctx.acctColIndex('account_name')], 'Renamed account');
+  assert.equal(sheet.rows[1][ctx.acctColIndex('description')], 'Updated');
+});
+
+test('account tracking timestamp may initialize once, with the retained timezone validated', () => {
+  const { ctx, sheet, account } = accountImporter();
+  assert.equal(ctx.createAccount({ ...account, tracking_start_date_local: '' }).ok, true);
+  const before = JSON.stringify(sheet.rows);
+  assert.equal(ctx.createAccountsBulk({ accounts: [{ ...account, local_timezone: undefined, tracking_start_date_local: '2026-03-29 01:30:00' }] }).results[0].error, 'nonexistent_local_time');
+  assert.equal(JSON.stringify(sheet.rows), before);
+  assert.equal(ctx.createAccountsBulk({ accounts: [account] }).ok, true);
+  assert.equal(sheet.rows[1][ctx.acctColIndex('tracking_start_date_local')], account.tracking_start_date_local);
+  assert.equal(ctx.createAccountsBulk({ accounts: [{ ...account, tracking_start_date_local: '' }] }).results[0].field, 'tracking_start_date_local');
+});
+
+test('beneficiary allocations validate before transaction writes with exact decimal rounding', () => {
+  const cases = [
+    ['A;', 'beneficiary_empty_name'], ['A:50;B', 'beneficiary_inconsistent_percentage_format'],
+    ['A:0;B:100', 'beneficiary_invalid_percentage'], ['A:100.000000000000000001', 'beneficiary_invalid_percentage'],
+    ['A:50;B:49', 'beneficiary_percentages_do_not_sum_to_100'], ['A;A', 'duplicate_beneficiary'],
+    ['A:0.00001;B:99.99999', 'beneficiary_percentage_rounds_to_zero'], ['A:1e-500;B:100', 'beneficiary_percentage_rounds_to_zero'],
+    ['A:0x10;B:90', 'beneficiary_invalid_percentage'], ['A:1_0;B:90', 'beneficiary_invalid_percentage'],
+  ];
+  for (const [beneficiaries, error] of cases) {
+    for (const bulk of [false, true]) {
+      const { ctx, sheet, transfer } = transactions();
+      const body = { ...transfer, beneficiaries };
+      const result = bulk ? ctx.createTransactionsBulk({ transactions: [body] }).results[0] : ctx.createTransaction(body);
+      assert.equal(result.error, error, beneficiaries);
+      assert.equal(sheet.writes, 0);
+    }
+  }
+  for (const beneficiaries of ['A;B;C', 'A:33.33335;B:66.66655', 'A:1e2', 'A:0.00005;B:99.99985']) {
+    const { ctx, sheet, transfer } = transactions();
+    assert.equal(ctx.createTransaction({ ...transfer, beneficiaries }).ok, true, beneficiaries);
+    assert.equal(sheet.rows[1][ctx.txColIndex('beneficiaries')], beneficiaries);
+    const before = JSON.stringify(sheet.rows);
+    assert.equal(ctx.updateTransaction({ row_num: 2, tx_type: 'money-out', tx_date_local: transfer.tx_date_local,
+      account_id: 'a', tx_amount_local: 10, major_category: 'transfer', minor_category: 'bank', beneficiaries: 'A:50' }).error,
+    'beneficiary_percentages_do_not_sum_to_100');
+    assert.equal(JSON.stringify(sheet.rows), before);
+  }
+});
+
+test('extension importer enforces the ETL boolean/date/range/precision contract before writes', () => {
+  const cases = [
+    ['account_deposit', 'cash', {}, 'is_interest_paid', 'sometimes'],
+    ['account_deposit', 'cash', {}, 'interest_rate', '-0.001'],
+    ['account_deposit', 'cash', {}, 'interest_rate', '0.0000000000000000001'],
+    ['account_liability_credit_card', 'credit-card', { credit_limit_local: 10 }, 'payment_month_day', '1.000000000000000001'],
+    ['account_liability_credit_card', 'credit-card', { credit_limit_local: 10 }, 'statement_month_day', 32],
+    ['account_liability_mortgage', 'mortgage', { original_principal_local: 100, term_months: 12 }, 'term_months', 2147483648],
+    ['account_liability_personal_loan', 'personal-loan', { original_principal_local: 100, term_months: 12 }, 'maturity_date_local', '2026-02-30'],
+    ['account_investment_property', 'property', { acquisition_type: 'GIFTED' }, 'is_rented', 'occasionally'],
+    ['account_investment_property', 'property', { acquisition_type: 'GIFTED' }, 'rent_month', 13],
+    ['account_investment_property', 'property', { acquisition_type: 'GIFTED' }, 'property_ownership_percentage', '100.000000000000000001'],
+    ['account_investment_property', 'property', { acquisition_type: 'GIFTED' }, 'current_value_local', '-1'],
+    ['account_investment_stocks', 'stocks-shares', { instrument_type: 'EQUITY' }, 'quantity', '100000000000000000000'],
+    ['account_investment_stocks', 'stocks-shares', { instrument_type: 'EQUITY' }, 'expiry_date', '2026-09-25T00:00:00Z'],
+    ['account_investment_stocks', 'stocks-shares', { instrument_type: 'OPTION' }, 'contract_multiplier', 0],
+    ['account_investment_stocks', 'stocks-shares', { instrument_type: 'EQUITY' }, 'instrument_currency_local', 'USDT'],
+  ];
+  for (const [fileType, subtype, base, field, value] of cases) {
+    const { ctx, sheet } = detailImporter(fileType, subtype);
+    const result = ctx.importAccountData({ file_type: fileType, rows: [{ id: DETAIL_ID, account_id: DETAIL_ACCOUNT_ID, ...base, [field]: value }] });
+    assert.equal(result.results[0].error, 'invalid_' + field, fileType + '.' + field);
+    assert.equal(sheet.writes, 0);
+  }
+  const { ctx, sheet, spec } = detailImporter('account_deposit', 'cash');
+  assert.equal(ctx.importAccountData({ file_type: 'account_deposit', rows: [{ id: DETAIL_ID, account_id: DETAIL_ACCOUNT_ID, is_interest_paid: ' YES ', interest_rate: '1.250000000000000000' }] }).ok, true);
+  assert.equal(sheet.rows[1][spec.columns.indexOf('is_interest_paid')], true);
+  assert.equal(sheet.rows[1][spec.columns.indexOf('interest_rate')], '1.250000000000000000');
+});
 test('category with neither mandatory flag still validates the selected target leg', () => {
   for (const bulk of [false, true]) {
     const { ctx, sheet, transfer } = transactions();
@@ -1028,4 +1348,35 @@ test('category with neither mandatory flag still validates the selected target l
     assert.equal(bulk ? result.results[0].error : result.error, 'missing_target_account');
     assert.equal(sheet.writes, 0);
   }
+});
+
+test('advisor provider failures never expose provider bodies or caught error text', () => {
+  const sensitive = 'private credential and transaction details';
+  for (const [code, body, error] of [
+    [401, JSON.stringify({ error: { message: sensitive } }), 'openai_401'],
+    [503, '<html>' + sensitive + '</html>', 'openai_503'],
+    [200, sensitive, 'invalid_openai_response'],
+    [200, 'null', 'invalid_openai_response'],
+    [200, JSON.stringify({ choices: [{ message: { content: null } }] }), 'invalid_openai_response'],
+  ]) {
+    const logs = [];
+    const ctx = runtime(['advisor-core.gs'], {
+      console: Object.fromEntries(['log', 'warn', 'error'].map(level => [level, (...args) => logs.push(args.join(' '))])),
+      UrlFetchApp: { fetch: () => ({ getResponseCode: () => code, getContentText: () => body }) },
+    });
+    const result = ctx._callOpenAi(sensitive, 'system', [{ role: 'user', content: sensitive }]);
+    assert.equal(result.error, error);
+    assert.equal(result.detail, undefined);
+    assert.equal(JSON.stringify(logs).includes(sensitive), false);
+  }
+  const logs = [];
+  const ctx = runtime(['advisor-core.gs'], {
+    console: { error: (...args) => logs.push(args.join(' ')), log: (...args) => logs.push(args.join(' ')) },
+    UrlFetchApp: { fetch: () => { throw new Error(sensitive); } },
+  });
+  assert.equal(ctx._callOpenAi(sensitive, 'system', []).error, 'fetch_error');
+  assert.equal(JSON.stringify(logs).includes(sensitive), false);
+  ctx.UrlFetchApp.fetch = () => ({ getResponseCode: () => 200, getContentText: () => JSON.stringify({ choices: [{ message: { content: 'Valid answer' } }], usage: { total_tokens: sensitive } }) });
+  assert.equal(ctx._callOpenAi(sensitive, 'system', []).content, 'Valid answer');
+  assert.equal(JSON.stringify(logs).includes(sensitive), false);
 });

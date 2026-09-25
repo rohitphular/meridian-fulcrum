@@ -45,7 +45,7 @@ def transform(row: dict[str, Any]) -> dict[str, Any]:
     raw_amount = row.get("subscription_amount_local")
     if raw_amount is None or str(raw_amount).strip() == "":
         raise ValueError(f"subscriptions: subscription_id={subscription_id!r} field=subscription_amount_local is required but got empty/None")
-    if re.fullmatch(r"[+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?", str(raw_amount).strip()) is None:
+    if re.fullmatch(r"[+]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?", str(raw_amount).strip()) is None:
         raise ValueError("subscriptions: invalid_subscription_amount_local")
     try:
         amount_local = Decimal(str(raw_amount).strip())
@@ -67,7 +67,7 @@ def transform(row: dict[str, Any]) -> dict[str, Any]:
     # Column 6 — day_of_month
     raw_day_of_month = row.get("day_of_month")
     raw_day_of_month_str = str(raw_day_of_month).strip() if raw_day_of_month is not None else ""
-    if raw_day_of_month_str and re.fullmatch(r"\d+", raw_day_of_month_str) is None:
+    if raw_day_of_month_str and re.fullmatch(r"[0-9]+", raw_day_of_month_str) is None:
         raise ValueError("subscriptions: invalid_day_of_month")
     day_of_month: int | None
 
@@ -95,7 +95,7 @@ def transform(row: dict[str, Any]) -> dict[str, Any]:
     # Column 7 — day_of_week
     raw_day_of_week = row.get("day_of_week")
     raw_day_of_week_str = str(raw_day_of_week).strip() if raw_day_of_week is not None else ""
-    if raw_day_of_week_str and re.fullmatch(r"\d+", raw_day_of_week_str) is None:
+    if raw_day_of_week_str and re.fullmatch(r"[0-9]+", raw_day_of_week_str) is None:
         raise ValueError("subscriptions: invalid_day_of_week")
     day_of_week: int | None
 

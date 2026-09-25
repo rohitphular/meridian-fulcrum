@@ -5,6 +5,7 @@ import { ExpenseAPI } from '../core/api.js';
 
 // Returns the error code string, or '[no error code]' if absent.
 function _errMsg(code) {
+  if (code === 'stale_record') return 'This record moved or changed. Refresh, then reopen it before trying again.';
   return (code !== undefined && code !== null) ? String(code) : '[no error code]';
 }
 
@@ -338,12 +339,18 @@ function _renderForm(cat, mode) {
 
 // ── Table ─────────────────────────────────────────────────────────────────────
 
+function _renderCategoryDelete(cat) {
+  return `<span class="confirm-text">Delete <strong>${esc(cat.major_category_label)} → ${esc(cat.minor_category_label)}</strong>?</span>
+    <div class="row-actions">
+      <button class="btn-link danger" data-action="cat-confirm-delete" data-row="${cat._row}">Yes, delete</button>
+      <button class="btn-link muted" data-action="cat-cancel-delete">Cancel</button>
+    </div>`;
+}
+
 function _renderCatTable(cats) {
   if (cats.length === 0) {
     return `<p class="placeholder">No categories for this filter. Use &ldquo;+ Add&rdquo; to create one.</p>`;
   }
-
-  const hasActiveCatRow = state.catDeleteRow !== null;
 
   const rows = cats.map(cat => {
     const rowStyle = cat.record_status === 'deleted'  ? ' style="opacity:0.5"'
@@ -351,14 +358,7 @@ function _renderCatTable(cats) {
                    : cat.record_status === 'locked'   ? ' style="opacity:0.7"' : '';
 
     if (state.catDeleteRow === cat._row) {
-      return `<tr>
-        <td>${_catTypeBadge(cat.tx_type_key)}</td>
-        <td colspan="2"><span class="confirm-text">Delete <strong>${esc(cat.major_category_label)} → ${esc(cat.minor_category_label)}</strong>?</span></td>
-        <td><div class="row-actions">
-          <button class="btn-link danger" data-action="cat-confirm-delete" data-row="${cat._row}">Yes, delete</button>
-          <button class="btn-link muted"  data-action="cat-cancel-delete">Cancel</button>
-        </div></td>
-      </tr>`;
+      return `<tr><td colspan="4">${_renderCategoryDelete(cat)}</td></tr>`;
     }
 
     return `<tr${rowStyle}>
@@ -373,7 +373,7 @@ function _renderCatTable(cats) {
   }).join('');
 
   const cardRows = cats.map(cat => {
-    if (state.catDeleteRow === cat._row) return '';
+    if (state.catDeleteRow === cat._row) return `<div class="card record-confirm-card">${_renderCategoryDelete(cat)}</div>`;
     const isArchived = cat.record_status !== 'active';
     return `<div class="cat-card${isArchived ? ' is-archived' : ''}">
       <div class="cat-card-top">
@@ -392,7 +392,7 @@ function _renderCatTable(cats) {
   }).join('');
 
   return `
-    <div class="table-wrap cat-table-wrap${hasActiveCatRow ? ' cat-has-active' : ''}">
+    <div class="table-wrap cat-table-wrap">
       <table>
         <thead><tr>
           <th style="width:80px">Type</th>
@@ -1033,7 +1033,7 @@ async function _restoreCat(rowNum) {
     }
   } catch (err) {
     console.error('[categories] _restoreCat failed:', err);
-    showMsg('Connection error.', 'warn');
+    showMsg('Connection lost. The change may have completed. Refresh and check before retrying.', 'warn');
     renderCategories();
   } finally {
     hideLoading();
@@ -1085,7 +1085,7 @@ async function _saveNewCategory() {
     }
   } catch (err) {
     console.error('[categories] _saveNewCategory failed:', err);
-    if (errEl !== null) errEl.textContent = 'Connection error.';
+    if (errEl !== null) errEl.textContent = 'Connection lost. The change may have completed. Refresh and check before retrying.';
     if (btn !== null) { btn.disabled = false; btn.textContent = 'Save'; }
   } finally {
     hideLoading();
@@ -1144,7 +1144,7 @@ async function _saveCatEdit() {
     }
   } catch (err) {
     console.error('[categories] _saveCatEdit failed:', err);
-    if (errEl !== null) errEl.textContent = 'Connection error.';
+    if (errEl !== null) errEl.textContent = 'Connection lost. The change may have completed. Refresh and check before retrying.';
     if (btn !== null) { btn.disabled = false; btn.textContent = 'Save'; }
   } finally {
     hideLoading();
@@ -1172,7 +1172,7 @@ async function _deleteCat(rowNum) {
     }
   } catch (err) {
     console.error('[categories] _deleteCat failed:', err);
-    showMsg('Connection error.', 'warn');
+    showMsg('Connection lost. The change may have completed. Refresh and check before retrying.', 'warn');
     state.catDeleteRow = null;
     renderCategories();
   } finally {

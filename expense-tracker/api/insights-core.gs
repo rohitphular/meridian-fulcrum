@@ -38,6 +38,11 @@ function getComputedInsights(params) {
   } catch (_) {
     return { ok: false, error: 'payload_parse_error' };
   }
+  // Legacy jobs used the retired dual-leg fields and can report misleading zero
+  // balances. Only an explicitly upgraded producer may supply trusted metrics.
+  if (payload === null || typeof payload !== 'object' || Array.isArray(payload)
+      || payload.source_contract !== 'single-leg-master-v1')
+    return { ok: false, error: 'legacy_insights_contract_requires_upgrade' };
 
   return {
     ok: true,

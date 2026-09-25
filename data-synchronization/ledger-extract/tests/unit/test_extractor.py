@@ -1,4 +1,5 @@
 from copy import deepcopy
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -107,6 +108,22 @@ def test_disabled_detail_tabs_are_not_read_even_during_hard_sync(monkeypatch: py
 def test_false_string_config_is_rejected() -> None:
     with pytest.raises(ValueError, match="boolean"):
         extractor.entity_enabled("account_master", {"entities": {"account_master": {"enabled": "false"}}})
+
+
+@pytest.mark.parametrize(
+    "invalid_entities", [None, [], {"accounts": {"enabled": True}}, {"account_deposit_details": {"enabled": True}}, {"account_master": None}, {"account_master": {"enable": True}}]
+)
+def test_invalid_entity_configuration_fails_before_opening_connections(monkeypatch: pytest.MonkeyPatch, invalid_entities: Any) -> None:
+    connect = MagicMock()
+    monkeypatch.setattr(extractor, "get_client", connect)
+    cfg = {"entities": {name: {"enabled": False} for name in ("category_master", "account_master", "transaction_master", "subscription_master")}}
+    if isinstance(invalid_entities, dict):
+        cfg["entities"].update(invalid_entities)
+    else:
+        cfg["entities"] = invalid_entities
+    with pytest.raises(ValueError, match="configuration"):
+        extractor.LedgerExtractJob(None, "fixture", "fixture").run(cfg)
+    connect.assert_not_called()
 
 
 def test_reprocess_updates_in_sync_rows_without_editing_source_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -898,13 +898,13 @@ function _attachEvents() {
             const res = await ExpenseAPI.restoreSubscription({ row_num: row });
             if (!res.ok) {
               console.warn('[subscriptions] restore failed:', res?.error);
-              showMsg('Restore failed: ' + (res.error !== undefined && res.error !== null ? res.error : '[no error code]'), 'warn');
+              showMsg('Restore failed: ' + (res.error !== undefined && res.error !== null ? (res.error === 'stale_record' ? 'This record moved or changed. Refresh, then reopen it before trying again.' : res.error) : '[no error code]'), 'warn');
               return;
             }
             document.dispatchEvent(new CustomEvent('et:reload'));
           } catch (err) {
             console.error('[subscriptions] restore failed:', err);
-            showMsg('Connection error.', 'warn');
+            showMsg('Connection lost. The change may have completed. Refresh and check before retrying.', 'warn');
           } finally {
             hideLoading();
           }
@@ -1036,11 +1036,11 @@ async function _saveAdd() {
       if (errEl) errEl.textContent = 'A subscription with this name already exists.';
     } else {
       console.warn('[subscriptions] _saveAdd failed:', res?.error);
-      if (errEl) errEl.textContent = 'Error: ' + (res.error !== undefined && res.error !== null ? res.error : '[no error code]');
+      if (errEl) errEl.textContent = 'Error: ' + (res.error !== undefined && res.error !== null ? (res.error === 'stale_record' ? 'This record moved or changed. Refresh, then reopen it before trying again.' : res.error) : '[no error code]');
     }
   } catch (err) {
     console.error('[subscriptions] _saveAdd failed:', err);
-    if (errEl) errEl.textContent = 'Connection error.';
+    if (errEl) errEl.textContent = 'Connection lost. The change may have completed. Refresh and check before retrying.';
   } finally {
     if (saveBtn) saveBtn.disabled = false;
     hideLoading();
@@ -1069,11 +1069,11 @@ async function _saveEdit(row) {
       document.dispatchEvent(new CustomEvent('et:reload'));
     } else {
       console.warn('[subscriptions] _saveEdit failed:', res?.error);
-      if (errEl) errEl.textContent = 'Error: ' + (res.error !== undefined && res.error !== null ? res.error : '[no error code]');
+      if (errEl) errEl.textContent = 'Error: ' + (res.error !== undefined && res.error !== null ? (res.error === 'stale_record' ? 'This record moved or changed. Refresh, then reopen it before trying again.' : res.error) : '[no error code]');
     }
   } catch (err) {
     console.error('[subscriptions] _saveEdit failed:', err);
-    if (errEl) errEl.textContent = 'Connection error.';
+    if (errEl) errEl.textContent = 'Connection lost. The change may have completed. Refresh and check before retrying.';
   } finally {
     if (saveBtn) saveBtn.disabled = false;
     hideLoading();
@@ -1095,11 +1095,11 @@ async function _toggle(row) {
       document.dispatchEvent(new CustomEvent('et:reload'));
     } else {
       console.warn('[subscriptions] _toggle failed:', res?.error);
-      showMsg('Update failed: ' + (res.error !== undefined && res.error !== null ? res.error : '[no error code]'), 'warn');
+      showMsg('Update failed: ' + (res.error !== undefined && res.error !== null ? (res.error === 'stale_record' ? 'This record moved or changed. Refresh, then reopen it before trying again.' : res.error) : '[no error code]'), 'warn');
     }
   } catch (err) {
     console.error('[subscriptions] _toggle failed:', err);
-    showMsg('Connection error.', 'warn');
+    showMsg('Connection lost. The change may have completed. Refresh and check before retrying.', 'warn');
   } finally {
     hideLoading();
   }
@@ -1115,13 +1115,13 @@ async function _confirmDelete(row) {
       document.dispatchEvent(new CustomEvent('et:reload'));
     } else {
       console.warn('[subscriptions] _confirmDelete failed:', res?.error);
-      showMsg('Delete failed: ' + (res.error !== undefined && res.error !== null ? res.error : '[no error code]'), 'warn');
+      showMsg('Delete failed: ' + (res.error !== undefined && res.error !== null ? (res.error === 'stale_record' ? 'This record moved or changed. Refresh, then reopen it before trying again.' : res.error) : '[no error code]'), 'warn');
       state.subDeleteRow = null;
       renderSubscriptions();
     }
   } catch (err) {
     console.error('[subscriptions] _confirmDelete failed:', err);
-    showMsg('Connection error.', 'warn');
+    showMsg('Connection lost. The change may have completed. Refresh and check before retrying.', 'warn');
     state.subDeleteRow = null;
     renderSubscriptions();
   } finally {

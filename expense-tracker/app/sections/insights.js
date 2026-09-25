@@ -257,31 +257,34 @@ async function _renderActiveInsight() {
 
     inner.innerHTML = `${rateWarn}<div id="insightChart"></div>`;
 
-    if (!precomputed?.ok) {
+    if (!precomputed?.ok || !precomputed.data?.payload) {
       el('insightChart').innerHTML =
-        `<div class="insight-placeholder">No pre-computed data for <strong>${esc(state.insightId)}</strong> / <strong>${esc(periodKey)}</strong>.<br>Run the insights job or switch to <em>Live</em> mode.</div>`;
+        precomputed?.error === 'legacy_insights_contract_requires_upgrade'
+          ? '<div class="insight-placeholder">Saved insights use an older data format. Switch to <em>Live</em> mode.</div>'
+          : `<div class="insight-placeholder">No pre-computed data for <strong>${esc(state.insightId)}</strong> / <strong>${esc(periodKey)}</strong>.<br>Switch to <em>Live</em> mode.</div>`;
       return;
     }
 
     // Precomputed data available — generic render if pcChart supports it.
     if (dash.pcChart) {
-      const chartInstance = _renderFromPayload(el('insightChart'), precomputed.data, dash, sym);
+      const chartInstance = _renderFromPayload(el('insightChart'), precomputed.data?.payload, dash, sym);
       if (myId !== _renderId) { try { chartInstance?.destroy(); } catch (_) {} return; }
       if (chartInstance) state.insightChartInstance = chartInstance;
-      _appendComputedAt(inner, precomputed.computed_at, false);
+      _appendComputedAt(inner, precomputed.data?.computed_at, false);
       return;
     }
 
-    // No generic renderer — fall through to local renderer but honour the server timestamp.
+    // Custom renderers compute their charts from the current local snapshot.
+    // Label that calculation as live rather than attributing it to a job run.
     if (renderer) {
       const chartInstance = await renderer.render('insightChart', {
         txs, accounts: state.accounts, from, to, sym,
         tab: state.insightTab, period: state.insightPeriod,
-        precomputed: precomputed.data,
+        precomputed: precomputed.data?.payload,
       });
       if (myId !== _renderId) { try { chartInstance?.destroy(); } catch (_) {} return; }
       if (chartInstance) state.insightChartInstance = chartInstance;
-      _appendComputedAt(inner, precomputed.computed_at, false);
+      _appendComputedAt(inner, new Date().toISOString(), true);
     }
     return;
   }

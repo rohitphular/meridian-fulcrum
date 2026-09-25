@@ -60,6 +60,14 @@ function validateTransactionRecord(body, catMap, accountMap) {
     return { ok: false, error: 'missing_date' };
   if (body.tx_type === undefined || body.tx_type === null || String(body.tx_type).trim() === '' || !VALID_TRANSACTION_TYPES.includes(body.tx_type))
     return { ok: false, error: 'invalid_transaction_type' };
+  const contextValidation = validateTransactionContext(body, body.tx_timezone_local);
+  if (contextValidation.ok === false) return contextValidation;
+  for (const field of ['source_amount_local', 'target_amount_local']) {
+    const value = body[field];
+    if (value !== undefined && value !== null && String(value).trim() !== ''
+        && (isFiniteDecimal(value) === false || Number(value) <= 0))
+      return { ok: false, error: field === 'source_amount_local' ? 'missing_source_amount' : 'missing_target_amount' };
+  }
 
   // TX-NEW-C-2: unconditional amount validation — must run before category-conditional checks.
   // At least one of source_amount_local or target_amount_local must be a finite positive number.
@@ -136,7 +144,7 @@ function validateTransactionUpdate(body, oldRow, catMap) {
     return { ok: false, error: 'missing_date' };
   if (body.tx_type === undefined || body.tx_type === null || String(body.tx_type).trim() === '' || !VALID_TRANSACTION_TYPES.includes(body.tx_type))
     return { ok: false, error: 'invalid_transaction_type' };
-  if (body.tx_amount_local === undefined || body.tx_amount_local === null || !Number.isFinite(Number(body.tx_amount_local)) || Number(body.tx_amount_local) <= 0)
+  if (isFiniteDecimal(body.tx_amount_local) === false || Number(body.tx_amount_local) <= 0)
     return { ok: false, error: 'invalid_amount' };
   if (body.account_id === undefined || body.account_id === null || String(body.account_id).trim() === '')
     return { ok: false, error: 'missing_account_id' };
@@ -149,22 +157,109 @@ function validateTransactionUpdate(body, oldRow, catMap) {
     }
   }
 
-  // T-H1: validate category FK when major_category or minor_category is being updated.
-  if (body.major_category !== undefined || body.minor_category !== undefined) {
-    const major = body.major_category !== undefined && body.major_category !== null ? String(body.major_category).trim() : '';
-    const minor = body.minor_category !== undefined && body.minor_category !== null ? String(body.minor_category).trim() : '';
-    if (major === '' || minor === '')
-      return { ok: false, error: 'missing_category' };
-    // TX-NEW-H-2: use caller-supplied catMap when available; fall back to building it.
-    const resolvedCatMap = (catMap !== undefined && catMap !== null) ? catMap : _buildCategoryMap();
-    const catKey = body.tx_type + '|' + major + '|' + minor;
-    if (!resolvedCatMap[catKey])
-      return { ok: false, error: 'unknown_category' };
-  }
+  const contextValidation = validateTransactionContext(body, oldRow[txColIndex('tx_timezone_local')]);
+  if (contextValidation.ok === false) return contextValidation;
+
+  // The writer replaces both category cells, so omitted keys must not erase a
+  // previously valid classification and leave a row that extraction rejects.
+  const major = body.major_category !== undefined && body.major_category !== null ? String(body.major_category).trim() : '';
+  const minor = body.minor_category !== undefined && body.minor_category !== null ? String(body.minor_category).trim() : '';
+  if (major === '' || minor === '') return { ok: false, error: 'missing_category' };
+  const resolvedCatMap = (catMap !== undefined && catMap !== null) ? catMap : _buildCategoryMap();
+  const catKey = body.tx_type + '|' + major + '|' + minor;
+  if (!resolvedCatMap[catKey]) return { ok: false, error: 'unknown_category' };
 
   const finErr = _validateFinancialRules(body, oldRow !== undefined ? oldRow : null);
   if (!finErr.ok) return finErr;
 
+  return { ok: true };
+}
+
+function validateTransactionContext(body, timezoneValue) {
+  const key = localDateTimeKey(body.tx_date_local);
+  if (key === null) return { ok: false, error: 'invalid_tx_date_local' };
+  if (timezoneValue !== undefined && timezoneValue !== null && typeof timezoneValue !== 'string')
+    return { ok: false, error: 'invalid_tx_timezone_local' };
+  const timezone = timezoneValue === undefined || timezoneValue === null || timezoneValue.trim() === ''
+    ? 'Europe/London' : timezoneValue.trim();
+  try { ianaDateFormatter(timezone).format(new Date()); }
+  catch (_) { return { ok: false, error: 'invalid_tx_timezone_local' }; }
+  const wallError = localWallTimeError(key, timezone);
+  if (wallError !== null) return { ok: false, error: wallError, field: 'tx_date_local' };
+  let present = 0;
+  for (const field of ['user_location_latitude', 'user_location_longitude']) {
+    const value = body[field];
+    if (value === undefined || value === null || String(value).trim() === '') continue;
+    present++;
+    if (isFiniteDecimal(value) === false) return { ok: false, error: 'invalid_' + field };
+    if (Math.abs(Number(value)) > (field === 'user_location_latitude' ? 90 : 180))
+      return { ok: false, error: field === 'user_location_latitude' ? 'latitude_out_of_range' : 'longitude_out_of_range' };
+  }
+  if (present === 1) return { ok: false, error: 'incomplete_location_coordinates' };
+  const beneficiaryValidation = validateTransactionBeneficiaries(body.beneficiaries);
+  if (beneficiaryValidation.ok === false) return beneficiaryValidation;
+  return { ok: true };
+}
+
+function validateTransactionBeneficiaries(value) {
+  if (value === undefined || value === null || String(value).trim() === '') return { ok: true };
+  const entries = String(value).split(';').map(function(entry) { return entry.trim(); });
+  if (entries.some(function(entry) { return entry === ''; })) return { ok: false, error: 'beneficiary_empty_name' };
+  const explicit = entries.map(function(entry) { return entry.indexOf(':') !== -1; });
+  if (explicit.some(Boolean) && !explicit.every(Boolean)) return { ok: false, error: 'beneficiary_inconsistent_percentage_format' };
+  const names = [];
+  if (explicit.every(Boolean)) {
+    let totalUnits = 0;
+    for (const entry of entries) {
+      const separator = entry.indexOf(':');
+      const name = entry.slice(0, separator).trim();
+      if (name === '') return { ok: false, error: 'beneficiary_empty_name' };
+      const key = decimalValueKey(entry.slice(separator + 1).trim());
+      if (key === null || key === '0' || key[0] === '-') return { ok: false, error: 'beneficiary_invalid_percentage' };
+      const parts = key.split('e'), digits = parts[0], exponent = Number(parts[1]);
+      const magnitude = digits.length + exponent;
+      if (magnitude > 3 || (magnitude === 3 && key !== '1e2')) return { ok: false, error: 'beneficiary_invalid_percentage' };
+      // Exact decimal HALF_UP at four places without binary-float rounding.
+      const places = digits.length + exponent + 4;
+      let units = places <= 0 ? 0 : Number(digits.slice(0, places).padEnd(places, '0'));
+      const nextDigit = places < 0 ? '0' : digits[places];
+      if (nextDigit !== undefined && nextDigit >= '5') units++;
+      if (units === 0) return { ok: false, error: 'beneficiary_percentage_rounds_to_zero' };
+      totalUnits += units;
+      names.push(name);
+    }
+    if (totalUnits !== 1000000) return { ok: false, error: 'beneficiary_percentages_do_not_sum_to_100' };
+  } else {
+    entries.forEach(function(entry) { names.push(entry); });
+    const units = Math.floor(1000000 / names.length + 0.5);
+    if (units <= 0 || 1000000 - units * (names.length - 1) <= 0) return { ok: false, error: 'too_many_beneficiaries' };
+  }
+  if (new Set(names).size !== names.length) return { ok: false, error: 'duplicate_beneficiary' };
+  return { ok: true };
+}
+
+// Interactive operations remain single-leg edits. Check the resulting pair so
+// a successful UI write cannot leave a relationship that extraction rejects.
+function validateTransactionPairChange(sheet, rowNum, candidate) {
+  const rows = sheet.getDataRange().getValues().slice(1);
+  rows[rowNum - 2] = candidate;
+  function identity(row, field) { return String(row[txColIndex(field)]).trim().toLowerCase(); }
+  const changedId = identity(candidate, 'id');
+  const changedParent = identity(candidate, 'parent_tx_id');
+  const rootId = changedParent === '' ? changedId : changedParent;
+  const roots = rows.filter(function(row) { return identity(row, 'id') === rootId; });
+  const children = rows.filter(function(row) {
+    return identity(row, 'parent_tx_id') === rootId && String(row[txColIndex('record_status')]) !== 'deleted';
+  });
+  if (children.length === 0) return { ok: true };
+  if (roots.length !== 1 || children.length > 1) return { ok: false, error: 'invalid_transfer_pair' };
+  const root = roots[0];
+  if (String(root[txColIndex('record_status')]) === 'deleted')
+    return { ok: false, error: 'transfer_parent_deleted' };
+  if (identity(root, 'parent_tx_id') !== '') return { ok: false, error: 'invalid_transfer_pair' };
+  const child = children[0];
+  if (identity(root, 'account_id') === identity(child, 'account_id') || root[txColIndex('tx_type')] === child[txColIndex('tx_type')])
+    return { ok: false, error: 'invalid_transfer_pair' };
   return { ok: true };
 }
 

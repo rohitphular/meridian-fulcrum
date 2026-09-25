@@ -14,67 +14,20 @@ function subscriptionText(value) {
   return value === undefined || value === null ? '' : String(value).trim();
 }
 
-function subscriptionLocalDateTimeKey(value) {
-  if (typeof value !== 'string') return null;
-  const parts = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,6}))?$/.exec(value.trim());
-  if (parts === null) return null;
-  const year = Number(parts[1]), month = Number(parts[2]), day = Number(parts[3]);
-  if (year < 1 || month < 1 || month > 12 || day < 1 || Number(parts[4]) > 23 || Number(parts[5]) > 59 || Number(parts[6]) > 59) return null;
-  const calendar = _subscriptionCalendarDate(year, month - 1, day);
-  if (calendar.getUTCFullYear() !== year || calendar.getUTCMonth() !== month - 1 || calendar.getUTCDate() !== day) return null;
-  return parts.slice(1, 4).join('-') + ' ' + parts.slice(4, 7).join(':') + '.'
-    + (parts[7] === undefined ? '' : parts[7]).padEnd(6, '0');
-}
+function subscriptionLocalDateTimeKey(value) { return localDateTimeKey(value); }
 
-function _subscriptionCalendarDate(year, month, day) {
-  const calendar = new Date(0);
-  calendar.setUTCFullYear(year, month, day);
-  return calendar;
-}
+function _subscriptionCalendarDate(year, month, day) { return localCalendarDate(year, month, day); }
 
-function _subscriptionDateFormatter(timezone) {
-  // Intl also accepts raw numeric offsets; those are not IANA zone keys in ETL.
-  if (/^[+-]/.test(timezone)) throw new Error('invalid_subscription_timezone_local');
-  return new Intl.DateTimeFormat('en-GB', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' });
-}
+function _subscriptionDateFormatter(timezone) { return ianaDateFormatter(timezone); }
 
-function _subscriptionZonedParts(instant, formatter) {
-  const parts = {};
-  formatter.formatToParts(instant).forEach(function(part) { parts[part.type] = part.value; });
-  return parts;
-}
+function _subscriptionZonedParts(instant, formatter) { return zonedDateParts(instant, formatter); }
 
 function _subscriptionLocalDate(instant, timezone) {
   const parts = _subscriptionZonedParts(instant, _subscriptionDateFormatter(timezone));
   return parts.year.padStart(4, '0') + '-' + parts.month + '-' + parts.day;
 }
 
-// Reject wall times with zero or two possible instants, matching ledger-extract.
-// Sample offsets around the local day so both sides of a DST change are considered.
-function subscriptionWallTimeError(key, timezone) {
-  const formatter = _subscriptionDateFormatter(timezone);
-  const wall = _subscriptionCalendarDate(Number(key.slice(0, 4)), Number(key.slice(5, 7)) - 1, Number(key.slice(8, 10)));
-  wall.setUTCHours(Number(key.slice(11, 13)), Number(key.slice(14, 16)), Number(key.slice(17, 19)), 0);
-  const offsets = new Set();
-  for (let hours = -48; hours <= 48; hours += 6) {
-    const instant = new Date(wall.getTime() + hours * 3600000);
-    const parts = _subscriptionZonedParts(instant, formatter);
-    const local = _subscriptionCalendarDate(Number(parts.year), Number(parts.month) - 1, Number(parts.day));
-    local.setUTCHours(Number(parts.hour), Number(parts.minute), Number(parts.second), 0);
-    offsets.add(local.getTime() - instant.getTime());
-  }
-  const matches = new Set();
-  offsets.forEach(function(offset) {
-    const instant = new Date(wall.getTime() - offset);
-    const parts = _subscriptionZonedParts(instant, formatter);
-    const local = parts.year.padStart(4, '0') + '-' + parts.month + '-' + parts.day + ' ' + parts.hour + ':' + parts.minute + ':' + parts.second;
-    if (local === key.slice(0, 19)) matches.add(instant.getTime());
-  });
-  if (matches.size === 0) return 'nonexistent_local_time';
-  if (matches.size > 1) return 'ambiguous_local_time';
-  return null;
-}
+function subscriptionWallTimeError(key, timezone) { return localWallTimeError(key, timezone); }
 
 // Scheduling is date-based in the row's timezone. Boundaries are inclusive;
 // quarter/year cadence is anchored to the start month and cannot drift per read.

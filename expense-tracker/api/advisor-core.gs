@@ -205,17 +205,32 @@ function _callOpenAi(apiKey, systemPrompt, messages) {
   try {
     const resp = UrlFetchApp.fetch('https://api.openai.com/v1/chat/completions', options);
     const code = resp.getResponseCode();
-    const data = JSON.parse(resp.getContentText());
     if (code !== 200) {
-      console.warn('_callOpenAi: status=' + code + ' error=' + (data.error ? data.error.message : 'unknown'));
-      return { ok: false, error: 'openai_' + code, detail: data.error ? data.error.message : 'api_error' };
+      // Provider errors can echo request content or credential fragments. The
+      // HTTP status is sufficient for diagnostics; never surface their bodies.
+      const status = Number.isInteger(code) && code >= 100 && code <= 599 ? code : 'unknown';
+      console.warn('_callOpenAi: status=' + status + ' error=provider_error');
+      return { ok: false, error: 'openai_' + status };
     }
-    const content = (data.choices && data.choices[0]) ? data.choices[0].message.content : '';
-    console.log('_callOpenAi: status=200 tokens=' + (data.usage ? data.usage.total_tokens : 'unknown'));
+    let data;
+    try {
+      data = JSON.parse(resp.getContentText());
+    } catch (_) {
+      console.error('_callOpenAi: error=invalid_provider_response');
+      return { ok: false, error: 'invalid_openai_response' };
+    }
+    const choice = data && data.choices && data.choices[0];
+    const content = choice && choice.message && choice.message.content;
+    if (typeof content !== 'string' || content.trim() === '') {
+      console.error('_callOpenAi: error=invalid_provider_response');
+      return { ok: false, error: 'invalid_openai_response' };
+    }
+    const tokens = data.usage && data.usage.total_tokens;
+    console.log('_callOpenAi: status=200 tokens=' + (Number.isSafeInteger(tokens) && tokens >= 0 ? tokens : 'unknown'));
     return { ok: true, content: content };
   } catch (e) {
-    console.error('_callOpenAi: ' + e.message);
-    return { ok: false, error: 'fetch_error', detail: e.message };
+    console.error('_callOpenAi: error=fetch_error');
+    return { ok: false, error: 'fetch_error' };
   }
 }
 

@@ -178,7 +178,7 @@ def upsert_categories(conn: Any, sheets_client: SheetsClient, rows: list[dict[st
                 category_id = _insert_category(conn, typed)
                 _replace_join_rows(conn, category_id, source_ids, "category_source_account_types")
                 _replace_join_rows(conn, category_id, target_ids, "category_target_account_types")
-                if dependency_refresh and before_dependency_commit is not None:
+                if before_dependency_commit is not None:
                     checking_source = True
                     before_dependency_commit()
                     checking_source = False

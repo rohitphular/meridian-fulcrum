@@ -98,6 +98,8 @@ def _parse_beneficiaries(raw_beneficiaries: str | None) -> list[tuple[str, Decim
             name, percentage_raw = (part.strip() for part in entry.split(":", 1))
             if not name:
                 raise ValueError("transactions: beneficiary_empty_name")
+            if re.fullmatch(r"[+]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?", percentage_raw) is None:
+                raise ValueError("transactions: beneficiary_invalid_percentage")
             try:
                 percentage = Decimal(percentage_raw)
                 if not percentage.is_finite() or not 0 < percentage <= 100:

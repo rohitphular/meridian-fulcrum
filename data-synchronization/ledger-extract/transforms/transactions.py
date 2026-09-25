@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -9,6 +10,7 @@ from transforms.dates import local_datetime
 
 _VALID_TX_TYPES = {"money-in", "money-out"}
 _VALID_RECORD_STATUSES = {"active", "inactive", "deleted", "locked"}
+_DECIMAL = re.compile(r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
 
 
 def transform(row: dict[str, Any]) -> dict[str, Any]:
@@ -71,6 +73,8 @@ def transform(row: dict[str, Any]) -> dict[str, Any]:
     raw_tx_amount_local = row.get("tx_amount_local")
     if raw_tx_amount_local is None or str(raw_tx_amount_local).strip() == "":
         raise ValueError(f"transactions: transaction_id={transaction_id!r} field=tx_amount_local is required but got empty/None")
+    if _DECIMAL.fullmatch(str(raw_tx_amount_local).strip()) is None:
+        raise ValueError("transactions: invalid_tx_amount_local")
     try:
         tx_amount_local = Decimal(str(raw_tx_amount_local).strip())
     except InvalidOperation:
@@ -144,6 +148,8 @@ def transform(row: dict[str, Any]) -> dict[str, Any]:
     # Column 17 — user_location_latitude (optional)
     raw_user_location_latitude = row.get("user_location_latitude")
     if raw_user_location_latitude is not None and str(raw_user_location_latitude).strip() != "":
+        if _DECIMAL.fullmatch(str(raw_user_location_latitude).strip()) is None:
+            raise ValueError("transactions: invalid_user_location_latitude")
         try:
             user_location_latitude: Decimal | None = Decimal(str(raw_user_location_latitude).strip())
         except InvalidOperation:
@@ -156,6 +162,8 @@ def transform(row: dict[str, Any]) -> dict[str, Any]:
     # Column 18 — user_location_longitude (optional)
     raw_user_location_longitude = row.get("user_location_longitude")
     if raw_user_location_longitude is not None and str(raw_user_location_longitude).strip() != "":
+        if _DECIMAL.fullmatch(str(raw_user_location_longitude).strip()) is None:
+            raise ValueError("transactions: invalid_user_location_longitude")
         try:
             user_location_longitude: Decimal | None = Decimal(str(raw_user_location_longitude).strip())
         except InvalidOperation:

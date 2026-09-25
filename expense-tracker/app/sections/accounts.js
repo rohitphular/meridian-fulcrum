@@ -1,13 +1,17 @@
 import { state } from '../core/state.js';
 import {
   el, esc, getSymbol, toBase, fmtBase, exportAccounts,
-  openContextMenu, closeContextMenu, recordStatusIcon, syncStatusIcon, parseCsvRow,
+  openContextMenu, closeContextMenu, recordStatusIcon, syncStatusIcon, parseCsvRecords,
 } from '../core/utils.js';
 import { showLoading, hideLoading, showMsg } from '../core/ui.js';
 import { ExpenseAPI } from '../core/api.js';
 
 // Module-level holding area for the current import session's parsed rows.
 let _importParsed  = null;   // array of plain objects (header → cell value) or null
+let _importReadSequence = 0;
+let _importBusy = false;
+let _importResult = '';
+let _importRetry = false;
 let _importType    = '';     // selected file_type for the current import session
 let _accMenuKey    = null;
 let _accDraft      = null;   // pending filter selections; copied to state.accFilters on Search
@@ -300,7 +304,7 @@ function _renderImportPanel() {
         <div class="field-hint">Required columns depend on the selected file type — the header row must match the target table's columns. Import account (master) rows before any detail rows, as detail rows reference accounts by account_id.</div>
       </div>
     </div>
-    <div id="accImportStatus"></div>
+    <div id="accImportStatus">${_importResult}</div>
     <div class="form-actions" style="margin-top:16px">
       <button class="btn btn-primary" id="accImportConfirm" disabled>Import</button>
       <button class="btn btn-secondary" id="accImportCancel">Cancel</button>
@@ -314,18 +318,21 @@ function _renderImportPanel() {
 // the only FE parse errors surfaced are structural (empty file, missing header,
 // column-count mismatch).
 function _parseGenericCsv(text) {
-  const lines = text.split(/\r?\n/).filter(l => l.trim() !== '');
-  if (lines.length === 0) return { rows: [], errors: ['File is empty.'] };
-  if (lines.length === 1) return { rows: [], errors: ['No data rows found — the file has only a header row.'] };
+  const decoded = parseCsvRecords(text);
+  if (decoded.errors.length > 0) return { rows: [], errors: decoded.errors };
+  const records = decoded.records;
+  if (records.length === 0) return { rows: [], errors: ['File is empty.'] };
+  if (records.length === 1) return { rows: [], errors: ['No data rows found — the file has only a header row.'] };
 
-  const headers = parseCsvRow(lines[0]).map(h => h.trim().toLowerCase().replace(/\s+/g, '_'));
+  const headers = records[0].values.map(h => h.trim().toLowerCase().replace(/\s+/g, '_'));
+  if (headers.includes('') || new Set(headers).size !== headers.length) return { rows: [], errors: ['CSV has blank or duplicate column headers.'] };
   const rows    = [];
   const errors  = [];
 
-  for (let i = 1; i < lines.length; i++) {
-    const vals = parseCsvRow(lines[i]);
+  for (let i = 1; i < records.length; i++) {
+    const vals = records[i].values;
     if (vals.length !== headers.length) {
-      errors.push(`Row ${i + 1}: expected ${headers.length} column${headers.length !== 1 ? 's' : ''}, found ${vals.length}`);
+      errors.push(`Row ${records[i].line}: expected ${headers.length} column${headers.length !== 1 ? 's' : ''}, found ${vals.length}`);
       continue;
     }
     const row = {};
@@ -344,7 +351,8 @@ function _renderImportStatus(parsed) {
   const errHtml = errors.length !== 0
     ? `<div class="pin-error" style="margin-bottom:8px">${errors.map(e => esc(e)).join('<br>')}</div>`
     : '';
-  if (rows.length === 0) return errHtml + '<p class="placeholder">No valid rows found.</p>';
+  if (errors.length > 0) return errHtml + '<p class="placeholder">Correct the errors before importing.</p>';
+  if (rows.length === 0) return '<p class="placeholder">No valid rows found.</p>';
   return `${errHtml}<p style="font-size:13px;color:var(--muted);margin:0">${rows.length} row${rows.length !== 1 ? 's' : ''} ready to import</p>`;
 }
 
@@ -515,35 +523,33 @@ function _renderAccountForm(a, mode) {
 
 // ── Table ─────────────────────────────────────────────────────────────────────
 
-function _renderAccountRow(a) {
-  const rowStyle = (a.record_status === 'deleted' || a.record_status === 'inactive') ? ' style="opacity:0.5"'
-                 : a.record_status === 'locked' ? ' style="opacity:0.7"'
-                 : '';
-
-  if (state.accDeleteRow === a._row) {
+function _renderAccountDelete(a) {
     if (state.accDeleteBlocked) {
       const n    = state.accDeleteBlocked.referenced_count;
       const noun = n === 1 ? 'transaction refers' : 'transactions refer';
-      return `<tr${rowStyle}>
-        <td colspan="4">
+      return `
           <span class="confirm-text">Cannot delete <strong>${esc(a.account_name)}</strong> — <strong>${n}</strong> ${noun} to this account.</span>
           <div style="color:var(--muted);font-size:var(--text-sm);margin-top:4px">
             Delete or reassign those transactions first, or deactivate the account instead.
           </div>
-        </td>
-        <td><div class="row-actions">
+        <div class="row-actions">
           <button class="btn-link" data-action="acc-deactivate" data-row="${a._row}">Deactivate instead</button>
           <button class="btn-link" data-action="acc-cancel-delete">Cancel</button>
-        </div></td>
-      </tr>`;
+        </div>`;
     }
-    return `<tr${rowStyle}>
-      <td colspan="4"><span class="confirm-text">Delete <strong>${esc(a.account_name)}</strong>? This marks the account as deleted.</span></td>
-      <td><div class="row-actions">
+    return `<span class="confirm-text">Delete <strong>${esc(a.account_name)}</strong>? This marks the account as deleted.</span>
+      <div class="row-actions">
         <button class="btn-link danger" data-action="acc-confirm-delete" data-row="${a._row}">Yes, delete</button>
         <button class="btn-link" data-action="acc-cancel-delete">Cancel</button>
-      </div></td>
-    </tr>`;
+      </div>`;
+}
+
+function _renderAccountRow(a) {
+  const rowStyle = (a.record_status === 'deleted' || a.record_status === 'inactive') ? ' style="opacity:0.5"'
+                 : a.record_status === 'locked' ? ' style="opacity:0.7"'
+                 : '';
+  if (state.accDeleteRow === a._row) {
+    return `<tr${rowStyle}><td colspan="5">${_renderAccountDelete(a)}</td></tr>`;
   }
 
   return `<tr${rowStyle}>
@@ -592,15 +598,13 @@ function _renderTable(accounts) {
     return [_groupHeader(g.label, total, sym, g.isLiab), ...accs.map(_renderAccountRow)];
   }).join('');
 
-  const hasActiveAccRow = state.accDeleteRow !== null;
-
   const cardSections = groups.flatMap(g => {
     const accs = byGroup[g.key];
     if (accs === undefined || accs === null || accs.length === 0) return [];
     return [
       `<div class="acc-card-group">${esc(g.label)}</div>`,
       ...accs.map(a => {
-        if (state.accDeleteRow === a._row) return '';
+        if (state.accDeleteRow === a._row) return `<div class="card record-confirm-card">${_renderAccountDelete(a)}</div>`;
         const cardStyle = (a.record_status === 'deleted' || a.record_status === 'inactive') ? ' style="opacity:0.5"'
                         : a.record_status === 'locked' ? ' style="opacity:0.7"'
                         : '';
@@ -620,7 +624,7 @@ function _renderTable(accounts) {
   }).join('');
 
   return `
-    <div class="table-wrap acc-table-wrap${hasActiveAccRow ? ' acc-has-active' : ''}">
+    <div class="table-wrap acc-table-wrap">
       <table class="acc-table">
         <thead><tr>
           <th style="width:160px">Name</th>
@@ -650,10 +654,14 @@ function _attachEvents() {
   if (_accDDCleanup !== null) { _accDDCleanup(); _accDDCleanup = null; }
 
   el('accImportBtn').addEventListener('click', () => {
+    if (_importBusy) return;
+    _importReadSequence++;
     if (state.accImportOpen) {
       state.accImportOpen = false;
       _importParsed = null;
       _importType   = '';
+      _importResult = '';
+      _importRetry = false;
     } else {
       state.accImportOpen = true;
       state.accAddOpen = false;
@@ -664,6 +672,8 @@ function _attachEvents() {
   });
 
   el('accAddBtn').addEventListener('click', () => {
+    if (_importBusy) return;
+    _importReadSequence++;
     if (state.accAddOpen || state.accViewRow !== null || state.accEditRow !== null) {
       state.accAddOpen = false;
       state.accViewRow = null;
@@ -673,6 +683,8 @@ function _attachEvents() {
       state.accImportOpen = false;
       _importParsed = null;
       _importType   = '';
+      _importResult = '';
+      _importRetry = false;
     }
     renderAccounts();
   });
@@ -683,31 +695,20 @@ function _attachEvents() {
       _updateImportConfirmState();
     });
 
-    el('accImportFile').addEventListener('change', e => {
-      const file = e.target.files[0];
-      if (file === undefined || file === null) {
-        _importParsed = null;
-        _updateImportConfirmState();
-        return;
-      }
-      const reader = new FileReader();
-      reader.onload = ev => {
-        const parsed = _parseGenericCsv(ev.target.result);
-        _importParsed = parsed.rows.length !== 0 ? parsed.rows : null;
-        el('accImportStatus').innerHTML = _renderImportStatus(parsed);
-        _updateImportConfirmState();
-      };
-      reader.readAsText(file);
-    });
-
+    el('accImportFile').addEventListener('change', e => _readAccountImport(e.target.files[0]));
     el('accImportConfirm').addEventListener('click', () => {
       if (_importParsed !== null && _importType !== '') _submitImport(_importType, _importParsed);
     });
 
+    _updateImportConfirmState();
     el('accImportCancel').addEventListener('click', () => {
+      if (_importBusy) return;
+      _importReadSequence++;
       state.accImportOpen = false;
       _importParsed = null;
       _importType   = '';
+      _importResult = '';
+      _importRetry = false;
       renderAccounts();
     });
   }
@@ -1016,7 +1017,7 @@ async function _saveNew() {
       document.dispatchEvent(new CustomEvent('et:reload'));
     } else {
       console.warn('[accounts] _saveNew failed:', res.error);
-      const errCode = (res.error !== undefined && res.error !== null) ? res.error : 'unknown';
+      const errCode = (res.error !== undefined && res.error !== null) ? (res.error === 'stale_record' ? 'This record moved or changed. Refresh, then reopen it before trying again.' : res.error) : 'unknown';
       const msg = errCode === 'duplicate_account'           ? 'An account with this name already exists.'
                 : errCode === 'missing_opening_value_local'       ? 'Opening value is required.'
                 : errCode === 'invalid_opening_value_local'       ? 'Opening value must be a finite number.'
@@ -1027,7 +1028,7 @@ async function _saveNew() {
     }
   } catch (_) {
     console.error('[accounts] _saveNew failed:', _);
-    errEl.textContent = 'Connection error.';
+    errEl.textContent = 'Connection lost. The change may have completed. Refresh and check before retrying.';
     if (btn !== null) { btn.disabled = false; btn.textContent = 'Save'; }
   } finally {
     hideLoading();
@@ -1072,7 +1073,7 @@ async function _saveEdit() {
       document.dispatchEvent(new CustomEvent('et:reload'));
     } else {
       console.warn('[accounts] _saveEdit failed:', res.error);
-      const editErrCode = (res.error !== undefined && res.error !== null) ? res.error : 'unknown';
+      const editErrCode = (res.error !== undefined && res.error !== null) ? (res.error === 'stale_record' ? 'This record moved or changed. Refresh, then reopen it before trying again.' : res.error) : 'unknown';
       errEl.textContent = editErrCode === 'record_locked'
         ? 'This account is locked and cannot be edited.'
         : editErrCode === 'duplicate_account'
@@ -1082,7 +1083,7 @@ async function _saveEdit() {
     }
   } catch (_) {
     console.error('[accounts] _saveEdit failed:', _);
-    errEl.textContent = 'Connection error.';
+    errEl.textContent = 'Connection lost. The change may have completed. Refresh and check before retrying.';
     if (btn !== null) { btn.disabled = false; btn.textContent = 'Save'; }
   } finally {
     hideLoading();
@@ -1113,14 +1114,14 @@ async function _confirmDelete(rowNum) {
       renderAccounts();
     } else {
       console.warn('[accounts] _confirmDelete failed:', res.error);
-      showMsg('Delete failed: ' + ((res.error !== undefined && res.error !== null) ? res.error : 'unknown'), 'warn');
+      showMsg('Delete failed: ' + ((res.error !== undefined && res.error !== null) ? (res.error === 'stale_record' ? 'This record moved or changed. Refresh, then reopen it before trying again.' : res.error) : 'unknown'), 'warn');
       state.accDeleteRow = null;
       state.accDeleteBlocked = null;
       renderAccounts();
     }
   } catch (_) {
     console.error('[accounts] _confirmDelete failed:', _);
-    showMsg('Connection error.', 'warn');
+    showMsg('Connection lost. The change may have completed. Refresh and check before retrying.', 'warn');
     state.accDeleteRow = null;
     state.accDeleteBlocked = null;
     renderAccounts();
@@ -1148,14 +1149,14 @@ async function _deactivateAccount(rowNum) {
       document.dispatchEvent(new CustomEvent('et:reload'));
     } else {
       console.warn('[accounts] _deactivateAccount failed:', res.error);
-      showMsg('Deactivate failed: ' + ((res.error !== undefined && res.error !== null) ? res.error : 'unknown'), 'warn');
+      showMsg('Deactivate failed: ' + ((res.error !== undefined && res.error !== null) ? (res.error === 'stale_record' ? 'This record moved or changed. Refresh, then reopen it before trying again.' : res.error) : 'unknown'), 'warn');
       state.accDeleteBlocked = null;
       state.accDeleteRow = null;
       renderAccounts();
     }
   } catch (_) {
     console.error('[accounts] _deactivateAccount failed:', _);
-    showMsg('Connection error.', 'warn');
+    showMsg('Connection lost. The change may have completed. Refresh and check before retrying.', 'warn');
     state.accDeleteBlocked = null;
     state.accDeleteRow = null;
     renderAccounts();
@@ -1178,13 +1179,13 @@ async function _restoreAccount(rowNum) {
       const msg = res.error === 'missing_row_num' ? 'Invalid restore request.'
                 : res.error === 'invalid_row'     ? 'Row not found.'
                 : res.error === 'not_deleted'     ? 'Account is not deleted — cannot restore.'
-                : 'Restore failed: ' + ((res.error !== undefined && res.error !== null) ? res.error : 'unknown');
+                : 'Restore failed: ' + ((res.error !== undefined && res.error !== null) ? (res.error === 'stale_record' ? 'This record moved or changed. Refresh, then reopen it before trying again.' : res.error) : 'unknown');
       showMsg(msg, 'warn');
       renderAccounts();
     }
   } catch (_) {
     console.error('[accounts] _restoreAccount failed:', _);
-    showMsg('Connection error.', 'warn');
+    showMsg('Connection lost. The change may have completed. Refresh and check before retrying.', 'warn');
     renderAccounts();
   } finally {
     hideLoading();
@@ -1193,77 +1194,91 @@ async function _restoreAccount(rowNum) {
 
 // Enable the Import button only when BOTH a file_type is chosen AND rows parsed.
 function _updateImportConfirmState() {
-  const btn = el('accImportConfirm');
-  if (btn === null) return;
-  btn.disabled = (_importParsed === null || _importType === '');
+  const button = el('accImportConfirm');
+  if (button !== null) {
+    button.disabled = _importBusy || _importParsed === null || _importType === '';
+    button.textContent = _importBusy ? 'Importing…' : _importRetry ? 'Retry failed rows' : 'Import';
+  }
+  for (const id of ['accImportFile', 'accImportType', 'accImportCancel', 'accImportBtn', 'accAddBtn']) {
+    const control = el(id);
+    if (control !== null) control.disabled = _importBusy;
+  }
+}
+
+async function _readAccountImport(file) {
+  if (_importBusy) return;
+  const sequence = ++_importReadSequence;
+  _importParsed = null;
+  _importResult = '';
+  _importRetry = false;
+  const status = el('accImportStatus');
+  if (status !== null) status.innerHTML = '';
+  _updateImportConfirmState();
+  if (file === undefined) return;
+  try {
+    const text = await file.text();
+    if (sequence !== _importReadSequence || !state.accImportOpen) return;
+    const parsed = _parseGenericCsv(text);
+    _importParsed = parsed.errors.length === 0 && parsed.rows.length > 0 ? parsed.rows : null;
+    _importResult = _renderImportStatus(parsed);
+  } catch (_) {
+    if (sequence !== _importReadSequence || !state.accImportOpen) return;
+    _importResult = '<p class="pin-error">Could not read this CSV. Choose the file again.</p>';
+  } finally {
+    if (sequence === _importReadSequence && state.accImportOpen) {
+      el('accImportStatus').innerHTML = _importResult;
+      _updateImportConfirmState();
+    }
+  }
 }
 
 async function _submitImport(fileType, rows) {
-  if (fileType === '') {
-    showMsg('Select a file type first.', 'warn');
-    return;
-  }
-  if (rows === undefined || rows === null || rows.length === 0) {
-    showMsg('No rows to import.', 'warn');
-    return;
-  }
-  const btn   = el('accImportConfirm');
-  const errEl = el('accImportError');
-  if (btn !== null)   { btn.disabled = true; btn.textContent = 'Importing…'; }
-  if (errEl !== null) errEl.textContent = '';
+  if (_importBusy) return;
+  if (fileType === '') { showMsg('Select a file type first.', 'warn'); return; }
+  if (!Array.isArray(rows) || rows.length === 0) { showMsg('No rows to import.', 'warn'); return; }
+  _importBusy = true;
+  _updateImportConfirmState();
   showLoading();
+  let changed = false;
+  let uncertain = false;
   try {
-    const res = await ExpenseAPI.importAccountData({ file_type: fileType, rows });
-
-    if (res.ok === false && (res.results === undefined || res.results === null)) {
-      console.warn('[accounts] _submitImport failed:', res.error);
-      if (errEl !== null) errEl.textContent = 'Error: ' + ((res.error !== undefined && res.error !== null) ? res.error : 'unknown');
-      if (btn !== null)   { btn.disabled = false; btn.textContent = 'Import'; }
-      return;
+    const response = await ExpenseAPI.importAccountData({ file_type: fileType, rows });
+    if (!Array.isArray(response?.results) || response.results.length !== rows.length
+        || !response.results.every(result => typeof result?.ok === 'boolean')) {
+      throw new Error(response?.error ?? 'incomplete_import_response');
     }
-
-    const created = res.created;
-    const updated = res.updated;
-    const failed  = res.failed;
-
-    if (failed === 0) {
-      _importParsed = null;
-      _importType   = '';
+    const succeeded = response.results.filter(result => result.ok);
+    const failures = response.results.map((result, index) => ({ ...result, row: rows[index] })).filter(result => !result.ok);
+    const created = succeeded.filter(result => result.action === 'created').length;
+    const updated = succeeded.length - created;
+    changed = succeeded.length > 0;
+    if (failures.length === 0) {
+      _importParsed = null; _importType = ''; _importResult = ''; _importRetry = false;
       state.accImportOpen = false;
-      const msg = [
-        created !== 0 ? `${created} created` : '',
-        updated !== 0 ? `${updated} updated` : '',
-      ].filter(s => s !== '').join(' · ');
-      showMsg(msg !== '' ? msg : 'Nothing to import.');
-      document.dispatchEvent(new CustomEvent('et:reload'));
+      showMsg(`${created} created · ${updated} updated`);
     } else {
-      const results = (res.results !== undefined && res.results !== null) ? res.results : [];
-      const resultRows = results.map(r => `
-        <tr>
-          <td>${esc((r.key !== undefined && r.key !== null) ? String(r.key) : '—')}</td>
-          <td>${r.ok
-            ? `<span class="badge badge-et-in">${esc((r.action !== undefined && r.action !== null) ? r.action : 'ok')}</span>`
-            : `<span class="badge badge-et-out">${esc((r.error !== undefined && r.error !== null) ? r.error : 'unknown')}</span>`}
-          </td>
-        </tr>`).join('');
-      el('accImportStatus').innerHTML = `
-        <div style="margin-bottom:8px;font-size:13px">${created} created · ${updated} updated · <span style="color:var(--ember)">${failed} failed</span></div>
-        <div class="table-wrap" style="margin-bottom:8px">
-          <table class="acc-table">
-            <thead><tr><th>Key</th><th>Result</th></tr></thead>
-            <tbody>${resultRows}</tbody>
-          </table>
-        </div>`;
-      _importParsed = null;
-      if (btn !== null) { btn.disabled = true; btn.textContent = 'Import'; }
-      if (created > 0 || updated > 0) { document.dispatchEvent(new CustomEvent('et:reload')); }
-      showMsg(`${created} created · ${updated} updated · ${failed} failed`, 'warn');
+      _importParsed = failures.map(result => result.row);
+      _importType = fileType;
+      _importRetry = true;
+      _importResult = `<p>${created} created · ${updated} updated · ${failures.length} failed</p>
+        <div class="table-wrap"><table><thead><tr><th>Key</th><th>Reason</th></tr></thead><tbody>${failures.map(result =>
+          `<tr><td>${esc(result.key ?? result.row.id ?? '—')}</td><td>${esc(result.error ?? 'unknown')}</td></tr>`
+        ).join('')}</tbody></table></div>`;
+      showMsg(`${failures.length} account rows failed. Review their reasons and retry only those rows.`, 'warn');
     }
-  } catch (_) {
-    console.error('[accounts] _submitImport failed:', _);
-    if (errEl !== null) errEl.textContent = 'Connection error.';
-    if (btn !== null)   { btn.disabled = false; btn.textContent = 'Import'; }
+  } catch (error) {
+    uncertain = true;
+    _importParsed = null;
+    _importRetry = false;
+    const message = `Import stopped: ${error?.message ?? 'connection_error'}. Some rows may have been saved. Refresh and check before choosing the file again.`;
+    _importResult = `<p class="pin-error" role="alert">${esc(message)}</p>`;
+    showMsg(message, 'warn');
   } finally {
+    _importBusy = false;
+    const status = el('accImportStatus');
+    if (status !== null) status.innerHTML = _importResult;
+    _updateImportConfirmState();
+    if (changed || uncertain) document.dispatchEvent(new CustomEvent('et:reload'));
     hideLoading();
   }
 }

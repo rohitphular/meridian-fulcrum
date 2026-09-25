@@ -14,7 +14,7 @@ function load(file, globals, exports) {
   return context.testExports;
 }
 
-const { parseCsvRow } = load('core/utils.js', {}, ['parseCsvRow']);
+const { parseCsvRecords } = load('core/utils.js', {}, ['parseCsvRecords']);
 const headers = 'id,tx_date_local,tx_type,source_account,source_amount_local,major_category,minor_category';
 const csvRow = index => `transaction-${index},2026-09-24,money-out,Bank,10,food,lunch`;
 const statuses = ['active', 'inactive', 'deleted', 'locked'];
@@ -23,14 +23,14 @@ function fixture(transactionSchema = { record_statuses: statuses }) {
   const submitted = [];
   const parser = load('sections/transactions.js', {
     state: { accounts: [{ id: 'bank-id', account_name: 'Bank' }], transactionSchema },
-    parseCsvRow,
+    parseCsvRecords,
     el: () => null,
     showLoading() {}, hideLoading() {}, showMsg() {},
     document: { dispatchEvent() {} }, CustomEvent: class {},
     ExpenseAPI: {
       async createTransactionsBulk(payload) {
         submitted.push(...payload.transactions);
-        return { ok: true, created: 0, updated: payload.transactions.length, failed: 0, results: [] };
+        return { ok: true, created: 0, updated: payload.transactions.length, failed: 0, results: payload.transactions.map(row => ({ ok: true, action: 'updated', key: row.id })) };
       },
     },
   }, ['_parseTxCsv', '_submitTxImport']);
@@ -110,13 +110,13 @@ test('CSV amounts and coordinates reject malformed numeric text instead of impor
   }
 });
 
-test('CSV amounts and coordinates accept full finite decimal strings as numeric payloads', () => {
+test('CSV amounts and coordinates accept full finite decimal strings with exact amount text', () => {
   const frontend = fixture();
   for (const field of ['source_amount_local', 'target_amount_local', 'user_location_latitude', 'user_location_longitude']) {
     for (const value of ['12.50', '.125', '12.', '+12.3', '-0.25', '1.2e-2', ' 10.25 ', '0']) {
       const parsed = frontend._parseTxCsv(numericCsv({ [field]: value }));
       assert.equal(parsed.errors.length, 0, field + ' must accept ' + value);
-      assert.equal(parsed.transactions[0][field], Number(value));
+      assert.equal(parsed.transactions[0][field], field.endsWith('_amount_local') ? value.trim() : Number(value));
     }
   }
 });

@@ -211,7 +211,8 @@ async function _mutate(request, success) {
   try {
     const result = await request();
     if (result?.ok !== true) {
-      const detail = result?.error?.includes('in_use') ? 'This type is used by accounts or categories. Keep it available until those references are reconciled.' : result?.error ?? 'invalid_response';
+      const detail = result?.error === 'stale_record' ? 'This record moved or changed. Refresh, then reopen it before trying again.'
+        : result?.error?.includes('in_use') ? 'This type is used by accounts or categories. Keep it available until those references are reconciled.' : result?.error ?? 'invalid_response';
       const message = result?.row_num === undefined ? detail : `Row ${result.row_num}: ${detail}`;
       if (el('accountTypeError') !== null) el('accountTypeError').textContent = message;
       showMsg(message, 'warn');
@@ -221,7 +222,7 @@ async function _mutate(request, success) {
     showMsg(success);
     document.dispatchEvent(new CustomEvent('et:reload'));
   } catch (_) {
-    showMsg('Could not save account types. Check the connection and retry.', 'warn');
+    showMsg('Connection lost. The change may have completed. Refresh and check before retrying.', 'warn');
   } finally {
     state.accountTypeBusy = false;
     controls.forEach((control, index) => { control.disabled = disabled[index]; });
@@ -235,6 +236,7 @@ function _saveType() {
   const fields = state.accountTypeSchema.fields.filter(field => !SYSTEM_FIELDS.has(field.key));
   const payload = Object.fromEntries(fields.map(field => [field.key, field.type === 'boolean' ? String(draft[field.key]).toLowerCase() === 'true' : String(draft[field.key] ?? '').trim()]));
   payload.id = draft.id; payload.row_num = draft.row_num;
+  if (draft.updated_at !== undefined) payload.expected_updated_at = draft.updated_at;
   return _mutate(() => ExpenseAPI.updateAccountType(payload), 'Account type saved.');
 }
 

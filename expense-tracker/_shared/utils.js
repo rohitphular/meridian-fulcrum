@@ -64,7 +64,7 @@ export function utcToLocalInput(s) {
 export function fmtDateTime(v) {
   if (!v) return '—';
   try {
-    const d = new Date(String(v));
+    const d = new Date(String(v).replace(' ', 'T'));
     if (isNaN(d)) return String(v).slice(0, 16) || '—';
     const date = d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
     const time = d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });

@@ -137,7 +137,9 @@ def test_invalid_corrected_rate_cannot_destroy_existing_snapshot_on_hard_retry(d
     sync_details(database_client, "account_investment_stocks", [row])
     original = _one(database_client, "SELECT id,created_at,updated_at,current_value_local_value,current_value_base_value,applied_rate_value FROM account_investment_stocks")
     with database_client.cursor() as cursor:
-        # PostgreSQL permits numeric NaN under its older rate_value > 0 check.
+        # Simulate legacy corruption from before currency migration 0006.
+        # Current databases reject this at storage, but readers must still guard it.
+        cursor.execute("ALTER TABLE currency_rates DROP CONSTRAINT chk_cr_rate_finite")
         cursor.execute("UPDATE currency_rates SET rate_value='NaN' WHERE quote_currency_code='USD'")
     database_client.commit()
     assert sync_details(database_client, "account_investment_stocks", [row])["unchanged"] == 1

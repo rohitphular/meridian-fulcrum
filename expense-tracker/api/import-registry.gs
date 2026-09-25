@@ -23,6 +23,9 @@ const IMPORT_REGISTRY = {
   },
 
   account_deposit: {
+    boolean_fields: ['is_interest_paid'],
+    nonnegative_fields: ['interest_rate'],
+    precise_fields: ['interest_rate'],
     numeric_fields: ['interest_rate'],
     sheet_name: ACCOUNT_DEPOSIT_SHEET,
     columns: [
@@ -40,6 +43,9 @@ const IMPORT_REGISTRY = {
   },
 
   account_liability_credit_card: {
+    integer_fields: {'payment_month_day': [1, 31], 'statement_month_day': [1, 31]},
+    nonnegative_fields: ['credit_limit_local', 'interest_rate'],
+    precise_fields: ['interest_rate'],
     numeric_fields: ['credit_limit_local', 'interest_rate', 'payment_month_day', 'statement_month_day'],
     sheet_name: ACCOUNT_LIABILITY_CREDIT_CARD_SHEET,
     columns: [
@@ -53,6 +59,11 @@ const IMPORT_REGISTRY = {
   },
 
   account_liability_mortgage: {
+    integer_fields: {'term_months': [1, 2147483647]},
+    date_fields: ['maturity_date_local'],
+    nonnegative_fields: ['monthly_payment_local', 'interest_rate'],
+    positive_fields: ['original_principal_local'],
+    precise_fields: ['interest_rate'],
     numeric_fields: ['original_principal_local', 'monthly_payment_local', 'interest_rate', 'term_months'],
     sheet_name: ACCOUNT_LIABILITY_MORTGAGE_SHEET,
     columns: [
@@ -70,6 +81,11 @@ const IMPORT_REGISTRY = {
   },
 
   account_liability_personal_loan: {
+    integer_fields: {'term_months': [1, 2147483647]},
+    date_fields: ['maturity_date_local'],
+    nonnegative_fields: ['monthly_payment_local', 'interest_rate'],
+    positive_fields: ['original_principal_local'],
+    precise_fields: ['interest_rate'],
     numeric_fields: ['original_principal_local', 'monthly_payment_local', 'interest_rate', 'term_months'],
     sheet_name: ACCOUNT_LIABILITY_PERSONAL_LOAN_SHEET,
     columns: [
@@ -83,6 +99,12 @@ const IMPORT_REGISTRY = {
   },
 
   account_investment_property: {
+    boolean_fields: ['is_rented'],
+    integer_fields: {'rent_day': [1, 31], 'rent_month': [1, 12]},
+    date_fields: ['acquisition_date_local', 'current_value_evaluation_date'],
+    nonnegative_fields: ['current_value_local', 'rent_amount_local', 'property_service_charge_amount_local'],
+    percentage_fields: ['property_ownership_percentage', 'rent_ownership_percentage'],
+    precise_fields: ['property_ownership_percentage', 'rent_ownership_percentage'],
     numeric_fields: ['rent_day', 'rent_month', 'current_value_local', 'property_ownership_percentage', 'rent_amount_local', 'rent_ownership_percentage', 'property_service_charge_amount_local'],
     sheet_name: ACCOUNT_INVESTMENT_PROPERTY_SHEET,
     columns: [
@@ -104,6 +126,9 @@ const IMPORT_REGISTRY = {
   },
 
   account_investment_stocks: {
+    date_fields: ['price_asof_date', 'expiry_date', 'opening_date'],
+    positive_fields: ['contract_multiplier'],
+    precise_fields: ['quantity', 'avg_cost_price_local', 'current_price_local', 'strike_price_local', 'contract_multiplier'],
     numeric_fields: ['quantity', 'avg_cost_price_local', 'cost_basis_local', 'current_price_local', 'current_value_local', 'strike_price_local', 'contract_multiplier'],
     sheet_name: ACCOUNT_INVESTMENT_STOCKS_SHEET,
     columns: [

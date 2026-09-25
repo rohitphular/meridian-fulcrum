@@ -1,10 +1,11 @@
 import { state } from '../core/state.js';
-import { el, esc, fmtDateTime, fmtDateTimeCompact, fmtNative, fmtBase, nowLocalISO, toDateInputVal, exportData, getSymbol, openContextMenu, closeContextMenu, syncStatusIcon, recordStatusIcon, parseCsvRow } from '../core/utils.js';
+import { el, esc, fmtDateTime, fmtDateTimeCompact, fmtNative, fmtBase, nowLocalISO, toDateInputVal, exportData, getSymbol, openContextMenu, closeContextMenu, syncStatusIcon, recordStatusIcon, parseCsvRecords } from '../core/utils.js';
 import { showLoading, hideLoading, showMsg } from '../core/ui.js';
 import { filteredTx, getRangeBounds } from '../core/daterange.js';
 import { ExpenseAPI } from '../core/api.js';
+import { balanceMovementAffectsSnapshot } from '../core/date-utils.js';
 
-const SUGGESTIONS_CACHE_KEY = 'et_suggestions_v1';
+const SUGGESTIONS_CACHE_KEY = 'et_suggestions_v2';
 const SUGGESTIONS_TTL_MS    = 6 * 60 * 60 * 1000;
 
 const METADATA_CACHE_KEY = 'et_metadata_v1';
@@ -12,6 +13,9 @@ const METADATA_TTL_MS    = 6 * 60 * 60 * 1000;
 
 let filterOpen         = false;
 let _txImportParsed    = null;
+let _txImportReadSequence = 0;
+let _txImportBusy = false;
+let _txImportRetry = false;
 let _filterEventsAbort = null;
 let _txImportResult  = null;   // persists failure table HTML across re-renders
 let _txMenuKey      = null;
@@ -19,6 +23,26 @@ let _txEventsAbort  = null;
 let _accTypeSel     = new Set();
 let _siblingMap     = {};   // tx.id → sibling tx; rebuilt only when state.transactions reference changes
 let _siblingMapSrc  = null; // the state.transactions array that produced _siblingMap
+
+function _transactionError(code) {
+  const messages = {
+    stale_record: 'This record moved or changed. Refresh, then reopen it before trying again.',
+    transfer_parent_deleted: 'A live linked transaction needs its original transfer. Delete the linked transaction first, or restore the original.',
+    invalid_transfer_pair: 'A transfer must link different accounts and opposite money-in / money-out directions.',
+    invalid_tx_date_local: 'Enter a valid local date and time.',
+    invalid_tx_timezone_local: 'The transaction timezone is invalid.',
+    nonexistent_local_time: 'This time does not exist because the clocks moved forward. Choose a valid time.',
+    ambiguous_local_time: 'This time occurs twice when the clocks move back. Choose an unambiguous time.',
+    incomplete_location_coordinates: 'Enter both latitude and longitude, or clear both.',
+    latitude_out_of_range: 'Latitude must be between −90 and 90.',
+    longitude_out_of_range: 'Longitude must be between −180 and 180.',
+  };
+  return messages[code] ?? (typeof code === 'string' && code !== '' ? code : '[no error code]');
+}
+
+function _suggestionKey(suggestion) {
+  return suggestion.suggestion_key ?? JSON.stringify([suggestion.counterparty_name, suggestion.major_category, suggestion.minor_category, suggestion.account_id, suggestion.currency]);
+}
 
 function _buildSiblingMap(allTx) {
   const byId = {};
@@ -29,7 +53,8 @@ function _buildSiblingMap(allTx) {
     const parent = byId[tx.parent_tx_id];
     if (parent === undefined || parent === null) return;
     out[tx.id]     = parent;
-    out[parent.id] = tx;
+    // An old deleted child must not hide a current transfer leg.
+    if (out[parent.id] === undefined || out[parent.id].record_status === 'deleted') out[parent.id] = tx;
   });
   return out;
 }
@@ -49,18 +74,19 @@ function _dispatchTxAction(action, row) {
     if (tx === undefined || tx === null) return;
     const _copySibling = _siblingMap[tx.id] !== undefined ? _siblingMap[tx.id] : null;
     // Reconstruct source/target for the add form (which still uses source/target format)
-    let _cpySrcAcc = '', _cpyTgtAcc = '', _cpySrcAmt = Number(tx.tx_amount_local), _cpyTgtAmt = '';
+    let _cpySrcAcc = '', _cpyTgtAcc = '', _cpySrcAmt = String(tx.tx_amount_local), _cpyTgtAmt = '';
     if (tx.tx_type === 'money-out') {
       _cpySrcAcc = (tx.account_id !== undefined && tx.account_id !== null) ? tx.account_id : '';
       if (_copySibling !== null && _copySibling.tx_type === 'money-in') {
         _cpyTgtAcc = (_copySibling.account_id !== undefined && _copySibling.account_id !== null) ? _copySibling.account_id : '';
-        _cpyTgtAmt = Number(_copySibling.tx_amount_local) !== _cpySrcAmt ? String(_copySibling.tx_amount_local) : '';
+        _cpyTgtAmt = String(_copySibling.tx_amount_local);
       }
     } else {
       _cpyTgtAcc = (tx.account_id !== undefined && tx.account_id !== null) ? tx.account_id : '';
       if (_copySibling !== null && _copySibling.tx_type === 'money-out') {
         _cpySrcAcc = (_copySibling.account_id !== undefined && _copySibling.account_id !== null) ? _copySibling.account_id : '';
-        _cpySrcAmt = Number(_copySibling.tx_amount_local);
+        _cpySrcAmt = String(_copySibling.tx_amount_local);
+        _cpyTgtAmt = String(tx.tx_amount_local);
       }
     }
     state.txCopyPrefill = {
@@ -194,6 +220,19 @@ function _fmtBeneficiaries(str) {
   }).join(' &middot; ');
 }
 
+// Location enrichment is optional and must not leave an import waiting forever.
+async function _locationData(url) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5000);
+  try {
+    const response = await fetch(url, { headers: { Accept: 'application/json' }, signal: controller.signal });
+    if (!response.ok) throw new Error('location_unavailable');
+    return await response.json();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // Forward geocode: area+city+country → lat/lon via Nominatim.
 async function _geocodeCity(areaId, cityId, countryId, latId, lonId) {
   const area    = el(areaId)    !== null && el(areaId)    !== undefined ? el(areaId).value    : '';
@@ -207,8 +246,7 @@ async function _geocodeCity(areaId, cityId, countryId, latId, lonId) {
   try {
     const q   = encodeURIComponent([area, city, country].filter(v => v !== undefined && v !== null && v !== '').join(', '));
     const url = `https://nominatim.openstreetmap.org/search?q=${q}&format=json&limit=1`;
-    const res = await fetch(url, { headers: { 'Accept': 'application/json' } });
-    const data = await res.json();
+    const data = await _locationData(url);
     if (data !== null && data !== undefined && data[0] !== undefined && data[0] !== null) {
       latEl.value = parseFloat(data[0].lat).toFixed(6);
       lonEl.value = parseFloat(data[0].lon).toFixed(6);
@@ -226,8 +264,7 @@ async function _reverseGeocode(latId, lonId, areaId, cityId, countryId) {
   if (lat === '' || lon === '') return;
   try {
     const url = `https://nominatim.openstreetmap.org/reverse?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}&format=json`;
-    const res = await fetch(url, { headers: { 'Accept': 'application/json' } });
-    const data = await res.json();
+    const data = await _locationData(url);
     if (data !== null && data !== undefined && data.address !== undefined && data.address !== null) {
       const addr     = data.address;
       const cityEl   = el(cityId);
@@ -326,10 +363,10 @@ export function renderTransactions() {
             localStorage.setItem(SUGGESTIONS_CACHE_KEY, JSON.stringify({ suggestions: state.suggestions, ts: Date.now() }));
           } catch (_) {}
         }
-        renderTransactions();
+        _refreshSuggestionsPanel();
       }).catch(() => {
         state.suggestionsFetching = false;
-        renderTransactions();
+        _refreshSuggestionsPanel();
       });
     }
   }
@@ -396,12 +433,14 @@ export function renderTransactions() {
     ${viewTx             ? _renderTxForm(viewTx, 'view') : ''}
     ${editTx             ? _renderTxForm(editTx, 'edit') : ''}
     ${_renderFilterBar()}
-    ${_renderSuggestionsPanel()}
+    <div id="txSuggestions">${_renderSuggestionsPanel()}</div>
     ${warnRows.length ? `<div class="warning-count" id="warnToggle">⚠ ${warnRows.length} row${warnRows.length > 1 ? 's' : ''} have warnings — click to expand</div>` : ''}
     ${_renderTxTable(validRows, warnRows)}
   `;
 
   el('txImportBtn').addEventListener('click', () => {
+    if (_txImportBusy) return;
+    _txImportReadSequence++;
     if (state.txImportOpen) {
       state.txImportOpen = false;
       _txImportParsed = null;
@@ -416,6 +455,8 @@ export function renderTransactions() {
   });
 
   el('txAddBtn').addEventListener('click', () => {
+    if (_txImportBusy) return;
+    _txImportReadSequence++;
     if (anyAddOpen) {
       state.txAddOpen = false;
       state.txViewRow = null;
@@ -429,26 +470,15 @@ export function renderTransactions() {
   });
 
   if (state.txImportOpen) {
-    el('txImportFile').addEventListener('change', e => {
-      const file = e.target.files[0];
-      if (file === undefined || file === null) return;
-      _txImportResult = null;
-      const reader = new FileReader();
-      reader.onload = ev => {
-        const parsed = _parseTxCsv(ev.target.result);
-        _txImportParsed = parsed.transactions.length > 0 ? parsed.transactions : null;
-        el('txImportStatus').innerHTML = _renderTxImportStatus(parsed);
-        el('txImportConfirm').disabled = _txImportParsed === null;
-      };
-      reader.readAsText(file);
+    el('txImportFile').addEventListener('change', e => _readTxImport(e.target.files[0]));
+    el('txImportConfirm').addEventListener('click', () => {
+      if (_txImportParsed !== null) _submitTxImport(_txImportParsed, true);
     });
-
-    el('txImportConfirm').addEventListener('click', async () => {
-      if (_txImportParsed === null) return;
-      _submitTxImport(await _geocodeImportRows(_txImportParsed));
-    });
+    _updateTxImportControls();
 
     el('txImportCancel').addEventListener('click', () => {
+      if (_txImportBusy) return;
+      _txImportReadSequence++;
       state.txImportOpen = false;
       _txImportParsed = null;
       _txImportResult = null;
@@ -467,7 +497,10 @@ export function renderTransactions() {
     openContextMenu(el('txExportBtn'), [
       { key: 'csv',  label: 'CSV'  },
       { key: 'json', label: 'JSON' },
-    ], key => exportData(key, rows));
+    ], key => {
+      try { exportData(key, rows); }
+      catch (error) { showMsg(error.message, 'warn'); }
+    });
   });
 
   if (warnRows.length) {
@@ -488,11 +521,11 @@ function _renderTxTable(validRows, warnRows) {
     return `<th class="${cls}" data-sort="${esc(col)}">${esc(label)}</th>`;
   };
 
-  // Only force table visible on mobile for inline delete confirmation
-  const hasDeleteRow = state.txDeleteRow !== null;
-
   const rowData = paged.map(tx => {
-    if (state.txDeleteRow === tx._row) return { tr: _renderTxDeleteRow(tx), card: '' };
+    if (state.txDeleteRow === tx._row) return {
+      tr: `<tr><td colspan="6">${_renderTxDelete(tx)}</td></tr>`,
+      card: `<div class="card record-confirm-card">${_renderTxDelete(tx)}</div>`,
+    };
 
     const badgeCls    = tx.tx_type === 'money-in' ? 'badge-et-in' : tx.tx_type === 'money-out' ? 'badge-et-out' : 'badge-et-transfer';
     const typeLabel   = (_txTypeMap()[tx.tx_type] !== undefined && _txTypeMap()[tx.tx_type] !== null) ? _txTypeMap()[tx.tx_type] : tx.tx_type;
@@ -568,7 +601,7 @@ function _renderTxTable(validRows, warnRows) {
     </div>`;
 
   return `
-    <div class="table-wrap tx-table-wrap${hasDeleteRow ? ' tx-has-active' : ''}">
+    <div class="table-wrap tx-table-wrap">
       <table>
         <thead><tr>
           ${thSort('tx_date_local','Date')}
@@ -638,7 +671,7 @@ function _attachEvents() {
     }
     if (action === 'sugg-add') {
       const key = btn.dataset.key;
-      const s = state.suggestions.find(x => `${x.counterparty_name}|${x.minor_category}` === key);
+      const s = state.suggestions.find(x => _suggestionKey(x) === key);
       if (s === undefined || s === null) return;
       state.txCopyPrefill = {
         tx_type:              'money-out',
@@ -670,7 +703,7 @@ function _sortTx(rows) {
   const dir = state.txSort.dir === 'asc' ? 1 : -1;
   return rows.sort((a, b) => {
     if (col === 'tx_date_local') {
-      const ts = s => { const d = new Date(String(s)); return Number.isFinite(d.getTime()) ? d.getTime() : null; };
+      const ts = s => { const d = new Date(String(s).replace(' ', 'T')); return Number.isFinite(d.getTime()) ? d.getTime() : null; };
       const va = ts(a[col]); const vb = ts(b[col]);
       const aNil = va === null; const bNil = vb === null;
       if (aNil && bNil) return 0;
@@ -742,11 +775,11 @@ function _renderAddForm() {
       </div>
       <div class="field form-grid-span-2" id="afSourceAmountField">
         <label for="afSourceAmount" id="afSourceAmountLabel">Amount *</label>
-        <input type="number" id="afSourceAmount" min="0.01" step="0.01" placeholder="0.00">
+        <input type="number" id="afSourceAmount" inputmode="decimal" min="0" step="any" placeholder="0.00">
       </div>
       <div class="field form-grid-span-1 hidden" id="afTargetAmountField">
         <label for="afTargetAmount">Target amount</label>
-        <input type="number" id="afTargetAmount" min="0.01" step="0.01" placeholder="0.00">
+        <input type="number" id="afTargetAmount" inputmode="decimal" min="0" step="any" placeholder="0.00">
       </div>
       <!-- Row 4: Counterparty | Tags -->
       <div class="field form-grid-span-3" id="afCounterpartyField">
@@ -1007,10 +1040,12 @@ function _afRefreshToAccountField() {
 // Rule 5     — money-out from a loan account (with exemption for interest/charges).
 // Rule 6     — FX transfer: source_amount_local and target_amount_local may differ for cross-currency transfers.
 
-function _checkBalanceRules(transaction_type, sourceAccount, isTransfer, amount, txDate) {
+function _checkBalanceRules(transaction_type, sourceAccount, isTransfer, amount, txDate, txTimezone = '') {
   if (sourceAccount === undefined || sourceAccount === null) return null;
   const trackingStart = String(sourceAccount.tracking_start_date_local ?? '').trim();
-  if (trackingStart !== '' && txDate !== undefined && new Date(txDate) < new Date(trackingStart.replace(' ', 'T'))) return null;
+  if (trackingStart !== '' && txDate !== undefined && !balanceMovementAffectsSnapshot(sourceAccount, {
+    tx_date_local: txDate, tx_timezone_local: txTimezone,
+  })) return null;
   const isMoneyOut      = transaction_type === 'money-out';
   if (!isMoneyOut && !isTransfer) return null;
 
@@ -1052,6 +1087,7 @@ function _checkRule5(transaction_type, sourceAccount, major_category, minor_cate
 
 async function _saveTransaction() {
   const btn   = el('afSubmit');
+  if (btn.disabled) return;
   const errEl = el('afError');
   errEl.textContent = '';
 
@@ -1082,19 +1118,22 @@ async function _saveTransaction() {
   if (tx_type === '')                                            { errEl.textContent = 'Type is required.';           return; }
   if (srcMandatory && source_account === '')                     { errEl.textContent = 'Source account is required.'; return; }
   if (tgtMandatory && target_account === '')                     { errEl.textContent = 'Target account is required.'; return; }
-  if (source_amount_raw === '' || parseFloat(source_amount_raw) <= 0) { errEl.textContent = 'Enter a positive amount.'; return; }
+  if (!_isPositiveAmount(source_amount_raw))                      { errEl.textContent = 'Enter a positive finite amount.'; return; }
   if (major_category === '')                                     { errEl.textContent = 'Major category is required.'; return; }
   if (minor_category === '')                                     { errEl.textContent = 'Minor category is required.'; return; }
 
-  const source_amount = parseFloat(source_amount_raw);
-  const _targetAmtParsed = (target_amount_raw !== undefined && target_amount_raw !== null && String(target_amount_raw).trim() !== '')
-    ? parseFloat(String(target_amount_raw).trim())
-    : null;
-  const target_amount = (Number.isFinite(_targetAmtParsed) && _targetAmtParsed > 0) ? _targetAmtParsed : source_amount;
-
+  const source_amount = source_amount_raw.trim();
   const sourceAcc     = state.accountMap[source_account];
   const targetAcc     = state.accountMap[target_account];
-  const balanceError  = _checkBalanceRules(tx_type, sourceAcc, isTransfer, source_amount, dateRaw);
+  const targetText = target_amount_raw.trim();
+  if (targetText !== '' && !_isPositiveAmount(targetText)) {
+    errEl.textContent = 'Enter a positive finite target amount.'; return;
+  }
+  if (isTransfer && targetText === '' && sourceAcc?.account_currency_local !== targetAcc?.account_currency_local) {
+    errEl.textContent = 'Target amount is required for a transfer between different currencies.'; return;
+  }
+  const target_amount = targetText === '' ? source_amount : targetText;
+  const balanceError  = _checkBalanceRules(tx_type, sourceAcc, isTransfer, Number(source_amount), dateRaw, tx_timezone);
   if (balanceError) { errEl.textContent = balanceError; return; }
 
   const rule5Error    = _checkRule5(tx_type, sourceAcc, major_category, minor_category);
@@ -1104,7 +1143,7 @@ async function _saveTransaction() {
   showLoading();
   try {
     const res = await ExpenseAPI.createTransaction({
-      tx_date_local: (dateRaw.replace('T', ' ') + ':00').substring(0, 19),
+      tx_date_local: _localInputTimestamp(dateRaw),
       tx_type, source_account, target_account,
       source_amount_local: source_amount, target_amount_local: target_amount,
       major_category, minor_category,
@@ -1118,16 +1157,30 @@ async function _saveTransaction() {
       document.dispatchEvent(new CustomEvent('et:reload'));
     } else {
       console.warn('[transactions] _saveTransaction failed:', res.error);
-      errEl.textContent = 'Error: ' + (res.error !== undefined && res.error !== null && String(res.error).trim() !== '' ? res.error : '[no error code]');
+      errEl.textContent = 'Error: ' + _transactionError(res.error);
       btn.disabled = false; btn.textContent = 'Save';
     }
   } catch (err) {
     console.error('[transactions] _saveTransaction failed:', err);
-    errEl.textContent = 'Connection error.';
+    errEl.textContent = 'Connection lost. The change may have completed. Refresh and check before retrying.';
     btn.disabled = false; btn.textContent = 'Save';
   } finally {
     hideLoading();
   }
+}
+
+function _isPositiveAmount(value) {
+  const text = String(value).trim();
+  return /^[+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(text)
+    && Number.isFinite(Number(text)) && Number(text) > 0;
+}
+
+function _localInputTimestamp(value, original = '') {
+  // The edit control displays minutes. Preserve stored seconds/microseconds
+  // when another field is edited, rather than silently moving the transaction.
+  const local = value.replace('T', ' ');
+  if (original !== '' && local === String(original).replace('T', ' ').slice(0, 16)) return original;
+  return local.length === 16 ? local + ':00' : local;
 }
 
 // ── Transaction view / edit card ──────────────────────────────────────────────
@@ -1269,7 +1322,7 @@ function _renderTxForm(tx, mode) {
       </div>
       <div class="field form-grid-span-2">
         <label>Amount</label>
-        <input type="number" id="txEditAmount" min="0.01" step="0.01" value="${esc(String(Number(tx.tx_amount_local)))}">
+        <input type="number" id="txEditAmount" inputmode="decimal" min="0" step="any" value="${esc(tx.tx_amount_local)}">
       </div>
       <!-- Row 4: Counterparty | Tags -->
       <div class="field form-grid-span-3">
@@ -1307,8 +1360,8 @@ function _renderTxForm(tx, mode) {
       <div class="field form-grid-full">
         <label>Coordinates <span class="optional">optional</span></label>
         <div style="display:flex;gap:8px;align-items:center">
-          <input type="number" id="txEditLatitude"  step="any" placeholder="Latitude"  style="flex:1" min="-90"  max="90"  value="${(tx.user_location_latitude  !== undefined && tx.user_location_latitude  !== null) ? tx.user_location_latitude  : ''}">
-          <input type="number" id="txEditLongitude" step="any" placeholder="Longitude" style="flex:1" min="-180" max="180" value="${(tx.user_location_longitude !== undefined && tx.user_location_longitude !== null) ? tx.user_location_longitude : ''}">
+          <input type="number" id="txEditLatitude"  step="any" placeholder="Latitude"  style="flex:1" min="-90"  max="90"  value="${esc(tx.user_location_latitude ?? '')}">
+          <input type="number" id="txEditLongitude" step="any" placeholder="Longitude" style="flex:1" min="-180" max="180" value="${esc(tx.user_location_longitude ?? '')}">
           <button type="button" id="txEditDetectLocation" class="btn btn-secondary btn-sm">Detect</button>
         </div>
       </div>
@@ -1326,7 +1379,7 @@ function _renderTxForm(tx, mode) {
   </div>`;
 }
 
-function _renderTxDeleteRow(tx) {
+function _renderTxDelete(tx) {
   const _txAccDel   = (state.accountMap[tx.account_id] !== undefined && state.accountMap[tx.account_id] !== null) ? state.accountMap[tx.account_id] : {};
   const _delSibling = (_siblingMap[tx.id] !== undefined && _siblingMap[tx.id] !== null) ? _siblingMap[tx.id] : null;
   const _delSibAcc  = _delSibling !== null ? ((state.accountMap[_delSibling.account_id] !== undefined && state.accountMap[_delSibling.account_id] !== null) ? state.accountMap[_delSibling.account_id] : {}) : null;
@@ -1339,15 +1392,12 @@ function _renderTxDeleteRow(tx) {
     : acctName;
   const delAmt = Number(tx.tx_amount_local);
   const _delCur = (_txAccDel.account_currency_local !== undefined && _txAccDel.account_currency_local !== null) ? _txAccDel.account_currency_local : '';
-  return `<tr>
-    <td colspan="6">
+  return `
       <span class="confirm-text">Delete <strong>${esc(fmtDateTime(tx.tx_date_local))}</strong> — ${esc(accLabel)} — ${esc(fmtNative(delAmt, _delCur))}?</span>
-      <span style="display:inline-flex;gap:8px;margin-left:16px">
+      <div class="row-actions">
         <button class="btn-link danger" data-action="tx-confirm-delete" data-row="${tx._row}">Yes, delete</button>
         <button class="btn-link" data-action="tx-cancel-delete">Cancel</button>
-      </span>
-    </td>
-  </tr>`;
+      </div>`;
 }
 
 function _attachTxEditCascadeEvents() {
@@ -1425,11 +1475,11 @@ async function _saveEdit() {
   if (dateRaw === '')                                            { errEl.textContent = 'Date is required.';           return; }
   if (tx_type === '')                                            { errEl.textContent = 'Type is required.';           return; }
   if (account_id === '')                                         { errEl.textContent = 'Account is required.';        return; }
-  if (tx_amount_raw === '' || parseFloat(tx_amount_raw) <= 0)   { errEl.textContent = 'Enter a positive amount.';    return; }
+  if (!_isPositiveAmount(tx_amount_raw))                          { errEl.textContent = 'Enter a positive finite amount.'; return; }
   if (major_category === '')                                     { errEl.textContent = 'Major category is required.'; return; }
   if (minor_category === '')                                     { errEl.textContent = 'Minor category is required.'; return; }
 
-  const tx_amount_local = parseFloat(tx_amount_raw);
+  const tx_amount_local = tx_amount_raw.trim();
   const oldTx           = state.transactions.find(t => t._row === rowNum);
   const acctEdit   = state.accountMap[account_id];
 
@@ -1437,16 +1487,15 @@ async function _saveEdit() {
   // Undo the old movement only when the account hasn't changed.
   if (acctEdit === undefined || acctEdit === null || !Number.isFinite(Number(acctEdit.current_value_local))) { errEl.textContent = 'Account not found or has no valid balance.'; return; }
   let postRevBal = Number(acctEdit.current_value_local);
-  const trackingStart = String(acctEdit.tracking_start_date_local ?? '').trim();
   if (oldTx && oldTx.record_status !== 'deleted' && String(oldTx.account_id) === String(account_id) &&
-      (trackingStart === '' || new Date(String(oldTx.tx_date_local).replace(' ', 'T')) >= new Date(trackingStart.replace(' ', 'T')))) {
+      balanceMovementAffectsSnapshot(acctEdit, oldTx)) {
     const oldAmt = Number(oldTx.tx_amount_local);
     if (oldTx.tx_type === 'money-in')  postRevBal -= oldAmt;
     if (oldTx.tx_type === 'money-out') postRevBal += oldAmt;
   }
   const acctPR = Object.assign({}, acctEdit, { current_value_local: postRevBal });
 
-  const balanceErrorEdit = _checkBalanceRules(tx_type, acctPR, false, tx_amount_local, dateRaw);
+  const balanceErrorEdit = _checkBalanceRules(tx_type, acctPR, false, Number(tx_amount_local), dateRaw, oldTx?.tx_timezone_local ?? '');
   if (balanceErrorEdit) { errEl.textContent = balanceErrorEdit; return; }
 
   const rule5ErrorEdit = _checkRule5(tx_type, acctEdit, major_category, minor_category);
@@ -1455,7 +1504,7 @@ async function _saveEdit() {
   showLoading();
   try {
     const res = await ExpenseAPI.updateTransaction({
-      row_num: rowNum, tx_date_local: (dateRaw.replace('T', ' ') + ':00').substring(0, 19), tx_type,
+      row_num: rowNum, tx_date_local: _localInputTimestamp(dateRaw, oldTx?.tx_date_local ?? ''), tx_type,
       account_id, tx_amount_local,
       major_category, minor_category, counterparty_name,
       user_location_area, user_location_city, user_location_country,
@@ -1468,11 +1517,11 @@ async function _saveEdit() {
       document.dispatchEvent(new CustomEvent('et:reload'));
     } else {
       console.warn('[transactions] _saveEdit failed:', res.error);
-      errEl.textContent = 'Error: ' + (res.error !== undefined && res.error !== null && String(res.error).trim() !== '' ? res.error : '[no error code]');
+      errEl.textContent = 'Error: ' + _transactionError(res.error);
     }
   } catch (err) {
     console.error('[transactions] _saveEdit failed:', err);
-    errEl.textContent = 'Connection error.';
+    errEl.textContent = 'Connection lost. The change may have completed. Refresh and check before retrying.';
   } finally {
     hideLoading();
   }
@@ -1488,13 +1537,13 @@ async function _confirmDelete(rowNum) {
       document.dispatchEvent(new CustomEvent('et:reload'));
     } else {
       console.warn('[transactions] _confirmDelete failed:', res.error);
-      showMsg('Delete failed: ' + (res.error !== undefined && res.error !== null && String(res.error).trim() !== '' ? res.error : '[no error code]'), 'warn');
+      showMsg('Delete failed: ' + _transactionError(res.error), 'warn');
       state.txDeleteRow = null;
       renderTransactions();
     }
   } catch (err) {
     console.error('[transactions] _confirmDelete failed:', err);
-    showMsg('Connection error.', 'warn');
+    showMsg('Connection lost. The change may have completed. Refresh and check before retrying.', 'warn');
     state.txDeleteRow = null;
     renderTransactions();
   } finally {
@@ -1511,12 +1560,12 @@ async function _restoreTx(rowNum) {
       document.dispatchEvent(new CustomEvent('et:reload'));
     } else {
       console.warn('[transactions] _restoreTx failed:', res.error);
-      showMsg('Restore failed: ' + (res.error !== undefined && res.error !== null && String(res.error).trim() !== '' ? res.error : '[no error code]'), 'warn');
+      showMsg('Restore failed: ' + _transactionError(res.error), 'warn');
       renderTransactions();
     }
   } catch (err) {
     console.error('[transactions] _restoreTx failed:', err);
-    showMsg('Connection error.', 'warn');
+    showMsg('Connection lost. The change may have completed. Refresh and check before retrying.', 'warn');
     renderTransactions();
   } finally {
     hideLoading();
@@ -1524,6 +1573,15 @@ async function _restoreTx(rowNum) {
 }
 
 // ── Suggestions panel ─────────────────────────────────────────────────────────
+
+function _refreshSuggestionsPanel() {
+  // Suggestions arrive independently; replacing the entire section here would
+  // discard an add/edit form the user started while the request was in flight.
+  const panel = el('txSuggestions');
+  if (panel === null) return;
+  panel.innerHTML = _renderSuggestionsPanel();
+  _attachSuggestionEvents();
+}
 
 function _renderSuggestionsPanel() {
   if (state.suggestionsFetching) {
@@ -1550,7 +1608,7 @@ function _renderSuggestionsPanel() {
   const countLabel = visible.length > 0 ? ` (${visible.length})` : '';
 
   const cards = visible.map(s => {
-    const key        = `${s.counterparty_name}|${s.minor_category}`;
+    const key        = _suggestionKey(s);
     const _suggAcc   = (state.accountMap[s.account_id] !== undefined && state.accountMap[s.account_id] !== null) ? state.accountMap[s.account_id] : {};
     const acctName   = (_suggAcc.account_name !== undefined && _suggAcc.account_name !== null) ? _suggAcc.account_name : esc((s.account_id !== undefined && s.account_id !== null) ? s.account_id : '');
     const sym        = getSymbol(s.currency);
@@ -1888,25 +1946,42 @@ function _renderTxImportPanel() {
 }
 
 function _parseTxCsv(text) {
-  const lines = text.split(/\r?\n/).filter(l => l.trim());
-  if (lines.length === 0) return { transactions: [], errors: ['File is empty.'] };
+  const decoded = parseCsvRecords(text);
+  if (decoded.errors.length > 0) return { transactions: [], errors: decoded.errors };
+  const records = decoded.records;
+  if (records.length === 0) return { transactions: [], errors: ['File is empty.'] };
 
-  const headers  = parseCsvRow(lines[0]).map(h => h.toLowerCase().replace(/\s+/g, '_'));
-  const nameToId = {};
-  ((state.accounts !== undefined && state.accounts !== null) ? state.accounts : []).forEach(a => { nameToId[a.account_name.trim().toLowerCase()] = a.id; });
+  const headers = records[0].values.map(h => h.trim().toLowerCase().replace(/\s+/g, '_'));
+  if (headers.includes('') || new Set(headers).size !== headers.length) return { transactions: [], errors: ['CSV has blank or duplicate column headers.'] };
+  const missing = ['tx_date_local', 'tx_type', 'major_category', 'minor_category'].filter(key => !headers.includes(key));
+  if (!headers.includes('source_amount_local') && !headers.includes('target_amount_local')) missing.push('source_amount_local or target_amount_local');
+  if (missing.length > 0) return { transactions: [], errors: ['Missing required headers: ' + missing.join(', ')] };
+  const accounts = state.accounts ?? [];
+  const resolveAccount = (value, rowErrors) => {
+    if (value === undefined || value.trim() === '') return '';
+    const key = value.trim().toLowerCase();
+    let matches = accounts.filter(account => String(account.id).toLowerCase() === key);
+    if (matches.length === 0) matches = accounts.filter(account => String(account.account_name).trim().toLowerCase() === key);
+    if (matches.length !== 1) {
+      rowErrors.push(`${matches.length === 0 ? 'unknown' : 'ambiguous'} account: "${value}"`);
+      return '';
+    }
+    return matches[0].id;
+  };
 
   const transactions = [];
   const errors       = [];
 
-  for (let i = 1; i < lines.length; i++) {
-    const vals = parseCsvRow(lines[i]);
+  for (let i = 1; i < records.length; i++) {
+    const vals = records[i].values;
+    if (vals.length !== headers.length) { errors.push(`Row ${records[i].line}: expected ${headers.length} columns, found ${vals.length}`); continue; }
     const row  = {};
     headers.forEach((h, idx) => { row[h] = (vals[idx] !== undefined && vals[idx] !== null ? vals[idx] : '').trim(); });
 
     const rowErrors = [];
     if (row.tx_date_local === '')    rowErrors.push('missing tx_date_local');
     if (row.tx_type === '')         rowErrors.push('missing tx_type');
-    if (row.source_amount_local === '' && row.target_amount_local === '') rowErrors.push('missing amount (source_amount_local or target_amount_local)');
+    if ((row.source_amount_local ?? '') === '' && (row.target_amount_local ?? '') === '') rowErrors.push('missing amount (source_amount_local or target_amount_local)');
     if (row.major_category === '')  rowErrors.push('missing major_category');
     if (row.minor_category === '')  rowErrors.push('missing minor_category');
     const numericValues = {};
@@ -1918,7 +1993,7 @@ function _parseTxCsv(text) {
         rowErrors.push(`invalid ${field}: expected a finite decimal number without grouping separators`);
         continue;
       }
-      numericValues[field] = Number(value);
+      numericValues[field] = field.endsWith('_amount_local') ? value : Number(value);
     }
     const hasRecordStatus = row.record_status !== undefined && row.record_status !== '';
     if (hasRecordStatus) {
@@ -1930,20 +2005,10 @@ function _parseTxCsv(text) {
       }
     }
 
-    let sourceId = '';
-    let targetId = '';
-    if (row.source_account !== undefined && row.source_account !== null && row.source_account.trim() !== '') {
-      const _srcLookup = nameToId[row.source_account.trim().toLowerCase()];
-      sourceId = (_srcLookup !== undefined && _srcLookup !== null) ? _srcLookup : '';
-      if (sourceId === '') rowErrors.push(`unknown account: "${row.source_account}"`);
-    }
-    if (row.target_account !== undefined && row.target_account !== null && row.target_account.trim() !== '') {
-      const _tgtLookup = nameToId[row.target_account.trim().toLowerCase()];
-      targetId = (_tgtLookup !== undefined && _tgtLookup !== null) ? _tgtLookup : '';
-      if (targetId === '') rowErrors.push(`unknown account: "${row.target_account}"`);
-    }
+    const sourceId = resolveAccount(row.source_account, rowErrors);
+    const targetId = resolveAccount(row.target_account, rowErrors);
 
-    if (rowErrors.length) { errors.push(`Row ${i + 1}: ${rowErrors.join('; ')}`); continue; }
+    if (rowErrors.length) { errors.push(`Row ${records[i].line}: ${rowErrors.join('; ')}`); continue; }
 
     transactions.push({
       id:                      row.id,
@@ -1981,7 +2046,7 @@ function _renderTxImportStatus(parsed) {
     : '';
   if (transactions.length === 0) return errHtml + '<p class="placeholder">No valid rows found.</p>';
   const countMsg = `${transactions.length} transaction${transactions.length !== 1 ? 's' : ''} ready to import` +
-    (errors.length ? ` · ${errors.length} row${errors.length !== 1 ? 's' : ''} skipped` : '');
+    (errors.length ? ` · correct ${errors.length} error${errors.length !== 1 ? 's' : ''} before importing` : '');
   return `${errHtml}<p style="font-size:13px;color:var(--muted);margin:0">${countMsg}</p>`;
 }
 
@@ -2038,8 +2103,7 @@ async function _geocodeImportRows(rows) {
     showGeoProgress();
     try {
       const q   = encodeURIComponent([area, city, country].filter(v => v !== undefined && v !== null && v !== '').join(', '));
-      const res = await fetch(`https://nominatim.openstreetmap.org/search?q=${q}&format=json&limit=1`, { headers: { Accept: 'application/json' } });
-      const data = await res.json();
+      const data = await _locationData(`https://nominatim.openstreetmap.org/search?q=${q}&format=json&limit=1`);
       if (data !== null && data !== undefined && data[0] !== undefined && data[0] !== null) fwdResolved.set(key, { lat: parseFloat(data[0].lat).toFixed(6), lon: parseFloat(data[0].lon).toFixed(6) });
     } catch (_) {}
     if (done < total) await new Promise(r => setTimeout(r, 1050));
@@ -2049,8 +2113,7 @@ async function _geocodeImportRows(rows) {
     done++;
     showGeoProgress();
     try {
-      const res = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}&format=json`, { headers: { Accept: 'application/json' } });
-      const data = await res.json();
+      const data = await _locationData(`https://nominatim.openstreetmap.org/reverse?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}&format=json`);
       if (data !== null && data !== undefined && data.address !== undefined && data.address !== null) {
         const addr = data.address;
         const _revArea = (addr.suburb !== undefined && addr.suburb !== null) ? addr.suburb
@@ -2087,126 +2150,108 @@ async function _geocodeImportRows(rows) {
   });
 }
 
-async function _submitTxImport(transactions) {
-  const btn    = el('txImportConfirm');
-  const errEl  = el('txImportError');
+function _updateTxImportControls() {
+  const button = el('txImportConfirm');
+  if (button !== null) {
+    button.disabled = _txImportBusy || _txImportParsed === null;
+    button.textContent = _txImportBusy ? 'Importing…' : _txImportRetry && _txImportParsed !== null ? 'Retry failed rows' : 'Import';
+  }
+  for (const id of ['txImportFile', 'txImportCancel', 'txImportBtn', 'txAddBtn']) {
+    const control = el(id);
+    if (control !== null) control.disabled = _txImportBusy;
+  }
+}
+
+async function _readTxImport(file) {
+  if (_txImportBusy) return;
+  const sequence = ++_txImportReadSequence;
+  _txImportParsed = null;
+  _txImportResult = null;
+  _txImportRetry = false;
   const status = el('txImportStatus');
-  if (btn !== null && btn !== undefined)   { btn.disabled = true; btn.textContent = 'Importing…'; }
-  if (errEl !== null && errEl !== undefined) errEl.textContent = '';
-
-  // Preserve every row and its ID; the backend owns upsert and duplicate rules.
-  const payload = transactions.map(tx => {
-    const clean = Object.assign({}, tx);
-    delete clean._src_name;
-    delete clean._tgt_name;
-    return clean;
-  });
-
-  const chunks = [];
-  for (let i = 0; i < payload.length; i += _TX_IMPORT_CHUNK)
-    chunks.push(payload.slice(i, i + _TX_IMPORT_CHUNK));
-
-  let totalCreated = 0;
-  let totalUpdated = 0;
-  let totalFailed  = 0;
-  let allResults   = [];
-
-  const setProgress = (chunkIdx) => {
-    if (status === null || status === undefined) return;
-    const done = Math.min(chunkIdx * _TX_IMPORT_CHUNK, payload.length);
-    const pct  = payload.length > 0 ? Math.round((done / payload.length) * 100) : 0;
-    status.innerHTML = `
-      <p style="font-size:13px;color:var(--muted);margin:0 0 6px">
-        Importing… ${done} / ${payload.length} rows (chunk ${chunkIdx} of ${chunks.length})
-      </p>
-      <div style="height:4px;border-radius:2px;background:var(--border)">
-        <div style="height:100%;border-radius:2px;background:var(--ember);width:${pct}%;transition:width .3s"></div>
-      </div>`;
-  };
-
-  showLoading();
+  if (status !== null) status.innerHTML = '';
+  _updateTxImportControls();
+  if (file === undefined) return;
   try {
-    for (let c = 0; c < chunks.length; c++) {
-      setProgress(c);
-      const res = await ExpenseAPI.createTransactionsBulk({ transactions: chunks[c] });
-
-      if (!res.ok && (res.results === undefined || res.results === null)) {
-        if (errEl !== null && errEl !== undefined) errEl.textContent = 'Error on chunk ' + (c + 1) + ': ' + ((res.error !== undefined && res.error !== null && String(res.error).trim() !== '') ? res.error : '[no error code]');
-        if (btn !== null && btn !== undefined)   { btn.disabled = false; btn.textContent = 'Import'; }
-        return;
-      }
-
-      if (res.created !== undefined && res.created !== null) totalCreated += res.created;
-      if (res.updated !== undefined && res.updated !== null) totalUpdated += res.updated;
-      if (res.failed  !== undefined && res.failed  !== null) totalFailed  += res.failed;
-      if (res.results !== undefined && res.results !== null) allResults    = allResults.concat(res.results);
-    }
-
-    // All chunks done
-    if (totalFailed === 0) {
-      _txImportParsed    = null;
-      _txImportResult    = null;
-      state.txImportOpen = false;
-      const okParts = [];
-      if (totalCreated > 0) okParts.push(`${totalCreated} created`);
-      if (totalUpdated > 0) okParts.push(`${totalUpdated} updated`);
-      showMsg(okParts.length > 0 ? okParts.join(' · ') : 'Nothing to import.');
-      document.dispatchEvent(new CustomEvent('et:reload'));
-    } else {
-      const enriched   = allResults.map((r, i) => ({ ...r, tx: (payload[i] !== undefined && payload[i] !== null) ? payload[i] : {} }));
-      const failedOnly = enriched.filter(r => !r.ok);
-
-      const resultRows = failedOnly.map(r => {
-        const tx    = r.tx;
-        const _txAcctId = (tx.account_id !== undefined && tx.account_id !== null && String(tx.account_id).trim() !== '') ? tx.account_id
-          : ((tx.source_account !== undefined && tx.source_account !== null && String(tx.source_account).trim() !== '') ? tx.source_account : '');
-        const _txCatStr = (tx.major_category !== undefined && tx.major_category !== null && String(tx.major_category).trim() !== '')
-          ? ((tx.minor_category !== undefined && tx.minor_category !== null && String(tx.minor_category).trim() !== '') ? `${tx.major_category} / ${tx.minor_category}` : tx.major_category)
-          : '';
-        const parts = [
-          (tx.source_amount_local !== undefined && tx.source_amount_local !== null && tx.source_amount_local !== '') ? String(tx.source_amount_local) : '',
-          _txAcctId,
-          _txCatStr,
-        ].filter(v => v !== undefined && v !== null && v !== '');
-        const _rDate  = (tx.tx_date_local !== undefined && tx.tx_date_local !== null) ? String(tx.tx_date_local).slice(0, 10) : '';
-        const _rDesc  = (tx.description !== undefined && tx.description !== null && String(tx.description).trim() !== '') ? String(tx.description)
-          : ((tx.counterparty_name !== undefined && tx.counterparty_name !== null) ? String(tx.counterparty_name) : '');
-        const _rLabel = (_rDate + ' ' + _rDesc).trim();
-        const _rError = (r.error !== undefined && r.error !== null && String(r.error).trim() !== '') ? r.error : '[no error code]';
-        return `<tr>
-          <td style="font-size:12px">
-            <div style="color:var(--ink);font-family:var(--mono)">${esc(_rLabel)}</div>
-            ${parts.length ? `<div style="color:var(--muted);font-size:11px;margin-top:2px">${esc(parts.join(' · '))}</div>` : ''}
-          </td>
-          <td><span class="badge badge-et-out" style="font-family:var(--mono);font-size:11px">${esc(_rError)}</span></td>
-        </tr>`;
-      }).join('');
-
-      const summary = [
-        `${totalCreated} created`,
-        `${totalUpdated} updated`,
-        `<span style="color:var(--ember)">${totalFailed} failed</span>`,
-      ].join(' · ');
-
-      _txImportResult = `
-        <div style="margin-bottom:8px;font-size:13px">${summary}</div>
-        <div class="table-wrap" style="margin-bottom:8px">
-          <table>
-            <thead><tr><th>Failed transaction</th><th>Error</th></tr></thead>
-            <tbody>${resultRows}</tbody>
-          </table>
-        </div>`;
-      if (status !== null && status !== undefined) status.innerHTML = _txImportResult;
-      _txImportParsed = null;
-      if (btn !== null && btn !== undefined) { btn.disabled = true; btn.textContent = 'Import'; }
-      if (totalCreated > 0 || totalUpdated > 0) document.dispatchEvent(new CustomEvent('et:reload'));
-      showMsg(`${totalCreated} created · ${totalUpdated} updated · ${totalFailed} failed`, 'warn');
-    }
-  } catch (err) {
-    console.error('[transactions] _submitTxImport failed:', err);
-    if (errEl !== null && errEl !== undefined) errEl.textContent = 'Connection error.';
-    if (btn !== null && btn !== undefined)   { btn.disabled = false; btn.textContent = 'Import'; }
+    const text = await file.text();
+    if (sequence !== _txImportReadSequence || !state.txImportOpen) return;
+    const parsed = _parseTxCsv(text);
+    _txImportParsed = parsed.errors.length === 0 && parsed.transactions.length > 0 ? parsed.transactions : null;
+    _txImportResult = _renderTxImportStatus(parsed);
+    el('txImportStatus').innerHTML = _txImportResult;
+  } catch (_) {
+    if (sequence !== _txImportReadSequence || !state.txImportOpen) return;
+    _txImportResult = '<p class="pin-error">Could not read this CSV. Choose the file again.</p>';
+    el('txImportStatus').innerHTML = _txImportResult;
   } finally {
+    if (sequence === _txImportReadSequence) _updateTxImportControls();
+  }
+}
+
+async function _submitTxImport(transactions, geocode = false) {
+  if (_txImportBusy || transactions.length === 0) return;
+  _txImportBusy = true;
+  _updateTxImportControls();
+  showLoading();
+  let changed = false;
+  let uncertain = false;
+  let created = 0;
+  let updated = 0;
+  const outcomes = [];
+  try {
+    const prepared = geocode ? await _geocodeImportRows(transactions) : transactions;
+    const payload = prepared.map(tx => {
+      const clean = { ...tx };
+      delete clean._src_name;
+      delete clean._tgt_name;
+      return clean;
+    });
+    for (let offset = 0; offset < payload.length; offset += _TX_IMPORT_CHUNK) {
+      const chunk = payload.slice(offset, offset + _TX_IMPORT_CHUNK);
+      const progress = el('txImportStatus');
+      if (progress !== null) progress.textContent = `Importing ${offset} / ${payload.length} rows…`;
+      const response = await ExpenseAPI.createTransactionsBulk({ transactions: chunk });
+      if (!Array.isArray(response?.results) || response.results.length !== chunk.length
+          || !response.results.every(result => typeof result?.ok === 'boolean')) {
+        uncertain = true;
+        throw new Error(response?.error ?? 'incomplete_import_response');
+      }
+      response.results.forEach((result, index) => {
+        outcomes.push({ ...result, tx: prepared[offset + index] });
+        if (result.ok) {
+          changed = true;
+          if (result.action === 'created') created++;
+          else updated++;
+        }
+      });
+    }
+    const failures = outcomes.filter(result => !result.ok);
+    if (failures.length === 0) {
+      _txImportParsed = null;
+      _txImportResult = null;
+      state.txImportOpen = false;
+      showMsg(`${created} created · ${updated} updated`);
+    } else {
+      _txImportParsed = failures.map(result => result.tx);
+      _txImportRetry = true;
+      _txImportResult = `<p>${created} created · ${updated} updated · ${failures.length} failed</p>
+        <div class="table-wrap"><table><thead><tr><th>Failed transaction</th><th>Reason</th></tr></thead><tbody>${failures.map(result =>
+          `<tr><td>${esc([result.tx.tx_date_local, result.tx.counterparty_name, result.tx.description].filter(value => value !== undefined && value !== '').join(' · '))}</td><td>${esc(_transactionError(result.error))}</td></tr>`
+        ).join('')}</tbody></table></div>`;
+      showMsg(`${failures.length} transaction rows failed. Review their reasons and retry only those rows.`, 'warn');
+    }
+  } catch (error) {
+    uncertain = true;
+    _txImportParsed = null;
+    const message = `Import stopped: ${error?.message ?? 'connection_error'}. Some rows may have been saved. Refresh and check before choosing the file again.`;
+    _txImportResult = `<p class="pin-error" role="alert">${esc(message)}</p>`;
+    showMsg(message, 'warn');
+  } finally {
+    _txImportBusy = false;
+    const status = el('txImportStatus');
+    if (status !== null && _txImportResult !== null) status.innerHTML = _txImportResult;
+    _updateTxImportControls();
+    if (changed || uncertain) document.dispatchEvent(new CustomEvent('et:reload'));
     hideLoading();
   }
 }
@@ -2214,7 +2259,7 @@ async function _submitTxImport(transactions) {
 function _attachSuggestionEvents() {
   el('suggestionsToggle').addEventListener('click', () => {
     state.suggestionsOpen = !state.suggestionsOpen;
-    renderTransactions();
+    _refreshSuggestionsPanel();
   });
 }
 

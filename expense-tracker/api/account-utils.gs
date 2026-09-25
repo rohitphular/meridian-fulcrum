@@ -40,3 +40,8 @@ function accountLocalDateTimeKey(value) {
     + String(hour).padStart(2, '0') + ':' + String(minute).padStart(2, '0') + ':' + String(second).padStart(2, '0')
     + '.' + (parts[7] === undefined ? '' : parts[7]).padEnd(6, '0');
 }
+
+function accountTimezone(value) {
+  if (value === undefined || value === null || String(value).trim() === '') return '';
+  return ianaDateFormatter(String(value).trim()).resolvedOptions().timeZone;
+}

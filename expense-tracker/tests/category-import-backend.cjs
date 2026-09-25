@@ -118,7 +118,7 @@ test('invalid UUID, duplicate input IDs, bad lifecycle and malformed booleans re
 
 test('catalog is read once for the whole batch, independent of row count', () => {
   const types = typeSheet(); const { ctx } = runtime(types);
-  const categories = Array.from({ length: 100 }, (_, index) => category({ id: `e0000000-0000-4000-8000-${String(index).padStart(12, '0')}` }));
+  const categories = Array.from({ length: 100 }, (_, index) => category({ id: `e0000000-0000-4000-8000-${String(index).padStart(12, '0')}`, minor_category_label: 'Fund return ' + index }));
   const result = ctx.createCategoriesBulk({ categories }); assert.equal(result.created, 100); assert.equal(types.reads, 1);
 });
 
@@ -135,7 +135,7 @@ test('failed writes retain per-row diagnostics and a retry matches successfully 
   const { ctx, table } = runtime(); ctx.createCategoriesBulk({ categories: [category()] });
   const original = table().appendRow;
   table().appendRow = () => { throw new Error('transient'); };
-  const rows = [category(), category({ id: OTHER_ID })];
+  const rows = [category(), category({ id: OTHER_ID, minor_category_label: 'Other return' })];
   const result = ctx.createCategoriesBulk({ categories: rows });
   assert.equal(result.updated, 1); assert.equal(result.failed, 1); assert.equal(result.results[1].error, 'category_write_failed');
   table().appendRow = original;
@@ -143,3 +143,98 @@ test('failed writes retain per-row diagnostics and a retry matches successfully 
 });
 
 module.exports = { runtime, Sheet, typeSheet };
+
+test('category natural keys are unique across imports, existing rows and deleted history', () => {
+  for (const status of ['active', 'inactive', 'deleted']) {
+    const { ctx, table } = runtime();
+    assert.equal(ctx.createCategoriesBulk({ categories: [category({ record_status: status })] }).ok, true);
+    const before = JSON.stringify(table().rows), writes = table().writes;
+    const result = ctx.createCategoriesBulk({ categories: [category({ id: OTHER_ID })] });
+    assert.equal(result.results[0].error, 'duplicate_category');
+    assert.equal(JSON.stringify(table().rows), before);
+    assert.equal(table().writes, writes);
+  }
+  const { ctx, table } = runtime();
+  const result = ctx.createCategoriesBulk({ categories: [category(), category({ id: OTHER_ID })] });
+  assert.equal(result.created, 1);
+  assert.equal(result.results[1].error, 'duplicate_category');
+  assert.equal(table().getLastRow(), 2);
+});
+
+test('existing duplicate category keys fail preflight without any rewrite', () => {
+  const { ctx, table } = runtime();
+  assert.equal(ctx.createCategoriesBulk({ categories: [category()] }).ok, true);
+  const duplicate = table().rows[1].slice(); duplicate[ctx.catColIndex('id')] = OTHER_ID;
+  table().rows.push(duplicate);
+  const before = JSON.stringify(table().rows), writes = table().writes;
+  assert.equal(ctx.createCategoriesBulk({ categories: [category({ description: 'new' })] }).error, 'duplicate_existing_category_key');
+  assert.equal(JSON.stringify(table().rows), before); assert.equal(table().writes, writes);
+});
+
+test('interactive category creation validates UUID and never appends a reused identity', () => {
+  const { ctx, table } = runtime();
+  assert.equal(ctx.createCategory(category({ id: 'invalid' })).error, 'invalid_id');
+  assert.equal(table(), undefined);
+  assert.equal(ctx.createCategory(category({ id: ID.toUpperCase() })).ok, true);
+  const before = JSON.stringify(table().rows), writes = table().writes;
+  assert.equal(ctx.createCategory(category({ minor_category_label: 'Different' })).error, 'category_id_exists');
+  assert.equal(JSON.stringify(table().rows), before); assert.equal(table().writes, writes);
+});
+
+test('category key dependency checks cannot be bypassed with force and never create missing tabs', () => {
+  const { ctx, sheets, table } = runtime();
+  ctx.createCategoriesBulk({ categories: [category()] });
+  sheets.push(new Sheet('transaction_master', [['tx_type', 'major_category', 'minor_category'], ['money-in', 'portfolio', 'fund-return']]));
+  const before = JSON.stringify(table().rows), writes = table().writes;
+  const result = ctx.updateCategory({ ...category({ minor_category_label: 'Renamed' }), row_num: 2, force: true });
+  assert.equal(result.error, 'category_key_change_has_dependents');
+  assert.equal(result.count, 1);
+  assert.equal(JSON.stringify(table().rows), before); assert.equal(table().writes, writes);
+  assert.equal(sheets.some(sheet => sheet.name === 'subscription_master'), false);
+});
+
+test('interactive category boolean values follow the same parsing as imports', () => {
+  const { ctx, table } = runtime();
+  assert.equal(ctx.createCategory(category({ target_account_mandatory: 'yes' })).error, 'invalid_boolean');
+  assert.equal(table(), undefined);
+  assert.equal(ctx.createCategory(category({ target_account_mandatory: ' TRUE ', is_subscription_eligible: 'TRUE' })).ok, true);
+  assert.equal(stored(ctx, table()).target_account_mandatory, true);
+  assert.equal(stored(ctx, table()).is_subscription_eligible, true);
+  assert.equal(ctx.updateCategory({ ...category({ target_account_mandatory: 'no' }), row_num: 2 }).error, 'invalid_boolean');
+});
+
+test('category dependency failures redact caught details and preserve the source row', () => {
+  const { ctx, table } = runtime();
+  ctx.createCategoriesBulk({ categories: [category()] });
+  const before = JSON.stringify(table().rows), writes = table().writes, logs = [];
+  ctx.console.error = (...args) => logs.push(args.join(' '));
+  ctx._countCategoryKeyReferences = () => { throw new Error('private transaction detail'); };
+  const result = ctx.updateCategory({ ...category({ minor_category_label: 'Renamed' }), row_num: 2 });
+  assert.equal(result.error, 'fk_scan_error');
+  assert.equal(JSON.stringify(logs).includes('private transaction detail'), false);
+  assert.equal(JSON.stringify(table().rows), before); assert.equal(table().writes, writes);
+});
+
+test('direct category business edits queue normal sync and revision without touching business cells', () => {
+  const { ctx, table } = runtime();
+  ctx.createCategoriesBulk({ categories: [category()] });
+  const sheet = table();
+  for (const field of ['description', 'record_status', 'id']) {
+    sheet.rows[1][ctx.catColIndex('sync_status')] = 'in-sync';
+    sheet.rows[1][ctx.catColIndex('sync_date')] = 'old-sync';
+    sheet.rows[1][ctx.catColIndex('sync_notes')] = 'old-note';
+    sheet.rows[1][ctx.catColIndex('updated_at')] = 'old-revision';
+    const business = sheet.rows[1].slice(0, ctx.catColIndex('sync_status'));
+    const event = { range: { getSheet: () => sheet, getRow: () => 2, getNumRows: () => 1,
+      getColumn: () => ctx.catColIndex(field) + 1, getNumColumns: () => 1 } };
+    ctx.onEdit(event);
+    assert.deepEqual(sheet.rows[1].slice(0, ctx.catColIndex('sync_status')), business);
+    assert.equal(sheet.rows[1][ctx.catColIndex('sync_status')], 'update-pending');
+    assert.equal(sheet.rows[1][ctx.catColIndex('sync_date')], '');
+    assert.equal(sheet.rows[1][ctx.catColIndex('sync_notes')], '');
+    assert.notEqual(sheet.rows[1][ctx.catColIndex('updated_at')], 'old-revision');
+  }
+  const writes = sheet.writes;
+  assert.equal(ctx.markCategoryEditPending({ range: { getSheet: () => sheet, getColumn: () => ctx.catColIndex('sync_status') + 1, getNumColumns: () => 3 } }), true);
+  assert.equal(sheet.writes, writes);
+});

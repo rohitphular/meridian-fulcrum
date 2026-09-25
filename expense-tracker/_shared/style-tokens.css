@@ -31,6 +31,8 @@
   --text-xl:   18px;    /* section headings (h2) */
   --text-2xl:  20px;    /* page headings (h1) */
   --text-3xl:  22px;    /* summary card values */
+  --text-input-mobile: 16px; /* readable controls without mobile focus zoom */
+  --touch-target: 44px;
 }
 
 [data-theme="dark"] {

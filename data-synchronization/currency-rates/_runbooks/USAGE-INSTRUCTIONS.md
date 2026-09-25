@@ -33,6 +33,8 @@ A `.env.{env}` file must exist under `meridian-fulcrum/infrastructure/` — `.en
 | `CR_HISTORICAL_CSV_DIR` | Absolute path to local CSV files (historical mode only) |
 | `MERIDIAN_LOG_ROOT` | Root directory for log output |
 
+The launcher exports port `5432` when `FULCRUM_DB_PORT` is unset, so configuration checks, migrations and the job use the same value. Explicitly blank or invalid ports fail validation. When invoking `py-db-migrate` directly, export the port first because its TOML environment interpolation requires the variable.
+
 ### 3. PostgreSQL
 
 The target database must be running and reachable with the credentials above before the job starts.
@@ -74,7 +76,7 @@ make run ENV=dev MODE=daily
 
 ## Daily mode
 
-Fetches the past 365 days of fiat and crypto rates from Yahoo Finance and upserts them into the database. Runs migrations first.
+Fetches 365 calendar dates ending on the current UTC date from Yahoo Finance and upserts them into the database. Validates the selected mode/configuration before migrations. A single gold snapshot anchors all conversions in a daily run; provider exceptions/empty responses retry up to three attempts.
 
 **When to run:** Nightly, after markets close.
 
@@ -132,6 +134,11 @@ Logs are written to `$MERIDIAN_LOG_ROOT`. Check the source warnings and final st
 | `KeyError: 'CR_HISTORICAL_CSV_DIR'` | Running historical mode without that var set | Add `CR_HISTORICAL_CSV_DIR=/path/to/csvs` to the selected infrastructure env file |
 | `currency=XYZ no_data` warnings | Yahoo Finance returned no data for that ticker/date | Inspect provider availability; a wholly missing tracked series fails and rolls back the job |
 | No crypto rates in DB | Yahoo Finance `GC=F` or crypto ticker temporarily unavailable | Check logs; re-run when market data is available |
+| `missing_environment_variable:<NAME>` or `invalid_database_port` | Missing/blank setting or port outside 1–65535 | Correct the named setting in the selected infrastructure env file; startup stops before migration |
+| `historical_csv_directory_missing_or_not_absolute` | CSV path is relative or does not exist | Set `CR_HISTORICAL_CSV_DIR` to an existing absolute directory |
+| `currency_rates_job_already_running` | Another daily/historical run holds the job transaction lock | Let that run finish, then retry; do not force concurrent writes |
+| `duplicate_headers` / `conflicting_date` | CSV headers or repeated source dates are ambiguous | Correct/re-download that file; no rates from it are accepted |
+| Migration 0006 fails `chk_cr_rate_finite` or `chk_cr_xau_identity` | Existing database rates violate the finite-value or XAU=1 contract | Inspect and reconcile those existing rows explicitly, then rerun; migration does not alter financial history |
 
 Offline validation: `make lint` and `make test`. PostgreSQL integration tests use a disposable cluster and skip when local server binaries are absent.
 

@@ -18,7 +18,7 @@ There is no `adjustAccountBalance` function — it was removed in Round 5. The `
 
 | Type | Stored `opening_value_local` | UI display of `current_value_local` |
 |---|---|---|
-| `asset`, `investment` | Positive | As-is |
+| `asset`, `investment` | Signed value | As-is |
 | `liability` | **Negative** (double-entry convention) | `abs(current_value_local)` labelled "owed" |
 
 The user always inputs and sees positive numbers for liabilities. The store negates on write; `current_value_local` naturally stays negative as liabilities are debited (money-out).
@@ -35,6 +35,8 @@ for each non-deleted row with valid date, positive finite amount and known accou
 ```
 
 The opening value is the snapshot at `tracking_start_date_local`, when set. The cutoff is inclusive: a movement exactly at the tracking timestamp counts. A blank cutoff retains all-history behavior. `account_opening_date_local` records the real-world opening date and is not the balance cutoff. Historical insight replay activates the opening snapshot at the tracking timestamp; it converts openings and movements using the same display currency.
+
+When the account supplies `local_timezone`, the cutoff is resolved in that zone and each movement is resolved in `tx_timezone_local` (blank transaction zone retains the legacy `Europe/London` default). The comparison uses actual UTC instants, including fractional seconds. For an account without a timezone, both values retain the documented wall-clock comparison. An invalid or ambiguous account snapshot fails the balance read rather than replaying all history. Native Sheet date cells are interpreted from their displayed wall time.
 
 Each transaction row touches exactly **one** account via `account_id`. A transfer between two accounts is two rows, each accumulating into its own account's net independently.
 
@@ -83,6 +85,8 @@ Setting `record_status = deleted` causes `_buildAccountNetMap` to skip the row (
 The computed model is naturally idempotent for reads — `listAccounts` always derives the correct balance from the current state of the `transaction_master` sheet. Mutations to transactions must still avoid double-submission; writing the same transaction row twice would cause its amount to be counted twice in `net`.
 
 ## Concurrency
+
+The UI sends the expected record UUID and source `updated_at` alongside each row-number mutation. A moved/replaced row or a newer edit to the same UUID returns `stale_record` before modification; reload the data and retry. Sync acknowledgements do not change this source revision. Legacy API callers that omit `expected_id` / `expected_updated_at` retain their previous behavior.
 
 Single-user model. POST mutations are serialized with a script lock; contention returns `busy_retry`. Reads and external spreadsheet edits can still overlap. Google Sheets does not provide a transaction spanning multiple requests or sheets.
 

@@ -38,6 +38,8 @@ function validateAccountCreate(body) {
       && String(body.tracking_start_date_local).trim() !== ''
       && accountLocalDateTimeKey(body.tracking_start_date_local) === null)
     return { ok: false, error: 'invalid_tracking_start_date_local' };
+  const timeValidation = validateAccountWallTimes(body);
+  if (timeValidation.ok === false) return timeValidation;
 
   // record_status is optional on create (defaults to 'active'); when supplied (e.g. seed
   // import preserving a closed/inactive account) it must be a valid status — never coerced.
@@ -62,7 +64,7 @@ function validateAccountCreate(body) {
   return { ok: true };
 }
 
-function validateAccountUpdate(body, currentType, currentOpeningDate) {
+function validateAccountUpdate(body, currentType, currentOpeningDate, currentTimezone) {
   if (body.row_num === undefined || body.row_num === null) return { ok: false, error: 'missing_row_num' };
   if (body.account_name === undefined || body.account_name === null || String(body.account_name).trim() === '') return { ok: false, error: 'missing_account_name' };
 
@@ -93,7 +95,60 @@ function validateAccountUpdate(body, currentType, currentOpeningDate) {
     const closingDate = accountLocalDateTimeKey(body.account_closing_date_local);
     const openingDate = accountLocalDateTimeKey(currentOpeningDate);
     if (closingDate === null || (openingDate !== null && closingDate < openingDate)) return { ok: false, error: 'invalid_account_closing_date_local' };
+    const timeValidation = validateAccountWallTimes({ account_closing_date_local: body.account_closing_date_local, local_timezone: currentTimezone });
+    if (timeValidation.ok === false) return timeValidation;
   }
 
   return { ok: true };
+}
+
+function validateAccountWallTimes(body) {
+  const rawZone = body.local_timezone;
+  if (rawZone !== undefined && rawZone !== null && typeof rawZone !== 'string') return { ok: false, error: 'invalid_local_timezone' };
+  const zone = rawZone === undefined || rawZone === null ? '' : rawZone.trim();
+  if (zone === '') return { ok: true }; // account ETL retains unzoned local dates
+  try { ianaDateFormatter(zone).format(new Date()); }
+  catch (_) { return { ok: false, error: 'invalid_local_timezone' }; }
+  for (const field of ['account_opening_date_local', 'account_closing_date_local', 'tracking_start_date_local']) {
+    if (body[field] === undefined || body[field] === null || String(body[field]).trim() === '') continue;
+    const key = accountLocalDateTimeKey(body[field]);
+    if (key === null) return { ok: false, error: 'invalid_' + field };
+    const error = localWallTimeError(key, zone);
+    if (error !== null) return { ok: false, error: error, field: field };
+  }
+  return { ok: true };
+}
+
+// Account currency/opening semantics are immutable in PostgreSQL as well as
+// the interactive form. CSV replacement must not bypass that source contract.
+function preserveAccountImmutableFields(incoming, candidate, existing) {
+  const fields = ['legal_entity_name', 'type', 'local_timezone', 'account_opening_date_local',
+    'tracking_start_date_local', 'opening_value_local', 'account_currency_local'];
+  function text(value) { return value === undefined || value === null ? '' : String(value).trim(); }
+  function comparable(field, value) {
+    if (field === 'opening_value_local') return decimalValueKey(value);
+    if (field === 'account_opening_date_local' || field === 'tracking_start_date_local')
+      return text(value) === '' ? '' : accountLocalDateTimeKey(sheetLocalDateTimeText(value));
+    if (field === 'local_timezone') return accountTimezone(value);
+    if (field === 'account_currency_local') return text(value).toUpperCase();
+    return text(value);
+  }
+  for (const field of fields) {
+    const index = acctColIndex(field);
+    if (incoming[field] === undefined) { candidate[index] = existing[index]; continue; }
+    // The ledger permits initializing its previously absent tracking snapshot once.
+    if (field === 'tracking_start_date_local' && text(existing[index]) === '') continue;
+    try {
+      if (comparable(field, candidate[index]) !== comparable(field, existing[index]))
+        return { ok: false, error: 'field_not_editable', field: field };
+    } catch (_) { return { ok: false, error: 'invalid_existing_account_field', field: field }; }
+    // Equality is semantic; preserve exact stored values so ETL immutable checks
+    // never see an alias/casing rewrite or artificial change in decimal precision.
+    candidate[index] = existing[index];
+  }
+  const wallTimes = { local_timezone: candidate[acctColIndex('local_timezone')] };
+  ['account_opening_date_local', 'account_closing_date_local', 'tracking_start_date_local'].forEach(function(field) {
+    wallTimes[field] = sheetLocalDateTimeText(candidate[acctColIndex(field)]);
+  });
+  return validateAccountWallTimes(wallTimes);
 }

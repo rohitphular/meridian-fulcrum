@@ -69,13 +69,13 @@ def test_legacy_blank_transaction_timezone_uses_documented_london_default(empty_
     assert typed["tx_date_time_base"].hour == 9
 
 
-@pytest.mark.parametrize("amount", ["NaN", "sNaN", "Infinity", "-Infinity", "0", "-1", "garbage"])
+@pytest.mark.parametrize("amount", ["NaN", "sNaN", "Infinity", "-Infinity", "0", "-1", "garbage", "1_000", "١٢.٥"])
 def test_bad_transaction_amounts_fail(amount: str) -> None:
     with pytest.raises(ValueError):
         transactions.transform(transaction_row(tx_amount_local=amount))
 
 
-@pytest.mark.parametrize("latitude, longitude", [("91", "0"), ("0", "181"), ("0", ""), ("NaN", "0"), ("0", "Infinity")])
+@pytest.mark.parametrize("latitude, longitude", [("91", "0"), ("0", "181"), ("0", ""), ("NaN", "0"), ("0", "Infinity"), ("1_0", "0"), ("0", "١٢")])
 def test_invalid_coordinates_fail_before_sql(latitude: str, longitude: str) -> None:
     with pytest.raises(ValueError):
         transactions.transform(transaction_row(user_location_latitude=latitude, user_location_longitude=longitude))
@@ -155,7 +155,10 @@ def test_xau_shortcut_checks_metadata() -> None:
         database_transactions._resolve_amount(conn, Decimal("1"), "XAU", date(2026, 9, 22), {"XAU": 6})
 
 
-@pytest.mark.parametrize("raw", ["Alice:NaN;Bob:100", "Alice:Infinity", "Alice:99.9999", "Alice:50;Alice:50", "Alice;Bob:50", "Alice;", "Alice:0;Bob:100"])
+@pytest.mark.parametrize(
+    "raw",
+    ["Alice:NaN;Bob:100", "Alice:Infinity", "Alice:99.9999", "Alice:50;Alice:50", "Alice;Bob:50", "Alice;", "Alice:0;Bob:100", "Alice:5_0;Bob:50", "Alice:٥٠;Bob:50", "Alice:5e١;Bob:50"],
+)
 def test_invalid_beneficiary_allocations_fail(raw: str) -> None:
     with pytest.raises(ValueError):
         database_transactions._parse_beneficiaries(raw)

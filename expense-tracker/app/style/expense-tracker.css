@@ -254,6 +254,7 @@ h2 { font-size: var(--text-xl); font-weight: 700; margin: 0; }
 .form-grid-span-2 { grid-column: span 2; }
 .form-grid-span-3 { grid-column: span 3; }
 .form-grid-span-4 { grid-column: span 4; }
+.field { min-width: 0; }
 
 .field label {
   display: block;
@@ -266,6 +267,7 @@ h2 { font-size: var(--text-xl); font-weight: 700; margin: 0; }
   font-family: var(--grotesk); font-size: var(--text-md); color: var(--ink);
   border: 1px solid var(--hair-strong); border-radius: 9px;
   padding: 9px 11px; width: 100%; background: var(--panel); outline: none;
+  min-width: 0;
   transition: border-color .15s;
 }
 .field input:focus, .field select:focus, .field textarea:focus { border-color: var(--ember); }
@@ -1050,6 +1052,21 @@ td.td-keywords { max-width: 220px; }
 
 /* ── responsive ── */
 @media (max-width: 640px) {
+  .header-controls, .sec-head, .pagination { flex-wrap: wrap; }
+  .app-brand { flex-basis: 100%; }
+  .header-controls { width: 100%; max-width: 100%; }
+  .quote-currency-wrap { min-width: 0; flex: 1; }
+  .quote-select { max-width: 100%; }
+  .field input, .field select, .field textarea, .quote-select, .per-page-select {
+    font-size: var(--text-input-mobile);
+    min-height: var(--touch-target);
+  }
+  .btn, .btn-link, .tx-menu-trigger, .tx-menu-item, .tab-btn, .theme-btn, .range-btn, .banner-close {
+    min-height: var(--touch-target);
+    min-width: var(--touch-target);
+  }
+  .record-confirm-card { overflow-wrap: anywhere; }
+  .record-confirm-card .row-actions { display: flex; flex-wrap: wrap; }
   .app-header-inner { padding: 10px 16px 0; flex-wrap: wrap; }
   .notices-area     { padding: 0 16px; }
   .tab-nav          { padding: 0 12px; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
@@ -1072,24 +1089,20 @@ td.td-keywords { max-width: 220px; }
   .summary-grid     { grid-template-columns: 1fr 1fr; }
   h1                { font-size: var(--text-xl); }
 
-  /* transactions: hide table, show cards (unless a row is active) */
+  /* Keep confirmation actions in cards on mobile, including blocked deletes. */
   .tx-table-wrap              { display: none; }
-  .tx-table-wrap.tx-has-active { display: block; }
   .tx-cards                   { display: flex; flex-direction: column; gap: 10px; }
 
-  /* accounts: hide table, show cards (unless a row is active) */
+  /* accounts */
   .acc-table-wrap               { display: none; }
-  .acc-table-wrap.acc-has-active { display: block; }
   .acc-cards                    { display: flex; flex-direction: column; gap: 10px; }
 
-  /* categories: hide table, show cards (unless a row is active) */
+  /* categories */
   .cat-table-wrap               { display: none; }
-  .cat-table-wrap.cat-has-active { display: block; }
   .cat-cards                    { display: flex; flex-direction: column; gap: 10px; }
 
-  /* rates: hide table, show cards (unless a row is active) */
+  /* rates */
   .rate-table-wrap               { display: none; }
-  .rate-table-wrap.rate-has-active { display: block; }
   .rate-cards                    { display: flex; flex-direction: column; gap: 10px; }
 
   /* advisor: use dvh so mobile browser chrome is excluded */

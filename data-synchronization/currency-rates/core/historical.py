@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sys
-from datetime import date
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 
@@ -11,8 +11,10 @@ from py_logging import get_logger
 import core.config as config
 import sources.crypto as crypto
 import sources.fiat as fiat
+from core.errors import failure_reason
 from core.fetcher import require_rates, store_identity_rates, store_rates
 from database.currency_master import get_currencies
+from database.locking import claim_job
 from database.upsert import forward_fill_rates
 
 logger = get_logger(__name__)
@@ -22,9 +24,10 @@ def main() -> None:
     client = None
     try:
         csv_dir = Path(config.historical_csv_dir())
-        to_date = date.today()
+        to_date = datetime.now(timezone.utc).date()
         logger.info(f"historical: to_date={to_date}")
         client = get_client(config.db_config())
+        claim_job(client)
         fiat_rates: dict[str, dict[date, Decimal]] = {}
         for code in get_currencies(client, "fiat"):
             symbol = fiat.SYMBOLS.get(code, f"xau{code.lower()}")
@@ -55,7 +58,7 @@ def main() -> None:
     except Exception as error:
         if client is not None:
             client.rollback()
-        logger.error(f"historical: job_failed=true error={type(error).__name__}")
+        logger.error(f"historical: job_failed=true error={type(error).__name__} reason={failure_reason(error)}")
         sys.exit(1)
     finally:
         if client is not None:

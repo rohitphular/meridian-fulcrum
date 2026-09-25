@@ -20,10 +20,15 @@ function getSuggestedTransactions() {
 
   const accountMap = _loadAccountMap();
 
-  // Filter to money-out only; skip orphaned transactions (no matching account).
+  // Only usable historical movements on active accounts can suggest new entries.
   // Augment each tx with derived currency and normalised amount.
   const outTx = allTx.filter(function(tx) {
-    return String(tx.tx_type) === 'money-out' && accountMap[String(tx.account_id)];
+    const account = accountMap[String(tx.account_id)];
+    const amount = Number(tx.tx_amount_local);
+    const date = new Date(tx.tx_date_local);
+    return String(tx.tx_type) === 'money-out' && String(tx.record_status) !== 'deleted'
+      && account !== undefined && String(account.record_status) === 'active'
+      && Number.isFinite(amount) && amount > 0 && Number.isFinite(date.getTime()) && date <= today;
   }).map(function(tx) {
     const acc = accountMap[String(tx.account_id)];
     return Object.assign({}, tx, {
@@ -33,8 +38,9 @@ function getSuggestedTransactions() {
   });
   console.log(fnName + ': money_out_count=' + outTx.length);
 
-  // Collect suggestions from each signal; map keyed by "counterparty_name|minor_category"
-  const suggestionMap = {};
+  // Keep account/currency and full classification separate: native amounts
+  // from two currencies must never be pooled into one median.
+  const suggestionMap = Object.create(null);
 
   _applyRecurringMonthly(outTx, today, suggestionMap);
   _applyRecurringWeekly(outTx, today, suggestionMap);
@@ -42,7 +48,9 @@ function getSuggestedTransactions() {
   _applyRecentFrequent(outTx, today, suggestionMap);
 
   // Sort by confidence descending, return top 10
-  const results = Object.values(suggestionMap)
+  const results = Object.keys(suggestionMap).map(function(key) {
+    return Object.assign({ suggestion_key: key }, suggestionMap[key]);
+  })
     .sort(function(a, b) { return b.confidence - a.confidence; })
     .slice(0, 10);
 
@@ -59,8 +67,8 @@ function getSuggestedTransactions() {
 function _applyRecurringMonthly(outTx, today, map) {
   const fnName   = '_applyRecurringMonthly';
   const cutoff   = new Date(today);
-  cutoff.setMonth(cutoff.getMonth() - 6);
   cutoff.setDate(1);
+  cutoff.setMonth(cutoff.getMonth() - 6);
   cutoff.setHours(0, 0, 0, 0);
 
   const thisMonth = today.getMonth();
@@ -72,7 +80,7 @@ function _applyRecurringMonthly(outTx, today, map) {
   outTx.forEach(function(tx) {
     const d = new Date(tx.tx_date_local);
     if (isNaN(d.getTime()) || d < cutoff) return;
-    const key = (tx.counterparty_name ? String(tx.counterparty_name) : '') + '|' + (tx.minor_category ? String(tx.minor_category) : '');
+    const key = _suggestionKey(tx);
     if (!groups[key]) groups[key] = { tx: tx, occurrences: [] };
     groups[key].occurrences.push({ tx: tx, date: d });
   });
@@ -99,6 +107,7 @@ function _applyRecurringMonthly(outTx, today, map) {
     // Median day-of-month
     const days = occs.map(function(o) { return o.date.getDate(); }).sort(function(a, b) { return a - b; });
     const medianDay = _median(days);
+    if (todayDay < medianDay - 3) return;
 
     const confidence = Math.min(distinctMonths / 6, 1);
     const existing   = map[key];
@@ -121,7 +130,7 @@ function _applyRecurringMonthly(outTx, today, map) {
       reason:              'monthly \xb7 usually around the ' + _ordinal(medianDay),
     };
 
-    console.log(fnName + ': surfaced key=' + key + ' confidence=' + confidence);
+    console.log(fnName + ': surfaced=true confidence=' + confidence);
   });
 }
 
@@ -145,7 +154,7 @@ function _applyRecurringWeekly(outTx, today, map) {
   outTx.forEach(function(tx) {
     const d = new Date(tx.tx_date_local);
     if (isNaN(d.getTime()) || d < cutoff) return;
-    const key = (tx.counterparty_name ? String(tx.counterparty_name) : '') + '|' + (tx.minor_category ? String(tx.minor_category) : '');
+    const key = _suggestionKey(tx);
     if (!groups[key]) groups[key] = { tx: tx, occurrences: [] };
     groups[key].occurrences.push({ tx: tx, date: d });
   });
@@ -193,13 +202,13 @@ function _applyRecurringWeekly(outTx, today, map) {
       reason:              'weekly \xb7 usually on ' + _SUGGESTION_DAY_NAMES[modeDow],
     };
 
-    console.log(fnName + ': surfaced key=' + key + ' confidence=' + confidence);
+    console.log(fnName + ': surfaced=true confidence=' + confidence);
   });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Signal 3 — time_of_day
-// Look back 8 weeks (56 days); group by (counterparty_name|minor_category|dow|hour_bucket);
+// Look back 8 weeks (56 days); group by suggestion identity plus dow/hour_bucket;
 // qualify if current dow+hour_bucket matches and ≥ 2 distinct days in group;
 // filter counterparties already transacted with today; emit at most 5 suggestions.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -214,16 +223,16 @@ function _applyTimeOfDay(outTx, today, map) {
   const todayHourBucket = Math.floor(today.getHours() / 2);
   const todayDateString = _calendarDateStr(today);
 
-  // Counterparties already transacted with today
+  // Matching account/currency/classification already transacted with today
   const transactedTodayCounterparties = {};
   outTx.forEach(function(tx) {
     const d = new Date(tx.tx_date_local);
     if (!isNaN(d.getTime()) && _calendarDateStr(d) === todayDateString) {
-      transactedTodayCounterparties[tx.counterparty_name ? String(tx.counterparty_name) : ''] = true;
+      transactedTodayCounterparties[_suggestionKey(tx)] = true;
     }
   });
 
-  // Group transactions from last 4 weeks by extended key (including dow + hour_bucket)
+  // Group transactions from the last 8 weeks by identity plus dow/hour_bucket.
   const groups = {};
   outTx.forEach(function(tx) {
     const d = new Date(tx.tx_date_local);
@@ -232,14 +241,15 @@ function _applyTimeOfDay(outTx, today, map) {
     const hourBucket = Math.floor(d.getHours() / 2);
     const cpName     = tx.counterparty_name ? String(tx.counterparty_name) : '';
     const minCat     = tx.minor_category    ? String(tx.minor_category)    : '';
-    const extKey = cpName + '|' + minCat + '|' + dow + '|' + hourBucket;
-    if (!groups[extKey]) groups[extKey] = { tx: tx, dateSet: {}, counterparty_name: cpName, minor_category: minCat, dow: dow, occurrences: [] };
+    const key = _suggestionKey(tx);
+    const extKey = JSON.stringify([key, dow, hourBucket]);
+    if (!groups[extKey]) groups[extKey] = { tx: tx, dateSet: {}, key: key, counterparty_name: cpName, minor_category: minCat, dow: dow, hour_bucket: hourBucket, occurrences: [] };
     const dateStr = _calendarDateStr(d);
     groups[extKey].dateSet[dateStr] = true;
     groups[extKey].occurrences.push({ tx: tx, date: d });
   });
 
-  // Collect candidates for this signal (at most 2)
+  // Collect candidates for this signal (at most 5 emitted below).
   const candidates = [];
 
   Object.keys(groups).forEach(function(extKey) {
@@ -247,19 +257,17 @@ function _applyTimeOfDay(outTx, today, map) {
     const dow   = group.dow;
     // Only consider groups matching current dow + hour_bucket
     if (dow !== todayDow) return;
-    // Derive hour_bucket from the extKey parts
-    const parts      = extKey.split('|');
-    const hourBucket = Number(parts[3]);
+    const hourBucket = group.hour_bucket;
     if (hourBucket !== todayHourBucket) return;
 
     const distinctDays = Object.keys(group.dateSet).length;
     if (distinctDays < 2) return;
 
     // Filter if already transacted today with this counterparty
-    if (transactedTodayCounterparties[group.counterparty_name]) return;
+    if (transactedTodayCounterparties[group.key]) return;
 
     const confidence = Math.min((distinctDays / 4) * 0.6, 0.6);
-    const dedupeKey  = group.counterparty_name + '|' + group.minor_category;
+    const dedupeKey  = group.key;
     const occs       = group.occurrences;
 
     candidates.push({
@@ -299,7 +307,7 @@ function _applyTimeOfDay(outTx, today, map) {
       confidence:        c.confidence,
       reason:            c.reason,
     };
-    console.log(fnName + ': surfaced key=' + c.dedupeKey + ' confidence=' + c.confidence);
+    console.log(fnName + ': surfaced=true confidence=' + c.confidence);
     emitted++;
   });
 }
@@ -320,12 +328,12 @@ function _applyRecentFrequent(outTx, today, map) {
 
   const todayDateString = _calendarDateStr(today);
 
-  // Counterparties already transacted with today
+  // Matching account/currency/classification already transacted with today
   const transactedToday = {};
   outTx.forEach(function(tx) {
     const d = new Date(tx.tx_date_local);
     if (!isNaN(d.getTime()) && _calendarDateStr(d) === todayDateString) {
-      transactedToday[tx.counterparty_name ? String(tx.counterparty_name) : ''] = true;
+      transactedToday[_suggestionKey(tx)] = true;
     }
   });
 
@@ -334,7 +342,7 @@ function _applyRecentFrequent(outTx, today, map) {
   outTx.forEach(function(tx) {
     const d = new Date(tx.tx_date_local);
     if (isNaN(d.getTime()) || d < cutoff) return;
-    const key = (tx.counterparty_name ? String(tx.counterparty_name) : '') + '|' + (tx.minor_category ? String(tx.minor_category) : '');
+    const key = _suggestionKey(tx);
     if (!groups[key]) groups[key] = { tx: tx, occurrences: [] };
     groups[key].occurrences.push({ tx: tx, date: d });
   });
@@ -349,7 +357,7 @@ function _applyRecentFrequent(outTx, today, map) {
 
     // Skip if transacted today
     const cpName = occs[0].tx.counterparty_name ? String(occs[0].tx.counterparty_name) : '';
-    if (transactedToday[cpName]) return;
+    if (transactedToday[key]) return;
 
     const confidence = Math.min(occs.length / 15, 0.35);
     map[key] = {
@@ -369,13 +377,19 @@ function _applyRecentFrequent(outTx, today, map) {
       reason:              occs.length + ' times in the last 2 months',
     };
 
-    console.log(fnName + ': surfaced key=' + key + ' confidence=' + confidence);
+    console.log(fnName + ': surfaced=true confidence=' + confidence);
   });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Private helpers
 // ─────────────────────────────────────────────────────────────────────────────
+
+function _suggestionKey(tx) {
+  return JSON.stringify(['counterparty_name', 'major_category', 'minor_category', 'account_id', 'currency'].map(function(field) {
+    return tx[field] === undefined || tx[field] === null ? '' : String(tx[field]);
+  }));
+}
 
 // Returns the median of a numeric array (must be non-empty).
 function _median(arr) {
@@ -391,7 +405,7 @@ function _median(arr) {
 // On ties, returns the first encountered winner.
 function _mostFrequent(arr) {
   if (!arr.length) return '';
-  const counts = {};
+  const counts = Object.create(null);
   arr.forEach(function(v) { counts[v] = (counts[v] !== undefined ? counts[v] : 0) + 1; });
   let best = '';
   let max  = 0;

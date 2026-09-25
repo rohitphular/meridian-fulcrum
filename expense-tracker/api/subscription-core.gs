@@ -199,6 +199,7 @@ function updateSubscription(body) {
   if (rowNumber < 2 || rowNumber > sheet.getLastRow()) return { ok: false, error: 'invalid_row' };
   const rows = sheet.getDataRange().getValues();
   const current = rows[rowNumber - 1];
+  if (matchesExpectedRecord(body, current[subColIndex('id')], current[subColIndex('updated_at')]) === false) return { ok: false, error: 'stale_record' };
   const currentStatus = subscriptionText(current[subColIndex('record_status')]);
   if (currentStatus === 'locked') return { ok: false, error: 'record_locked' };
   if (currentStatus === 'deleted') return { ok: false, error: 'record_deleted' };
@@ -228,6 +229,7 @@ function _subscriptionLifecycleChange(body, restoring) {
   if (rowNumber > sheet.getLastRow()) return { ok: false, error: 'invalid_row' };
   const rows = sheet.getDataRange().getValues();
   const current = rows[rowNumber - 1];
+  if (matchesExpectedRecord(body, current[subColIndex('id')], current[subColIndex('updated_at')]) === false) return { ok: false, error: 'stale_record' };
   const status = subscriptionText(current[subColIndex('record_status')]);
   if (status === 'locked') return { ok: false, error: 'record_locked' };
   if (restoring && status !== 'deleted') return { ok: false, error: 'not_deleted' };

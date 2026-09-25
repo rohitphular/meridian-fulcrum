@@ -14,7 +14,7 @@ export { el, esc, fmtDate, fmtDateTime, parseLocalDate, toDateInputVal, todayISO
 export function fmtDateTimeCompact(v) {
   if (!v) return '—';
   try {
-    const d = new Date(String(v));
+    const d = new Date(String(v).replace(' ', 'T'));
     if (isNaN(d)) return String(v).slice(0, 16) || '—'; // computed string, not model field
     const date = d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
     const time = d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
@@ -32,7 +32,7 @@ const ET_COLS  = [
   'user_location_area', 'user_location_city', 'user_location_country',
   'user_location_latitude', 'user_location_longitude',
   'source_amount_local', 'target_amount_local', 'major_category', 'minor_category',
-  'description', 'counterparty_name', 'tx_tags', 'beneficiaries',
+  'description', 'counterparty_name', 'tx_tags', 'beneficiaries', 'record_status',
 ];
 const ACC_COLS = ['id', 'account_name', 'legal_entity_name', 'type', 'sub_type', 'account_currency_local', 'local_timezone', 'account_opening_date_local', 'account_closing_date_local', 'tracking_start_date_local', 'opening_value_local', 'description', 'record_status'];
 // Preserve the complete Sheet contract and original audit timestamps on export.
@@ -59,12 +59,14 @@ export const exportData = (format, rows) => {
   const byId  = {};
   allTx.forEach(tx => { if (tx.id) byId[tx.id] = tx; });
   const siblingMap = {};
+  const children = {};
   allTx.forEach(tx => {
     if (!tx.parent_tx_id) return;
     const parent = byId[tx.parent_tx_id];
     if (!parent) return;
-    siblingMap[tx.id]     = parent;
-    siblingMap[parent.id] = tx;
+    siblingMap[tx.id] = parent;
+    (children[parent.id] ??= []).push(tx);
+    if (siblingMap[parent.id] === undefined || siblingMap[parent.id].record_status === 'deleted') siblingMap[parent.id] = tx;
   });
 
   // Reconstruct source/target from account_id + sibling relationship.
@@ -73,6 +75,20 @@ export const exportData = (format, rows) => {
   const seen = {};
   rows.forEach(row => {
     const tx = row.parent_tx_id && byId[row.parent_tx_id] ? byId[row.parent_tx_id] : row;
+    const linked = children[tx.id] ?? [];
+    const sibling = siblingMap[tx.id];
+    const exportError = () => new Error('This transfer has separately edited or deleted legs that cannot fit one import row. Export transaction_master directly from Google Sheets to preserve both rows.');
+    // The import contract has one set of shared fields/status for both legs.
+    // Refuse a lossy export, including historical children hidden by a live leg.
+    if (row.parent_tx_id && (!byId[row.parent_tx_id] || row !== sibling)) throw exportError();
+    if (linked.length > 1) throw exportError();
+    if (sibling) {
+      const shared = ['tx_date_local', 'tx_timezone_local', 'major_category', 'minor_category',
+        'user_location_area', 'user_location_city', 'user_location_country', 'user_location_latitude',
+        'user_location_longitude', 'description', 'counterparty_name', 'tx_tags', 'beneficiaries'];
+      if ((tx.record_status || 'active') !== (sibling.record_status || 'active')
+          || shared.some(key => String(tx[key] ?? '') !== String(sibling[key] ?? ''))) throw exportError();
+    }
     if (seen[tx.id] === true) return;
     seen[tx.id] = true;
     const acct   = (state.accountMap[tx.account_id] !== undefined && state.accountMap[tx.account_id] !== null) ? state.accountMap[tx.account_id] : null;
@@ -83,31 +99,31 @@ export const exportData = (format, rows) => {
     const sibAccName  = (sibAcc !== null && sibAcc.account_name !== undefined && sibAcc.account_name !== null) ? sibAcc.account_name : (sib !== null && sib.account_id !== undefined && sib.account_id !== null ? sib.account_id : '');
 
     let source_account, target_account, source_amount, target_amount;
-    if (sibAcc !== null) {
+    if (sib !== null) {
       // Transfer: parent leg determines direction
       if (tx.tx_type === 'money-out') {
         source_account = acctName;
         target_account = sibAccName;
-        source_amount  = Number(tx.tx_amount_local);
-        target_amount  = Number(sib.tx_amount_local);
+        source_amount  = tx.tx_amount_local;
+        target_amount  = sib.tx_amount_local;
       } else {
         source_account = sibAccName;
         target_account = acctName;
-        source_amount  = Number(sib.tx_amount_local);
-        target_amount  = Number(tx.tx_amount_local);
+        source_amount  = sib.tx_amount_local;
+        target_amount  = tx.tx_amount_local;
       }
     } else {
       // Non-transfer
       if (tx.tx_type === 'money-out') {
         source_account = acctName;
         target_account = '';
-        source_amount  = Number(tx.tx_amount_local);
+        source_amount  = tx.tx_amount_local;
         target_amount  = '';
       } else {
         source_account = '';
         target_account = acctName;
-        source_amount  = Number(tx.tx_amount_local);
-        target_amount  = '';
+        source_amount  = '';
+        target_amount  = tx.tx_amount_local;
       }
     }
 
@@ -121,7 +137,7 @@ export const exportData = (format, rows) => {
     if (sib) seen[sib.id] = true;
   });
 
-  return _exportData(format, exported, 'expenses', ET_COLS);
+  return _exportData(format, exported, 'transaction_master', ET_COLS);
 };
 export const exportAccounts      = (format, rows) => _exportData(format, rows, 'account_master', ACC_COLS);
 export const exportSubscriptions = (format, rows) => _exportData(format, rows, 'subscription_master', SUB_COLS);
@@ -189,6 +205,34 @@ export function openContextMenu(triggerBtn, items, onSelect) {
     if (!(_ctxMenuEl && _ctxMenuEl.contains(e.target))) closeContextMenu();
   };
   document.addEventListener('click', _ctxHandler, true);
+}
+
+// Complete records retain quoted newlines and physical row numbers.
+export function parseCsvRecords(source) {
+  const text = source.replace(/^\uFEFF/, '');
+  const records = [];
+  let values = [], value = '', quoted = false, closed = false, line = 1, rowLine = 1;
+  for (let index = 0; index < text.length; index++) {
+    const char = text[index];
+    if (quoted) {
+      if (char === '"' && text[index + 1] === '"') { value += '"'; index++; }
+      else if (char === '"') { quoted = false; closed = true; }
+      else { value += char; if (char === '\n' || (char === '\r' && text[index + 1] !== '\n')) line++; }
+    } else if (char === '"' && value === '' && !closed) quoted = true;
+    else if (char === ',' || char === '\n' || char === '\r') {
+      values.push(value); value = ''; closed = false;
+      if (char !== ',') {
+        if (values.some(cell => cell.trim() !== '')) records.push({ values, line: rowLine });
+        values = []; line++; rowLine = line;
+        if (char === '\r' && text[index + 1] === '\n') index++;
+      }
+    } else if (closed || char === '"') return { records: [], errors: [`Row ${line}: invalid characters after a quoted CSV field.`] };
+    else value += char;
+  }
+  if (quoted) return { records: [], errors: [`Row ${rowLine}: a quoted CSV field is not closed.`] };
+  values.push(value);
+  if (values.some(cell => cell.trim() !== '')) records.push({ values, line: rowLine });
+  return { records, errors: [] };
 }
 
 // ── CSV row parser (shared across import panels) ─────────────────────────────

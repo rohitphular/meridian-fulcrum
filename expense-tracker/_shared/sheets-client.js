@@ -24,21 +24,36 @@ const SheetsClient = (() => {
     _meta = meta;
   }
 
+  // Bound loading on interrupted mobile connections. A POST timeout does not
+  // cancel server execution: callers must refresh/check before a manual retry.
+  async function _request(url, options = {}) {
+    const controller = new AbortController();
+    const mutation = options.method === 'POST';
+    const timer = setTimeout(() => controller.abort(), mutation ? 180000 : 60000);
+    try {
+      const response = await fetch(url, { ...options, signal: controller.signal });
+      if (!response.ok) throw new Error('http_error');
+      return await response.json();
+    } catch (_) {
+      throw new Error(controller.signal.aborted ? 'request_timeout' : 'connection_error');
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   async function _get(params) {
     const qs  = new URLSearchParams({ ...params, pin: _pin, ..._meta }).toString();
-    const res = await fetch(`${_url}?${qs}`);
-    return res.json();
+    return _request(`${_url}?${qs}`);
   }
 
   async function _post(body) {
     // Content-Type: text/plain avoids CORS preflight (Apps Script limitation).
     // Apps Script reads the raw body via e.postData.contents and parses it as JSON.
-    const res = await fetch(_url, {
+    return _request(_url, {
       method:  'POST',
       headers: { 'Content-Type': 'text/plain' },
       body:    JSON.stringify({ ...body, pin: _pin, ..._meta })
     });
-    return res.json();
   }
 
   return {

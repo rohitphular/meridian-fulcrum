@@ -25,7 +25,7 @@ _IMMUTABLE_FIELDS = ("legal_entity_name", "account_type", "local_timezone", "ope
 
 def _load_decimal_places(conn: Any) -> dict[str, int]:
     with conn.cursor() as cursor:
-        cursor.execute("SELECT currency_code, decimal_places FROM currency_master")
+        cursor.execute("SELECT currency_code, decimal_places FROM currency_master ORDER BY currency_code FOR SHARE")
         return {row[0].strip(): row[1] for row in cursor.fetchall()}
 
 
@@ -35,7 +35,7 @@ def _lookup_rate(conn: Any, local_currency: str, base_currency: str, snapshot_da
             """
             SELECT id, rate_value FROM currency_rates
             WHERE quote_currency_code = %s AND base_currency_code = %s AND rate_date <= %s
-            ORDER BY rate_date DESC LIMIT 1
+            ORDER BY rate_date DESC LIMIT 1 FOR SHARE
             """,
             (local_currency, base_currency, snapshot_date),
         )
@@ -197,7 +197,6 @@ def _store_account(conn: Any, typed: dict[str, Any], decimal_places: dict[str, i
 def upsert_accounts(conn: Any, sheets_client: SheetsClient, rows: list[dict[str, Any]], row_start: int, *, before_commit: Callable[[], None] | None = None) -> int:
     """Persist each row atomically; return failure count so the job cannot claim success."""
     logger.info(f"upsert_accounts: batch_start row_start={row_start} total={len(rows)}")
-    decimal_places = _load_decimal_places(conn)
     write_backs: list[sheets_accounts.WriteBack] = []
     succeeded = failed = 0
     try:
@@ -214,6 +213,9 @@ def upsert_accounts(conn: Any, sheets_client: SheetsClient, rows: list[dict[str,
             checking_source = False
             try:
                 typed = accounts_transform.transform(row)
+                # Each prior row commits and releases reference locks. Reload
+                # precision under a fresh lock for this row's valuation.
+                decimal_places = _load_decimal_places(conn)
                 _store_account(conn, typed, decimal_places)
                 if before_commit is not None:
                     checking_source = True

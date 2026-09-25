@@ -11,7 +11,10 @@
 // =============================================================================
 
 function listTransactions() {
-  return sheetToObjectsWithRow(getOrCreateSheet(TRANSACTIONS_SHEET, getTransactionSheetColumns()));
+  return sheetToObjectsWithRow(getOrCreateSheet(TRANSACTIONS_SHEET, getTransactionSheetColumns())).map(function(row) {
+    row.tx_date_local = sheetLocalDateTimeText(row.tx_date_local);
+    return row;
+  });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -33,8 +36,8 @@ function createTransaction(body) {
     && body.target_account !== undefined && body.target_account !== null && String(body.target_account).trim() !== '';
 
   if (isTransfer) {
-    const srcAmt = Number(body.source_amount_local);
-    const tgtAmt = Number(body.target_amount_local);
+    const srcAmt = transactionDecimal(body.source_amount_local);
+    const tgtAmt = transactionDecimal(body.target_amount_local);
 
     // Parent = the leg matching the submitted tx_type.
     // money-out submitted → source account is the primary leg (parent).
@@ -79,7 +82,7 @@ function createTransaction(body) {
 
   // Non-transfer: single row. Account and amount come from whichever side is mandatory.
   const account_id = cat.source_account_mandatory ? body.source_account : body.target_account;
-  const tx_amount_local  = cat.source_account_mandatory ? Number(body.source_amount_local) : Number(body.target_amount_local);
+  const tx_amount_local  = cat.source_account_mandatory ? transactionDecimal(body.source_amount_local) : transactionDecimal(body.target_amount_local);
 
   return _writeSingleTransaction(Object.assign(_txSharedFields(body), {
     tx_type:         body.tx_type,
@@ -104,7 +107,7 @@ function _defaultSameCurrencyTransferAmount(body, catMap, accountMap) {
   if (targetCurrency === undefined || targetCurrency === null || String(targetCurrency).trim() === '') return;
   if (String(sourceCurrency).trim().toUpperCase() !== String(targetCurrency).trim().toUpperCase()) return;
   if (body.source_amount_local !== undefined && body.source_amount_local !== null
-      && Number.isFinite(Number(body.source_amount_local)) && Number(body.source_amount_local) > 0)
+      && isFiniteDecimal(body.source_amount_local) && Number(body.source_amount_local) > 0)
     body.target_amount_local = body.source_amount_local;
 }
 
@@ -112,7 +115,7 @@ function _defaultSameCurrencyTransferAmount(body, catMap, accountMap) {
 function _txSharedFields(body) {
   return {
     tx_date_local:            body.tx_date_local,
-    tx_timezone_local:             body.tx_timezone_local             !== undefined && body.tx_timezone_local             !== null ? String(body.tx_timezone_local)             : '',
+    tx_timezone_local:             canonicalTransactionTimezone(body.tx_timezone_local),
     user_location_area:      body.user_location_area      !== undefined && body.user_location_area      !== null ? String(body.user_location_area)      : '',
     user_location_city:      body.user_location_city      !== undefined && body.user_location_city      !== null ? String(body.user_location_city)       : '',
     user_location_country:   body.user_location_country   !== undefined && body.user_location_country   !== null ? String(body.user_location_country)    : '',
@@ -143,7 +146,7 @@ function _writeSingleTransaction(body, opts) {
     : getOrCreateSheet(TRANSACTIONS_SHEET, cols);
 
   // TX-NEW-H-7: guard against NaN amounts before any sheet interaction.
-  if (!Number.isFinite(Number(body.tx_amount_local))) return { ok: false, error: 'invalid_tx_amount' };
+  if (isFiniteDecimal(body.tx_amount_local) === false || Number(body.tx_amount_local) <= 0) return { ok: false, error: 'invalid_tx_amount' };
 
   // T-C1/T-C3: skip internal dup check when the caller has already done it.
   if (!opts || !opts.skipDupCheck) {
@@ -170,7 +173,7 @@ function _writeSingleTransaction(body, opts) {
   setCol('user_location_country',   body.user_location_country   !== undefined && body.user_location_country   !== null ? String(body.user_location_country)   : '');
   setCol('user_location_latitude',  body.user_location_latitude  !== undefined && body.user_location_latitude  !== null ? body.user_location_latitude          : '');
   setCol('user_location_longitude', body.user_location_longitude !== undefined && body.user_location_longitude !== null ? body.user_location_longitude         : '');
-  setCol('tx_amount_local',         Number(body.tx_amount_local));
+  setCol('tx_amount_local',         transactionDecimal(body.tx_amount_local));
   setCol('major_category',          body.major_category          !== undefined && body.major_category          !== null ? String(body.major_category)           : '');
   setCol('minor_category',          body.minor_category          !== undefined && body.minor_category          !== null ? String(body.minor_category)           : '');
   setCol('description',             body.description             !== undefined && body.description             !== null ? String(body.description)             : '');
@@ -204,6 +207,7 @@ function updateTransaction(body) {
   if (!Number.isInteger(rowNum) || rowNum < 2 || rowNum > lastRow) return { ok: false, error: 'invalid_row' };
 
   const oldRow = sheet.getRange(rowNum, 1, 1, cols.length).getValues()[0];
+  if (matchesExpectedRecord(body, oldRow[txColIndex('id')], oldRow[txColIndex('updated_at')]) === false) return { ok: false, error: 'stale_record' };
 
   if (String(oldRow[txColIndex('record_status')]) === 'locked')
     return { ok: false, error: 'record_locked' };
@@ -242,7 +246,7 @@ function updateTransaction(body) {
   writeField('user_location_country',  body.user_location_country   !== undefined && body.user_location_country   !== null ? String(body.user_location_country)   : '');
   writeField('user_location_latitude', body.user_location_latitude  !== undefined && body.user_location_latitude  !== null ? body.user_location_latitude          : '');
   writeField('user_location_longitude',body.user_location_longitude !== undefined && body.user_location_longitude !== null ? body.user_location_longitude         : '');
-  writeField('tx_amount_local',        Number(body.tx_amount_local));
+  writeField('tx_amount_local',        transactionDecimal(body.tx_amount_local));
   writeField('major_category',         body.major_category          !== undefined && body.major_category          !== null ? String(body.major_category)           : '');
   writeField('minor_category',         body.minor_category          !== undefined && body.minor_category          !== null ? String(body.minor_category)           : '');
   writeField('description',            body.description             !== undefined && body.description             !== null ? String(body.description)             : '');
@@ -255,6 +259,9 @@ function updateTransaction(body) {
   updatedRow[txColIndex('sync_date')] = '';
   updatedRow[getTransactionSchemaField('sync_notes').sheet_column_position  - 1] = '';
   updatedRow[getTransactionSchemaField('updated_at').sheet_column_position  - 1] = new Date().toISOString();
+
+  const pairValidation = validateTransactionPairChange(sheet, rowNum, updatedRow);
+  if (pairValidation.ok === false) return pairValidation;
 
   sheet.getRange(rowNum, 1, 1, cols.length).setValues([updatedRow]);
 
@@ -275,6 +282,7 @@ function deleteTransaction(body) {
 
   // TX-NEW-H-1 + T-H6: single row read; mutate in-array; single setValues() write.
   const rowData           = sheet.getRange(rowNum, 1, 1, cols.length).getValues()[0];
+  if (matchesExpectedRecord(body, rowData[txColIndex('id')], rowData[txColIndex('updated_at')]) === false) return { ok: false, error: 'stale_record' };
   const rstatCol          = getTransactionSchemaField('record_status').sheet_column_position;
   const syncStatusCol     = getTransactionSchemaField('sync_status').sheet_column_position;
   const syncNotesCol      = getTransactionSchemaField('sync_notes').sheet_column_position;
@@ -295,6 +303,9 @@ function deleteTransaction(body) {
   updatedRow[syncNotesCol  - 1] = '';
   updatedRow[updatedAtCol  - 1] = new Date().toISOString();
 
+  const pairValidation = validateTransactionPairChange(sheet, rowNum, updatedRow);
+  if (pairValidation.ok === false) return pairValidation;
+
   sheet.getRange(rowNum, 1, 1, cols.length).setValues([updatedRow]);
 
   return { ok: true };
@@ -314,6 +325,7 @@ function restoreTransaction(body) {
 
   // T-H6: single row read for all field values — replaces N individual getValue() calls.
   const rowData           = sheet.getRange(rowNum, 1, 1, cols.length).getValues()[0];
+  if (matchesExpectedRecord(body, rowData[txColIndex('id')], rowData[txColIndex('updated_at')]) === false) return { ok: false, error: 'stale_record' };
   const rstatCol          = getTransactionSchemaField('record_status').sheet_column_position;
   const syncStatusCol     = getTransactionSchemaField('sync_status').sheet_column_position;
   const syncNotesCol      = getTransactionSchemaField('sync_notes').sheet_column_position;
@@ -330,6 +342,9 @@ function restoreTransaction(body) {
   updatedRow[txColIndex('sync_date')] = '';
   updatedRow[syncNotesCol  - 1] = '';
   updatedRow[updatedAtCol  - 1] = new Date().toISOString();
+
+  const pairValidation = validateTransactionPairChange(sheet, rowNum, updatedRow);
+  if (pairValidation.ok === false) return pairValidation;
 
   sheet.getRange(rowNum, 1, 1, cols.length).setValues([updatedRow]);
 
@@ -436,7 +451,7 @@ function createTransactionsBulk(body) {
     setC('parent_tx_id',            b.parent_tx_id            !== undefined && b.parent_tx_id            !== null ? String(b.parent_tx_id)            : '');
     setC('tx_type',                 b.tx_type);
     setC('account_id',              b.account_id              !== undefined && b.account_id              !== null ? String(b.account_id)              : '');
-    setC('tx_amount_local',         Number(b.tx_amount_local));
+    setC('tx_amount_local',         transactionDecimal(b.tx_amount_local));
     setC('major_category',          b.major_category          !== undefined && b.major_category          !== null ? String(b.major_category)          : '');
     setC('minor_category',          b.minor_category          !== undefined && b.minor_category          !== null ? String(b.minor_category)          : '');
     setC('description',             b.description             !== undefined && b.description             !== null ? String(b.description)             : '');
@@ -534,8 +549,8 @@ function createTransactionsBulk(body) {
       && txBody.target_account !== undefined && txBody.target_account !== null && String(txBody.target_account).trim() !== '';
 
     if (isTransfer) {
-      const srcAmt = Number(txBody.source_amount_local);
-      const tgtAmt = Number(txBody.target_amount_local);
+      const srcAmt = transactionDecimal(txBody.source_amount_local);
+      const tgtAmt = transactionDecimal(txBody.target_amount_local);
 
       var parentAcct, parentAmt, parentType, childAcct, childAmt, childType;
       if (txBody.tx_type === 'money-out') {
@@ -577,7 +592,7 @@ function createTransactionsBulk(body) {
 
     // Non-transfer: single row. Account and amount from whichever side is mandatory.
     const acct = cat.source_account_mandatory ? txBody.source_account : txBody.target_account;
-    const amt  = cat.source_account_mandatory ? Number(txBody.source_amount_local) : Number(txBody.target_amount_local);
+    const amt  = cat.source_account_mandatory ? transactionDecimal(txBody.source_amount_local) : transactionDecimal(txBody.target_amount_local);
 
     newRows.push(buildRow(Object.assign(_txSharedFields(txBody), {
       tx_type: txBody.tx_type, account_id: acct, tx_amount_local: amt, parent_tx_id: '', record_status: recordStatus,
@@ -722,13 +737,13 @@ function _checkDuplicate(sheet, body, excludeRowNum) {
   const ciAmt   = txColIndex('tx_amount_local');
   const ciRstat = txColIndex('record_status');
 
-  const inDate = body.tx_date_local   !== undefined && body.tx_date_local   !== null ? String(body.tx_date_local)   : '';
+  const inDate = localDateTimeKey(sheetLocalDateTimeText(body.tx_date_local));
   const inType = body.tx_type         !== undefined && body.tx_type         !== null ? String(body.tx_type)         : '';
-  const inAcct = body.account_id      !== undefined && body.account_id      !== null ? String(body.account_id)      : '';
-  const inAmt  = Number(body.tx_amount_local);
+  const inAcct = body.account_id      !== undefined && body.account_id      !== null ? String(body.account_id).trim().toLowerCase() : '';
+  const inAmt  = transactionDecimalKey(body.tx_amount_local);
 
   // TX-NEW-C-1: NaN amount can never match — return null (no duplicate found) immediately.
-  if (!Number.isFinite(inAmt)) return null;
+  if (inAmt === null || inDate === null) return null;
 
   for (var i = 1; i < rows.length; i++) {
     // rows[i] is 0-based; sheet row is i+1 (header is row 1, data starts at row 2 → i=1 → rowNum=2).
@@ -736,10 +751,10 @@ function _checkDuplicate(sheet, body, excludeRowNum) {
     const r = rows[i];
     if (String(r[ciRstat]) === 'deleted') continue;
     if (
-      String(r[ciDate]) === inDate &&
+      localDateTimeKey(sheetLocalDateTimeText(r[ciDate])) === inDate &&
       String(r[ciType]) === inType &&
-      String(r[ciAcct]) === inAcct &&
-      Number(r[ciAmt])  === inAmt
+      String(r[ciAcct]).trim().toLowerCase() === inAcct &&
+      transactionDecimalKey(r[ciAmt]) === inAmt
     ) {
       return { ok: false, error: 'duplicate_transaction' };
     }

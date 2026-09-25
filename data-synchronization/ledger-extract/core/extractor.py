@@ -29,6 +29,22 @@ _ID_COLUMNS = {
 }
 
 
+def _validate_configuration(config: dict[str, Any]) -> None:
+    """Reject stale names and misspelled switches instead of silently skipping data."""
+    entities = config.get("entities") if isinstance(config, dict) else None
+    if not isinstance(entities, dict):
+        raise ValueError("invalid_entities_configuration")
+    if any(name not in _ENTITIES for name in entities):
+        raise ValueError("unknown_entity_configuration")
+    for name in ("category_master", "account_master", "transaction_master", "subscription_master"):
+        if name not in entities:
+            raise ValueError(f"missing_entity_configuration:{name}")
+    for name, settings in entities.items():
+        if not isinstance(settings, dict) or set(settings) != {"enabled"}:
+            raise ValueError(f"invalid_entity_configuration:{name}")
+        entity_enabled(name, config)
+
+
 def entity_enabled(entity: str, config: dict[str, Any]) -> bool:
     # Older configs retain their existing scope until new source tabs are opted in.
     if (entity in CONTRACTS or entity == "account_types") and entity not in config["entities"]:
@@ -46,6 +62,7 @@ class LedgerExtractJob:
         self._service_account_file = service_account_file
 
     def run(self, config: dict[str, Any], *, reprocess: bool = False) -> None:
+        _validate_configuration(config)
         enabled = [name for name in _ENTITIES if entity_enabled(name, config)]
         if not enabled:
             logger.info("run: enabled_entities=0")

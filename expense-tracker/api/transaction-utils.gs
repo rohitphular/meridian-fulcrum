@@ -36,3 +36,15 @@ function getTransactionMetadata() {
 
   return { ok: true, countries: countries, cities: cities, areas: areas, counterparties: counterparties, tx_tags: tags };
 }
+
+// Keep caller decimal text intact until ledger-extract rounds to currency minor units.
+function transactionDecimal(value) {
+  return typeof value === 'string' ? value.trim() : value;
+}
+
+function transactionDecimalKey(value) { return decimalValueKey(value); }
+
+function canonicalTransactionTimezone(value) {
+  if (value === undefined || value === null || String(value).trim() === '') return '';
+  return ianaDateFormatter(String(value).trim()).resolvedOptions().timeZone;
+}

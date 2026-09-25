@@ -56,7 +56,7 @@ def test_invalid_subscription_dates_fail(changes: dict[str, str], error: str) ->
         subscriptions.transform(subscription_row(**changes))
 
 
-@pytest.mark.parametrize("amount", ["NaN", "Infinity", "-1", "0", "1_000", "1,000", "12bad", True, "0x10"])
+@pytest.mark.parametrize("amount", ["NaN", "Infinity", "-1", "0", "1_000", "1,000", "12bad", True, "0x10", "١٢.٥", "1e٢"])
 def test_invalid_subscription_amounts_fail(amount: str) -> None:
     with pytest.raises(ValueError):
         subscriptions.transform(subscription_row(subscription_amount_local=amount))
@@ -72,6 +72,8 @@ def test_invalid_subscription_amounts_fail(amount: str) -> None:
         {"frequency": "monthly", "day_of_month": ""},
         {"day_of_month": "1_0"},
         {"day_of_week": "0_1"},
+        {"day_of_month": "١٥"},
+        {"frequency": "weekly", "day_of_week": "٢"},
     ],
 )
 def test_schedule_anchors_are_validated(changes: dict[str, str]) -> None:

@@ -136,10 +136,14 @@ Rows missing `id`, `tx_date_local`, or with an invalid `tx_type` are diverted in
 
 | Format | Contents |
 |---|---|
-| CSV | All visible columns of the currently filtered row set; one row per transaction |
-| JSON | Array of objects; full field set (including reserved/unused fields) |
+| CSV | `transaction_master` import columns, including UUID, exact decimal amounts and lifecycle status |
+| JSON | The same reconstructed import rows with additional source fields |
 
-The export operates on the **currently filtered rows** — the same set visible in the table. All active filter dimensions (date range, type, account, category, location, tag, search) are reflected in the export. This is "what's currently shown," not "all rows in the period."
+The export begins with the currently filtered transactions. A transfer is reconstructed once as a source/target pair, including its sibling from the full loaded snapshot when a filter shows only one leg. Standalone money-in amounts are exported on the target account. Transfer amount text is preserved separately for each currency.
+
+This compact import contract has one set of shared metadata and one `record_status` for both legs. When the legs have different statuses or independently edited shared fields, or the transfer has historical deleted children, the app blocks export with an explanation. Export `transaction_master` directly from Google Sheets when the original separate rows and their history must be preserved; the compact app format is not a complete ledger backup.
+
+Transaction CSV import accepts quoted multiline fields, rejects blank/duplicate headers and malformed rows, and preserves decimal text. All parsing errors must be corrected before submission. Only rows with confirmed failures are retained for **Retry failed rows**. An interrupted request or incomplete result disables retry and asks you to refresh/check what was saved; the client never automatically repeats a mutation. Optional location enrichment stops waiting after five seconds per lookup.
 
 ## API surface
 
@@ -148,9 +152,19 @@ The export operates on the **currently filtered rows** — the same set visible 
 | `list_transactions` | Return all rows (including soft-deleted) |
 | `create_transaction` | Validate (`tx_amount_local` validated unconditionally, regardless of category flags); duplicate check on `(tx_date_local, tx_type, account_id, tx_amount_local)` skipping deleted rows → `duplicate_transaction`; assign `id`; stamp `record_status = active`, `created_at`, `updated_at`; append. For transfers, both legs are duplicate-checked BEFORE any row is written — see Transfer atomicity below. |
 | `create_transactions_bulk` | Accept `transactions[]`; validate rows, insert or replace by supplied ID, preserve child identities and deletion tombstones, and rewrite the resulting data region; return `{ ok, created, updated, failed, results }` |
-| `update_transaction` | Locked guard → `record_locked`; deleted guard → `transaction_deleted`; validate; duplicate check on `(tx_date_local, tx_type, account_id, tx_amount_local)` excluding the current row (via `excludeRowNum` parameter on `_checkDuplicate`) → `duplicate_transaction`; validates `major_category` / `minor_category` FK when those fields are present in the update body (returns `unknown_category` if the composite key `(tx_type, major_category, minor_category)` is not found); overwrite editable fields in a single batch write; stamp `updated_at`; advance `sync_status` |
+| `update_transaction` | Locked guard → `record_locked`; deleted guard → `transaction_deleted`; validate; duplicate check on `(tx_date_local, tx_type, account_id, tx_amount_local)` excluding the current row (via `excludeRowNum` parameter on `_checkDuplicate`) → `duplicate_transaction`; requires and validates the `major_category` / `minor_category` FK in the update body (returns `unknown_category` if the composite key `(tx_type, major_category, minor_category)` is not found); overwrite editable fields in a single batch write; stamp `updated_at`; advance `sync_status` |
 | `delete_transaction` | Already-deleted guard → `transaction_already_deleted`; locked guard → `record_locked`; soft-delete (`record_status → deleted`) in a single `setValues()` write; stamp `updated_at` |
 | `restore_transaction` | Check `record_status = deleted`; set `record_status → active` in a single `setValues()` write; stamp `updated_at` |
+
+Every row-number update/delete/restore accepts `expected_id` and `expected_updated_at`, which the UI supplies from its snapshot. A different UUID now occupying that row or a newer edit to the same record returns `stale_record` with no mutation. This also covers rows moved by bulk import; reload before retrying.
+
+### Source validation
+
+Create, bulk import and update validate calendar dates, `YYYY-MM-DD HH:MM:SS` / `T` local timestamp syntax (up to six fractional digits), IANA timezone meaning and DST ambiguity before writing. A blank transaction zone keeps the legacy `Europe/London` default; supplied zones are stored canonically. Updates use the existing immutable timezone. Coordinates must be finite decimals, supplied as a pair, with latitude in −90…90 and longitude in −180…180. Native Sheet date cells are returned as their displayed wall time.
+
+Amounts must use decimal syntax; booleans, arrays, numeric prefixes and non-finite values are rejected. Decimal text is preserved through all writers so extraction can apply the currency minor-unit rounding rule. Duplicate checks compare normalized decimal text exactly rather than rounding through JavaScript `Number`.
+
+Beneficiaries are validated before create/import/update writes. Supply semicolon-separated names, or use `name:percentage` for every entry. Empty/duplicate names, mixed formats, invalid percentages and allocations whose four-decimal HALF_UP-rounded shares do not total exactly 100 are rejected. Each raw explicit percentage must be greater than zero and at most 100; a share that rounds to zero is rejected. Equal-name splits retain the extractor's residual allocation to the final beneficiary.
 
 ### Transfer atomicity
 
@@ -158,7 +172,7 @@ Transfers require distinct accounts and an active category with the same major/m
 
 For interactive transfers, both the parent leg and the child leg are duplicate-checked BEFORE any row is written to the sheet. If either leg would be a duplicate, the entire transfer is rejected and no rows are written. Both built rows are written together in one `setValues` call. POST dispatch serializes mutations with a script lock; this is not a cross-request or cross-sheet database transaction.
 
-Interactive update/delete/restore still changes one selected leg. Ledger-extract rejects a live child whose root is deleted, a same-account pair, same-direction pair, or multiple live children. Complete intended lifecycle changes on both affected rows before extraction; it never silently deletes or restores another leg. See [the extraction contract](../../data-synchronization/ledger-extract/_docs/transaction-master.md#time-and-transfer-semantics).
+Interactive update/delete/restore changes one selected leg and validates the resulting relationship before writing. A live child cannot reference a deleted root; same-account/direction pairs, nested roots and multiple live children are rejected. Delete the child before the parent; restore the parent before the child. `transfer_parent_deleted` or `invalid_transfer_pair` leaves both rows untouched. The API never silently deletes or restores another leg. See [the extraction contract](../../data-synchronization/ledger-extract/_docs/transaction-master.md#time-and-transfer-semantics).
 
 ### Bulk replacement and sync
 
@@ -206,6 +220,11 @@ Error code strings carry no embedded values. Where additional context is needed 
 | `duplicate_transaction` | create, update | Row with same `(tx_date_local, tx_type, account_id, tx_amount_local)` already exists (non-deleted) | — |
 | `missing_row_num` | update, delete, restore | `row_num` not provided | — |
 | `invalid_row` | update, delete, restore | `row_num` is out of bounds | — |
+| `stale_record` | update, delete, restore | `expected_id` differs from the current row UUID; reload before retrying | — |
+| `invalid_tx_date_local`, `invalid_tx_timezone_local` | create, import, update | Local datetime or timezone is invalid | — |
+| `ambiguous_local_time`, `nonexistent_local_time` | create, import, update | Timestamp falls in a DST fold/gap | `field` |
+| `incomplete_location_coordinates`, `latitude_out_of_range`, `longitude_out_of_range` | create, import, update | Coordinates are incomplete or out of geographic range | — |
+| `transfer_parent_deleted`, `invalid_transfer_pair` | update, delete, restore | Proposed edit violates the transfer relationship | — |
 | `record_locked` | update, delete, bulk create | Transaction or an existing imported transfer leg is locked | — |
 | `transaction_deleted` | update | Attempted to update a soft-deleted transaction | — |
 | `invalid_amount` | update | `tx_amount_local` is not a positive finite number | — |
@@ -224,6 +243,10 @@ Error code strings carry no embedded values. Where additional context is needed 
 | `duplicate_id_in_batch` | bulk create | The same UUID appears again in this request, including a case variant | — |
 | `transfer_child_id_requires_parent` | bulk create | Import addresses an existing child; use the initiating parent's UUID | — |
 | `invalid_tx_amount_local` | create, bulk create | `tx_amount_local` resolved to a non-finite number before the sheet write (`_writeSingleTransaction` guard) | — |
+
+## Suggested entries
+
+Suggestions are optional drafts, never automatic payments. Their historical groups keep counterparty, full classification, account and currency together so native amounts from different currencies cannot share a median. Deleted, invalid, future and unavailable-account movements are excluded; a payment today suppresses only its matching group. Monthly recurrence respects its due-day window. Each card has a stable account-specific identity, and suggestion logs omit payee names.
 
 ## CSV import
 

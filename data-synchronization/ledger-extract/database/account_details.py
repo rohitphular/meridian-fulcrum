@@ -43,7 +43,7 @@ def _valuation_rate(conn: Any, currency: str, source: dict[str, Any]) -> tuple[A
     rate = None
     with conn.cursor() as cursor:
         if reference is not None:
-            cursor.execute("SELECT id, quote_currency_code, base_currency_code, rate_value, rate_date FROM currency_rates WHERE id=%s", (reference,))
+            cursor.execute("SELECT id, quote_currency_code, base_currency_code, rate_value, rate_date FROM currency_rates WHERE id=%s FOR SHARE", (reference,))
             rate = cursor.fetchone()
             if rate is None:
                 raise _RowError("evaluation_rate_not_found")
@@ -54,7 +54,7 @@ def _valuation_rate(conn: Any, currency: str, source: dict[str, Any]) -> tuple[A
         elif valuation_date is not None and currency != "XAU":
             cursor.execute(
                 """SELECT id, quote_currency_code, base_currency_code, rate_value, rate_date FROM currency_rates
-                   WHERE quote_currency_code=%s AND base_currency_code='XAU' AND rate_date<=%s ORDER BY rate_date DESC LIMIT 1""",
+                   WHERE quote_currency_code=%s AND base_currency_code='XAU' AND rate_date<=%s ORDER BY rate_date DESC LIMIT 1 FOR SHARE""",
                 (currency, valuation_date),
             )
             rate = cursor.fetchone()
@@ -75,7 +75,7 @@ def _prepare(conn: Any, sheet_name: str, row: dict[str, Any]) -> tuple[dict[str,
         raise _RowError("account_detail_policy_mismatch")
     currency = result.get("instrument_currency_local") or account_currency
     with conn.cursor() as cursor:
-        cursor.execute("SELECT decimal_places FROM currency_master WHERE currency_code=%s", (currency,))
+        cursor.execute("SELECT decimal_places FROM currency_master WHERE currency_code=%s FOR SHARE", (currency,))
         metadata = cursor.fetchone()
     if metadata is None:
         raise _RowError("currency_not_found")

@@ -11,11 +11,9 @@ export function renderRates() {
   closeContextMenu(); _rateMenuKey = null;
   const content = el('ratesContent');
 
-  const hasActiveRate = !!state.rateDeleteCurrency;
-
   const cardRows = state.rates.map(r => {
     const base = r.currency === 'XAU';
-    if (state.rateDeleteCurrency === r.currency) return '';
+    if (state.rateDeleteCurrency === r.currency) return `<div class="card record-confirm-card">${_renderRateDelete(r)}</div>`;
     return `<div class="rate-card">
       <div class="rate-card-body">
         <div class="rate-card-code">${esc(r.currency)}${r.symbol ? ` <span class="rate-card-sym">${esc(r.symbol)}</span>` : ''}</div>
@@ -35,7 +33,7 @@ export function renderRates() {
     <p class="sec-sub" style="margin:-8px 0 16px">Units of currency per 1g XAU. XAU is the base (read-only).</p>
     ${state.rateAddOpen    ? _renderAddForm()                                          : ''}
     ${state.rateEditCurrency ? _renderEditForm(state.rates.find(r => r.currency === state.rateEditCurrency)) : ''}
-    <div class="table-wrap rate-table-wrap${hasActiveRate ? ' rate-has-active' : ''}">
+    <div class="table-wrap rate-table-wrap">
       <table>
         <thead><tr>
           <th style="width:100px">Currency</th>
@@ -117,10 +115,7 @@ function _renderEditForm(r) {
 
 // ── Table rows ────────────────────────────────────────────────────────────────
 
-function _rateRowHtml(r) {
-  const base = r.currency === 'XAU';
-
-  if (state.rateDeleteCurrency === r.currency) {
+function _renderRateDelete(r) {
     // Blocked state — backend refused because accounts or transactions still
     // use this currency. Currency on an account is immutable, so the recovery
     // path is to delete those accounts/transactions first.
@@ -140,26 +135,24 @@ function _rateRowHtml(r) {
         body = `Cannot delete <strong>${esc(r.currency)}</strong> — <strong>${n}</strong> ${noun} recorded in this currency.`;
         hint = 'Delete or reassign those transactions first.';
       }
-      return `<tr>
-        <td class="td-mono"><strong>${esc(r.currency)}</strong></td>
-        <td colspan="3">
+      return `
           <span class="confirm-text">${body}</span>
           <div style="color:var(--muted);font-size:var(--text-sm);margin-top:4px">${hint}</div>
-        </td>
-        <td><div class="row-actions">
+        <div class="row-actions">
           <button class="btn-link muted" data-action="rate-cancel-delete">Cancel</button>
-        </div></td>
-      </tr>`;
+        </div>`;
     }
-    return `<tr>
-      <td class="td-mono"><strong>${esc(r.currency)}</strong></td>
-      <td colspan="2"><span class="confirm-text">Delete <strong>${esc(r.currency)}</strong>?</span></td>
-      <td></td>
-      <td><div class="row-actions">
+    return `<span class="confirm-text">Delete <strong>${esc(r.currency)}</strong>?</span>
+      <div class="row-actions">
         <button class="btn-link danger" data-action="rate-confirm-delete" data-currency="${esc(r.currency)}">Yes, delete</button>
         <button class="btn-link muted"  data-action="rate-cancel-delete">Cancel</button>
-      </div></td>
-    </tr>`;
+      </div>`;
+}
+
+function _rateRowHtml(r) {
+  const base = r.currency === 'XAU';
+  if (state.rateDeleteCurrency === r.currency) {
+    return `<tr><td colspan="5">${_renderRateDelete(r)}</td></tr>`;
   }
 
   return `<tr>

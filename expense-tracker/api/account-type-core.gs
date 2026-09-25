@@ -78,6 +78,7 @@ function _changeAccountType(body, status) {
   if (state.requires_migration) return { ok: false, error: 'account_type_migration_required' };
   if (state.sheet === null || rowNum > state.sheet.getLastRow()) return { ok: false, error: 'invalid_row' };
   const previous = state.rows[rowNum - 2];
+  if (matchesExpectedRecord(body, previous.id, previous.updated_at) === false) return { ok: false, error: 'stale_record' };
   if (body.id !== undefined && _accountTypeText(body.id).toLowerCase() !== previous.id) return { ok: false, error: 'stale_row' };
   const candidate = Object.assign({}, previous);
   for (const field of ['id', 'account_type_key', 'account_subtype_key']) {

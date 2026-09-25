@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
-from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation, localcontext
 from typing import Any
 
 from py_logging import get_logger
@@ -19,8 +19,12 @@ DO UPDATE SET rate_value = EXCLUDED.rate_value,
 """
 
 _FORWARD_FILL_SQL = f"""
-WITH date_series AS (
-    SELECT generate_series(%s::date, %s::date, '1 day'::interval)::date AS rate_date
+WITH date_bounds AS (
+    SELECT %s::date AS first_date, %s::date AS last_date
+), date_series AS (
+    SELECT first_date + day_offset AS rate_date
+    FROM date_bounds
+    CROSS JOIN LATERAL generate_series(0, last_date - first_date) AS days(day_offset)
 ), candidates AS (
     SELECT d.rate_date, c.currency_code AS quote_currency_code
     FROM date_series d
@@ -53,14 +57,16 @@ def upsert_rates(client: Any, rows: list[tuple[str, date, Decimal, str]]) -> Non
     """Validate the whole batch before writing. The caller owns the transaction."""
     validated = []
     for code, rate_date, rate, source in rows:
-        if len(code) != 3 or not code.isascii() or not code.isalpha() or code != code.upper():
+        if not isinstance(code, str) or len(code) != 3 or not code.isascii() or not code.isalpha() or code != code.upper():
             raise ValueError("invalid_currency_code")
-        if type(rate_date) is not date or source not in {"yfinance", "stooq", "synthetic"}:
+        if type(rate_date) is not date or not isinstance(source, str) or source not in {"yfinance", "stooq", "synthetic"}:
             raise ValueError("invalid_rate_metadata")
         if not isinstance(rate, Decimal) or not rate.is_finite() or rate <= 0:
             raise ValueError("invalid_rate_value")
         try:
-            rounded = rate.quantize(Decimal("0.00000001"), rounding=ROUND_HALF_UP)
+            with localcontext() as context:
+                context.prec = 64
+                rounded = rate.quantize(Decimal("0.00000001"), rounding=ROUND_HALF_UP)
         except InvalidOperation as error:
             raise ValueError("rate_outside_storage_precision") from error
         if rounded <= 0 or rounded >= Decimal("100000000000"):

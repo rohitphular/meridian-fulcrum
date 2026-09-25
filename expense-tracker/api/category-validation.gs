@@ -37,6 +37,10 @@ function validateCategoryImport(body, context) {
 }
 
 function validateCategoryCreate(body) {
+  // Interactive creation must meet the same UUID, label, boolean and hint
+  // contract as import; otherwise one bad identity blocks the whole next sync.
+  const validation = validateCategoryImport(body);
+  if (validation.ok === false) return validation;
   const type = (body.tx_type_key !== undefined && body.tx_type_key !== null) ? String(body.tx_type_key).trim() : '';
   if (VALID_CATEGORY_TX_TYPES.indexOf(type) === -1)
     return { ok: false, error: 'invalid_transaction_type' };
@@ -63,6 +67,8 @@ function validateCategoryCreate(body) {
 }
 
 function validateCategoryUpdate(body) {
+  const validation = validateCategoryImport(body);
+  if (validation.ok === false) return validation;
   if (body.row_num === undefined || body.row_num === null) return { ok: false, error: 'missing_row_num' };
   const type = (body.tx_type_key !== undefined && body.tx_type_key !== null) ? String(body.tx_type_key).trim() : '';
   if (VALID_CATEGORY_TX_TYPES.indexOf(type) === -1)

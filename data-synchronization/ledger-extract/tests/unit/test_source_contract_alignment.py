@@ -45,6 +45,12 @@ def test_runtime_registry_has_exactly_the_supported_sources(gas_contract: dict[s
         assert entry["key_field"] == "id"
         assert {key: tuple(values) for key, values in entry["enums"].items()} == dict(contract.enums)
         assert set(entry["numeric_fields"]) == set(contract.decimal_fields) | set(contract.integer_fields)
+        for field in ("boolean_fields", "date_fields", "nonnegative_fields", "positive_fields", "percentage_fields"):
+            assert set(entry.get(field, [])) == set(getattr(contract, field)), (sheet, field)
+        assert {field: tuple(bounds) for field, bounds in entry.get("integer_fields", {}).items()} == {
+            field: (minimum, 2**31 - 1 if maximum is None else maximum) for field, (minimum, maximum) in contract.integer_fields.items()
+        }
+        assert set(entry.get("precise_fields", [])) == set(contract.decimal_fields) - set(contract.money_fields), sheet
         assert tuple(entry["columns"][-6:]) == DETAIL_SYNC_METADATA
 
 

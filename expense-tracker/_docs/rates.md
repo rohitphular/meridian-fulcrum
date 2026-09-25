@@ -30,9 +30,9 @@ The app uses a single current rate per currency. Historical FX rates remain outs
 
 The Rates section supports Add, Edit and Delete. Symbols are editable. Saves dispatch `et:reload` to refresh all dependent data. GBP is editable; XAU is read-only.
 
-Currency codes are trimmed and uppercased; the API accepts 1–8 alphanumeric characters. Rates must be finite and greater than zero. Symbols are optional, at most eight characters, and may not contain HTML-meaningful characters or a backslash. Omitting a symbol on update preserves it.
+Currency codes are trimmed and uppercased; the API accepts 1–8 alphanumeric characters. This display-rate flexibility is separate from account/extraction currency eligibility: account creation requires exactly three ASCII letters and an available Sheet rate; PostgreSQL extraction additionally requires the currency catalog and dated rates managed by `currency-rates`. Rates must be finite and greater than zero. Symbols are optional, at most eight characters, and may not contain HTML-meaningful characters or a backslash. Omitting a symbol on update preserves it.
 
-Deletion checks `accounts.account_currency_local`, including inactive/deleted account rows, since historical transactions derive currency from their account. There is no transaction currency column to scan separately.
+Deletion checks `account_master.account_currency_local`, including inactive/deleted account rows, since historical transactions derive currency from their account. There is no transaction currency column to scan separately.
 
 ## Errors and schema
 

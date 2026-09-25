@@ -12,7 +12,9 @@ function load(file, globals, expose) {
   vm.runInContext(source + '\n globalThis.testExports = {' + expose.join(',') + '};', context);
   return context.testExports;
 }
+const dateUtils = load('core/date-utils.js', {}, ['accountSnapshotInstant', 'accountMovementInstant', 'balanceMovementAffectsSnapshot']);
 const insights = load('sections/insights/insight-utils.js', {
+  ...dateUtils,
   state: {}, toBase: (amount, currency) => currency === 'GBP' ? amount / 2 : amount,
 }, ['accountBalanceByMonth', 'computeBalancesAt', 'computeDailyTotalAssets']);
 const account = { id: 'a', account_currency_local: 'GBP', opening_value_local: 100, tracking_start_date_local: '2026-09-02 12:00' };
@@ -24,7 +26,7 @@ assert.equal(insights.accountBalanceByMonth([account], txs, ['2026-08', '2026-09
 assert.equal(insights.accountBalanceByMonth([account], txs, ['2026-08', '2026-09']).get('2026-08').a, 0);
 assert.equal(insights.computeBalancesAt([{ ...account, tracking_start_date_local: '' }], [tx('2026-09-01', 20)], new Date(2026, 8, 3)).get('a'), 60);
 const exportState = {};
-const utils = load('core/utils.js', { state: exportState, _exportData: (format, rows, filename, cols) => ({ rows, filename, cols }), utcToLocalInput: value => value }, ['exportSubscriptions', 'exportAccounts', 'exportCategories', 'exportData', 'parseCsvRow']);
+const utils = load('core/utils.js', { state: exportState, _exportData: (format, rows, filename, cols) => ({ rows, filename, cols }), utcToLocalInput: value => value }, ['exportSubscriptions', 'exportAccounts', 'exportCategories', 'exportData', 'parseCsvRow', 'parseCsvRecords']);
 assert.deepEqual(Array.from(utils.parseCsvRow('"a ""quoted"" name",42')), ['a "quoted" name', '42']);
 const sub = { subscription_name: 'Rent', subscription_start_date_local: '2026-09-01', subscription_end_date_local: '2026-12-31' };
 const exported = utils.exportSubscriptions('csv', [sub]);
@@ -36,7 +38,7 @@ assert.equal(utils.exportAccounts('csv', [account]).filename, 'account_master');
 assert.equal(utils.exportCategories('csv', []).filename, 'category_master');
 assert.equal(exported.filename, 'subscription_master');
 const parent = { id: 'parent', account_id: 'a', tx_type: 'money-out', tx_amount_local: 10, tx_date_local: '2026-09-03 12:00:45' };
-const child = { id: 'child', parent_tx_id: 'parent', account_id: 'b', tx_type: 'money-in', tx_amount_local: 20 };
+const child = { id: 'child', parent_tx_id: 'parent', account_id: 'b', tx_type: 'money-in', tx_amount_local: 20, tx_date_local: parent.tx_date_local };
 exportState.transactions = [parent, child];
 exportState.accountMap = { a: { account_name: 'Bank' }, b: { account_name: 'Wallet' } };
 const transferExport = utils.exportData('csv', [child, parent]);
@@ -52,10 +54,11 @@ assert.equal(subscriptionImport.subscriptions[0].subscription_timezone_local, 'E
 assert.equal(subscriptionImport.subscriptions[0].record_status, 'inactive');
 const imported = [];
 const frontend = load('sections/transactions.js', {
-  state: { accounts: [{ id: 'a', account_name: 'Bank' }], accountSchema: { loan_sub_types: ['personal_loan'] } }, getSymbol: () => '£', parseCsvRow: utils.parseCsvRow,
+  ...dateUtils,
+  state: { accounts: [{ id: 'a', account_name: 'Bank' }], accountSchema: { loan_sub_types: ['personal_loan'] } }, getSymbol: () => '£', parseCsvRow: utils.parseCsvRow, parseCsvRecords: utils.parseCsvRecords,
   el: () => null, showLoading() {}, hideLoading() {}, showMsg() {},
   document: { dispatchEvent() {} }, CustomEvent: class {},
-  ExpenseAPI: { async createTransactionsBulk(payload) { imported.push(...payload.transactions); return { ok: true, created: 0, updated: payload.transactions.length, failed: 0, results: [] }; } },
+  ExpenseAPI: { async createTransactionsBulk(payload) { imported.push(...payload.transactions); return { ok: true, created: 0, updated: payload.transactions.length, failed: 0, results: payload.transactions.map(row => ({ ok: true, action: 'updated', key: row.id })) }; } },
 }, ['_parseTxCsv', '_submitTxImport', '_checkBalanceRules', '_checkRule5']);
 assert.match(frontend._checkBalanceRules('money-out', { ...account, type: 'asset', current_value_local: 10 }, false, 20, '2026-09-03'), /Insufficient balance/);
 assert.equal(frontend._checkBalanceRules('money-out', { ...account, type: 'asset', current_value_local: 10 }, false, 20, '2026-09-01'), null);

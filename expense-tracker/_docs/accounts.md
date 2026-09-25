@@ -55,7 +55,7 @@ Account subtype choices and labels come from active or locked rows in the `accou
 
 `account_closing_date_local` is populated via `update_account` when an account is closed — set alongside `record_status: inactive`.
 
-Opening, closing and tracking dates accept valid ISO local dates/datetimes without a UTC offset, with up to six fractional-second digits. Invalid calendar dates and time rollovers are rejected; closing cannot precede the recorded opening date. Text is preserved without UTC conversion. `local_timezone` remains optional; when supplied, ledger-extract validates its IANA timezone meaning and any ambiguous/nonexistent local time.
+Opening, closing and tracking dates accept valid ISO local dates/datetimes without a UTC offset, with up to six fractional-second digits. Invalid calendar dates and time rollovers are rejected; closing cannot precede the recorded opening date. Text is preserved without UTC conversion. `local_timezone` remains optional. When supplied, the backend validates the IANA zone and rejects ambiguous/nonexistent local times before writing; accepted aliases/casing are stored canonically for ledger-extract. Native Sheet date cells are returned using the spreadsheet's displayed wall time, without an unintended JSON UTC shift.
 
 `record_status` can be changed to `active`, `inactive`, or `locked` via `update_account`. Setting it to `deleted` via `update_account` is rejected with `invalid_record_status` — the `deleted` state is set only via `delete_account`; restoring from `deleted` requires `restore_account`.
 
@@ -94,7 +94,7 @@ Four cards above the table, always in the selected display currency and always u
 | Operation | Behaviour |
 |---|---|
 | `list_accounts` | Return all rows; no defaults seeded |
-| `create_account` | Validate required fields (including `opening_value_local`, `account_opening_date_local`); negate value for liabilities; assign UUID `id` (supplied IDs must be valid UUIDs; new values are written lowercase and an existing UUID returns `account_id_exists`); store `local_timezone` as-is from the frontend (captured from browser); store `account_opening_date_local` as-is (no UTC conversion); write `opening_value_local` to sheet; stamp `created_at`, `sync_status = create-pending`; append. `current_value_local` is NOT written at create time — it is computed at read time by `_buildAccountNetMap`. Returns `{ ok: true, id: '<uuid>' }`. |
+| `create_account` | Validate required fields (including `opening_value_local`, `account_opening_date_local`); negate value for liabilities; assign UUID `id` (supplied IDs must be valid UUIDs; new values are written lowercase and an existing UUID returns `account_id_exists`); store the validated canonical `local_timezone` from the frontend (captured from browser); store `account_opening_date_local` as-is (no UTC conversion); write `opening_value_local` to sheet; stamp `created_at`, `sync_status = create-pending`; append. `current_value_local` is NOT written at create time — it is computed at read time by `_buildAccountNetMap`. Returns `{ ok: true, id: '<uuid>' }`. |
 | `create_accounts_bulk` | Accept `accounts[]`; validate and insert or replace each row by `id`; match supplied UUIDs case-insensitively; preserve the existing UUID spelling, `created_at`, and omitted lifecycle status on replacement; advance `sync_status`. Existing duplicate UUIDs fail before row writes. Return `{ ok, created, updated, failed, results }` with result entries `{ key, ok, action?, error? }` |
 | `update_account` | Validate editable fields only; locked guard → `record_locked`; duplicate `account_name` check → `duplicate_account` (deleted accounts excluded from the collision check); advance `sync_status`; stamp `updated_at`. Editable fields: `account_name`, `sub_type`, `account_closing_date_local`, `description`, `record_status`. Valid `record_status` values for update: `active`, `inactive`, `locked` only — `deleted` is rejected with `invalid_record_status`. |
 | `delete_account` | Locked guard; FK check → `account_in_use`; soft-delete (`record_status → deleted`) |
@@ -121,6 +121,9 @@ Four cards above the table, always in the selected display currency and always u
 | `invalid_account_opening_date_local` | create/import | Opening date is not a valid ISO local date/datetime |
 | `invalid_account_closing_date_local` | create/import/update | Closing value is invalid or earlier than opening |
 | `invalid_tracking_start_date_local` | create/import | Tracking value is not a valid ISO local date/datetime |
+| `invalid_local_timezone` | create/import/update | Supplied timezone is not a recognized IANA zone |
+| `ambiguous_local_time`, `nonexistent_local_time` | create/import/update | Date falls inside a DST fold/gap; `field` identifies the date |
+| `stale_record` | update/delete/restore | `expected_id` differs from the UUID now at that row; reload before retrying |
 | `duplicate_account` | update | Another non-deleted account already has the same `account_name` (deleted accounts are excluded from the collision check) |
 | `invalid_record_status` | update | `record_status` is not one of `active`, `inactive`, `locked` |
 | `missing_row_num` | update, delete, restore | `row_num` not provided |
@@ -193,6 +196,6 @@ For `account_master`, these columns are supported:
 | `record_status` | No | Supplied valid status is retained. Omitted/blank means `active` for new IDs and preserves the current status on replacement. |
 | `description` | No | Notes. |
 
-IDs are validated before account writes. A single create cannot append an existing UUID; bulk import rejects ambiguous duplicate identities already present in the Sheet. Repeating an incoming UUID updates the same row and preserves the latest lifecycle state in that batch. Audit fields are managed by the backend. `current_value_local` is computed and is never imported. Replacements overwrite the account fields, so include all values that must be retained, including fields immutable in the interactive edit form.
+IDs are validated before account writes. A single create cannot append an existing UUID; bulk import rejects ambiguous duplicate identities already present in the Sheet. Repeating an incoming UUID updates the same row and preserves the latest lifecycle state in that batch. Audit fields are managed by the backend. `current_value_local` is computed and is never imported. Replacements may update name, subtype, closing date, description and lifecycle. They cannot change the legal entity, type, currency, timezone, opening date/value or an existing tracking timestamp: those fields are immutable in PostgreSQL too. Semantically equal decimal/date forms and timezone aliases preserve the original stored value. Omitted optional immutable fields retain their previous value; a previously blank tracking timestamp may be initialized once. A mismatch returns `field_not_editable` with the field name before the row is written. Existing locked rows return `record_locked`; import never unlocks them.
 
 Results: `N created · M updated · K failed`. Each result contains `{ key, ok, action?, error? }`. Keep IDs stable for repeat imports; omitting IDs creates new records.

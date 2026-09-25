@@ -34,25 +34,15 @@ clasp login                # opens browser; tokens cached in ~/.clasprc.json
 
 ## Daily commands
 
-Run from inside `api/`:
+From the repository root:
 
 ```bash
-clasp push --force         # sync local → GAS draft (does NOT affect live /exec)
-clasp open                 # open the GAS editor in browser
-clasp pull                 # pull GAS state back to local
-clasp logs                 # tail recent execution logs
+bash expense-tracker/cicd/deploy.sh dev "expense-tracker: change description"
+bash expense-tracker/cicd/logs.sh dev
+node --test expense-tracker/tests/*.cjs
 ```
 
-`clasp` reads `scriptId` from `.clasp.json` — at rest that's the placeholder. To run any of these against a real GAS project, hand-edit `.clasp.json` first to set `scriptId` to the env's value (from `cicd/envs.json`). Restore the placeholder when you're done.
-
-### Push vs deploy — the key distinction
-
-| Action | Effect |
-|---|---|
-| `clasp push` | Updates the **draft only**. The `/dev` URL reflects it immediately. The live `/exec` URL is unchanged. |
-| `clasp deploy` | Snapshots the draft as a new version on the live endpoint. The `/exec` URL (used by `app/config.js`) now serves the new code. |
-
-A push without a deploy means users still see the previous version.
+Use the deployment wrapper for source pushes and version promotion. It injects the environment's Script ID and restores `${SCRIPT_ID_PLACEHOLDER}` even on failure. Do not hand-edit `.clasp.json` or invoke `clasp push` / `clasp deploy` directly.
 
 ## Shipping a change
 
@@ -68,13 +58,18 @@ The deploy is **backend-only** — git operations are NOT performed. Commit and 
 
 See `cicd/README.md` for the full pipeline detail.
 
-## Testing on /dev before deploying
+## Validate in the dev environment
 
-Each GAS project has a `/dev` URL that always serves the latest draft (whatever was last `clasp push`'d). Useful for fast iteration without burning a new deployment version.
+Run the regression suite, deploy through `expense-tracker/cicd/deploy.sh dev`, and open the locally served frontend (which selects the dev `/exec` endpoint). Verify the changed flow there before deploying prod. The dev and prod environments have separate registered IDs; neither needs a manual `.clasp.json` or frontend URL edit.
 
-1. Hand-edit `api/.clasp.json` to the env's `scriptId` (from `cicd/envs.json`)
-2. `cd api && clasp push --force`
-3. In the GAS editor → **Deploy → Test deployments** → copy the `/dev` URL
-4. Temporarily edit the env's URL constant in `app/config.js` to point at the `/dev` URL
-5. Test in the browser (must be signed into the same Google account)
-6. When done, restore `.clasp.json` to `${SCRIPT_ID_PLACEHOLDER}` and revert `config.js`
+## Source integrity
+
+All master row-number mutations accept `expected_id` and `expected_updated_at`; the frontend sends the UUID and source revision from its current snapshot. A moved row or changed revision returns `stale_record` before writing, preventing stale forms on another device from replacing newer values. Sync acknowledgements do not change the source revision. Legacy callers may omit these checks for compatibility. Script-lock serialization does not prevent external Sheet edits during a request.
+
+Local date/time and decimal validation is shared in `app-utils.gs`. Transactions and account dates are checked against the extraction contracts; subscription schedule helpers use the same DST resolver. Sync and audit metadata are source-owned on every mutation.
+
+`get_computed_insights` rejects historical payloads without `source_contract: "single-leg-master-v1"` as `legacy_insights_contract_requires_upgrade`. The old Python insights producer requires a separate contract migration; its cached metrics are not trusted for the current source model.
+
+Positional Sheet contracts reject unknown trailing columns as well as renamed/reordered headers. Appending missing schema columns remains supported. Extra legacy fields require an explicit migration before either the app or extractor can accept the tab.
+
+Advisor failures expose stable error codes only (`openai_<http_status>`, `invalid_openai_response`, or `fetch_error`). Provider response bodies and caught exception messages are neither returned to clients nor written to logs; successful provider responses must contain nonempty text.

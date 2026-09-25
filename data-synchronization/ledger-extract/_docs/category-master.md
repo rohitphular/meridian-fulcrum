@@ -58,6 +58,8 @@ GAS accepts configured eligible subtype keys and the shorthand `investment`. For
 
 Each junction has only the two listed columns and a composite PK. Master changes and replacement of both junction sets commit in one transaction.
 
+Every category write rechecks the captured Sheet content immediately before commit. A source/header change rolls back the master and both junctions without acknowledging that row; this applies to pending creates/updates as well as dynamic account-type expansion refreshes.
+
 `account_types` is now managed from its own Sheet tab. Its 14 source columns, 15 database columns, bounded initial adoption and source/ingestion audit rules are documented in the [account-types mapping](account-types.md). Category synchronization only resolves those records and replaces category junctions; it does not generate account-type identities.
 
 ## Identity, constraints and mapping limits

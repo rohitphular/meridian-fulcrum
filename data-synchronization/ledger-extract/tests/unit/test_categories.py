@@ -150,3 +150,19 @@ def test_unchanged_dependency_check_releases_locks_without_sheet_ack(category_ro
     conn.rollback.assert_called_once()
     conn.commit.assert_not_called()
     sheet.batch_update_rows.assert_not_called()
+
+
+@pytest.mark.parametrize("status", ["create-pending", "update-pending", "in-sync"])
+@pytest.mark.parametrize("error", [RuntimeError("sheet_changed_before_acknowledgement:category_master"), ValueError("sheet_header_mismatch:category_master")])
+def test_all_category_writes_check_source_before_commit(category_row: dict, monkeypatch: pytest.MonkeyPatch, status: str, error: Exception) -> None:
+    conn, sheet = MagicMock(), MagicMock()
+    category_row["sync_status"] = status
+    monkeypatch.setattr(categories, "_investment_mapping_changed", lambda *_: True)
+    monkeypatch.setattr(categories, "_resolve_account_types", lambda *_: [])
+    monkeypatch.setattr(categories, "_insert_category", lambda *_: CATEGORY_ID)
+    monkeypatch.setattr(categories, "_replace_join_rows", MagicMock())
+    with pytest.raises(type(error), match=str(error)):
+        categories.upsert_categories(conn, sheet, [category_row], 1, before_dependency_commit=MagicMock(side_effect=error))
+    conn.commit.assert_not_called()
+    conn.rollback.assert_called_once()
+    sheet.batch_update_rows.assert_not_called()

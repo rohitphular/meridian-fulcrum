@@ -34,7 +34,29 @@ function setTheme(theme) {
 
 // ── Data loading ──────────────────────────────────────────────────────────────
 
+let _refreshVersion = 0;
+
+function _remapRowSelections(snapshot) {
+  const selections = {
+    transactions: ['txViewRow', 'txEditRow', 'txDeleteRow'],
+    accounts: ['accViewRow', 'accEditRow', 'accDeleteRow'],
+    categories: ['catViewRow', 'catEditRow', 'catDeleteRow'],
+    subscriptions: ['subEditRow', 'subDeleteRow'],
+  };
+  for (const [collection, keys] of Object.entries(selections)) {
+    for (const key of keys) {
+      if (!Number.isInteger(state[key])) continue;
+      const original = state[collection]?.find(row => row._row === state[key]);
+      const identity = typeof original?.id === 'string' ? original.id.toLowerCase() : null;
+      const matches = identity === null ? [] : snapshot[collection].filter(row => String(row.id).toLowerCase() === identity);
+      snapshot[key] = matches.length === 1 ? matches[0]._row : null;
+    }
+  }
+  snapshot.accDeleteBlocked = null;
+}
+
 async function loadAll() {
+  const refreshVersion = ++_refreshVersion;
   showLoading();
   try {
     const requests = [
@@ -51,6 +73,9 @@ async function loadAll() {
       ['subscription schema', loadSubscriptionSchema],
     ];
     const responses = await Promise.allSettled(requests.map(([, request]) => Promise.resolve().then(request)));
+    // An earlier read may finish after a post-save refresh. Only the newest
+    // requested snapshot may replace state or reopen the authentication gate.
+    if (refreshVersion !== _refreshVersion) return;
     const failures = [];
     responses.forEach((response, index) => {
       const entity = requests[index][0];
@@ -105,12 +130,15 @@ async function loadAll() {
       accountTypeSchema: accountTypeSchemaRes,
     };
     // Commit only after every dependency and derived collection is ready.
+    // Keep open selections attached to their UUID if an import moved Sheet rows.
+    _remapRowSelections(snapshot);
     Object.assign(state, snapshot);
 
     populateQuoteCurrencySelect();
     showSection(sessionStorage.getItem('et_section') || 'home');
 
   } catch (_) {
+    if (refreshVersion !== _refreshVersion) return;
     console.error('[main] loadAll failed:', _);
     showMsg('Connection error — check your internet and reload.', 'warn');
   } finally {
@@ -145,9 +173,10 @@ async function init() {
 
   // Reload events — fired by mutations instead of calling loadAll directly
   document.addEventListener('et:reload', loadAll);
+  el('refreshBtn')?.addEventListener('click', loadAll);
 
   // Config check
-  if (window.__configMissing) {
+  if (window.__configMissing || !window.CONFIG?.SCRIPT_URL) {
     hidePinGate();
     el('setupBanner').classList.remove('hidden');
     return;

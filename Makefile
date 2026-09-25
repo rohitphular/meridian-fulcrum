@@ -51,14 +51,14 @@ app-start: ## Start local HTTP server → http://localhost:8000/expense-tracker/
 		printf "#? "; read -r CHOICE; \
 		if [ "$$CHOICE" = "1" ]; then \
 			kill $$OTHER_PID && rm -f .server.pid; \
-			python3 -m http.server 8000 --directory . > /dev/null 2>&1 & echo $$! > .server.pid; \
+			python3 -m http.server 8000 --bind 127.0.0.1 --directory . > /dev/null 2>&1 & echo $$! > .server.pid; \
 			echo "Server started (PID $$(cat .server.pid)) → http://localhost:8000/expense-tracker/app/"; \
 		else \
 			echo "Run: kill $$OTHER_PID — then re-run make app-start."; \
 			exit 1; \
 		fi; \
 	else \
-		python3 -m http.server 8000 --directory . > /dev/null 2>&1 & echo $$! > .server.pid; \
+		python3 -m http.server 8000 --bind 127.0.0.1 --directory . > /dev/null 2>&1 & echo $$! > .server.pid; \
 		echo "Server started (PID $$(cat .server.pid)) → http://localhost:8000/expense-tracker/app/"; \
 	fi
 

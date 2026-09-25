@@ -12,6 +12,7 @@ import core.config as config
 import sources.crypto as crypto
 import sources.fiat as fiat
 from database.currency_master import get_currencies, update_last_fetched
+from database.locking import claim_job
 from database.upsert import forward_fill_rates, upsert_rates
 
 logger = get_logger(__name__)
@@ -27,6 +28,7 @@ class CurrencyRatesJob:
         client = None
         try:
             client = get_client(self._db)
+            claim_job(client)
             counts = _fetch_and_store(client, from_date, to_date)
             client.commit()
             return counts
@@ -66,10 +68,12 @@ def _fetch_and_store(client: Any, from_date: date, to_date: date) -> tuple[int, 
         return 0, 0
 
     fiat_codes = get_currencies(client, "fiat")
-    fiat_rates = {code: fiat.fetch_range(code, from_date, to_date) for code in fiat_codes}
-    require_rates(fiat_codes, fiat_rates)
     crypto_codes = get_currencies(client, "crypto")
-    crypto_rates = crypto.fetch_range(crypto_codes, from_date, to_date)
+    # One immutable gold snapshot anchors the entire daily cross-currency matrix.
+    gold_prices = fiat.download_closes("GC=F", from_date, to_date) if fiat_codes or crypto_codes else {}
+    fiat_rates = {code: fiat.fetch_range(code, from_date, to_date, gold_prices=gold_prices) for code in fiat_codes}
+    require_rates(fiat_codes, fiat_rates)
+    crypto_rates = crypto.fetch_range(crypto_codes, from_date, to_date, gold_prices=gold_prices)
     require_rates(crypto_codes, crypto_rates)
 
     store_rates(client, fiat_rates, "yfinance")

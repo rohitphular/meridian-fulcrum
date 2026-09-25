@@ -170,6 +170,50 @@ function _prepareImportDetailRow(spec, row) {
       return { key: key, ok: false, error: 'invalid_' + field };
   }
 
+  function present(field) { return row[field] !== undefined && row[field] !== null && String(row[field]).trim() !== ''; }
+  function fields(name) { return spec[name] === undefined ? [] : spec[name]; }
+  for (const field of fields('boolean_fields')) {
+    if (!present(field)) continue;
+    if (typeof row[field] !== 'string' && typeof row[field] !== 'number' && typeof row[field] !== 'boolean')
+      return { key: key, ok: false, error: 'invalid_' + field };
+    const text = String(row[field]).trim().toLowerCase();
+    if (['true', 'false', 'yes', 'no', '1', '0'].indexOf(text) === -1) return { key: key, ok: false, error: 'invalid_' + field };
+    normalisedRow[field] = ['true', 'yes', '1'].indexOf(text) !== -1;
+  }
+  for (const field of fields('date_fields')) {
+    if (present(field) && accountLocalDateTimeKey(row[field]) === null) return { key: key, ok: false, error: 'invalid_' + field };
+  }
+  const integers = spec.integer_fields === undefined ? {} : spec.integer_fields;
+  for (const field of Object.keys(integers)) {
+    if (!present(field)) continue;
+    const canonical = decimalValueKey(row[field]);
+    const exponent = canonical === '0' ? 0 : Number(canonical.split('e')[1]);
+    if (exponent < 0 || Number(row[field]) < integers[field][0] || Number(row[field]) > integers[field][1])
+      return { key: key, ok: false, error: 'invalid_' + field };
+  }
+  for (const field of fields('nonnegative_fields').concat(fields('positive_fields'), fields('percentage_fields'))) {
+    if (!present(field)) continue;
+    const canonical = decimalValueKey(row[field]);
+    const parts = canonical.replace(/^-/, '').split('e');
+    const exceedsPercentage = canonical !== '0' && canonical !== '1e2' && parts[0].length + Number(parts[1]) >= 3;
+    if (canonical[0] === '-' || (fields('positive_fields').indexOf(field) !== -1 && canonical === '0')
+        || (fields('percentage_fields').indexOf(field) !== -1 && exceedsPercentage))
+      return { key: key, ok: false, error: 'invalid_' + field };
+  }
+  for (const field of fields('precise_fields')) {
+    if (!present(field)) continue;
+    const canonical = decimalValueKey(row[field]);
+    if (canonical === '0') continue;
+    const parts = canonical.replace(/^-/, '').split('e');
+    const exponent = Number(parts[1]);
+    if (parts[0].length + exponent > 20 || exponent < -18) return { key: key, ok: false, error: 'invalid_' + field };
+  }
+  if (spec.columns.indexOf('instrument_currency_local') !== -1 && present('instrument_currency_local')) {
+    const currency = String(row.instrument_currency_local).trim().toUpperCase();
+    if (/^[A-Z]{3}$/.test(currency) === false) return { key: key, ok: false, error: 'invalid_instrument_currency_local' };
+    normalisedRow.instrument_currency_local = currency;
+  }
+
   return { key: normalisedRow[spec.key_field], ok: true, row: normalisedRow };
 }
 
@@ -249,6 +293,8 @@ function _importRow(sheet, spec, row, accountSubTypeById, rowNumById, values) {
     if (!Number.isInteger(existingRowNum) || existingRowNum < 2 || existingRowNum > sheet.getLastRow())
       return { key: key, ok: false, error: 'invalid_row' };
     const existingRow = values[existingRowNum - 1];
+    if (_detailCellText(existingRow[recordStatusIdx]) === 'locked')
+      return { key: key, ok: false, error: 'record_locked' };
     if (_detailCellText(existingRow[spec.columns.indexOf('account_id')]).toLowerCase() !== row.account_id) {
       return { key: key, ok: false, error: 'detail_account_move_rejected' };
     }

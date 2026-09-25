@@ -1,5 +1,6 @@
 import { state } from '../../core/state.js';
 import { toBase, esc } from '../../core/utils.js';
+import { accountSnapshotInstant, accountMovementInstant, balanceMovementAffectsSnapshot } from '../../core/date-utils.js';
 
 // ── Period bounds ─────────────────────────────────────────────────────────────
 
@@ -200,16 +201,14 @@ export function cumulativeByDay(txs, from, to) {
 
 // ── Account balance replay ────────────────────────────────────────────────────
 
-// Opening balances and transactions are events in the account's local timeline.
+// Zoned openings and movements share one instant timeline. Chart dates use the
+// viewer's calendar; accounts without a zone retain legacy wall-time behavior.
 // Historical transactions before tracking start must not double-count the opening value.
 function _balanceEvents(accounts, txs) {
   const accountMap = new Map(accounts.map(account => [account.id, account]));
-  const starts = new Map();
   const events = [];
   accounts.forEach(account => {
-    const rawStart = String(account.tracking_start_date_local ?? '').trim();
-    const start = rawStart === '' ? -Infinity : new Date(rawStart.replace(' ', 'T')).getTime();
-    starts.set(account.id, start);
+    const start = accountSnapshotInstant(account);
     const opening = toBase(Number(account.opening_value_local), account.account_currency_local);
     if (!Number.isNaN(start) && Number.isFinite(opening)) {
       events.push({ time: start, accountId: account.id, amount: opening });
@@ -218,8 +217,8 @@ function _balanceEvents(accounts, txs) {
   txs.forEach(tx => {
     const account = accountMap.get(tx.account_id);
     if (account === undefined || tx.record_status === 'deleted') return;
-    const time = new Date(String(tx.tx_date_local).replace(' ', 'T')).getTime();
-    if (!Number.isFinite(time) || !(time >= starts.get(account.id))) return;
+    const time = accountMovementInstant(account, tx);
+    if (!Number.isFinite(time) || !balanceMovementAffectsSnapshot(account, tx)) return;
     const native = Number(tx.tx_amount_local);
     if (!Number.isFinite(native) || native <= 0) return;
     const amount = toBase(native, account.account_currency_local);

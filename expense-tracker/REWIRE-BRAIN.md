@@ -1,6 +1,6 @@
 # Expense Tracker — Current project state
 
-Updated: 2026-09-24. This snapshot supersedes the historical review notes below.
+Updated: 2026-09-25. This snapshot supersedes the historical review notes below.
 
 ## Architecture and local use
 
@@ -9,7 +9,7 @@ Vanilla JS ES modules in `app/`, shared browser helpers in `_shared/`, GAS V8 ba
 From the `meridian-fulcrum` repository root:
 
 ```bash
-python3 -m http.server 8000
+python3 -m http.server 8000 --bind 127.0.0.1
 # http://localhost:8000/expense-tracker/app/
 ```
 
@@ -29,6 +29,12 @@ Master CSV filenames, Sheet tab names and PostgreSQL table names now align as `a
 - Account master/detail imports: UI and backend support one master plus six detail types, as described in [_docs/account-imports.md](_docs/account-imports.md). Each detail tab maps to a database table with the same name; mortgage and personal loans have separate tables. Fixed-income/P2P detail contracts and extraction have been removed, while account-master subtypes remain available. Detail UUIDs are validated and preserved on re-import. All six detail tabs include record_status, sync_status, sync_date, sync_notes, created_at and updated_at; the importer owns sync/audit state and direct Sheet edits queue reprocessing. Property has removed the source evaluation_currency_rate_id and derives valuation rates from its evaluation date.
 
 ## Review fixes and validation
+
+The September 25 cross-module review aligns daily mobile entry with manual synchronization. Refreshes keep the newest complete snapshot and preserve selected UUIDs across row reordering; source mutations check expected UUID/edit timestamps. Mobile login recovery, delayed suggestions, decimal/transfer entry, touch controls and inline confirmations are covered. Transaction/account wall times are validated before Sheet writes, and zoned tracking balances compare actual instants in backend and browser replay. Account imports enforce immutable financial fields and locked account/detail rows cannot be replaced. Transfer lifecycle changes must preserve the extractor's pair invariants.
+
+Every ledger entity now checks the source before commit, including pending category rows. Account/detail valuation references stay locked through commit. Currency runs share one gold-price snapshot, use bounded provider retries and reject ambiguous inputs; migration `0006` rejects nonfinite rates and XAU values other than one. The optional legacy insights job is incompatible with the current model and now fails before live I/O; use Live insights. See the [manual workflow](../data-synchronization/README.md) and [review evidence/limitations](../data-synchronization/_docs/REVIEW-2026-09-25.md).
+
+The final pass also fixed multiline/precise CSV round-trips, failed-only import retries, uncertain-save handling, portable date filters, category identity/classification validation and direct-edit sync queuing. Detail and beneficiary inputs now validate against the extractor's contracts before saving. Blank-zone snapshot cutoffs do not inherit device DST normalization, and suggestions keep accounts/currencies separate while excluding unusable history. Currency forward-fill uses timezone-independent calendar dates; the currency launcher applies its documented default port before migrations. Unexpected trailing Sheet columns and sensitive provider-error logging are rejected. The final regression evidence and deployment boundaries are maintained in the linked review.
 
 The September 23 review fixed lost CSV IDs, subscription export fields, transfer export selection, tracking-aware balance replay, mixed-currency opening balances, UI balance/loan guards, invalid numeric values, obsolete currency references, and unsafe closing-date/filter-label HTML insertion. Data refreshes now validate all entity/schema responses before replacing the current snapshot; failed dependencies retain the previous complete view and show their error.
 

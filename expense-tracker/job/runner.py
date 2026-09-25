@@ -6,31 +6,37 @@ import traceback
 
 import config
 from jobs import ALL_JOBS
-from sheets_client import SheetsClient
 
 
-def main():
-    parser = argparse.ArgumentParser(description='Forge job processor')
-    parser.add_argument('--env', choices=['dev', 'prod'], default='dev',
-                        help='Environment to run against (default: dev)')
-    parser.add_argument('--job', default=None,
-                        help='Run a single job by name (default: run all)')
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Forge job processor")
+    parser.add_argument("--env", choices=["dev", "prod"], default="dev", help="Environment to run against (default: dev)")
+    parser.add_argument("--job", default=None, help="Run a single job by name (default: run all)")
     args = parser.parse_args()
 
     print(f"[runner] env={args.env} job={args.job or 'all'}")
-
-    cfg    = config.load(args.env)
-    sheets = SheetsClient(cfg['service_account'], cfg['spreadsheet_id'])
 
     jobs_to_run = ALL_JOBS
     if args.job:
         jobs_to_run = [j for j in ALL_JOBS if j.name == args.job]
         if not jobs_to_run:
-            names = ', '.join(j.name for j in ALL_JOBS)
+            names = ", ".join(j.name for j in ALL_JOBS)
             print(f"[runner] ERROR: unknown job {args.job!r}. Available: {names}")
             sys.exit(1)
 
-    total   = len(jobs_to_run)
+    # All selected jobs validate before credential loading or any Sheet access.
+    try:
+        for JobClass in jobs_to_run:
+            JobClass.validate_source_contract(config.SOURCE_CONTRACT)
+    except ValueError as error:
+        parser.exit(1, f"{error}\n")
+
+    from sheets_client import SheetsClient
+
+    cfg = config.load(args.env)
+    sheets = SheetsClient(cfg["service_account"], cfg["spreadsheet_id"])
+
+    total = len(jobs_to_run)
     success = 0
 
     for i, JobClass in enumerate(jobs_to_run, 1):
@@ -51,5 +57,5 @@ def main():
         sys.exit(1)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

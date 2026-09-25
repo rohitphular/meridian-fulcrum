@@ -109,7 +109,7 @@ This answers: "how many units of crypto equal one gram of gold?"
 
 ### Daily (rolling last 365 days)
 
-Fetches 365 calendar dates, from today minus 364 days through today inclusive, for both tracked fiat and crypto. Designed to run on a schedule (e.g. nightly cron).
+Fetches 365 calendar dates, from the current UTC date minus 364 days through that UTC date inclusive, for both tracked fiat and crypto. Designed to run on a schedule (e.g. nightly cron). A single downloaded gold-price snapshot is shared by all fiat and crypto conversions in the run, avoiding different gold anchors if a provisional close changes during fetching.
 
 Entry point: `core/runner.py`
 
@@ -145,6 +145,7 @@ Gold and forex markets close on weekends and public holidays — Yahoo Finance r
 - Refreshes existing forward-filled rows after a corrected real close; preserves real source rows
 - Does not create or update crypto gaps; old crypto forward-fill rows from earlier versions require a separately reviewed data cleanup
 - Fills through the requested end date using the latest earlier real close, even after the last source date; the source tag identifies stale carried values
+- Generates calendar dates independently of the database timezone, including midnight clock changes and skipped local civil dates
 
 The daily job's rolling 365-day window also self-heals any gap caused by a failed run: the next successful run covers the missed days automatically.
 
@@ -182,7 +183,7 @@ The daily job's rolling 365-day window also self-heals any gap caused by a faile
 | `created_at`         | TIMESTAMPTZ    | Auto-set on insert |
 | `updated_at`         | TIMESTAMPTZ    | Auto-updated on upsert |
 
-Unique constraint on `(quote_currency_code, rate_date)` — source upserts overwrite on conflict; forward-fills update only derived rows.
+Unique constraint on `(quote_currency_code, rate_date)` — source upserts overwrite on conflict while preserving the row UUID and creation time; forward-fills update only derived rows. Migration `0006_enforce_finite_identity_rates.py` rejects nonfinite rates and requires every XAU identity quote to equal `1`, including writes outside this job. Existing violations stop the migration for review; it never rewrites historical rates automatically.
 
 ---
 
@@ -287,5 +288,9 @@ Arithmetic uses `Decimal` after parsing provider values; database writes round h
 `GC=F` is a futures proxy for gold, not a spot-gold fixing. Joined closes share a provider calendar/session date, not necessarily the same pricing instant. Crypto is stored only for dates with both gold and crypto closes; weekends and pre-listing dates can remain absent. Missing an entire tracked series fails daily/crypto fetching before writes; isolated missing source dates are omitted (fiat gaps are carried forward). Today's close may be provisional and corrected by the next run.
 
 Missing historical files are warnings and skipped. A present file with no valid rows, an unreadable file, future-dated data, or an import with no fiat data fails the job. Invalid individual CSV rows are warned and skipped. CSV imports are tagged `stooq`. Setting `sources.yfinance.enabled: false` skips the daily job and skips only the crypto portion of a historical import.
+
+Downloads use up to three attempts for provider exceptions or wholly empty responses, with one- and two-second backoffs and a 20-second request timeout. Malformed columns and conflicting duplicate session dates are rejected. Historical CSVs reject duplicate headers or conflicting duplicate dates as a whole; identical date/value repetitions are harmless. Ragged rows are skipped instead of silently reading extra or shifted fields. Conversion arithmetic uses an isolated 64-digit Decimal context before storage rounds to eight decimal places.
+
+Daily and historical jobs share a transaction advisory lock. An overlapping run stops with `currency_rates_job_already_running` before fetching or writing; commit/rollback/connection closure releases the lock. Startup validates environment, source configuration and the historical CSV directory before running migrations. Controlled failure codes are logged without provider responses, connection strings or secrets.
 
 This review changes code only: historical misdated crypto rows or incorrect provenance already in a database are not automatically deleted. Re-fetching correct dates repairs overlapping rows, but any remaining legacy rows need explicit review before cleanup.

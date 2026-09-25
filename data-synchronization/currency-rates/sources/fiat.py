@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import csv
 import io
+import time
 from datetime import date, timedelta
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, localcontext
 from pathlib import Path
 
 import yfinance as yf
@@ -12,6 +13,7 @@ from py_logging import get_logger
 import sources.constants as constants
 
 logger = get_logger(__name__)
+_DOWNLOAD_ATTEMPTS = 3
 
 # Used by historical.py to derive local CSV filenames.
 SYMBOLS = {
@@ -54,13 +56,20 @@ def download_closes(ticker: str, from_date: date, to_date: date) -> dict[date, D
     """Read finite positive daily closes, preserving the provider's session dates."""
     if from_date > to_date or to_date == date.max:
         raise ValueError("Use an ordered date range with to_date earlier than 9999-12-31")
-    try:
-        prices = yf.download(ticker, start=from_date.isoformat(), end=(to_date + timedelta(days=1)).isoformat(), progress=False, auto_adjust=False)
-    except Exception as error:
-        logger.warning(f"download_closes: ticker={ticker} reason=download_failed error={type(error).__name__}")
-        return {}
-    if prices.empty:
-        logger.warning(f"download_closes: ticker={ticker} reason=no_data")
+    prices = None
+    for attempt in range(1, _DOWNLOAD_ATTEMPTS + 1):
+        try:
+            prices = yf.download(ticker, start=from_date.isoformat(), end=(to_date + timedelta(days=1)).isoformat(), progress=False, auto_adjust=False, threads=False, timeout=20)
+            if prices is not None and not prices.empty:
+                break
+            reason = "no_data"
+        except Exception as error:
+            prices = None
+            reason = f"download_failed error={type(error).__name__}"
+        logger.warning(f"download_closes: ticker={ticker} reason={reason} attempt={attempt}/{_DOWNLOAD_ATTEMPTS}")
+        if attempt < _DOWNLOAD_ATTEMPTS:
+            time.sleep(attempt)
+    if prices is None or prices.empty:
         return {}
     if "Close" not in prices:
         logger.warning(f"download_closes: ticker={ticker} reason=missing_close")
@@ -83,28 +92,37 @@ def download_closes(ticker: str, from_date: date, to_date: date) -> dict[date, D
             logger.warning(f"download_closes: ticker={ticker} reason=invalid_close_row")
             continue
         if from_date <= rate_date <= to_date:
+            if rate_date in rates and rates[rate_date] != rate:
+                logger.warning(f"download_closes: ticker={ticker} reason=conflicting_date date={rate_date}")
+                return {}
             rates[rate_date] = rate
     logger.info(f"download_closes: ticker={ticker} rows={len(rates)}")
     return rates
 
 
-def fetch_range(currency_code: str, from_date: date, to_date: date) -> dict[date, Decimal]:
+def fetch_range(currency_code: str, from_date: date, to_date: date, *, gold_prices: dict[date, Decimal] | None = None) -> dict[date, Decimal]:
     """Return quote currency units per gram XAU, using matching session dates."""
     if currency_code not in SYMBOLS:
+        logger.warning(f"fetch_range: currency={currency_code} reason=unsupported_fiat_currency action=add_symbol_and_forex_mapping")
         raise ValueError(f"Unsupported fiat currency {currency_code}; add its SYMBOLS and forex ticker mapping before tracking it")
-    gold_prices = download_closes("GC=F", from_date, to_date)
+    if gold_prices is None:
+        gold_prices = download_closes("GC=F", from_date, to_date)
     if currency_code == "USD":
-        return {rate_date: price / constants.TROY_OZ_TO_GRAM for rate_date, price in gold_prices.items()}
+        with localcontext() as context:
+            context.prec = 64
+            return {rate_date: price / constants.TROY_OZ_TO_GRAM for rate_date, price in gold_prices.items()}
     if not gold_prices:
         return {}
     ticker, multiply = _FOREX[currency_code]
     forex_prices = download_closes(ticker, from_date, to_date)
     rates: dict[date, Decimal] = {}
-    for rate_date in gold_prices.keys() & forex_prices.keys():
-        gold_price = gold_prices[rate_date]
-        forex_price = forex_prices[rate_date]
-        quote_per_ounce = gold_price * forex_price if multiply else gold_price / forex_price
-        rates[rate_date] = quote_per_ounce / constants.TROY_OZ_TO_GRAM
+    with localcontext() as context:
+        context.prec = 64
+        for rate_date in gold_prices.keys() & forex_prices.keys():
+            gold_price = gold_prices[rate_date]
+            forex_price = forex_prices[rate_date]
+            quote_per_ounce = gold_price * forex_price if multiply else gold_price / forex_price
+            rates[rate_date] = quote_per_ounce / constants.TROY_OZ_TO_GRAM
     return rates
 
 
@@ -119,14 +137,26 @@ def _parse_csv(text: str, currency_code: str) -> dict[date, Decimal]:
     if not reader.fieldnames or not {"Date", "Close"}.issubset(reader.fieldnames):
         logger.warning(f"_parse_csv: currency={currency_code} reason=missing_date_close_headers")
         return {}
+    if len(reader.fieldnames) != len(set(reader.fieldnames)):
+        logger.warning(f"_parse_csv: currency={currency_code} reason=duplicate_headers")
+        return {}
+    source_closes: dict[date, Decimal] = {}
     try:
         for row in reader:
             try:
+                if None in row or any(value is None for value in row.values()):
+                    raise ValueError("invalid_row_width")
                 rate_date = date.fromisoformat(row["Date"])
                 close = Decimal(row["Close"])
                 if not close.is_finite() or close <= 0:
                     raise ValueError("nonpositive_or_nonfinite_close")
-                rows[rate_date] = close / constants.TROY_OZ_TO_GRAM
+                if rate_date in source_closes and source_closes[rate_date] != close:
+                    logger.warning(f"_parse_csv: currency={currency_code} line={reader.line_num} reason=conflicting_date")
+                    return {}
+                source_closes[rate_date] = close
+                with localcontext() as context:
+                    context.prec = 64
+                    rows[rate_date] = close / constants.TROY_OZ_TO_GRAM
             except (KeyError, TypeError, ValueError, InvalidOperation):
                 logger.warning(f"_parse_csv: currency={currency_code} line={reader.line_num} reason=invalid_row")
     except csv.Error:

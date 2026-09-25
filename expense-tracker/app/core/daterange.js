@@ -29,7 +29,9 @@ export function txInRange(tx) {
   const { from, to } = getRangeBounds();
   const raw = tx.tx_date_local;
   if (raw === undefined || raw === null || String(raw).trim() === '') return true;
-  const d = new Date(raw);
+  // Filter by the recorded calendar date; space-separated Sheet timestamps
+  // are not a portable input to the browser Date string parser.
+  const d = parseLocalDate(raw);
   if (!Number.isFinite(d.getTime())) return true;
   const localDate = new Date(d.getFullYear(), d.getMonth(), d.getDate());
   return localDate >= from && localDate <= to;
@@ -53,7 +55,7 @@ export function filteredTx() {
     if (f.search !== undefined && f.search !== null && f.search !== '') {
       const q           = f.search.toLowerCase();
       const acctEntry   = (state.accountMap[tx.account_id] !== undefined && state.accountMap[tx.account_id] !== null) ? state.accountMap[tx.account_id] : {};
-      const _acctName   = (acctEntry.name !== undefined && acctEntry.name !== null) ? acctEntry.name : '';
+      const _acctName   = (acctEntry.account_name !== undefined && acctEntry.account_name !== null) ? acctEntry.account_name : '';
       const hay         = [tx.counterparty_name, tx.description, _acctName].join(' ').toLowerCase();
       if (!hay.includes(q)) return false;
     }

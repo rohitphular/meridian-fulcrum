@@ -65,6 +65,14 @@ function _dispatchGet(e) {
 }
 
 function doPost(e) {
+  try {
+    return _dispatchPostRequest(e);
+  } catch (error) {
+    return _sheetRequestFailure('doPost', error);
+  }
+}
+
+function _dispatchPostRequest(e) {
   let body;
   try { body = JSON.parse(e.postData.contents); }
   catch (_) { return json({ ok: false, error: 'invalid_json' }); }

@@ -12,6 +12,10 @@ cd "$JOB_DIR"
 
 ENV_ARG="${1:-}"
 MODE_ARG="${2:-}"
+if [[ $# -gt 2 ]]; then
+  echo "ERROR: Usage: ./cicd/start-up.sh dev|prod [daily|historical]"
+  exit 1
+fi
 
 if [[ -z "$ENV_ARG" ]]; then
   echo "ERROR: environment argument is required."
@@ -70,11 +74,16 @@ fi
 
 echo "[$ENV_ARG] Loading env vars..."
 set -a; source "$ENV_FILE"; set +a
+# Match core.config's unset-only default for the migration CLI's env interpolation.
+export FULCRUM_DB_PORT="${FULCRUM_DB_PORT-5432}"
 
 # ── Step 3: Install dependencies and run migrations ───────────────────────────
 
 echo "[$ENV_ARG] Installing dependencies..."
 uv sync --locked --quiet
+
+echo "[$ENV_ARG] Validating job configuration..."
+uv run --locked python -m core.config "$MODE_ARG"
 
 echo "[$ENV_ARG] Running migrations..."
 uv run --locked py-db-migrate run --db postgres

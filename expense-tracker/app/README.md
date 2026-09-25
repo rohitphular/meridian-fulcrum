@@ -21,14 +21,17 @@ app/
 │   ├── schema.js             loads account/transaction/category schemas from the backend
 │   ├── nav.js                showSection(name) — swaps visible tab content
 │   ├── daterange.js          this_month / last_30 / custom filter for transactions
+│   ├── date-utils.js         timezone-aware balance snapshot comparisons
 │   ├── utils.js              el, esc, fmtDateTime, fmtNative, fmtBase, exportData …
 │   └── ui.js                 re-exports loading/toast helpers from expense-tracker/_shared/ui.js
 ├── sections/               one module per tab; each exports a render<Name>() function
 │   ├── insights.js           summary cards, charts
-│   ├── transactions.js       filterable + sortable list (largest module — ~1200 lines)
+│   ├── transactions.js       filterable + sortable single-leg ledger and transfer entry
 │   ├── accounts.js           accounts table + net-worth summary
 │   ├── categories.js         category tree (major → minor) with archive toggle
 │   ├── rates.js              FX rates per currency (base = XAU; selectable display currency)
+│   ├── subscriptions.js      recurring payment definitions and CSV import
+│   ├── configure.js          collapsible Account Types configuration
 │   └── advisor.js            LLM chat panel
 └── style/
     └── expense-tracker.css   all app styles — light + dark themes
@@ -40,10 +43,14 @@ Design tokens (`--ink`, `--ember`, `--teal`, type scale, fonts) live in `../_sha
 
 1. `index.html` links `_shared/style-tokens.css` then `style/expense-tracker.css`, loads `config.js` (sets `window.CONFIG.SCRIPT_URL`), then `main.js` as `type="module"`.
 2. `main.js` checks the local six-hour PIN session. No valid local session → show PIN gate; otherwise initialise the API client and load data. Every API request validates the PIN server-side.
-3. Schemas are fetched once (`loadAccountSchema`, `loadTransactionSchema`, `loadCategorySchema`) and stored on `state`.
+3. Schemas are loaded onto `state`; account, category, account-type and subscription schemas refresh on each load. The transaction schema uses a versioned cache.
 4. The saved section renders, defaulting to Home. Clicking a tab calls `showSection(name)` which calls the section's `renderXxx()`.
-5. Refresh validates every entity/schema response before assigning one complete snapshot. A failed dependency preserves the previous view and displays its error.
+5. Refresh validates every entity/schema response before assigning one complete snapshot. A failed dependency preserves the previous view and displays its error. Only the latest requested refresh may commit; an older response cannot replace newer data. The header Refresh button reloads Sheet changes and sync acknowledgements.
 6. On any data mutation (save / delete), the section fires `document.dispatchEvent(new CustomEvent('et:reload'))` — `main.js` listens, refetches, and re-renders the current section.
+
+Row-based mutations include `expected_id` and, when available, `expected_updated_at` from the displayed snapshot. The backend rejects a moved or concurrently edited row with `stale_record`. Refresh remaps open account/category/transaction/subscription selections by UUID before replacing the arrays. Account Types retains its draft identity and timestamp. On a stale-record message, refresh and reopen the record before retrying.
+
+Sign-in suppresses repeated submissions, clears the PIN/TOTP inputs after success, and re-enables Unlock if authentication is required again. Optional IP geolocation stops waiting after three seconds and falls back to unavailable metadata.
 
 ## State model
 
@@ -88,8 +95,20 @@ Each section owns its own `xxxAddOpen` / `xxxViewRow` / `xxxEditRow` / `xxxDelet
 
 - **One render function per section.** Sets `innerHTML`, then attaches events. No setTimeout — bind synchronously.
 - **Event delegation.** Action buttons carry `data-action="tx-edit"` + `data-row="42"`. A single listener on the section container fans out to handlers.
-- **No inline expansions in tables.** View/Edit always render above the table as a `.card`. Delete confirmation stays inline (one-line confirm).
-- **Cards mirror table rows on mobile.** Desktop sees the table; below 640px the table hides and the cards show.
+- **No inline expansions in tables.** View/Edit always render above the table as a `.card`. Delete confirmation stays in the row on desktop and in the corresponding card on mobile, including blocked-deletion recovery actions.
+- **Cards mirror table rows on mobile.** Desktop sees the table; at 640px and below the table hides and the cards show. Header and pagination controls wrap, form controls use a 16px font, and primary actions have a minimum 44px touch target.
+- **Transaction drafts survive suggestion updates.** An asynchronous suggestions response and expanding/collapsing that panel update only the panel. They do not recreate the add/edit form.
+- **Transaction precision.** Entry, edit, copy and CSV export retain decimal amount text. Blank target amounts default only for same-currency transfers; cross-currency transfers require a target amount. Editing another field preserves the original seconds and fractional seconds when the displayed minute is unchanged.
+
+## CSV import and export
+
+Transactions, accounts and detail imports accept quoted commas, escaped quotes and multiline text. Invalid/duplicate headers and malformed rows block submission until corrected. Monetary amounts remain decimal strings. Selecting another file or closing the panel invalidates an older asynchronous file read.
+
+Transaction and account imports retain only rows with a confirmed failure for **Retry failed rows**. Every submitted row must have a response outcome; an incomplete response or interrupted connection disables retry and asks you to refresh and check what was saved. Imports cannot be started twice while their current request is running. GAS requests have a 60-second read deadline and a 180-second write deadline; timed-out writes may still finish on the server, and the client never automatically repeats them. Optional location lookups have a five-second deadline and leave the supplied location unchanged when unavailable.
+
+Transaction exports use `transaction_master` as the filename, retain `record_status`, and put a standalone money-in amount on its target account. The compact import format represents a transfer as one row with shared metadata. If its legs were independently edited, have different lifecycle statuses, or include historical deleted children, app export stops with an explanation instead of silently losing those differences. Use a direct export of the `transaction_master` Sheet when both original rows and their history are needed.
+
+Date filters compare the recorded calendar date using numeric date components, avoiding browser-dependent parsing of space-separated Sheet timestamps. Suggestions use an account-specific identity and cache version 2 so identical merchants in different accounts/currencies remain distinct.
 
 ## Design system
 
@@ -101,7 +120,7 @@ Each section owns its own `xxxAddOpen` / `xxxViewRow` / `xxxEditRow` / `xxxDelet
 | Type   | `--grotesk` (sans), `--mono` |
 | Scale  | `--text-2xs` 10px · `--text-xs` 11px · `--text-sm` 12px · `--text-base` 13.5px · `--text-md` 14px · `--text-lg` 15px · `--text-xl` 18px · `--text-2xl` 20px · `--text-3xl` 22px |
 
-Never use literal px font sizes in code or styles. Pick the closest token.
+Never use literal px font sizes in code or styles. Pick the closest token. Mobile controls also use `--text-input-mobile` (16px) and `--touch-target` (44px).
 
 **Dark mode.** Toggling `[data-theme="dark"]` on `<html>` rebinds the colour tokens — no per-rule overrides needed. The theme button in the header persists choice to `localStorage`.
 
@@ -115,6 +134,10 @@ Never use literal px font sizes in code or styles. Pick the closest token.
 - **Loading overlay** (`showLoading()` / `hideLoading()`) — used for every network call.
 - **Toast** (`showMsg(text)`) — non-blocking confirmations.
 - **Number formatting** — `fmtNative(amount, currency)` for source-currency; `fmtBase(amount, currency, fxRate)` for the selected display-currency equivalent.
+
+## Local verification
+
+Run `node --test expense-tracker/tests/*.cjs` from the repository root. `mobile-daily-use-review.cjs` covers sign-in recovery, refresh races, stale identities, transaction precision and transfer copying, draft preservation, mobile confirmation rendering and the precomputed-insight response envelope. Browser layout checks use synthetic data and block external requests; they do not write to Sheets or PostgreSQL. A September 25 review verified Chrome mobile viewports at 320, 390 and 640px, including confirmation visibility, touch targets, viewport overflow and transaction entry. `frontend-final-review.cjs` covers multiline CSV/decimal preservation, malformed headers, file-read races, failed-only import retries, uncertain write results, transfer-export guards, portable date filters, suggestion identity and HTTP deadlines. Browser checks also exercise valid/invalid CSV button state. Physical iOS/Android keyboard and deployed GAS integration still require device testing.
 
 ## Adding a new section
 

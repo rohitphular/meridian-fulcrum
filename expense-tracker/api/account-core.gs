@@ -5,7 +5,12 @@
 function listAccounts() {
   const cols     = getAccountSheetColumns();
   const sheet    = getOrCreateSheet(ACCOUNTS_SHEET, cols);
-  const accounts = sheetToObjectsWithRow(sheet);
+  const accounts = sheetToObjectsWithRow(sheet).map(function(account) {
+    ['account_opening_date_local', 'account_closing_date_local', 'tracking_start_date_local'].forEach(function(field) {
+      account[field] = sheetLocalDateTimeText(account[field]);
+    });
+    return account;
+  });
   const netMap   = _buildAccountNetMap(accounts);
   return accounts.map(function(a) {
     const opening = Number(a.opening_value_local);
@@ -26,7 +31,15 @@ function _buildAccountNetMap(accounts) {
   // resolve to opening_value + 0, not opening_value + undefined (which yields NaN).
   const net = Object.create(null);
   const trackingStartById = Object.create(null);
-  accounts.forEach(function(a) { trackingStartById[a.id] = sheetDateTimeToDate(a.tracking_start_date_local); });
+  accounts.forEach(function(a) {
+    const zone = a.local_timezone === undefined || a.local_timezone === null ? '' : String(a.local_timezone).trim();
+    const text = sheetLocalDateTimeText(a.tracking_start_date_local);
+    const key = accountLocalDateTimeKey(text);
+    const cutoff = key === null || zone === '' ? key : localDateTimeUtcKey(key, zone);
+    if (text !== undefined && text !== null && String(text).trim() !== '' && cutoff === null)
+      throw new Error('invalid_account_tracking_start');
+    trackingStartById[a.id] = { key: cutoff, zone: zone };
+  });
   accounts.forEach(function(a) { net[a.id] = 0; });
 
   const txSheet  = getOrCreateSheet(TRANSACTIONS_SHEET, getTransactionSheetColumns());
@@ -38,6 +51,7 @@ function _buildAccountNetMap(accounts) {
   const typeIdx = txColIndex('tx_type');
   const statIdx = txColIndex('record_status');
   const dateIdx = txColIndex('tx_date_local');
+  const zoneIdx = txColIndex('tx_timezone_local');
 
   // Index by account ID — transaction_master stores that UUID in account_id.
   const validIds = {};
@@ -53,10 +67,17 @@ function _buildAccountNetMap(accounts) {
       console.warn('_buildAccountNetMap: skipped_reason=invalid_amount row=' + (i + 1));
       continue;
     }
-    const transactionDate = sheetDateTimeToDate(values[i][dateIdx]);
-    if (transactionDate === null) continue;
     const trackingStart = trackingStartById[accId];
-    if (trackingStart !== null && transactionDate < trackingStart) continue;
+    const localKey = localDateTimeKey(sheetLocalDateTimeText(values[i][dateIdx]));
+    if (localKey === null) continue;
+    let transactionKey = localKey;
+    if (trackingStart.key !== null && trackingStart.zone !== '') {
+      const rawZone = values[i][zoneIdx];
+      const zone = rawZone === undefined || rawZone === null || String(rawZone).trim() === '' ? 'Europe/London' : String(rawZone).trim();
+      transactionKey = localDateTimeUtcKey(localKey, zone);
+      if (transactionKey === null) continue;
+    }
+    if (trackingStart.key !== null && transactionKey < trackingStart.key) continue;
     if (type === 'money-in')       net[accId] += amount;
     else if (type === 'money-out') net[accId] -= amount;
   }
@@ -100,7 +121,7 @@ function createAccount(body) {
   setCol('type',               type);
   setCol('sub_type',           body.sub_type            !== undefined && body.sub_type            !== null ? String(body.sub_type).trim()            : '');
   setCol('account_currency_local',     normCurrency);
-  setCol('local_timezone',     body.local_timezone      !== undefined && body.local_timezone      !== null ? String(body.local_timezone).trim()      : '');
+  setCol('local_timezone',     accountTimezone(body.local_timezone));
   setCol('account_opening_date_local', String(body.account_opening_date_local).trim());
   setCol('account_closing_date_local', body.account_closing_date_local  !== undefined && body.account_closing_date_local  !== null ? String(body.account_closing_date_local).trim()  : '');
   setCol('tracking_start_date_local',  body.tracking_start_date_local   !== undefined && body.tracking_start_date_local   !== null ? String(body.tracking_start_date_local).trim()   : '');
@@ -201,7 +222,7 @@ function createAccountsBulk(body) {
     setCol('type',               type);
     setCol('sub_type',           acct.sub_type            !== undefined && acct.sub_type            !== null ? String(acct.sub_type).trim()            : '');
     setCol('account_currency_local',     normCurrency);
-    setCol('local_timezone',     acct.local_timezone      !== undefined && acct.local_timezone      !== null ? String(acct.local_timezone).trim()      : '');
+    setCol('local_timezone',     accountTimezone(acct.local_timezone));
     setCol('account_opening_date_local', String(acct.account_opening_date_local).trim());
     setCol('account_closing_date_local', acct.account_closing_date_local  !== undefined && acct.account_closing_date_local  !== null ? String(acct.account_closing_date_local).trim()  : '');
     setCol('tracking_start_date_local',  acct.tracking_start_date_local   !== undefined && acct.tracking_start_date_local   !== null ? String(acct.tracking_start_date_local).trim()   : '');
@@ -222,6 +243,17 @@ function createAccountsBulk(body) {
       }
       // Preserve created_at from the existing row; advance sync_status.
       const existingRow = existingData[existingRowNum - 1];
+      if (String(existingRow[acctColIndex('record_status')]).trim() === 'locked') {
+        results.push({ key: id, ok: false, error: 'record_locked' });
+        failed += 1;
+        return;
+      }
+      const immutableValidation = preserveAccountImmutableFields(acct, row, existingRow);
+      if (immutableValidation.ok === false) {
+        results.push(Object.assign({ key: id }, immutableValidation));
+        failed += 1;
+        return;
+      }
       // Existing transaction/subscription references may use the original UUID
       // spelling. Match UUIDs canonically without rewriting that stored identity.
       row[idColIdx] = existingRow[idColIdx];
@@ -273,13 +305,14 @@ function updateAccount(body) {
   if (!Number.isInteger(rowNum) || rowNum < 2 || rowNum > lastRow) return { ok: false, error: 'invalid_row' };
 
   const allRows = sheet.getDataRange().getValues();
+  if (matchesExpectedRecord(body, allRows[rowNum - 1][acctColIndex('id')], allRows[rowNum - 1][acctColIndex('updated_at')]) === false) return { ok: false, error: 'stale_record' };
 
   if (String(allRows[rowNum - 1][acctColIndex('record_status')]) === 'locked')
     return { ok: false, error: 'record_locked' };
 
   const currentType = String(allRows[rowNum - 1][acctColIndex('type')]);
 
-  const validation = validateAccountUpdate(body, currentType, allRows[rowNum - 1][acctColIndex('account_opening_date_local')]);
+  const validation = validateAccountUpdate(body, currentType, allRows[rowNum - 1][acctColIndex('account_opening_date_local')], allRows[rowNum - 1][acctColIndex('local_timezone')]);
   if (validation.ok === false) return validation;
 
   // Duplicate name guard — reject if a different non-deleted row already has the same account_name
@@ -344,6 +377,7 @@ function deleteAccount(body) {
   // Single read — extract all needed values from this row before mutating.
   const allData       = sheet.getDataRange().getValues();
   const row           = allData[rowNum - 1].slice(); // copy so we can mutate
+  if (matchesExpectedRecord(body, row[acctColIndex('id')], row[acctColIndex('updated_at')]) === false) return { ok: false, error: 'stale_record' };
 
   const recordStatusColIdx = acctColIndex('record_status');
   const idColIdx           = acctColIndex('id');
@@ -408,6 +442,7 @@ function restoreAccount(body) {
   // Single read — extract both the status check and the sync_status from the same read.
   const allData = sheet.getDataRange().getValues();
   const row     = allData[rowNum - 1].slice(); // copy so we can mutate
+  if (matchesExpectedRecord(body, row[acctColIndex('id')], row[acctColIndex('updated_at')]) === false) return { ok: false, error: 'stale_record' };
 
   const recordStatusColIdx = acctColIndex('record_status');
   const syncStatusColIdx   = acctColIndex('sync_status');

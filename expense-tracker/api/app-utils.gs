@@ -14,6 +14,8 @@ function getOrCreateSheet(name, columns) {
   }
   const lastCol = sheet.getLastColumn();
   const headers = lastCol > 0 ? sheet.getRange(1, 1, 1, lastCol).getValues()[0] : [];
+  if (headers.length > columns.length)
+    throw new Error('sheet_header_mismatch: migrate sheet ' + name + ' unexpected trailing columns');
   // Positional schemas cannot safely read/write reordered or renamed legacy headers.
   // Require an explicit sheet migration instead of appending duplicate replacements.
   for (let i = 0; i < Math.min(headers.length, columns.length); i++) {
@@ -122,6 +124,113 @@ function getColIndex(schema, name) {
 // (as Sheets returns for boolean columns) into a JS boolean.
 function toBool(v) {
   return v === true || String(v).toLowerCase() === 'true';
+}
+
+// A browser snapshot can outlive a CSV rewrite or a manual row reorder. Never
+// apply an identified edit to whichever unrelated record now occupies that row.
+function matchesExpectedRecord(body, storedId, storedUpdatedAt) {
+  if (body.expected_id !== undefined && (typeof body.expected_id !== 'string' || body.expected_id.trim() === ''
+      || body.expected_id.trim().toLowerCase() !== String(storedId).trim().toLowerCase())) return false;
+  if (body.expected_updated_at === undefined) return true; // legacy API callers
+  function auditText(value) {
+    if (Object.prototype.toString.call(value) === '[object Date]') return Number.isFinite(value.getTime()) ? value.toISOString() : '';
+    return value === undefined || value === null ? '' : String(value).trim();
+  }
+  return auditText(body.expected_updated_at) === auditText(storedUpdatedAt);
+}
+
+function isFiniteDecimal(value) {
+  return (typeof value === 'number' || typeof value === 'string')
+    && /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(String(value).trim())
+    && Number.isFinite(Number(value));
+}
+
+function decimalValueKey(value) {
+  if (isFiniteDecimal(value) === false) return null;
+  const parts = /^([+-]?)(\d*)(?:\.(\d*))?(?:[eE]([+-]?\d+))?$/.exec(String(value).trim());
+  const fraction = parts[3] === undefined ? '' : parts[3];
+  let digits = (parts[2] + fraction).replace(/^0+/, '');
+  if (digits === '') return '0';
+  let exponent = (parts[4] === undefined ? 0 : Number(parts[4])) - fraction.length;
+  const trailing = /0+$/.exec(digits);
+  if (trailing !== null) { exponent += trailing[0].length; digits = digits.slice(0, -trailing[0].length); }
+  return (parts[1] === '-' ? '-' : '') + digits + 'e' + exponent;
+}
+
+// Shared with all local-wall-time source contracts. Offset-bearing timestamps
+// must not be confused with local time and DST gaps/folds cannot be guessed.
+function localDateTimeKey(value) {
+  if (typeof value !== 'string') return null;
+  const parts = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,6}))?$/.exec(value.trim());
+  if (parts === null) return null;
+  const year = Number(parts[1]), month = Number(parts[2]), day = Number(parts[3]);
+  if (year < 1 || month < 1 || month > 12 || day < 1 || Number(parts[4]) > 23 || Number(parts[5]) > 59 || Number(parts[6]) > 59) return null;
+  const calendar = localCalendarDate(year, month - 1, day);
+  if (calendar.getUTCFullYear() !== year || calendar.getUTCMonth() !== month - 1 || calendar.getUTCDate() !== day) return null;
+  return parts.slice(1, 4).join('-') + ' ' + parts.slice(4, 7).join(':') + '.'
+    + (parts[7] === undefined ? '' : parts[7]).padEnd(6, '0');
+}
+
+function localCalendarDate(year, month, day) {
+  const calendar = new Date(0);
+  calendar.setUTCFullYear(year, month, day);
+  return calendar;
+}
+
+function ianaDateFormatter(timezone) {
+  if (typeof timezone !== 'string' || /^[+-]/.test(timezone)) throw new Error('invalid_timezone');
+  return new Intl.DateTimeFormat('en-GB', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' });
+}
+
+function zonedDateParts(instant, formatter) {
+  const parts = {};
+  formatter.formatToParts(instant).forEach(function(part) { parts[part.type] = part.value; });
+  return parts;
+}
+
+function localWallTimeCandidates(key, timezone) {
+  const formatter = ianaDateFormatter(timezone);
+  const wall = localCalendarDate(Number(key.slice(0, 4)), Number(key.slice(5, 7)) - 1, Number(key.slice(8, 10)));
+  wall.setUTCHours(Number(key.slice(11, 13)), Number(key.slice(14, 16)), Number(key.slice(17, 19)), 0);
+  const offsets = new Set();
+  for (let hours = -48; hours <= 48; hours += 6) {
+    const instant = new Date(wall.getTime() + hours * 3600000);
+    const parts = zonedDateParts(instant, formatter);
+    const local = localCalendarDate(Number(parts.year), Number(parts.month) - 1, Number(parts.day));
+    local.setUTCHours(Number(parts.hour), Number(parts.minute), Number(parts.second), 0);
+    offsets.add(local.getTime() - instant.getTime());
+  }
+  const matches = new Set();
+  offsets.forEach(function(offset) {
+    const instant = new Date(wall.getTime() - offset);
+    const parts = zonedDateParts(instant, formatter);
+    const local = parts.year.padStart(4, '0') + '-' + parts.month + '-' + parts.day + ' ' + parts.hour + ':' + parts.minute + ':' + parts.second;
+    if (local === key.slice(0, 19)) matches.add(instant.getTime());
+  });
+  return Array.from(matches);
+}
+
+function localWallTimeError(key, timezone) {
+  const matches = localWallTimeCandidates(key, timezone);
+  if (matches.length === 0) return 'nonexistent_local_time';
+  if (matches.length > 1) return 'ambiguous_local_time';
+  return null;
+}
+
+function localDateTimeUtcKey(key, timezone) {
+  try {
+    const matches = localWallTimeCandidates(key, timezone);
+    if (matches.length !== 1) return null;
+    // Preserve all six fractional digits when comparing snapshot cutoffs.
+    return new Date(matches[0]).toISOString().slice(0, 19).replace('T', ' ') + '.' + key.slice(20);
+  } catch (_) { return null; }
+}
+
+function sheetLocalDateTimeText(value) {
+  if (Object.prototype.toString.call(value) !== '[object Date]') return value;
+  if (!Number.isFinite(value.getTime())) return '';
+  return Utilities.formatDate(value, SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone(), 'yyyy-MM-dd HH:mm:ss.SSS');
 }
 
 // Converts a sheet datetime string ('YYYY-MM-DD HH:MM:SS') to a Date object.

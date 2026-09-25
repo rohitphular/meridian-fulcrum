@@ -77,6 +77,8 @@ Imported rows leave unsupported legacy fields NULL: these include SCD `effective
 
 Account and linked-property rows are locked for shared access through the detail commit. The master writer locks its row for update before validating retained detail policy, so concurrent subtype edits cannot invalidate a just-validated detail relationship. Unknown or mismatched stored source provenance fails with a reconciliation error.
 
+Currency precision and any selected valuation-rate row also remain share-locked through commit. A concurrent rate update cannot alter those inputs between conversion and the source-content check.
+
 Consumers combining old and imported rows must filter by `source_sheet` and avoid counting both as one balance series. No automatic reconciliation, deletion, historical rebuild or transaction-driven detail mutation is performed.
 
 Implementation: [contracts](../core/account_detail_contracts.py), [transform](../transforms/account_details.py), [writer](../database/account_details.py), [table migration](../migrations/0018_align_account_detail_tables.py), [lifecycle migration](../migrations/0016_account_detail_sync_metadata.py), [unit checks](../tests/unit/test_account_details.py), and [PostgreSQL checks](../tests/integration/test_database.py).

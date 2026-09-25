@@ -1,8 +1,11 @@
 /* global SheetsClient */
+import { el } from './utils.js';
 
 const SESSION_TTL = 6 * 60 * 60 * 1000; // 6 hours
+const GEO_TIMEOUT_MS = 3000;
 
 export function createAuthModule({ sessionKey, legacyKeys = [], verifyFn, reloadEvent }) {
+  let submitting = false;
 
   function writeSession(pin) {
     sessionStorage.setItem(sessionKey, JSON.stringify({
@@ -33,69 +36,78 @@ export function createAuthModule({ sessionKey, legacyKeys = [], verifyFn, reload
   }
 
   function showPinGate() {
-    document.getElementById('pinOverlay').classList.remove('hidden');
-    document.getElementById('appShell').classList.add('hidden');
-    document.getElementById('pinInput').focus();
+    el('pinOverlay').classList.remove('hidden');
+    el('appShell').classList.add('hidden');
+    el('pinSubmit').disabled = submitting;
+    el('pinInput').focus();
   }
 
   function hidePinGate() {
-    document.getElementById('pinOverlay').classList.add('hidden');
-    document.getElementById('appShell').classList.remove('hidden');
+    el('pinOverlay').classList.add('hidden');
+    el('appShell').classList.remove('hidden');
   }
 
   function pinError(msg) {
-    document.getElementById('pinError').textContent = msg;
-    const inp = document.getElementById('pinInput');
+    el('pinError').textContent = msg;
+    const inp = el('pinInput');
     inp.classList.add('shake');
     inp.addEventListener('animationend', () => inp.classList.remove('shake'), { once: true });
   }
 
   async function fetchGeo() {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), GEO_TIMEOUT_MS);
     try {
-      const d = await fetch('https://ipapi.co/json/').then(r => r.json());
+      const response = await fetch('https://ipapi.co/json/', { signal: controller.signal });
+      if (!response.ok) throw new Error('Geolocation unavailable');
+      const d = await response.json();
       return { ip: d.ip ?? 'unknown', city: d.city ?? '', country: d.country_name ?? '', ua: navigator.userAgent };
     } catch (_) {
       return { ip: 'unknown', city: '', country: '', ua: navigator.userAgent };
+    } finally {
+      clearTimeout(timeout);
     }
   }
 
   async function submitPin() {
-    const pin  = document.getElementById('pinInput').value.trim();
-    const totp = document.getElementById('totpInput').value.trim();
+    if (submitting) return;
+    const pin  = el('pinInput').value.trim();
+    const totp = el('totpInput').value.trim();
 
-    if (!pin)                   { pinError('Enter your PIN.');                document.getElementById('pinInput').focus();  return; }
-    if (!totp)                  { pinError('Enter your authenticator code.'); document.getElementById('totpInput').focus(); return; }
-    if (!/^\d{6}$/.test(totp)) { pinError('Code must be 6 digits.');         document.getElementById('totpInput').focus(); return; }
+    if (!pin)                   { pinError('Enter your PIN.');                el('pinInput').focus();  return; }
+    if (!totp)                  { pinError('Enter your authenticator code.'); el('totpInput').focus(); return; }
+    if (!/^\d{6}$/.test(totp)) { pinError('Code must be 6 digits.');         el('totpInput').focus(); return; }
 
-    document.getElementById('pinSubmit').disabled = true;
-    document.getElementById('pinError').textContent = 'Connecting…';
-
-    const meta = await fetchGeo();
-    SheetsClient.init({ scriptUrl: window.CONFIG.SCRIPT_URL, pin, meta });
-
+    submitting = true;
+    el('pinSubmit').disabled = true;
+    el('pinError').textContent = 'Connecting…';
     try {
+      const meta = await fetchGeo();
+      SheetsClient.init({ scriptUrl: window.CONFIG.SCRIPT_URL, pin, meta });
       const res = await verifyFn(totp);
       if (res.ok) {
         writeSession(pin);
+        el('pinInput').value = '';
+        el('totpInput').value = '';
+        el('pinError').textContent = '';
         hidePinGate();
         document.dispatchEvent(new CustomEvent(reloadEvent));
       } else if (res.error === 'locked') {
         pinError('Access locked. Contact admin to unlock.');
-        document.getElementById('pinSubmit').disabled = false;
       } else if (res.error === 'totp_invalid') {
         pinError('Wrong authenticator code. Try again.');
-        document.getElementById('totpInput').value = '';
-        document.getElementById('totpInput').focus();
-        document.getElementById('pinSubmit').disabled = false;
+        el('totpInput').value = '';
+        el('totpInput').focus();
       } else {
         pinError('Wrong PIN. Try again.');
-        document.getElementById('pinInput').value = '';
-        document.getElementById('pinInput').focus();
-        document.getElementById('pinSubmit').disabled = false;
+        el('pinInput').value = '';
+        el('pinInput').focus();
       }
     } catch (_) {
       pinError('Connection failed. Check the Script URL in config.js.');
-      document.getElementById('pinSubmit').disabled = false;
+    } finally {
+      submitting = false;
+      el('pinSubmit').disabled = false;
     }
   }
 
