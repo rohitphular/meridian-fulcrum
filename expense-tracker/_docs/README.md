@@ -6,6 +6,8 @@ Reverse-engineered, language-agnostic specification for the Expense Tracker app.
 
 For an existing installation, first follow [master tab naming and migration](master-sheet-names.md) to align the master CSVs, Sheet tabs and database names.
 
+See [spreadsheet tab order](sheet-order.md) for the preferred layout and automatic/manual arrangement helper.
+
 1. **[overview.md](overview.md)** — What the app is, the domain model, the capabilities, what's out of scope
 2. **[data-model.md](data-model.md)** — Entity shapes (Account, Transaction, Category, Rate, Subscription, AuditEntry) and their cross-entity invariants
 3. **[APP-AUTH-PIN-TOTP.md](../../building-standards/documents/standards/APP-AUTH-PIN-TOTP.md)** — Single-user authentication with PIN + optional TOTP, IP rate limiting, session model (shared Forge doc)

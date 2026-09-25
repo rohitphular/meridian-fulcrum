@@ -258,8 +258,8 @@ The import panel accepts a CSV file. Canonical column names (no aliases):
 | `tx_date_local` | Yes | Date/time of the transaction in local time (e.g. `2026-08-12 14:30:00`). Stored as-is — no UTC conversion. |
 | `tx_timezone_local` | No | IANA timezone string (e.g. `Europe/London`). When submitting via the UI form, this is auto-detected from the browser (`Intl.DateTimeFormat().resolvedOptions().timeZone`) and sent silently — it is never a user-typed input. CSV import may supply it explicitly. Immutable after creation. |
 | `tx_type` | Yes | `money-in` or `money-out` |
-| `source_account` | Conditional | Account name (not ID). Required for `money-out` and transfer rows; empty for standalone `money-in` rows. Resolved to account ID at import time. |
-| `target_account` | Conditional | Account name (not ID). Required for `money-in` and transfer rows; empty for standalone `money-out` rows. Resolved to account ID at import time. |
+| `source_account` | Conditional | Account UUID or name. Required for `money-out` and transfer rows; empty for standalone `money-in` rows. Resolved to account UUID at import time. |
+| `target_account` | Conditional | Account UUID or name. Required for `money-in` and transfer rows; empty for standalone `money-out` rows. Resolved to account UUID at import time. |
 | `source_amount_local` | Conditional | Positive number in the source account's currency. At least one of `source_amount_local` or `target_amount_local` must be a finite positive number. Both are required for cross-currency transfers. |
 | `target_amount_local` | Conditional | Amount arriving in the target account's currency. Required for cross-currency transfers; may be omitted for same-currency transfers (defaults to `source_amount_local`). |
 | `major_category` | Yes | |
@@ -279,6 +279,8 @@ The import panel accepts a CSV file. Canonical column names (no aliases):
 | `sync_notes` | No | System field — accepted in header but silently ignored on import |
 | `created_at` | No | System field — accepted in header but silently ignored on import |
 | `updated_at` | No | System field — accepted in header but silently ignored on import |
+
+Account resolution checks UUID first, then trimmed names without case sensitivity. If several accounts share a name, the importer uses the matching active category's `source_account_types` or `target_account_types` for that side. A hint matches either `type` or `sub_type`, with the same Sheet-driven rules as the account dropdowns. Exactly one active category must match the complete `tx_type` / `major_category` / `minor_category` key, and its hints must leave exactly one account. Missing, blank, conflicting or insufficient hints keep the row blocked with a field-specific error; an explicit UUID can identify the intended account. Hints never override an explicit UUID or a unique name, and account lifecycle validation remains on the backend. No account names or classifications are hardcoded into this lookup.
 
 Sync/audit fields (`sync_status`, `sync_date`, `sync_notes`, `created_at`, `updated_at`) are accepted in the CSV header row but ignored as input. The backend preserves existing `created_at`, stamps `updated_at`, clears stale acknowledgements and queues sync. `record_status` is a validated optional lifecycle field; leaving it blank cannot reactivate a historical row.
 

@@ -9,6 +9,7 @@ Source is split into per-domain `.gs` modules. GAS flattens them all into one na
 | Group | Files | Purpose |
 |---|---|---|
 | App | `app-auth.gs`, `app-config.gs`, `app-router.gs`, `app-utils.gs` | Auth, config, HTTP routing, shared helpers |
+| Sheet layout | `sheet-order.gs` | Arrange existing tabs on spreadsheet open or through the Expense Tracker menu |
 | Accounts | `account-core.gs`, `account-schema.gs`, `account-utils.gs`, `account-validation.gs` | Account CRUD, schema, validation |
 | Transactions | `transaction-core.gs`, `transaction-schema.gs`, `transaction-utils.gs`, `transaction-validation.gs` | Transaction CRUD, schema, validation |
 | Categories | `category-core.gs`, `category-schema.gs`, `category-utils.gs`, `category-validation.gs` | Category CRUD, schema, validation |
@@ -63,6 +64,8 @@ See `cicd/README.md` for the full pipeline detail.
 Run the regression suite, deploy through `expense-tracker/cicd/deploy.sh dev`, and open the locally served frontend (which selects the dev `/exec` endpoint). Verify the changed flow there before deploying prod. The dev and prod environments have separate registered IDs; neither needs a manual `.clasp.json` or frontend URL edit.
 
 ## Source integrity
+
+Spreadsheet tab order is configured by `EXPENSE_TRACKER_SHEET_ORDER` in `app-config.gs`. The bound spreadsheet's `onOpen()` handler applies it; **Expense Tracker → Arrange sheet tabs** reapplies it on demand. `ensureExpenseTrackerSheetOrder()` is also available in the Apps Script editor. Missing tabs stay absent, custom tabs retain their relative order at the end, and tab contents/IDs are untouched. See [spreadsheet tab order](../_docs/sheet-order.md) for the sequence and retry behavior.
 
 All master row-number mutations accept `expected_id` and `expected_updated_at`; the frontend sends the UUID and source revision from its current snapshot. A moved row or changed revision returns `stale_record` before writing, preventing stale forms on another device from replacing newer values. Sync acknowledgements do not change the source revision. Legacy callers may omit these checks for compatibility. Script-lock serialization does not prevent external Sheet edits during a request.
 

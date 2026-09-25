@@ -305,15 +305,19 @@ function _isAlreadySubscribed(tx) {
   });
 }
 
-// Returns <option> elements filtered to allowedTypesStr account types.
-// Shows all accounts when no types are configured for the category.
+// Category hints match either the account type or subtype, using Sheet-owned keys.
+// Keep all candidates when no types are configured; a blank hint cannot resolve ambiguity.
+function _filterAccountsByTypes(accounts, allowedTypesStr) {
+  const allowed = new Set(String(allowedTypesStr ?? '').split(',').map(key => key.trim().toLowerCase()).filter(key => key !== ''));
+  if (allowed.size === 0) { return accounts; }
+  return accounts.filter(account => [account.type, account.sub_type].some(key =>
+    allowed.has(String(key ?? '').trim().toLowerCase())
+  ));
+}
+
+// Returns <option> elements using the same category rules as CSV name resolution.
 function _acctOptsWithHints(accounts, allowedTypesStr, selectedId = '') {
-  const allowed = allowedTypesStr
-    ? new Set(allowedTypesStr.split(',').map(s => s.trim().toLowerCase()).filter(v => v !== undefined && v !== null && v !== ''))
-    : new Set();
-  const filtered = allowed.size
-    ? accounts.filter(a => allowed.has((a.type !== undefined && a.type !== null ? a.type : '').toLowerCase()) || allowed.has((a.sub_type !== undefined && a.sub_type !== null ? a.sub_type : '').toLowerCase()))
-    : accounts;
+  const filtered = _filterAccountsByTypes(accounts, allowedTypesStr);
   return filtered.map(a =>
     `<option value="${esc(a.id)}" ${a.id === selectedId ? 'selected' : ''}>${esc(a.account_name)} (${esc(a.account_currency_local)})</option>`
   ).join('');
@@ -1934,6 +1938,7 @@ function _renderTxImportPanel() {
         <label for="txImportFile">CSV file</label>
         <input type="file" id="txImportFile" accept=".csv">
         <div class="field-hint">Columns: id (optional), tx_date_local, tx_timezone_local, tx_type, source_account, target_account, source_amount_local, target_amount_local, major_category, minor_category, description, counterparty_name, tx_tags, beneficiaries, user_location_area, user_location_city, user_location_country, user_location_latitude, user_location_longitude, record_status (optional; leave blank to preserve existing status)</div>
+        <div class="field-hint">Accounts accept names or UUIDs. When names repeat, the category's account types must identify one account.</div>
       </div>
     </div>
     <div id="txImportStatus">${_txImportResult !== null ? _txImportResult : ''}</div>
@@ -1957,13 +1962,22 @@ function _parseTxCsv(text) {
   if (!headers.includes('source_amount_local') && !headers.includes('target_amount_local')) missing.push('source_amount_local or target_amount_local');
   if (missing.length > 0) return { transactions: [], errors: ['Missing required headers: ' + missing.join(', ')] };
   const accounts = state.accounts ?? [];
-  const resolveAccount = (value, rowErrors) => {
+  const resolveAccount = (value, field, category, rowErrors) => {
     if (value === undefined || value.trim() === '') return '';
     const key = value.trim().toLowerCase();
     let matches = accounts.filter(account => String(account.id).toLowerCase() === key);
-    if (matches.length === 0) matches = accounts.filter(account => String(account.account_name).trim().toLowerCase() === key);
+    if (matches.length === 0) {
+      matches = accounts.filter(account => String(account.account_name).trim().toLowerCase() === key);
+      // Only disambiguate names. An explicit UUID must never be redirected by hints.
+      if (matches.length > 1 && category !== null) {
+        const eligible = _filterAccountsByTypes(matches, category[field + '_types']);
+        if (eligible.length === 1) { return eligible[0].id; }
+      }
+    }
     if (matches.length !== 1) {
-      rowErrors.push(`${matches.length === 0 ? 'unknown' : 'ambiguous'} account: "${value}"`);
+      const reason = matches.length === 0 ? 'unknown' : 'ambiguous';
+      const guidance = matches.length > 1 ? '; category rules do not identify one account. Use an account UUID to choose explicitly.' : '';
+      rowErrors.push(`${reason} account: "${value}" (${field})${guidance}`);
       return '';
     }
     return matches[0].id;
@@ -2005,8 +2019,13 @@ function _parseTxCsv(text) {
       }
     }
 
-    const sourceId = resolveAccount(row.source_account, rowErrors);
-    const targetId = resolveAccount(row.target_account, rowErrors);
+    // Require exactly one active category with the full key before using its hints.
+    const categories = (state.categories ?? []).filter(category => category.record_status === 'active'
+      && category.tx_type_key === row.tx_type && category.major_category_key === row.major_category
+      && category.minor_category_key === row.minor_category);
+    const category = categories.length === 1 ? categories[0] : null;
+    const sourceId = resolveAccount(row.source_account, 'source_account', category, rowErrors);
+    const targetId = resolveAccount(row.target_account, 'target_account', category, rowErrors);
 
     if (rowErrors.length) { errors.push(`Row ${records[i].line}: ${rowErrors.join('; ')}`); continue; }
 

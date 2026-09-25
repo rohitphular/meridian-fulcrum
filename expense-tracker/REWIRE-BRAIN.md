@@ -17,6 +17,8 @@ From `expense-tracker/`, backend deployment uses `bash cicd/deploy.sh <env> "des
 
 ## Current model
 
+Spreadsheet tabs follow a configured daily-use-first sequence on spreadsheet open, with **Expense Tracker → Arrange sheet tabs** available to reapply it. `ensureExpenseTrackerSheetOrder()` moves only existing tabs, preserves contents/IDs/visibility and the active selection, and leaves custom tabs at the end. See [_docs/sheet-order.md](_docs/sheet-order.md); this is independent of the web app navigation and ETL processing sequence.
+
 Master CSV filenames, Sheet tab names and PostgreSQL table names now align as `account_master`, `category_master`, `transaction_master` and `subscription_master`. Existing spreadsheets need the deployed `migrateMasterSheetNames()` helper before extraction; it preserves existing tabs/data and refuses old/new name collisions. See [_docs/master-sheet-names.md](_docs/master-sheet-names.md).
 
 - Configure: final navigation tab maintains the existing 22 account classifications through a 14-column `account_types` Sheet/CSV. UUIDs are preserved. `is_loan` and `detail_sheet` are business columns before the six metadata fields; keys use hyphens while field/tab names retain underscores. The Sheet supplies account/category choices, loan flags and detail eligibility. There is no application catalog seed and adding new classifications is disabled. Active and locked rows are available. Import the supplied catalog before use; see [_docs/account-types.md](_docs/account-types.md).
