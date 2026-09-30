@@ -1,17 +1,13 @@
 import { state } from '../core/state.js';
-import {
-  el, esc, getSymbol, toBase, fmtBase, exportAccounts,
-  openContextMenu, closeContextMenu, recordStatusIcon, syncStatusIcon, parseCsvRecords,
-} from '../core/utils.js';
+import { el, esc, getSymbol, toBase, fmtBase, exportAccounts, openContextMenu, closeContextMenu, recordStatusIcon, syncStatusIcon, renderImportResult } from '../core/utils.js';
 import { showLoading, hideLoading, showMsg } from '../core/ui.js';
 import { ExpenseAPI } from '../core/api.js';
 
-// Module-level holding area for the current import session's parsed rows.
-let _importParsed  = null;   // array of plain objects (header → cell value) or null
-let _importReadSequence = 0;
+// Current import session. The server parses and validates the CSV; the browser
+// only holds the chosen file and renders the server's outcome.
+let _importFile    = null;   // File chosen in the import panel, or null
 let _importBusy = false;
 let _importResult = '';
-let _importRetry = false;
 let _importType    = '';     // selected file_type for the current import session
 let _accMenuKey    = null;
 let _accDraft      = null;   // pending filter selections; copied to state.accFilters on Search
@@ -21,7 +17,6 @@ let _accDDCleanup  = null;   // cleanup fn for the currently open filter dropdow
 // Schema is loaded at boot into state.accountSchema — no hardcoded constants here.
 // All accessors assume schema is present; renderAccounts guards against absent schema.
 function _accountTypes()     { return state.accountSchema.types; }
-function _loanSubSet()       { return new Set(state.accountSchema.loan_sub_types); }
 function _validTypes()       { return new Set(_accountTypes().map(t => t.value)); }
 
 function _subTypesForType(type) {
@@ -29,7 +24,6 @@ function _subTypesForType(type) {
 }
 
 function _isLiability(a)     { return a.type === 'liability'; }
-function _isLoan(a)          { return a.type === 'liability' && _loanSubSet().has(a.sub_type); }
 
 // All record statuses — includes 'deleted' so the filter bar can show deleted accounts.
 const ALL_RECORD_STATUSES = ['active', 'inactive', 'deleted', 'locked'];
@@ -313,47 +307,10 @@ function _renderImportPanel() {
   </div>`;
 }
 
-// Generic CSV parser: header row (normalized to snake_case) → array of plain
-// objects keyed by column name. The backend is the single source of validation;
-// the only FE parse errors surfaced are structural (empty file, missing header,
-// column-count mismatch).
-function _parseGenericCsv(text) {
-  const decoded = parseCsvRecords(text);
-  if (decoded.errors.length > 0) return { rows: [], errors: decoded.errors };
-  const records = decoded.records;
-  if (records.length === 0) return { rows: [], errors: ['File is empty.'] };
-  if (records.length === 1) return { rows: [], errors: ['No data rows found — the file has only a header row.'] };
-
-  const headers = records[0].values.map(h => h.trim().toLowerCase().replace(/\s+/g, '_'));
-  if (headers.includes('') || new Set(headers).size !== headers.length) return { rows: [], errors: ['CSV has blank or duplicate column headers.'] };
-  const rows    = [];
-  const errors  = [];
-
-  for (let i = 1; i < records.length; i++) {
-    const vals = records[i].values;
-    if (vals.length !== headers.length) {
-      errors.push(`Row ${records[i].line}: expected ${headers.length} column${headers.length !== 1 ? 's' : ''}, found ${vals.length}`);
-      continue;
-    }
-    const row = {};
-    headers.forEach((h, idx) => {
-      const cell = vals[idx];
-      row[h] = (cell === undefined || cell === null) ? '' : String(cell).trim();
-    });
-    rows.push(row);
-  }
-
-  return { rows, errors };
-}
-
-function _renderImportStatus(parsed) {
-  const { rows, errors } = parsed;
-  const errHtml = errors.length !== 0
-    ? `<div class="pin-error" style="margin-bottom:8px">${errors.map(e => esc(e)).join('<br>')}</div>`
-    : '';
-  if (errors.length > 0) return errHtml + '<p class="placeholder">Correct the errors before importing.</p>';
-  if (rows.length === 0) return '<p class="placeholder">No valid rows found.</p>';
-  return `${errHtml}<p style="font-size:13px;color:var(--muted);margin:0">${rows.length} row${rows.length !== 1 ? 's' : ''} ready to import</p>`;
+// Renders the server's import outcome: file-level errors as a list, otherwise a
+// summary plus a table of failed CSV lines.
+function _renderImportResponse(response) {
+  return renderImportResult(response);
 }
 
 // ── Unified form (Add / View / Edit) ─────────────────────────────────────────
@@ -655,13 +612,9 @@ function _attachEvents() {
 
   el('accImportBtn').addEventListener('click', () => {
     if (_importBusy) return;
-    _importReadSequence++;
     if (state.accImportOpen) {
       state.accImportOpen = false;
-      _importParsed = null;
-      _importType   = '';
-      _importResult = '';
-      _importRetry = false;
+      _resetImport();
     } else {
       state.accImportOpen = true;
       state.accAddOpen = false;
@@ -673,7 +626,6 @@ function _attachEvents() {
 
   el('accAddBtn').addEventListener('click', () => {
     if (_importBusy) return;
-    _importReadSequence++;
     if (state.accAddOpen || state.accViewRow !== null || state.accEditRow !== null) {
       state.accAddOpen = false;
       state.accViewRow = null;
@@ -681,10 +633,7 @@ function _attachEvents() {
     } else {
       state.accAddOpen = true;
       state.accImportOpen = false;
-      _importParsed = null;
-      _importType   = '';
-      _importResult = '';
-      _importRetry = false;
+      _resetImport();
     }
     renderAccounts();
   });
@@ -695,20 +644,21 @@ function _attachEvents() {
       _updateImportConfirmState();
     });
 
-    el('accImportFile').addEventListener('change', e => _readAccountImport(e.target.files[0]));
+    el('accImportFile').addEventListener('change', e => {
+      _importFile = e.target.files[0] ?? null;
+      _importResult = '';
+      el('accImportStatus').innerHTML = '';
+      _updateImportConfirmState();
+    });
     el('accImportConfirm').addEventListener('click', () => {
-      if (_importParsed !== null && _importType !== '') _submitImport(_importType, _importParsed);
+      if (_importFile !== null && _importType !== '') _submitImport(_importType, _importFile);
     });
 
     _updateImportConfirmState();
     el('accImportCancel').addEventListener('click', () => {
       if (_importBusy) return;
-      _importReadSequence++;
       state.accImportOpen = false;
-      _importParsed = null;
-      _importType   = '';
-      _importResult = '';
-      _importRetry = false;
+      _resetImport();
       renderAccounts();
     });
   }
@@ -1192,12 +1142,18 @@ async function _restoreAccount(rowNum) {
   }
 }
 
-// Enable the Import button only when BOTH a file_type is chosen AND rows parsed.
+function _resetImport() {
+  _importFile   = null;
+  _importType   = '';
+  _importResult = '';
+}
+
+// Enable the Import button only when BOTH a file_type and a file are chosen.
 function _updateImportConfirmState() {
   const button = el('accImportConfirm');
   if (button !== null) {
-    button.disabled = _importBusy || _importParsed === null || _importType === '';
-    button.textContent = _importBusy ? 'Importing…' : _importRetry ? 'Retry failed rows' : 'Import';
+    button.disabled = _importBusy || _importFile === null || _importType === '';
+    button.textContent = _importBusy ? 'Importing…' : 'Import';
   }
   for (const id of ['accImportFile', 'accImportType', 'accImportCancel', 'accImportBtn', 'accAddBtn']) {
     const control = el(id);
@@ -1205,76 +1161,58 @@ function _updateImportConfirmState() {
   }
 }
 
-async function _readAccountImport(file) {
-  if (_importBusy) return;
-  const sequence = ++_importReadSequence;
-  _importParsed = null;
-  _importResult = '';
-  _importRetry = false;
-  const status = el('accImportStatus');
-  if (status !== null) status.innerHTML = '';
-  _updateImportConfirmState();
-  if (file === undefined) return;
-  try {
-    const text = await file.text();
-    if (sequence !== _importReadSequence || !state.accImportOpen) return;
-    const parsed = _parseGenericCsv(text);
-    _importParsed = parsed.errors.length === 0 && parsed.rows.length > 0 ? parsed.rows : null;
-    _importResult = _renderImportStatus(parsed);
-  } catch (_) {
-    if (sequence !== _importReadSequence || !state.accImportOpen) return;
-    _importResult = '<p class="pin-error">Could not read this CSV. Choose the file again.</p>';
-  } finally {
-    if (sequence === _importReadSequence && state.accImportOpen) {
-      el('accImportStatus').innerHTML = _importResult;
-      _updateImportConfirmState();
-    }
-  }
-}
-
-async function _submitImport(fileType, rows) {
+// Sends the raw file text; the server parses, validates and imports it.
+async function _submitImport(fileType, file) {
   if (_importBusy) return;
   if (fileType === '') { showMsg('Select a file type first.', 'warn'); return; }
-  if (!Array.isArray(rows) || rows.length === 0) { showMsg('No rows to import.', 'warn'); return; }
+  if (file === null || file === undefined) { showMsg('Choose a CSV file first.', 'warn'); return; }
   _importBusy = true;
   _updateImportConfirmState();
   showLoading();
   let changed = false;
   let uncertain = false;
   try {
-    const response = await ExpenseAPI.importAccountData({ file_type: fileType, rows });
-    if (!Array.isArray(response?.results) || response.results.length !== rows.length
-        || !response.results.every(result => typeof result?.ok === 'boolean')) {
+    let csv;
+    try { csv = await file.text(); }
+    catch (_) {
+      _importResult = '<p class="pin-error" role="alert">Could not read this CSV. Choose the file again.</p>';
+      return;
+    }
+    const response = await ExpenseAPI.importAccountData({ file_type: fileType, csv });
+    if (Array.isArray(response?.errors) && response.errors.length > 0) {
+      _importResult = _renderImportResponse(response);
+      showMsg('The CSV has errors. Nothing was imported.', 'warn');
+      return;
+    }
+    if (!Array.isArray(response?.results) || !response.results.every(result => typeof result?.ok === 'boolean')) {
+      if (response?.ok === false && typeof response.error === 'string' && !Array.isArray(response.results)) {
+        _importResult = `<p class="pin-error" role="alert">Import failed: ${esc(response.error)}. Nothing was imported.</p>`;
+        showMsg(`Import failed: ${response.error}`, 'warn');
+        return;
+      }
       throw new Error(response?.error ?? 'incomplete_import_response');
     }
-    const succeeded = response.results.filter(result => result.ok);
-    const failures = response.results.map((result, index) => ({ ...result, row: rows[index] })).filter(result => !result.ok);
-    const created = succeeded.filter(result => result.action === 'created').length;
-    const updated = succeeded.length - created;
-    changed = succeeded.length > 0;
+    const failures = response.results.filter(result => !result.ok);
+    changed = failures.length < response.results.length;
     if (failures.length === 0) {
-      _importParsed = null; _importType = ''; _importResult = ''; _importRetry = false;
+      _resetImport();
       state.accImportOpen = false;
-      showMsg(`${created} created · ${updated} updated`);
+      showMsg(`${response.created ?? 0} created · ${response.updated ?? 0} updated`);
     } else {
-      _importParsed = failures.map(result => result.row);
-      _importType = fileType;
-      _importRetry = true;
-      _importResult = `<p>${created} created · ${updated} updated · ${failures.length} failed</p>
-        <div class="table-wrap"><table><thead><tr><th>Key</th><th>Reason</th></tr></thead><tbody>${failures.map(result =>
-          `<tr><td>${esc(result.key ?? result.row.id ?? '—')}</td><td>${esc(result.error ?? 'unknown')}</td></tr>`
-        ).join('')}</tbody></table></div>`;
-      showMsg(`${failures.length} account rows failed. Review their reasons and retry only those rows.`, 'warn');
+      _importResult = _renderImportResponse(response);
+      showMsg(`${failures.length} account rows failed. Review the failed lines, correct the file and import it again.`, 'warn');
     }
   } catch (error) {
     uncertain = true;
-    _importParsed = null;
-    _importRetry = false;
-    const message = `Import stopped: ${error?.message ?? 'connection_error'}. Some rows may have been saved. Refresh and check before choosing the file again.`;
+    const message = `Import stopped: ${error?.message ?? 'connection_error'}. Some rows may have been saved. Refresh and check before importing the file again.`;
     _importResult = `<p class="pin-error" role="alert">${esc(message)}</p>`;
     showMsg(message, 'warn');
   } finally {
     _importBusy = false;
+    // Every attempt re-reads a freshly chosen file; nothing from this one is retried.
+    _importFile = null;
+    const input = el('accImportFile');
+    if (input !== null) input.value = '';
     const status = el('accImportStatus');
     if (status !== null) status.innerHTML = _importResult;
     _updateImportConfirmState();

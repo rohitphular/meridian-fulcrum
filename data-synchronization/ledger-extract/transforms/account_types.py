@@ -26,13 +26,6 @@ def transform(row: dict[str, Any]) -> dict[str, Any]:
     for field in ("account_type_key", "account_subtype_key"):
         if _KEY.fullmatch(typed[field]) is None:
             raise ValueError(f"account_types: invalid_{field}")
-    is_loan = row.get("is_loan")
-    if isinstance(is_loan, bool):
-        typed["is_loan"] = is_loan
-    elif isinstance(is_loan, str) and is_loan.strip().lower() in {"true", "false"}:
-        typed["is_loan"] = is_loan.strip().lower() == "true"
-    else:
-        raise ValueError("account_types: invalid_is_loan")
     detail = row.get("detail_sheet")
     if detail is not None and not isinstance(detail, str):
         raise ValueError("account_types: invalid_detail_sheet")

@@ -113,6 +113,10 @@ function _sheetRequestFailure(handler, error) {
     console.error(handler + ': error=master_sheet_name_collision');
     return json({ ok: false, error: message, detail: 'Both legacy and canonical master tabs exist. Resolve the duplicate tabs, then run migrateMasterSheetNames().' });
   }
+  if (message === 'account_types_is_loan_column_present') {
+    console.error(handler + ': error=account_types_is_loan_column_present');
+    return json({ ok: false, error: message, detail: 'Delete the retired is_loan column from the account_types Sheet, then retry.' });
+  }
   if (message.indexOf('sheet_header_mismatch:') === 0) {
     console.error(handler + ': error=' + message);
     return json({ ok: false, error: 'sheet_header_mismatch' });
@@ -126,11 +130,11 @@ function _dispatchPost(body) {
   if (body.action === 'update_transaction')      return json(updateTransaction(body));
   if (body.action === 'delete_transaction')      return json(deleteTransaction(body));
   if (body.action === 'restore_transaction')     return json(restoreTransaction(body));
-  if (body.action === 'create_transactions_bulk') return json(createTransactionsBulk(body));
+  if (body.action === 'create_transactions_bulk') return json(importTransactionsCsv(body));
   if (body.action === 'upsert_rate')        return json(upsertRate(body));
   if (body.action === 'delete_rate')        return json(deleteRate(body));
   if (body.action === 'create_category')    return json(createCategory(body));
-  if (body.action === 'create_categories_bulk') return json(createCategoriesBulk(body));
+  if (body.action === 'create_categories_bulk') return json(importCategoriesCsv(body));
   if (body.action === 'update_category')    return json(updateCategory(body));
   if (body.action === 'delete_category')    return json(deleteCategory(body));
   if (body.action === 'create_account')      return json(createAccount(body));
@@ -138,19 +142,19 @@ function _dispatchPost(body) {
   if (body.action === 'update_account_type') return json(updateAccountType(body));
   if (body.action === 'delete_account_type') return json(deleteAccountType(body));
   if (body.action === 'restore_account_type') return json(restoreAccountType(body));
-  if (body.action === 'create_account_types_bulk') return json(createAccountTypesBulk(body));
-  if (body.action === 'create_accounts_bulk') return json(createAccountsBulk(body));
-  if (body.action === 'import_account_data') return json(importAccountData(body));
+  if (body.action === 'create_account_types_bulk') return json(importAccountTypesCsv(body));
+  if (body.action === 'import_account_data') return json(importAccountDataCsv(body));
   if (body.action === 'update_account')     return json(updateAccount(body));
   if (body.action === 'delete_account')     return json(deleteAccount(body));
   if (body.action === 'restore_account')    return json(restoreAccount(body));
   if (body.action === 'advisor_chat')              return json(advisorChat(body));
   if (body.action === 'clear_advisor_history')     return json(clearAdvisorHistory());
   if (body.action === 'create_subscription')       return json(createSubscription(body));
-  if (body.action === 'create_subscriptions_bulk') return json(createSubscriptionsBulk(body));
+  if (body.action === 'create_subscriptions_bulk') return json(importSubscriptionsCsv(body));
   if (body.action === 'update_subscription')       return json(updateSubscription(body));
   if (body.action === 'delete_subscription')       return json(deleteSubscription(body));
   if (body.action === 'restore_subscription')      return json(restoreSubscription(body));
+  if (body.action === 'factory_reset_delete_sheets') return json(factoryResetDeleteSheets(body));
 
   return json({ ok: false, error: 'unknown_action' });
 }

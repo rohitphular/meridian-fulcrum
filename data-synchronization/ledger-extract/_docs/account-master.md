@@ -2,7 +2,7 @@
 
 The account master path reads **`account_master`** and writes **`account_master`**. Six separately enabled detail tabs map into six identically named database tables; see [account-details.md](account-details.md) and its per-type mappings. Transactions do not maintain detail balances or history.
 
-This document describes the implemented code through migration `0020`. Synchronize [account types](account-types.md) first: account lookups require an active or locked, Sheet-managed classification with completed policy sync and resolve its explicit type/subtype keys. Sheet account UUIDs are preserved on every sync.
+This document describes the implemented code through migration `0022`. Synchronize [account types](account-types.md) first: account lookups require an active or locked, Sheet-managed classification with completed policy sync and resolve its explicit type/subtype keys. Sheet account UUIDs are preserved on every sync.
 
 Sources: [GAS account schema](../../../expense-tracker/api/account-schema.gs), [sheet header contract](../sheets/contracts.py), [account transform](../transforms/accounts.py), [account writer](../database/accounts.py), [original account tables](../migrations/0004_create_accounts.py), [tracking-date migration](../migrations/0011_account_tracking_snapshot.py), and [applied-rate migration](../migrations/0013_capture_applied_rates.py).
 

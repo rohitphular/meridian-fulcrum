@@ -8,6 +8,7 @@ Backend deploy pipeline. Pushes `.gs` source to a GAS project draft and promotes
 |---|---|
 | `envs.json` | Single source of truth for both envs' Script ID + Deployment ID + /exec URL. Edited by hand. |
 | `deploy.sh` | Backend deploy pipeline — takes env as required first arg; pure clasp (no git). |
+| `../scripts/factory-reset.sh` | Deletes and re-imports the CSV-backed Sheet tabs through the GAS web app. See [Factory reset](#factory-reset-make-factory-reset). |
 
 ## Prerequisites
 
@@ -64,7 +65,7 @@ Script exits → trap fires → `.clasp.json` back to `${SCRIPT_ID_PLACEHOLDER}`
 
 Do this once for `dev`, then again for `prod`.
 
-1. **Sheet** — create a Google Sheet (e.g. `Expense Tracker — DEV`). Normal entity tabs initialize through their APIs. `account_types` has no automatic seed: import the supplied 14-column catalog through Configure before creating accounts or using category hints.
+1. **Sheet** — create a Google Sheet (e.g. `Expense Tracker — DEV`). Normal entity tabs initialize through their APIs. `account_types` has no automatic seed: import the supplied 13-column catalog through Configure before creating accounts or using category hints.
 2. **Apps Script** — in the Sheet: Extensions → Apps Script. Note the **Script ID** in Project Settings → IDs. Enable the manifest in **Project Settings → Show "appsscript.json"**, then paste:
    ```json
    {
@@ -119,6 +120,18 @@ clasp deploy --deploymentId "<paste from envs.json>" --description "your descrip
 #    (which flips to env's scriptId, then trap restores placeholder on exit).
 ```
 
+## Factory reset (`make factory-reset`)
+
+Rebuilds one environment's spreadsheet from `local/files/*.csv`. Run it from the repository root and pick an environment. The target calls `expense-tracker/scripts/factory-reset.sh <env>`, which only makes HTTP calls to the deployed GAS web app. Deploy the current backend first: the delete endpoint is new and the import endpoints now take raw CSV.
+
+1. **Confirm and sign in.** Type the environment name, then enter your PIN (hidden) and a fresh authenticator code. The script calls `verify`, as the app's login does. Credentials are never passed as command arguments. Like the app, GET calls carry the PIN in the request URL.
+2. **Preflight.** Every CSV is sent to its entity's import endpoint with `dry_run: true`, which only parses and validates it without reading or writing any Sheet. Any error stops the run before anything is deleted.
+3. **Delete.** `factory_reset_delete_sheets` deletes the 11 CSV-backed tabs: `account_types`, `category_master`, `account_master`, the six account detail tabs, `subscription_master` and `transaction_master`. It requires `confirm: "factory-reset"` and the environment's `spreadsheet_id` from `envs.json`, so a script pointed at the wrong spreadsheet deletes nothing. Every other tab is kept, including `dummy`, `rates`, `audit_access`, `advisor_chat` and `computed_insights`.
+4. **Recreate.** The existing `list_transactions`, `list_categories`, `list_accounts` and `list_subscriptions` calls recreate those tabs with current headers. `account_types` and the detail tabs are created by their own imports; no endpoint creates them empty.
+5. **Import.** Each file goes, in dependency order, to the same import endpoint the app uses: `create_account_types_bulk`, `create_categories_bulk`, `import_account_data` (with `file_type`) for the account master and six detail tabs, `create_subscriptions_bulk`, then `create_transactions_bulk` for every `transaction_master_*.csv`. One request per file.
+
+The run stops at the first response that is not `ok` or that reports failed rows, and prints that response. It never retries: repeated wrong PINs lock the caller. `rates` must already hold every account currency. Optional overrides: `FACTORY_RESET_DATA_DIR` (CSV folder) and `FACTORY_RESET_ENVS_FILE` (environment registry).
+
 ## Safety notes
 
 - `clasp push --force` overwrites the GAS draft with local files. If you edited code in the GAS browser editor since the last push, run `clasp pull` first.
@@ -135,6 +148,6 @@ For an existing spreadsheet with plural master tab names, deploy this version an
 
 ### Account Types configuration
 
-Deploy the updated `account-type-*.gs` implementation and frontend; there is no catalog seed file. Then use Configure → Account Types → Import with the complete `local/files/account_types.csv`. The 14-column file preserves the existing 22 UUIDs and adds `is_loan`/`detail_sheet` before metadata. Classification keys use hyphens. An absent/empty catalog stays empty until this explicit import; an established catalog cannot accept additional identities.
+Deploy the updated `account-type-*.gs` implementation and frontend; there is no catalog seed file. Then use Configure → Account Types → Import with the complete `local/files/account_types.csv`. The 13-column file preserves the existing 16 UUIDs and adds `detail_sheet` before metadata. If the live `account_types` tab still has the retired `is_loan` column, delete it first. Classification keys use hyphens. An absent/empty catalog stays empty until this explicit import; an established catalog cannot accept additional identities.
 
-For an existing 12-column Sheet, the same full CSV import validates identities, key equivalence, policy values and dependent account/category references before writing. It upgrades the catalog and dependent keys/hints, marking changed rows pending. The explicit Apps Script alternative is `migrateAccountTypeKeys(catalogRows)` with the parsed full CSV objects. Multi-tab updates are not atomic; retry the same full CSV after an interrupted migration. Apply the current ledger migrations, including `0020`, before extraction. See the [Account Types guide](../_docs/account-types.md) for the full rollout and dependency rules.
+For an existing 12-column Sheet, the same full CSV import validates identities, key equivalence, policy values and dependent account/category references before writing. It upgrades the catalog and dependent keys/hints, marking changed rows pending. The explicit Apps Script alternative is `migrateAccountTypeKeys(catalogRows)` with the parsed full CSV objects. Multi-tab updates are not atomic; retry the same full CSV after an interrupted migration. Apply the current ledger migrations, through `0022`, before extraction. See the [Account Types guide](../_docs/account-types.md) for the full rollout and dependency rules.

@@ -26,8 +26,7 @@ assert.equal(insights.accountBalanceByMonth([account], txs, ['2026-08', '2026-09
 assert.equal(insights.accountBalanceByMonth([account], txs, ['2026-08', '2026-09']).get('2026-08').a, 0);
 assert.equal(insights.computeBalancesAt([{ ...account, tracking_start_date_local: '' }], [tx('2026-09-01', 20)], new Date(2026, 8, 3)).get('a'), 60);
 const exportState = {};
-const utils = load('core/utils.js', { state: exportState, _exportData: (format, rows, filename, cols) => ({ rows, filename, cols }), utcToLocalInput: value => value }, ['exportSubscriptions', 'exportAccounts', 'exportCategories', 'exportData', 'parseCsvRow', 'parseCsvRecords']);
-assert.deepEqual(Array.from(utils.parseCsvRow('"a ""quoted"" name",42')), ['a "quoted" name', '42']);
+const utils = load('core/utils.js', { state: exportState, _exportData: (format, rows, filename, cols) => ({ rows, filename, cols }), utcToLocalInput: value => value }, ['exportSubscriptions', 'exportAccounts', 'exportCategories', 'exportData']);
 const sub = { subscription_name: 'Rent', subscription_start_date_local: '2026-09-01', subscription_end_date_local: '2026-12-31' };
 const exported = utils.exportSubscriptions('csv', [sub]);
 assert.equal(exported.rows[0].subscription_name, 'Rent');
@@ -47,31 +46,16 @@ assert.equal(transferExport.rows[0].id, 'parent');
 assert.equal(transferExport.rows[0].tx_date_local, '2026-09-03 12:00:45');
 assert.equal(transferExport.rows[0].target_amount_local, 20);
 const subscriptionSchema = { frequencies: ['monthly'], tx_types: ['money-in', 'money-out'], record_statuses: ['active', 'inactive', 'deleted', 'locked'], default_timezone: 'Europe/London' };
-const subscriptions = load('sections/subscriptions.js', { state: { subscriptionSchema }, parseCsvRow: utils.parseCsvRow }, ['_parseSubscriptionsCsv']);
-const subscriptionImport = subscriptions._parseSubscriptionsCsv('id,subscription_name,subscription_amount_local,frequency,subscription_timezone_local,record_status,source_account,day_of_month\naaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa,Rent,100,monthly,Europe/London,inactive,11111111-1111-4111-8111-111111111111,1');
-assert.equal(subscriptionImport.subscriptions[0].id, 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
-assert.equal(subscriptionImport.subscriptions[0].subscription_timezone_local, 'Europe/London');
-assert.equal(subscriptionImport.subscriptions[0].record_status, 'inactive');
-const imported = [];
 const frontend = load('sections/transactions.js', {
   ...dateUtils,
-  state: { accounts: [{ id: 'a', account_name: 'Bank' }], accountSchema: { loan_sub_types: ['personal_loan'] } }, getSymbol: () => '£', parseCsvRow: utils.parseCsvRow, parseCsvRecords: utils.parseCsvRecords,
+  state: { accounts: [{ id: 'a', account_name: 'Bank' }] }, getSymbol: () => '£',
   el: () => null, showLoading() {}, hideLoading() {}, showMsg() {},
   document: { dispatchEvent() {} }, CustomEvent: class {},
-  ExpenseAPI: { async createTransactionsBulk(payload) { imported.push(...payload.transactions); return { ok: true, created: 0, updated: payload.transactions.length, failed: 0, results: payload.transactions.map(row => ({ ok: true, action: 'updated', key: row.id })) }; } },
-}, ['_parseTxCsv', '_submitTxImport', '_checkBalanceRules', '_checkRule5']);
+}, ['_checkBalanceRules']);
 assert.match(frontend._checkBalanceRules('money-out', { ...account, type: 'asset', current_value_local: 10 }, false, 20, '2026-09-03'), /Insufficient balance/);
 assert.equal(frontend._checkBalanceRules('money-out', { ...account, type: 'asset', current_value_local: 10 }, false, 20, '2026-09-01'), null);
-assert.match(frontend._checkRule5('money-out', { type: 'liability', sub_type: 'personal_loan' }, 'shopping', 'other'), /Cannot record/);
-assert.equal(frontend._checkRule5('money-out', { type: 'liability', sub_type: 'personal_loan' }, 'debt-finance', 'interest-charges'), null);
-const parsed = frontend._parseTxCsv('id,tx_date_local,tx_type,source_account,source_amount_local,major_category,minor_category\none,2026-09-03,money-out,Bank,10,food,lunch\ntwo,2026-09-03,money-out,Bank,10,food,lunch');
-assert.equal(parsed.errors.length, 0);
-assert.equal(parsed.transactions[0].id, 'one');
-(async () => {
-  await frontend._submitTxImport(parsed.transactions);
-  assert.deepEqual(imported.map(row => row.id), ['one', 'two']);
-  console.log('Frontend regression checks passed');
-})().catch(error => { console.error(error); process.exitCode = 1; });
+console.log('Frontend regression checks passed');
+
 
 (async () => {
   const fields = Object.fromEntries(Object.entries({

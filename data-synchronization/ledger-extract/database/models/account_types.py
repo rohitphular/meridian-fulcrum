@@ -25,7 +25,6 @@ COLS = [
     "sync_status",
     "sync_date",
     "sync_notes",
-    "is_loan",
     "detail_sheet",
 ]
 
@@ -44,7 +43,6 @@ class Row(TypedDict):
     sync_status: str | None
     sync_date: datetime | None
     sync_notes: str | None
-    is_loan: bool
     detail_sheet: str | None
 
 

@@ -54,9 +54,9 @@ def _store(conn: Any, typed: dict[str, Any], synced_at: datetime) -> None:
         validate_type_detail_policy(conn, group, subtype, typed["detail_sheet"])
         cursor.execute(
             """UPDATE account_types SET id=%s, account_type_label=%s, account_subtype_label=%s, description=%s,
-               record_status=%s, is_loan=%s, detail_sheet=%s, updated_at=now(), is_sheet_managed=TRUE,
+               record_status=%s, detail_sheet=%s, updated_at=now(), is_sheet_managed=TRUE,
                sync_status='in-sync', sync_date=%s, sync_notes='' WHERE id=%s""",
-            (identity, typed["account_type_label"], typed["account_subtype_label"], typed["description"], typed["record_status"], typed["is_loan"], typed["detail_sheet"], synced_at, existing[0]),
+            (identity, typed["account_type_label"], typed["account_subtype_label"], typed["description"], typed["record_status"], typed["detail_sheet"], synced_at, existing[0]),
         )
 
 

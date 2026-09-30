@@ -207,51 +207,35 @@ export function openContextMenu(triggerBtn, items, onSelect) {
   document.addEventListener('click', _ctxHandler, true);
 }
 
-// Complete records retain quoted newlines and physical row numbers.
-export function parseCsvRecords(source) {
-  const text = source.replace(/^\uFEFF/, '');
-  const records = [];
-  let values = [], value = '', quoted = false, closed = false, line = 1, rowLine = 1;
-  for (let index = 0; index < text.length; index++) {
-    const char = text[index];
-    if (quoted) {
-      if (char === '"' && text[index + 1] === '"') { value += '"'; index++; }
-      else if (char === '"') { quoted = false; closed = true; }
-      else { value += char; if (char === '\n' || (char === '\r' && text[index + 1] !== '\n')) line++; }
-    } else if (char === '"' && value === '' && !closed) quoted = true;
-    else if (char === ',' || char === '\n' || char === '\r') {
-      values.push(value); value = ''; closed = false;
-      if (char !== ',') {
-        if (values.some(cell => cell.trim() !== '')) records.push({ values, line: rowLine });
-        values = []; line++; rowLine = line;
-        if (char === '\r' && text[index + 1] === '\n') index++;
-      }
-    } else if (closed || char === '"') return { records: [], errors: [`Row ${line}: invalid characters after a quoted CSV field.`] };
-    else value += char;
-  }
-  if (quoted) return { records: [], errors: [`Row ${rowLine}: a quoted CSV field is not closed.`] };
-  values.push(value);
-  if (values.some(cell => cell.trim() !== '')) records.push({ values, line: rowLine });
-  return { records, errors: [] };
+// ── Import results (shared by every CSV import panel) ───────────────────────
+// The server parses and validates uploads; panels only render its response.
+export function importErrorText(code) {
+  const text = String(code ?? 'unknown_error').replace(/_/g, ' ');
+  return text.charAt(0).toUpperCase() + text.slice(1) + '.';
 }
 
-// ── CSV row parser (shared across import panels) ─────────────────────────────
-// Parses a single CSV line, respecting double-quoted fields.
-export function parseCsvRow(line) {
-  const result = [];
-  let cur = '';
-  let inQ = false;
-  for (let i = 0; i < line.length; i++) {
-    const c = line[i];
-    if (c === '"') {
-      if (inQ && line[i + 1] === '"') { cur += '"'; i++; }
-      else { inQ = !inQ; }
-    }
-    else if (c === ',' && !inQ) { result.push(cur.trim()); cur = ''; }
-    else { cur += c; }
+export function renderImportResult(response, { message = importErrorText, filename = '', notice = '' } = {}) {
+  const prefix = filename === '' ? '' : `${esc(filename)} · `;
+  const results = Array.isArray(response?.results) ? response.results : [];
+  if (response?.ok !== true && results.length === 0) {
+    const errors = Array.isArray(response?.errors) ? response.errors : [];
+    const list = errors.length === 0 ? '' : `<ul class="pin-error import-result-errors">${errors.map(error => `<li>${esc(error)}</li>`).join('')}</ul>`;
+    const detail = [response?.field, response?.referenced_count === undefined ? '' : `${response.referenced_count} references`].filter(value => value !== undefined && value !== null && value !== '').join(' · ');
+    const text = message(response?.error, response);
+    const outcome = /nothing was (imported|saved|written)/i.test(text) ? '' : ' Nothing was imported.';
+    return `<div class="import-result"><p class="pin-error" role="alert">${prefix}${esc(text)}${detail === '' ? '' : ` (${esc(detail)})`}${outcome}</p>${list}</div>`;
   }
-  result.push(cur.trim());
-  return result;
+  const count = action => results.filter(result => result?.ok === true && result.action === action).length;
+  const failures = results.filter(result => result?.ok !== true);
+  const created = response.created ?? count('created');
+  const updated = response.updated ?? count('updated');
+  const skipped = response.skipped ?? 0;
+  const summary = `${prefix}${created} created · ${updated} updated${skipped > 0 ? ` · ${skipped} unchanged` : ''} · ${failures.length} failed`;
+  const details = result => [result.label, result.field, Array.isArray(result.invalid_values) ? result.invalid_values.join(', ') : result.invalid_values, result.key]
+    .filter(value => value !== undefined && value !== null && value !== '').join(' · ');
+  const table = failures.length === 0 ? '' : `<div class="table-wrap"><table><thead><tr><th>CSV line</th><th>Error</th><th>Details</th></tr></thead><tbody>${failures.map(result =>
+    `<tr><td class="td-mono">${esc(result.line ?? '—')}</td><td class="import-result-reason">${esc(message(result.error, result))}<div class="td-mono td-muted">${esc(result.error ?? '')}</div></td><td>${esc(details(result))}</td></tr>`).join('')}</tbody></table></div>`;
+  return `<div class="import-result"><p class="cat-count">${summary}</p>${notice}${table}</div>`;
 }
 
 export async function shareSnapshot(targetEl, filename = 'snapshot.png') {

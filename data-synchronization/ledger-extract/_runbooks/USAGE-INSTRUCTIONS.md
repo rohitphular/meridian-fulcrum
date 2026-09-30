@@ -79,7 +79,7 @@ Values must be YAML booleans, not quoted strings. Disabling a dependency means t
 
 ## Account type configuration
 
-Deploy expense-tracker and open Configure → Account Types before extraction to initialize the fourteen-column `account_types` source from CSV. Import `local/files/account_types.csv` to use the existing reference UUIDs. Migrations 0019–0020 and normal-sync preserve category links, hyphenate key values and support one-time adoption of existing unmanaged catalog IDs. Import explicit `is_loan` and `detail_sheet` policy from the current CSV; no runtime seed is supplied. Migration 0020 requires a completed policy refresh before dependent lookups, including source rows already marked in-sync. Unknown classifications are rejected. Process account types before categories and accounts; unavailable or invalid enabled configuration stops dependent entities. See [account-type mapping](../_docs/account-types.md).
+Deploy expense-tracker and open Configure → Account Types before extraction to initialize the thirteen-column `account_types` source from CSV. Import `local/files/account_types.csv` to use the existing reference UUIDs. Migrations 0019–0020 and normal-sync preserve category links, hyphenate key values and support one-time adoption of existing unmanaged catalog IDs. Import explicit `detail_sheet` policy from the current CSV; no runtime seed is supplied. Migration 0020 requires a completed policy refresh before dependent lookups, including source rows already marked in-sync. Unknown classifications are rejected. Process account types before categories and accounts; unavailable or invalid enabled configuration stops dependent entities. See [account-type mapping](../_docs/account-types.md).
 
 ## Recovery
 

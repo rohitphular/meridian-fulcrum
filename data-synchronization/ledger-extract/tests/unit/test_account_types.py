@@ -18,7 +18,6 @@ def _row(**changes: object) -> dict:
         "account_subtype_key": "custom-savings",
         "account_subtype_label": "Custom savings",
         "description": "",
-        "is_loan": False,
         "detail_sheet": "",
         "record_status": "active",
         "sync_status": "create-pending",
@@ -37,7 +36,7 @@ def test_configuration_values_are_validated_before_database_work(field: str, val
     conn.commit.assert_not_called()
     sheet.batch_update_rows.assert_called_once()
     assert sheet.batch_update_rows.call_args.args[0] == "account_types"
-    assert sheet.batch_update_rows.call_args.args[1][0][1] == 10
+    assert sheet.batch_update_rows.call_args.args[1][0][1] == HEADERS["account_types"].index("sync_status") + 1
     assert sheet.batch_update_rows.call_args.args[1][0][2][0] == "create-failed"
 
 
@@ -91,17 +90,17 @@ def test_group_tokens_derive_from_the_source_catalog() -> None:
         account_types.upsert_account_types(MagicMock(), MagicMock(), rows)
 
 
-@pytest.mark.parametrize("changes", [{"description": 123}, {"description": False}, {"is_loan": ""}, {"is_loan": 1}, {"detail_sheet": "unknown"}])
+@pytest.mark.parametrize("changes", [{"description": 123}, {"description": False}, {"detail_sheet": "unknown"}])
 def test_account_type_source_matches_gas_policy_and_text_validation(changes: dict) -> None:
     with pytest.raises(ValueError, match="invalid_"):
         transform(_row(**changes))
 
 
 def test_catalog_labels_and_processing_policies_are_source_values() -> None:
-    typed = transform(_row(account_type_key="configured-group", account_type_label="Configured Group", is_loan="TRUE", detail_sheet="account_deposit"))
+    typed = transform(_row(account_type_key="configured-group", account_type_label="Configured Group", detail_sheet="account_deposit"))
     assert typed["account_type_key"] == "configured-group"
     assert typed["account_type_label"] == "Configured Group"
-    assert typed["is_loan"] is True
+    assert "is_loan" not in typed
     assert typed["detail_sheet"] == "account_deposit"
 
 

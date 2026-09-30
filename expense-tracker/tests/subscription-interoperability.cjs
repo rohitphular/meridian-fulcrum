@@ -36,14 +36,23 @@ test('exported subscription CSV matches every Sheet column and round-trips witho
   assert.equal(exported.rows[0].updated_at, row.updated_at);
   const quote = value => '"' + String(value ?? '').replaceAll('"', '""') + '"';
   const csv = exported.columns.join(',') + '\n' + exported.columns.map(key => quote(row[key])).join(',');
-  const frontend = load('sections/subscriptions.js', { state });
-  const parsed = frontend._parseSubscriptionsCsv(csv);
-  assert.equal(parsed.errors.length, 0);
-  assert.equal(parsed.subscriptions[0].subscription_amount_local, row.subscription_amount_local);
-  assert.equal(parsed.subscriptions[0].description, row.description);
-  assert.equal(parsed.subscriptions[0].record_status, 'inactive');
-  assert.equal(parsed.subscriptions[0].created_at, undefined);
-  assert.equal(parsed.subscriptions[0].sync_status, undefined);
+  const backend = vm.createContext({ console: { log() {}, warn() {}, error() {} } });
+  for (const file of ['app-config.gs', 'app-utils.gs', 'subscription-schema.gs', 'subscription-utils.gs', 'subscription-validation.gs', 'csv-import.gs', 'subscription-import.gs']) {
+    vm.runInContext(fs.readFileSync(path.join(__dirname, '../api', file), 'utf8'), backend);
+  }
+  const forwarded = [];
+  backend.createSubscriptionsBulk = body => { forwarded.push(...body.subscriptions); return { ok: true, results: body.subscriptions.map((_, index) => ({ index, ok: true, action: 'created' })) }; };
+  const result = backend.importSubscriptionsCsv({ csv });
+  assert.equal(result.ok, true, JSON.stringify(result.errors));
+  assert.equal(result.results[0].line, 2);
+  assert.equal(forwarded[0].subscription_amount_local, row.subscription_amount_local);
+  assert.equal(forwarded[0].description, row.description);
+  assert.equal(forwarded[0].record_status, 'inactive');
+  assert.equal(forwarded[0].subscription_timezone_local, 'Europe/London');
+  assert.equal(forwarded[0].id, identity);
+  assert.equal(forwarded[0].subscription_start_date_local, row.subscription_start_date_local);
+  assert.equal(forwarded[0].created_at, undefined);
+  assert.equal(forwarded[0].sync_status, undefined);
 });
 
 test('pause sends only lifecycle intent so it cannot overwrite business fields from an old browser snapshot', async () => {

@@ -55,7 +55,7 @@ If the existing property tab still contains `evaluation_currency_rate_id`, first
 
 Run `migrateAccountDetailMetadata()` in the Apps Script editor (or pass one supported file type to limit scope), as described in the [account import guide](../../../expense-tracker/_docs/account-imports.md) for existing detail tabs before running extraction. It scans existing tabs only, appends missing trailing headers, initializes absent lifecycle/sync state, preserves creation time and refreshes update time only for initialized rows. It does not invent a historical creation time. An incompatible header layout or invalid existing metadata needs explicit correction; it is not silently reordered.
 
-Apply ledger migrations through `0020` and sync the fourteen-column `account_types` source (normal startup handles pending migrations), then enable the upgraded tabs. Use hard-sync once after the property-column migration; otherwise use normal-sync. No live deployment, Sheet migration or configured-database write was performed by this code change.
+Apply ledger migrations through `0022` and sync the thirteen-column `account_types` source (normal startup handles pending migrations), then enable the upgraded tabs. Use hard-sync once after the property-column migration; otherwise use normal-sync. No live deployment, Sheet migration or configured-database write was performed by this code change.
 
 ## Money, dates and missing values
 

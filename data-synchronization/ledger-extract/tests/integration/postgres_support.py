@@ -54,7 +54,6 @@ def configure_test_account_types(client: Any) -> None:
         cursor.execute("UPDATE account_types SET is_sheet_managed=TRUE,sync_status='in-sync'")
         for subtype, sheet in fixture_policies.items():
             cursor.execute("UPDATE account_types SET detail_sheet=%s WHERE account_subtype_key=%s", (sheet, subtype))
-        cursor.execute("UPDATE account_types SET is_loan=TRUE WHERE detail_sheet IN ('account_liability_mortgage','account_liability_personal_loan')")
     client.commit()
 
 

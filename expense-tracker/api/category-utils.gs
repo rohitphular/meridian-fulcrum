@@ -27,7 +27,8 @@ function _categoryHintContext() {
       if (row.account_type_key === 'investment') valid.add('investment');
     });
     return { ok: true, valid: valid };
-  } catch (_) {
+  } catch (error) {
+    if (error.message === 'account_types_is_loan_column_present') return { ok: false, error: error.message, field: 'account_types' };
     return { ok: false, error: 'invalid_account_types', field: 'account_types' };
   }
 }

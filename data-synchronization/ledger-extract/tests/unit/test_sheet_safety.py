@@ -68,12 +68,19 @@ def test_property_snapshot_rejects_unmigrated_rate_reference_header() -> None:
 
 
 def test_legacy_account_type_snapshot_requires_explicit_source_upgrade() -> None:
-    legacy = [field for field in HEADERS["account_types"] if field not in {"is_loan", "detail_sheet"}]
+    legacy = [field for field in HEADERS["account_types"] if field != "detail_sheet"]
     with pytest.raises(ValueError, match="^account_types_migration_required$"):
         SnapshotSheetsClient._parse_snapshot("account_types", [legacy])
     # An unrelated malformed schema must not be diagnosed as the known migration.
     with pytest.raises(ValueError, match="^sheet_header_mismatch:account_types$"):
         SnapshotSheetsClient._parse_snapshot("account_types", [legacy[:-1]])
+
+
+def test_retired_is_loan_column_requires_sheet_cleanup() -> None:
+    headers = list(HEADERS["account_types"])
+    headers.insert(headers.index("detail_sheet"), "is_loan")
+    with pytest.raises(ValueError, match="^account_types_is_loan_column_present$"):
+        SnapshotSheetsClient._parse_snapshot("account_types", [headers])
 
 
 def test_separate_loan_tables_allow_same_uuid_in_different_tabs(monkeypatch: pytest.MonkeyPatch) -> None:

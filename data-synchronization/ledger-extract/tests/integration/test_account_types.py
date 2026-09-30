@@ -30,7 +30,6 @@ def _row(**changes: Any) -> dict[str, Any]:
         "account_subtype_key": "current",
         "account_subtype_label": "Current",
         "description": "Sheet description",
-        "is_loan": False,
         "detail_sheet": "account_deposit",
         "record_status": "active",
         "sync_status": "create-pending",
@@ -106,7 +105,7 @@ def test_seed_uuid_adoption_preserves_account_and_category_references(database_c
         assert _one(database_client, f"SELECT account_type_id FROM {table}") == (row["id"],)
     assert _one(database_client, "SELECT account_type,account_subtype FROM account_master") == ("asset", "current")
     assert sheet.updates[0][0] == "account_types"
-    assert sheet.updates[0][1][1] == 10
+    assert sheet.updates[0][1][1] == HEADERS["account_types"].index("sync_status") + 1
     assert sheet.updates[0][1][2][0] == "in-sync"
     assert account_types.upsert_account_types(database_client, RecordingSheets(), [{**row, "account_subtype_label": "Edited", "sync_status": "update-pending"}]) == 0
     assert _one(database_client, "SELECT id,created_at,account_subtype_label FROM account_types WHERE id=%s", (row["id"],)) == (row["id"], created_at, "Edited")
@@ -221,7 +220,7 @@ def test_normal_hard_sync_recovery_and_acknowledgement_retry_keep_one_identity(d
     job.run(cfg)
     original = _one(database_client, "SELECT id,created_at,updated_at,is_sheet_managed FROM account_types WHERE id=%s", (seed_id,))
     assert original[3] is True
-    assert _one(database_client, "SELECT is_loan,detail_sheet,sync_status FROM account_types WHERE id=%s", (seed_id,)) == (False, "account_deposit", "in-sync")
+    assert _one(database_client, "SELECT detail_sheet,sync_status FROM account_types WHERE id=%s", (seed_id,)) == ("account_deposit", "in-sync")
     source["account_subtype_label"] = "Committed despite missing acknowledgement"
     source["sync_status"] = "update-pending"
     sheets.fail_ack = True

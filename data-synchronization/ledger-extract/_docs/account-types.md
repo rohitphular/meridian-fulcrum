@@ -6,7 +6,7 @@ The Sheet supplies the existing classification catalog, its labels, lifecycle an
 
 ## Column mapping
 
-The source contract has fourteen columns, in this order. Database-only fields are listed last.
+The source contract has thirteen columns, in this order. Database-only fields are listed last.
 
 | Sheet column | Database column | Processing |
 |---|---|---|
@@ -16,7 +16,6 @@ The source contract has fourteen columns, in this order. Database-only fields ar
 | `account_subtype_key` | `account_subtype_key` | Existing catalog subtype key, using the same hyphen format. Globally unique; cannot equal any configured group key. Immutable for a stored identity. |
 | `account_subtype_label` | `account_subtype_label` | Required trimmed label. |
 | `description` | `description` | String text only; blank becomes NULL. |
-| `is_loan` | `is_loan` | Required boolean, supplied as a native boolean or case-insensitive `true`/`false` text. Blank and numeric flags fail. This is explicit source policy. |
 | `detail_sheet` | `detail_sheet` | Optional exact name of one of the six supported detail tabs; blank becomes NULL and enables no detail importer. Eligibility follows this value, independently of the subtype spelling. |
 | `record_status` | `record_status` | Required `active`, `inactive`, `deleted` or `locked`. Active and locked rows can supply references. |
 | `sync_status` | `sync_status` | Source selects processing. A committed database row records `in-sync`; source acknowledgement follows commit and a source check. |
@@ -32,7 +31,7 @@ Valid `detail_sheet` values are `account_deposit`, `account_investment_property`
 
 Migration `0019` adds ownership/sync metadata and makes category type references cascade UUID updates. Migration `0020` converts existing group/subtype key values from underscores to hyphens, cascades account-master composite-key references, and appends `is_loan` and `detail_sheet` without moving database columns. UUIDs, category links, ownership and audit timestamps remain intact. Key collisions or invalid converted keys abort atomically with `account_type_hyphen_keys_require_reconciliation`.
 
-Migration `0020` deliberately leaves policy as false/NULL and clears the database sync state with `policy_source_sync_required`. These temporary defaults do not authorize references: account/category/detail lookups require completed Sheet ownership and policy sync. The next normal-sync reprocesses source rows even if their Sheet status was already `in-sync`, obtains the actual policy values, and preserves existing UUID ownership. Upgrade/import the fourteen-column Sheet contract first; an old twelve-column header fails safely.
+Migration `0020` deliberately leaves policy as false/NULL and clears the database sync state with `policy_source_sync_required`. These temporary defaults do not authorize references: account/category/detail lookups require completed Sheet ownership and policy sync. The next normal-sync reprocesses source rows even if their Sheet status was already `in-sync`, obtains the actual policy values, and preserves existing UUID ownership. Upgrade/import the current Sheet contract first; an old twelve-column header fails safely. Migration `0022` drops the unused `is_loan` column that `0020` added; a Sheet that still has `is_loan` fails with `account_types_is_loan_column_present` until that column is deleted.
 
 Only an existing database classification can be synchronized. Its natural key is the group/subtype pair. An unmanaged existing row can adopt the source UUID once if that UUID does not belong to another classification. The UUID update, cascaded category links, labels, policy and ownership commit together after the source guard succeeds. Accounts retain their natural-key relationship. This supports existing installations with historical random IDs without a hardcoded list of eligible seeds.
 
@@ -42,7 +41,9 @@ Once managed, a different UUID cannot claim that classification. Keys cannot cha
 
 Normal-sync skips existing source `in-sync` rows whose database ownership and policy ingestion are complete. Pending/failed rows and rows requiring initial adoption/policy refresh are processed. Hard-sync includes existing in-sync rows, preserving identity. Failures stop downstream entities after recording safe row failures.
 
-A `detail_sheet` mapping cannot change once any account references the classification, including historical/deleted accounts. Initial policy assignment after migration is permitted, but retained extension rows and linked-property references must already fit the chosen mapping. Account subtype changes likewise cannot orphan extension rows or property links. `is_loan` remains an explicitly editable policy for unlocked configuration; review its effect on application transaction eligibility before changing it.
+Retiring a classification (`inactive`/`deleted`) fails with `referenced_type_cannot_be_retired` while database category links still reference it, and account types are processed before categories. Sync the updated categories first, then the retired types; see [Retire classifications](../../../expense-tracker/_docs/account-types.md#retire-classifications). Rows removed from the Sheet are not retired in the database.
+
+A `detail_sheet` mapping cannot change once any account references the classification, including historical/deleted accounts. Initial policy assignment after migration is permitted, but retained extension rows and linked-property references must already fit the chosen mapping. Account subtype changes likewise cannot orphan extension rows or property links.
 
 `inactive` and `deleted` cannot be applied while any account or category source/target mapping references the classification, including historical records. `locked` is frozen configuration in the application and remains reference-eligible. Account/category lookups accept only active/locked, Sheet-managed, successfully synchronized types. Detail writes also require synchronized policy. Shared row locks preserve that policy through dependent commits.
 

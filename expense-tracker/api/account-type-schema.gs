@@ -8,7 +8,6 @@ const ACCOUNT_TYPE_SCHEMA = {};
   ['account_subtype_key', 'Subtype key', 'string', false, true],
   ['account_subtype_label', 'Subtype label', 'string', true, true],
   ['description', 'Description', 'string', true, false],
-  ['is_loan', 'Loan account', 'boolean', true, true],
   ['detail_sheet', 'Detail sheet', 'string', true, false],
   ['record_status', 'Status', 'enum', true, false],
   ['sync_status', 'Sync status', 'string', false, false],

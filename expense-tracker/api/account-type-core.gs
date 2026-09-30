@@ -88,7 +88,7 @@ function _changeAccountType(body, status) {
     if (ACCOUNT_TYPE_SCHEMA[key].editable && body[key] !== undefined) candidate[key] = body[key];
   }
   if (status === null) {
-    for (const key of ['account_type_label', 'account_subtype_label', 'description', 'is_loan', 'detail_sheet', 'record_status']) writeField(key);
+    for (const key of ['account_type_label', 'account_subtype_label', 'description', 'detail_sheet', 'record_status']) writeField(key);
   } else {
     if (status === 'active' && previous.record_status !== 'deleted') return { ok: false, error: 'account_type_not_deleted' };
     candidate.record_status = status;

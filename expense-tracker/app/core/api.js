@@ -45,7 +45,6 @@ export const ExpenseAPI = {
   updateCategory:    f    => _mutateRow('update_category', state.categories, f),
   deleteCategory:    f    => _mutateRow('delete_category', state.categories, f),
   createAccount:     f    => SheetsClient.post({ action: 'create_account', ...f }),
-  createAccountsBulk:      f => SheetsClient.post({ action: 'create_accounts_bulk',      ...f }),
   importAccountData:       f => SheetsClient.post({ action: 'import_account_data',        ...f }),
   createTransactionsBulk: f => SheetsClient.post({ action: 'create_transactions_bulk', ...f }),
   updateAccount:     f    => _mutateRow('update_account', state.accounts, f),

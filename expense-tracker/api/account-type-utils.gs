@@ -4,15 +4,17 @@ function _readAccountTypeState() {
   if (sheet === undefined || sheet.getLastRow() === 0) return { sheet: sheet === undefined ? null : sheet, rows: [], requires_migration: false };
   const values = sheet.getDataRange().getValues();
   const columns = getAccountTypeSheetColumns();
-  const legacyColumns = columns.filter(function(key) { return key !== 'is_loan' && key !== 'detail_sheet'; });
+  const legacyColumns = columns.filter(function(key) { return key !== 'detail_sheet'; });
   const headers = values[0];
   const matches = function(expected) { return headers.length === expected.length && headers.every(function(value, index) { return value === expected[index]; }); };
   const legacy = matches(legacyColumns);
+  // The retired is_loan column must be deleted from the Sheet; positional writes cannot skip it.
+  if (headers.indexOf('is_loan') !== -1) throw new Error('account_types_is_loan_column_present');
   if (!legacy && !matches(columns)) throw new Error('sheet_header_mismatch: account_types');
   const rows = values.slice(1).map(function(row, index) {
     const accountType = { _row: index + 2, row_num: index + 2 };
     headers.forEach(function(column, position) {
-      accountType[column] = column === 'is_loan' ? _accountTypeBoolean(row[position]) : _accountTypeText(row[position]);
+      accountType[column] = _accountTypeText(row[position]);
     });
     accountType.id = accountType.id.toLowerCase();
     return accountType;
@@ -26,7 +28,7 @@ function _accountTypeDefaults(body, previous) {
     id: _accountTypeText(body.id).toLowerCase(), account_type_key: _accountTypeText(body.account_type_key),
     account_type_label: _accountTypeText(body.account_type_label), account_subtype_key: _accountTypeText(body.account_subtype_key),
     account_subtype_label: _accountTypeText(body.account_subtype_label), description: _accountTypeText(body.description),
-    is_loan: _accountTypeBoolean(body.is_loan), detail_sheet: _accountTypeText(body.detail_sheet),
+    detail_sheet: _accountTypeText(body.detail_sheet),
     record_status: _accountTypeText(body.record_status) === '' ? (previous === null ? 'active' : previous.record_status) : _accountTypeText(body.record_status),
     sync_status: previous === null ? SYNC_STATUS_CREATE_PENDING : computeSyncStatus(previous.sync_status),
     sync_date: '', sync_notes: '', created_at: previous === null ? now : previous.created_at, updated_at: now,

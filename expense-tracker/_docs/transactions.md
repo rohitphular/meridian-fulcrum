@@ -15,7 +15,7 @@ Schema reference: [data-model.md § Transaction](data-model.md#transaction). Bal
 - Sortable, paginated table; mobile uses card layout
 - Date-range scoping (shared with the insight section)
 - CSV / JSON export of the **currently filtered rows** (both date-range and active filter dimensions apply)
-- CSV bulk import — upload, preview, then submit; ID-based insert or replacement, with created/updated/failed counts
+- CSV bulk import — choose a file and import; the backend parses and validates it, then reports created/updated/failed counts and line-numbered failures. ID-based insert or replacement
 - Warning banner separating malformed rows from the main table
 
 ## Transaction types
@@ -63,7 +63,7 @@ When a category with these hints is selected:
 1. Backend validates that the transfer legs are present (if `mandatory`).
 2. Frontend filters the account dropdowns to the allowed types and shows hints indicating the expected account type. Account type constraints are not enforced server-side.
 
-The category's stored hints determine eligible account choices. Hint values use the catalog's hyphenated subtype keys; `investment` is the shorthand for available investment rows. Loan classification is derived from `account_types.is_loan`. The `account_types` Sheet is authoritative; there is no default catalog seed in application code.
+The category's stored hints determine eligible account choices. Hint values use the catalog's hyphenated subtype keys; `investment` is the shorthand for available investment rows. The `account_types` Sheet is authoritative; there is no default catalog seed in application code.
 
 ## Hard-block rules
 
@@ -143,7 +143,7 @@ The export begins with the currently filtered transactions. A transfer is recons
 
 This compact import contract has one set of shared metadata and one `record_status` for both legs. When the legs have different statuses or independently edited shared fields, or the transfer has historical deleted children, the app blocks export with an explanation. Export `transaction_master` directly from Google Sheets when the original separate rows and their history must be preserved; the compact app format is not a complete ledger backup.
 
-Transaction CSV import accepts quoted multiline fields, rejects blank/duplicate headers and malformed rows, and preserves decimal text. All parsing errors must be corrected before submission. Only rows with confirmed failures are retained for **Retry failed rows**. An interrupted request or incomplete result disables retry and asks you to refresh/check what was saved; the client never automatically repeats a mutation. Optional location enrichment stops waiting after five seconds per lookup.
+Transaction CSV import is parsed and validated on the backend (`api/transaction-import.gs`); the browser only sends the file text. It accepts quoted multiline fields, rejects blank/duplicate headers and malformed rows, and preserves decimal text. If any row fails a format or account-resolution check, the whole file is rejected with `Row <line>: …` messages and nothing is written. Otherwise the file is written in one bulk call and the panel lists any failed rows with their CSV line and reason; fix those lines and import the file again (rows with ids are replaced, not duplicated). An interrupted request or incomplete result asks you to refresh/check what was saved; the client never automatically repeats a mutation. Import does not geocode locations; location enrichment in the add/edit form stops waiting after five seconds per lookup.
 
 ## API surface
 
@@ -151,7 +151,7 @@ Transaction CSV import accepts quoted multiline fields, rejects blank/duplicate 
 |---|---|
 | `list_transactions` | Return all rows (including soft-deleted) |
 | `create_transaction` | Validate (`tx_amount_local` validated unconditionally, regardless of category flags); duplicate check on `(tx_date_local, tx_type, account_id, tx_amount_local)` skipping deleted rows → `duplicate_transaction`; assign `id`; stamp `record_status = active`, `created_at`, `updated_at`; append. For transfers, both legs are duplicate-checked BEFORE any row is written — see Transfer atomicity below. |
-| `create_transactions_bulk` | Accept `transactions[]`; validate rows, insert or replace by supplied ID, preserve child identities and deletion tombstones, and rewrite the resulting data region; return `{ ok, created, updated, failed, results }` |
+| `create_transactions_bulk` | Accept `{ csv, dry_run? }` (`importTransactionsCsv`): parse and validate the file, resolve account names, then pass every row to `createTransactionsBulk` in one call, which inserts or replaces by supplied ID, preserves child identities and deletion tombstones, and rewrites the resulting data region. Returns `{ ok, created, updated, failed, results, rows, without_id }` with each `results[i].line` set to its CSV line, or `{ ok: false, error, errors[] }` when the file is invalid. `dry_run: true` runs only the format checks (no Sheet reads or writes) and returns `{ ok: true, dry_run: true, rows, without_id }` |
 | `update_transaction` | Locked guard → `record_locked`; deleted guard → `transaction_deleted`; validate; duplicate check on `(tx_date_local, tx_type, account_id, tx_amount_local)` excluding the current row (via `excludeRowNum` parameter on `_checkDuplicate`) → `duplicate_transaction`; requires and validates the `major_category` / `minor_category` FK in the update body (returns `unknown_category` if the composite key `(tx_type, major_category, minor_category)` is not found); overwrite editable fields in a single batch write; stamp `updated_at`; advance `sync_status` |
 | `delete_transaction` | Already-deleted guard → `transaction_already_deleted`; locked guard → `record_locked`; soft-delete (`record_status → deleted`) in a single `setValues()` write; stamp `updated_at` |
 | `restore_transaction` | Check `record_status = deleted`; set `record_status → active` in a single `setValues()` write; stamp `updated_at` |
@@ -188,7 +188,7 @@ API mutations clear old sync date/notes and advance pending status. Direct Sheet
 
 `tx_amount_local` (and the equivalent `source_amount_local` / `target_amount_local` fields on the create path) is validated unconditionally before any category-conditional checks run. A category where both `source_account_mandatory` and `target_account_mandatory` are `false` does NOT bypass amount validation — at least one of `source_amount_local` or `target_amount_local` must be a finite positive number for any create call to succeed.
 
-The internal `_writeSingleTransaction` function also guards against a non-finite `tx_amount_local` immediately before the sheet write, returning `invalid_tx_amount_local` as a safety net.
+The internal `_writeSingleTransaction` function also guards against a non-finite `tx_amount_local` immediately before the sheet write, returning `invalid_tx_amount` as a safety net.
 
 ### Duplicate check (`_checkDuplicate`)
 
@@ -242,7 +242,12 @@ Error code strings carry no embedded values. Where additional context is needed 
 | `duplicate_existing_transaction_id`, `multiple_live_transfer_children` | bulk create | Existing identities or transfer relationships are ambiguous; rewrite aborted | `row_num` |
 | `duplicate_id_in_batch` | bulk create | The same UUID appears again in this request, including a case variant | — |
 | `transfer_child_id_requires_parent` | bulk create | Import addresses an existing child; use the initiating parent's UUID | — |
-| `invalid_tx_amount_local` | create, bulk create | `tx_amount_local` resolved to a non-finite number before the sheet write (`_writeSingleTransaction` guard) | — |
+| `invalid_tx_amount` | create, bulk create | `tx_amount_local` resolved to a non-finite or non-positive number before the sheet write (`_writeSingleTransaction` guard) | — |
+| `duplicate_generated_transaction_id` | bulk create | A generated transfer-child UUID collided with an existing or in-batch id; retry the row | — |
+| `beneficiary_empty_name`, `duplicate_beneficiary` | create, update, bulk create | A beneficiary entry has no name, or a name repeats | — |
+| `beneficiary_inconsistent_percentage_format`, `beneficiary_invalid_percentage`, `beneficiary_percentage_rounds_to_zero`, `beneficiary_percentages_do_not_sum_to_100` | create, update, bulk create | Mixed `name` / `name:percentage` entries, an invalid or zero share, or explicit shares that do not total 100 | — |
+| `too_many_beneficiaries` | create, update, bulk create | Too many names to give each a non-zero equal share | — |
+| `unknown_account_id` | create, update | The account is missing or deleted; a new or moved row also needs an active account (an edit that keeps a closed account's row is allowed) | — |
 
 ## Suggested entries
 
@@ -267,7 +272,7 @@ The import panel accepts a CSV file. Canonical column names (no aliases):
 | `description` | No | |
 | `counterparty_name` | No | |
 | `tx_tags` | No | Semicolon-separated |
-| `beneficiaries` | No | Semicolon-separated |
+| `beneficiaries` | No | Semicolon-separated names, or `name:percentage` for every entry (e.g. `rohit:34;reena:33;aryan:33`); see [Source validation](#source-validation) |
 | `user_location_area` | No | |
 | `user_location_city` | No | |
 | `user_location_country` | No | |
@@ -280,7 +285,7 @@ The import panel accepts a CSV file. Canonical column names (no aliases):
 | `created_at` | No | System field — accepted in header but silently ignored on import |
 | `updated_at` | No | System field — accepted in header but silently ignored on import |
 
-Account resolution checks UUID first, then trimmed names without case sensitivity. If several accounts share a name, the importer uses the matching active category's `source_account_types` or `target_account_types` for that side. A hint matches either `type` or `sub_type`, with the same Sheet-driven rules as the account dropdowns. Exactly one active category must match the complete `tx_type` / `major_category` / `minor_category` key, and its hints must leave exactly one account. Missing, blank, conflicting or insufficient hints keep the row blocked with a field-specific error; an explicit UUID can identify the intended account. Hints never override an explicit UUID or a unique name, and account lifecycle validation remains on the backend. No account names or classifications are hardcoded into this lookup.
+Account resolution checks UUID first, then trimmed names without case sensitivity. If several accounts share a name, the importer uses the matching active category's `source_account_types` or `target_account_types` for that side. A hint matches either `type` or `sub_type`, with the same Sheet-driven rules as the account dropdowns. Exactly one active category must match the complete `tx_type` / `major_category` / `minor_category` key, and its hints must leave exactly one account. Missing, blank, conflicting or insufficient hints reject the file (nothing is written) with a line- and field-specific error; an explicit UUID can identify the intended account. Hints never override an explicit UUID or a unique name, and account lifecycle validation remains on the backend. No account names or classifications are hardcoded into this lookup.
 
 Sync/audit fields (`sync_status`, `sync_date`, `sync_notes`, `created_at`, `updated_at`) are accepted in the CSV header row but ignored as input. The backend preserves existing `created_at`, stamps `updated_at`, clears stale acknowledgements and queues sync. `record_status` is a validated optional lifecycle field; leaving it blank cannot reactivate a historical row.
 
@@ -288,7 +293,17 @@ Amount and coordinate fields must contain a complete finite decimal number. Deci
 
 `parent_tx_id` is not accepted as a CSV column. The backend auto-generates the parent-child transfer relationship from the `source_account` and `target_account` columns — do not include it in the CSV file.
 
-Preview is shown before submission. Bulk imports match by supplied `id`, not by the interactive duplicate tuple. Results distinguish created, updated, and failed rows. Retain IDs when re-importing to avoid creating new records.
+The backend checks, before anything is written:
+
+- required headers: `tx_date_local`, `tx_type`, `major_category`, `minor_category`, and at least one of `source_amount_local` / `target_amount_local`
+- required values on every row, including at least one amount; `tx_date_local` syntax (`YYYY-MM-DD HH:MM:SS`, optional fraction) and `tx_type` (`money-in` / `money-out`)
+- `id`, when supplied, is a UUID and is not repeated anywhere in the file (case-insensitive; the error names the line of first use)
+- amount and coordinate decimal syntax, and `record_status` against the transaction schema
+- account names and UUIDs resolve to exactly one non-deleted account (real import only)
+
+A `T` separator in `tx_date_local` is stored as a space. The remaining business rules (categories, account lifecycle, transfer pairing, timezone, beneficiaries, coordinates range) are applied per row by the bulk writer and reported as failed rows.
+
+Bulk imports match by supplied `id`, not by the interactive duplicate tuple. Results distinguish created, updated, and failed rows. Rows without an `id` are always inserted as new transactions; the panel says how many there were after import. Retain IDs (export after importing) when re-importing to avoid creating duplicates.
 
 ## Add / edit form layout
 

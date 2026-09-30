@@ -88,10 +88,6 @@ input:focus-visible, textarea:focus-visible { outline: none; }
   display: flex; align-items: center; justify-content: space-between; gap: 16px;
 }
 .app-brand { flex: 1; min-width: 0; }
-.eyebrow {
-  font-family: var(--mono); font-size: var(--text-2xs); letter-spacing: .2em; text-transform: uppercase;
-  color: var(--muted); margin: 0 0 2px;
-}
 h1 { font-size: var(--text-2xl); font-weight: 700; letter-spacing: -.02em; margin: 0; }
 .brand-dim   { font-weight: 400; color: var(--muted); }
 .brand-ember { color: var(--ember); }
@@ -118,15 +114,18 @@ h1 { font-size: var(--text-2xl); font-weight: 700; letter-spacing: -.02em; margi
 }
 .quote-select:focus { border-color: var(--ember); }
 
-/* theme toggle */
-.theme-btn {
-  font-size: var(--text-xl); line-height: 1;
+/* header icon buttons (refresh, theme toggle) — one size, matching the currency picker */
+.icon-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 34px; height: 34px; padding: 0;
+  font-size: var(--text-lg); line-height: 1;
   background: none; border: 1px solid var(--hair-strong); border-radius: 8px;
-  padding: 5px 8px; cursor: pointer; color: var(--muted);
+  cursor: pointer; color: var(--muted);
   transition: color .15s, border-color .15s, background .15s;
   flex: none;
 }
-.theme-btn:hover { color: var(--ink); border-color: var(--ink); }
+.icon-btn:hover { color: var(--ink); border-color: var(--ink); }
+.icon-btn svg { display: block; }
 
 /* tab nav */
 .tab-nav {
@@ -1061,7 +1060,7 @@ td.td-keywords { max-width: 220px; }
     font-size: var(--text-input-mobile);
     min-height: var(--touch-target);
   }
-  .btn, .btn-link, .tx-menu-trigger, .tx-menu-item, .tab-btn, .theme-btn, .range-btn, .banner-close {
+  .btn, .btn-link, .tx-menu-trigger, .tx-menu-item, .tab-btn, .icon-btn, .range-btn, .banner-close {
     min-height: var(--touch-target);
     min-width: var(--touch-target);
   }
@@ -1427,9 +1426,34 @@ td.td-keywords { max-width: 220px; }
 .configure-description { max-width: 420px; white-space: normal; overflow-wrap: anywhere; }
 .configure-archived { opacity: .5; }
 .configure-module .cat-card .row-actions { margin-top: 10px; }
-.configure-module .cat-keywords { margin-top: 6px; overflow-wrap: anywhere; }
+.configure-card-desc { margin-top: 6px; font-size: var(--text-sm); color: var(--muted); line-height: 1.5; overflow-wrap: anywhere; }
+.configure-hint { margin: 0 0 14px; }
+.configure-file-meta { margin: 12px 0; }
+.configure-preview { margin-top: 4px; }
+.configure-form-grid { align-items: start; }
+.configure-form-grid textarea { min-height: 64px; line-height: 1.5; }
+.configure-view-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.configure-view-desc { margin: 0 0 16px; font-size: var(--text-base); color: var(--ink); line-height: 1.55; max-width: 720px; }
+.configure-view-grid {
+  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px 24px; margin: 12px 0 18px;
+}
+.configure-view-grid .acc-view-field { min-width: 0; gap: 3px; }
+.configure-view-grid .acc-view-val { overflow-wrap: anywhere; }
+.configure-view-span { grid-column: 1 / -1; }
+.configure-mono { font-family: var(--mono); font-size: var(--text-sm); }
+@media (max-width: 640px) {
+  .configure-view-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
 
 /* Keep row-level category import diagnostics readable on both layouts. */
 .cat-import-report { margin-top: 16px; }
 .cat-import-report .table-wrap { max-height: 420px; overflow: auto; }
 .cat-import-reason { min-width: 260px; max-width: 520px; white-space: normal; overflow-wrap: anywhere; }
+
+/* CSV import results — one layout for every import panel */
+.import-result { margin-top: 12px; }
+.import-result .cat-count { margin: 0 0 8px; }
+.import-result-errors { margin: 4px 0 0; padding-left: 18px; }
+.import-result .table-wrap { max-height: 420px; overflow: auto; }
+.import-result-reason { min-width: 220px; max-width: 520px; white-space: normal; overflow-wrap: anywhere; }

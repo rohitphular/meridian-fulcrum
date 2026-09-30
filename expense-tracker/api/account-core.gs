@@ -315,11 +315,13 @@ function updateAccount(body) {
   const validation = validateAccountUpdate(body, currentType, allRows[rowNum - 1][acctColIndex('account_opening_date_local')], allRows[rowNum - 1][acctColIndex('local_timezone')]);
   if (validation.ok === false) return validation;
 
-  // Duplicate name guard — reject if a different non-deleted row already has the same account_name
+  // Duplicate name guard — a rename may not collide with another non-deleted account.
+  // Identity is the UUID, so existing shared names (e.g. a property and its mortgage) stay editable.
   const nameIdx      = acctColIndex('account_name');
   const rstatIdx     = acctColIndex('record_status');
   const normName     = String(body.account_name).trim().toLowerCase();
-  for (let i = 1; i < allRows.length; i++) {
+  const renamed      = normName !== String(allRows[rowNum - 1][nameIdx]).trim().toLowerCase();
+  for (let i = 1; renamed && i < allRows.length; i++) {
     if (i + 1 === rowNum) continue;
     if (String(allRows[i][rstatIdx]) === 'deleted') continue;
     if (String(allRows[i][nameIdx]).trim().toLowerCase() === normName) {

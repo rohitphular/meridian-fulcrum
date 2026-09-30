@@ -282,7 +282,6 @@ function getAccountSchemaForClient() {
     asset_sub_types: byType.asset === undefined ? [] : byType.asset,
     investment_sub_types: byType.investment === undefined ? [] : byType.investment,
     liability_sub_types: byType.liability === undefined ? [] : byType.liability,
-    loan_sub_types: rows.filter(function(row) { return row.is_loan === true; }).map(function(row) { return row.account_subtype_key; }),
     subtype_labels: labels, type_labels: familyLabels,
   };
 }

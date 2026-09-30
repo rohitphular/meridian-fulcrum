@@ -10,7 +10,8 @@ const VALID_CATEGORY_TX_TYPES = CATEGORY_SCHEMA.tx_type_key.enum_values;
 var VALID_CATEGORY_RECORD_STATUSES = CATEGORY_SCHEMA.record_status.enum_values;
 
 // CSV upserts preserve lifecycle state; interactive create intentionally starts active.
-function validateCategoryImport(body, context) {
+// Sheet-free checks shared by import, create and the CSV import dry run.
+function validateCategoryFormat(body) {
   if (body === null || typeof body !== 'object' || Array.isArray(body))
     return { ok: false, error: 'invalid_category_row', field: 'row' };
   const id = strField(body.id);
@@ -33,6 +34,12 @@ function validateCategoryImport(body, context) {
         (typeof value !== 'string' || !['true', 'false'].includes(value.trim().toLowerCase())))
       return { ok: false, error: 'invalid_boolean', field: field, invalid_values: [strField(value)] };
   }
+  return { ok: true };
+}
+
+function validateCategoryImport(body, context) {
+  const format = validateCategoryFormat(body);
+  if (format.ok === false) return format;
   return validateCategoryAccountTypeHints(body, context);
 }
 

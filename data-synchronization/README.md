@@ -24,7 +24,7 @@ Run ledger extraction during a quiet editing window. It checks captured content 
 
 - Deploy the matching Expense Tracker frontend and Apps Script backend after code changes. Local tests do not update an existing deployment.
 - Follow the [source schema migration instructions](../expense-tracker/_docs/master-sheet-names.md). Import Account Types first, then categories/accounts and desired detail tabs. Enable only existing tabs with current headers.
-- Run currency migrations before ledger migrations on a new database. The launchers apply pending migrations for the selected environment. Ledger currently requires migrations through `0021`; currency requires `0006`, which rejects nonfinite rates and non-identity XAU values without rewriting historical data.
+- Run currency migrations before ledger migrations on a new database. The launchers apply pending migrations for the selected environment. Ledger currently requires migrations through `0022`; currency requires `0006`, which rejects nonfinite rates and non-identity XAU values without rewriting historical data.
 - Complete any missing per-row subscription timezones before importing/syncing dated subscriptions. No timezone is inferred from names or currencies.
 - Use **Live** insights for the current data model. The older optional `expense-tracker/job` precomputation pipeline requires a separate port from its retired dual-leg model and now refuses to publish incompatible calculations.
 - `make app-start` serves the repository on loopback for desktop development. Use the hosted frontend on mobile. Do not expose the repository's generic static server to a network: it contains private local configuration alongside public app assets.

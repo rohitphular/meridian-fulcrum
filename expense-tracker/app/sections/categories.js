@@ -1,5 +1,5 @@
 import { state } from '../core/state.js';
-import { el, esc, openContextMenu, closeContextMenu, exportCategories, recordStatusIcon, syncStatusIcon, parseCsvRow } from '../core/utils.js';
+import { el, esc, openContextMenu, closeContextMenu, exportCategories, recordStatusIcon, syncStatusIcon, renderImportResult } from '../core/utils.js';
 import { showLoading, hideLoading, showMsg } from '../core/ui.js';
 import { ExpenseAPI } from '../core/api.js';
 
@@ -9,8 +9,7 @@ function _errMsg(code) {
   return (code !== undefined && code !== null) ? String(code) : '[no error code]';
 }
 
-let _catImportParsed = null;
-let _catImportSequence = 0;
+let _catImportFile   = null;   // File chosen in the import panel; the server parses it
 let _catMenuKey      = null;
 let _catDraft        = null;   // pending filter selections; copied to state.catFilters on Search
 let _catDDCleanup    = null;   // cleanup fn for the currently open filter dropdown's outside-click listener
@@ -456,24 +455,11 @@ function _catTypeDot(type) {
 
 
 // ── CSV import ────────────────────────────────────────────────────────────────
-
-function _categoryImportPrerequisite() {
-  const schema = state.accountTypeSchema;
-  const types = state.accountTypes;
-  if (!Array.isArray(schema?.columns) || !['is_loan', 'detail_sheet'].every(column => schema.columns.includes(column))) {
-    return { error: 'account_types_backend_outdated' };
-  }
-  if (schema.requires_migration === true
-      || (types ?? []).some(type => String(type.account_type_key).includes('_') || String(type.account_subtype_key).includes('_'))) {
-    return { error: 'account_types_migration_required' };
-  }
-  if (!Array.isArray(types) || types.length === 0) return { error: 'account_types_missing' };
-  return null;
-}
+// The server parses and validates the CSV; the panel uploads the raw text and
+// renders the server's summary, file errors, and per-line failures.
 
 function _renderCatImportPanel() {
-  const prerequisite = _categoryImportPrerequisite();
-  const ready = prerequisite === null && _catImportParsed !== null && _catImportParsed.length > 0 && state.catImportPreview?.errors.length === 0;
+  const ready = !state.catImportBusy && _catImportFile !== null;
   return `
   <div class="card" id="catImportPanel" style="margin-bottom:20px">
     <div class="cat-form-header">Import categories from CSV</div>
@@ -484,93 +470,28 @@ function _renderCatImportPanel() {
         <div class="field-hint">Required: tx_type_key, major_category_label, minor_category_label. Optional: id, description, record_status, tag_keywords, counterparty_examples, source_account_types, target_account_types, source_account_mandatory, target_account_mandatory, is_subscription_eligible. Exported sync and audit columns are accepted; the server manages their values.</div>
       </div>
     </div>
-    ${prerequisite === null ? '' : `<p class="pin-error">${esc(_categoryImportError(prerequisite))}</p>`}
-    <div id="catImportStatus">${state.catImportPreview === null ? '' : _renderCatImportStatus(state.catImportPreview)}</div>
+    <div id="catImportChosen">${_renderCatImportChosen()}</div>
     <div id="catImportReport" aria-live="polite">${_renderCatImportReport(state.catImportReport)}</div>
     <div class="form-actions" style="margin-top:16px">
-      <button class="btn btn-primary" id="catImportConfirm"${state.catImportBusy || !ready ? ' disabled' : ''}>${state.catImportBusy ? 'Importing…' : state.catImportReport?.failures.length > 0 ? 'Retry failed rows' : 'Import'}</button>
+      <button class="btn btn-primary" id="catImportConfirm"${ready ? '' : ' disabled'}>${state.catImportBusy ? 'Importing…' : 'Import'}</button>
       <button class="btn btn-secondary" id="catImportCancel"${state.catImportBusy ? ' disabled' : ''}>Close</button>
     </div>
     <div class="pin-error" id="catImportError" role="alert"></div>
   </div>`;
 }
 
-// Keep physical CSV line numbers, including quoted multiline fields, for diagnostics.
-function _categoryCsvRecords(source) {
-  const text = source.replace(/^\uFEFF/, '');
-  const records = [];
-  let values = [], value = '', quoted = false, closed = false, line = 1, rowLine = 1;
-  for (let index = 0; index < text.length; index++) {
-    const char = text[index];
-    if (quoted) {
-      if (char === '"' && text[index + 1] === '"') { value += '"'; index++; }
-      else if (char === '"') { quoted = false; closed = true; }
-      else { value += char; if (char === '\n' || (char === '\r' && text[index + 1] !== '\n')) line++; }
-    } else if (char === '"' && value === '' && !closed) quoted = true;
-    else if (char === ',' || char === '\n' || char === '\r') {
-      values.push(value); value = ''; closed = false;
-      if (char !== ',') {
-        if (values.some(cell => cell.trim() !== '')) records.push({ values, line: rowLine });
-        values = []; line++; rowLine = line;
-        if (char === '\r' && text[index + 1] === '\n') index++;
-      }
-    } else if (closed || char === '"') return { records: [], errors: [`Row ${line}: invalid characters after a quoted CSV field.`] };
-    else value += char;
-  }
-  if (quoted) return { records: [], errors: [`Row ${rowLine}: a quoted CSV field is not closed.`] };
-  values.push(value);
-  if (values.some(cell => cell.trim() !== '')) records.push({ values, line: rowLine });
-  return { records, errors: [] };
-}
-
-function _parseCatCsv(text) {
-  const parsed = _categoryCsvRecords(text);
-  if (parsed.errors.length > 0) return { categories: [], errors: parsed.errors };
-  const records = parsed.records;
-  if (records.length === 0) return { categories: [], errors: ['File is empty.'] };
-  const headers = records.shift().values.map(header => header.trim().toLowerCase().replace(/\s+/g, '_'));
-  const required = ['tx_type_key', 'major_category_label', 'minor_category_label'];
-  if (new Set(headers).size !== headers.length) return { categories: [], errors: ['CSV contains duplicate column headers.'] };
-  const missing = required.filter(header => !headers.includes(header));
-  if (missing.length > 0) return { categories: [], errors: [`Missing required headers: ${missing.join(', ')}.`] };
-  const categories = [], errors = [];
-  const types = state.categorySchema.types.map(type => type.value);
-  const statuses = state.categorySchema.record_statuses;
-  const booleans = ['source_account_mandatory', 'target_account_mandatory', 'is_subscription_eligible'];
-  const textFields = ['id', ...required, 'description', 'record_status', 'tag_keywords', 'counterparty_examples', 'source_account_types', 'target_account_types'];
-  records.forEach(record => {
-    if (record.values.length !== headers.length) { errors.push(`Row ${record.line}: expected ${headers.length} columns, found ${record.values.length}.`); return; }
-    const row = Object.fromEntries(headers.map((header, index) => [header, record.values[index].trim()]));
-    const rowErrors = [];
-    required.forEach(field => { if (row[field] === '') rowErrors.push(`${field} is required`); });
-    if (row.tx_type_key !== '' && !types.includes(row.tx_type_key)) rowErrors.push(`invalid tx_type_key: ${row.tx_type_key}`);
-    if (row.record_status !== undefined && row.record_status !== '' && !statuses.includes(row.record_status)) rowErrors.push(`invalid record_status: ${row.record_status}`);
-    if (row.id !== undefined && row.id !== '' && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(row.id)) rowErrors.push('id must be a UUID');
-    booleans.forEach(field => {
-      if (row[field] !== undefined && row[field] !== '' && !['true', 'false'].includes(row[field].toLowerCase())) rowErrors.push(`${field} must be true or false`);
-    });
-    if (rowErrors.length > 0) { errors.push(`Row ${record.line}: ${rowErrors.join('; ')}.`); return; }
-    const category = { csv_row_num: record.line };
-    textFields.forEach(field => { if (row[field] !== undefined && (row[field] !== '' || field !== 'record_status')) category[field] = row[field]; });
-    if (category.id !== undefined) category.id = category.id.toLowerCase();
-    booleans.forEach(field => { if (row[field] !== undefined && row[field] !== '') category[field] = row[field].toLowerCase() === 'true'; });
-    categories.push(category);
-  });
-  return { categories, errors };
-}
-
-function _renderCatImportStatus(parsed) {
-  const { categories, errors } = parsed;
-  const filename = parsed.filename === undefined ? '' : `<p class="cat-count">${esc(parsed.filename)}</p>`;
-  const errHtml = errors.length > 0 ? `<div class="pin-error">${errors.map(error => esc(error)).join('<br>')}</div>` : '';
-  if (errors.length > 0) return `${filename}${errHtml}<p class="field-hint">Correct the CSV errors and select the file again before importing.</p>`;
-  if (categories.length === 0) return filename + '<p class="field-hint">No rows ready to import.</p>';
-  if (_categoryImportPrerequisite() !== null) return `${filename}<p class="cat-count">${categories.length} valid CSV rows · Import blocked until Account Types is ready.</p>`;
-  return `${filename}<p class="cat-count">${categories.length} categor${categories.length !== 1 ? 'ies' : 'y'} ready to import</p>`;
+function _renderCatImportChosen() {
+  return _catImportFile === null ? '' : `<p class="cat-count">Selected: ${esc(_catImportFile.name ?? 'CSV file')}</p>`;
 }
 
 function _categoryImportError(result) {
   const messages = {
+    missing_csv: 'Choose a CSV file with a header row and at least one category.',
+    invalid_csv: 'The file is not valid CSV. Correct it and select the file again.',
+    csv_has_no_rows: 'The CSV has no category rows.',
+    invalid_csv_headers: 'The CSV headers are invalid. Correct them and select the file again.',
+    invalid_csv_rows: 'The CSV has invalid rows. Nothing was imported; correct them and select the file again.',
+    missing_categories: 'The connected backend does not support CSV upload yet. Deploy the updated backend and reload.',
     account_types_missing: 'Import account_types.csv in Configure → Account Types first, then retry.',
     account_types_backend_outdated: 'The connected backend uses the old Account Types schema. Deploy the updated backend and reload. Then import account_types.csv in Configure → Account Types before importing categories.',
     account_types_migration_required: 'Account Types still uses the old Sheet layout or underscore keys. Import the complete updated account_types.csv in Configure → Account Types, then return here. Selecting category_master.csv does not upgrade Account Types.',
@@ -604,22 +525,20 @@ function _categoryImportError(result) {
 
 function _renderCatImportReport(report) {
   if (report === null || report === undefined) return '';
-  const summary = `${report.created} imported · ${report.updated} updated · ${report.skipped} unchanged · ${report.failures.length} failed`;
-  return `<div class="cat-import-report">
-    ${report.globalError === null ? `<p class="cat-count">${esc(summary)}</p>` : `<p class="pin-error">${esc(_categoryImportError(report.globalError))} <code>${esc(report.globalError.error)}</code></p>`}
-    ${report.failures.length === 0 ? '' : `<div class="table-wrap"><table><thead><tr><th>CSV row</th><th>Category</th><th>Field</th><th>Reason</th></tr></thead><tbody>${report.failures.map(failure => `<tr><td>${esc(failure.csv_row_num ?? 'Unknown')}</td><td>${esc(failure.label)}</td><td>${esc(failure.field ?? '—')}</td><td class="cat-import-reason">${esc(_categoryImportError(failure))}<div class="td-mono">${esc(failure.error)}</div></td></tr>`).join('')}</tbody></table></div>`}
-  </div>`;
+  const message = (code, entry) => _categoryImportError(entry ?? { error: code });
+  if (report.globalError !== null) return renderImportResult({ ok: false, ...report.globalError }, { message });
+  return renderImportResult({ ok: true, results: report.failures, created: report.created, updated: report.updated, skipped: report.skipped }, { message });
 }
 
 function _refreshCatImportPanel() {
-  const preview = el('catImportStatus');
-  if (preview !== null) preview.innerHTML = state.catImportPreview === null ? '' : _renderCatImportStatus(state.catImportPreview);
+  const chosen = el('catImportChosen');
+  if (chosen !== null) chosen.innerHTML = _renderCatImportChosen();
   const report = el('catImportReport');
   if (report !== null) report.innerHTML = _renderCatImportReport(state.catImportReport);
   const button = el('catImportConfirm');
   if (button !== null) {
-    button.disabled = state.catImportBusy || _categoryImportPrerequisite() !== null || _catImportParsed === null || _catImportParsed.length === 0 || state.catImportPreview?.errors.length > 0;
-    button.textContent = state.catImportBusy ? 'Importing…' : state.catImportReport?.failures.length > 0 ? 'Retry failed rows' : 'Import';
+    button.disabled = state.catImportBusy || _catImportFile === null;
+    button.textContent = state.catImportBusy ? 'Importing…' : 'Import';
   }
   for (const id of ['catImportFile', 'catImportCancel', 'catImportBtn', 'catAddBtn']) {
     const control = el(id);
@@ -627,70 +546,48 @@ function _refreshCatImportPanel() {
   }
 }
 
-async function _readCatImport(file) {
-  const sequence = ++_catImportSequence;
-  _catImportParsed = null; state.catImportPreview = null; state.catImportReport = null;
-  _refreshCatImportPanel();
-  if (file === undefined) return;
-  try {
-    const parsed = _parseCatCsv(await file.text());
-    if (sequence !== _catImportSequence || !state.catImportOpen) return;
-    state.catImportPreview = { ...parsed, filename: file.name };
-    _catImportParsed = parsed.errors.length === 0 && parsed.categories.length > 0 ? parsed.categories : null;
-  } catch (_) {
-    if (sequence !== _catImportSequence || !state.catImportOpen) return;
-    state.catImportPreview = { categories: [], errors: ['Unable to read the CSV. Select the file again.'], filename: file.name };
-  }
+function _selectCatImportFile(file) {
+  _catImportFile = file ?? null;
+  state.catImportReport = null;
   _refreshCatImportPanel();
 }
 
-async function _submitCatImport(categories) {
-  if (state.catImportBusy || !Array.isArray(categories) || categories.length === 0 || state.catImportPreview?.errors.length > 0) return;
-  const prerequisite = _categoryImportPrerequisite();
-  if (prerequisite !== null) {
-    state.catImportReport = { created: 0, updated: 0, skipped: 0, failures: [], globalError: prerequisite };
-    _refreshCatImportPanel();
-    return;
-  }
+async function _submitCatImport() {
+  if (state.catImportBusy || _catImportFile === null) return;
+  const file = _catImportFile;
   state.catImportBusy = true; state.catImportReport = null;
   _refreshCatImportPanel();
   if (el('catImportError') !== null) el('catImportError').textContent = '';
   showLoading();
   try {
-    const res = await ExpenseAPI.createCategoriesBulk({ categories });
+    let csv;
+    try { csv = await file.text(); } catch (_) {
+      state.catImportReport = { globalError: { error: 'invalid_csv', errors: ['Unable to read the CSV. Select the file again.'] } };
+      return;
+    }
+    const res = await ExpenseAPI.createCategoriesBulk({ csv });
     const results = res?.results;
-    if (!Array.isArray(results) || (res?.ok === false && typeof res.error === 'string' && results.length === 0)) {
-      state.catImportReport = { created: 0, updated: 0, skipped: 0, failures: [], globalError: { ...res, error: res?.error ?? 'invalid_response' } };
-      if (res?.ok !== false) _catImportParsed = null;
+    if (!Array.isArray(results) || results.length === 0) {
+      state.catImportReport = { globalError: { ...res, error: typeof res?.error === 'string' ? res.error : 'invalid_response' } };
       showMsg(_categoryImportError(state.catImportReport.globalError), 'warn');
       return;
     }
-    const indexed = results.map((result, position) => {
-      const index = Number.isInteger(result.index) ? result.index : position;
-      return { result, index, category: categories[index] };
-    });
-    if (results.length !== categories.length || new Set(indexed.map(item => item.index)).size !== categories.length || indexed.some(item => item.category === undefined || typeof item.result.ok !== 'boolean')) {
-      state.catImportReport = { created: 0, updated: 0, skipped: 0, failures: [], globalError: { error: 'invalid_response' } };
-      _catImportParsed = null;
+    if (results.some(result => result === null || typeof result !== 'object' || typeof result.ok !== 'boolean')) {
+      state.catImportReport = { globalError: { error: 'invalid_response' } };
       showMsg(_categoryImportError(state.catImportReport.globalError), 'warn');
       document.dispatchEvent(new CustomEvent('et:reload'));
       return;
     }
-    const rejected = indexed.filter(item => item.result.ok === false);
-    const failures = rejected.map(({ result, category }) => ({ ...result, error: result.error ?? 'unknown_error', csv_row_num: category.csv_row_num ?? result.csv_row_num,
-      label: [category.major_category_label, category.minor_category_label].filter(value => value !== undefined && value !== '').join(' → ') }));
-    const created = indexed.filter(item => item.result.ok && item.result.action === 'created').length;
-    const updated = indexed.filter(item => item.result.ok && item.result.action === 'updated').length;
-    const skipped = indexed.filter(item => item.result.ok && item.result.action === 'unchanged').length;
+    const failures = results.filter(result => result.ok === false).map(result => ({ ...result, error: result.error ?? 'unknown_error' }));
+    const created = results.filter(result => result.ok && result.action === 'created').length;
+    const updated = results.filter(result => result.ok && result.action === 'updated').length;
+    const skipped = results.filter(result => result.ok && result.action === 'unchanged').length;
     state.catImportReport = { created, updated, skipped, failures, globalError: null };
     state.catImportOpen = true;
-    _catImportParsed = rejected.length === 0 ? null : rejected.map(item => item.category);
-    state.catImportPreview = { categories: _catImportParsed ?? [], errors: [], filename: state.catImportPreview?.filename };
-    showMsg(`${created} imported · ${updated} updated · ${skipped} unchanged · ${failures.length} failed`, failures.length > 0 ? 'warn' : 'success');
+    showMsg(`${created} created · ${updated} updated · ${skipped} unchanged · ${failures.length} failed`, failures.length > 0 ? 'warn' : 'success');
     if (created + updated > 0) document.dispatchEvent(new CustomEvent('et:reload'));
   } catch (_) {
-    state.catImportReport = { created: 0, updated: 0, skipped: 0, failures: [], globalError: { error: 'connection_error' } };
-    _catImportParsed = null;
+    state.catImportReport = { globalError: { error: 'connection_error' } };
     console.warn('[categories] _submitCatImport: error=connection_error');
   } finally {
     state.catImportBusy = false;
@@ -716,7 +613,7 @@ function _attachCatEvents() {
     if (state.catImportBusy) return;
     if (state.catImportOpen) {
       state.catImportOpen = false;
-      _catImportParsed = null; state.catImportPreview = null; state.catImportReport = null; _catImportSequence++;
+      _catImportFile = null; state.catImportReport = null;
     } else {
       state.catImportOpen = true;
       state.catAddOpen = false;
@@ -727,17 +624,15 @@ function _attachCatEvents() {
   });
 
   if (state.catImportOpen) {
-    el('catImportFile').addEventListener('change', event => { if (!state.catImportBusy) _readCatImport(event.target.files[0]); });
+    el('catImportFile').addEventListener('change', event => { if (!state.catImportBusy) _selectCatImportFile(event.target.files[0]); });
 
-    el('catImportConfirm').addEventListener('click', () => {
-      if (_catImportParsed !== null) _submitCatImport(_catImportParsed);
-    });
+    el('catImportConfirm').addEventListener('click', () => { _submitCatImport(); });
 
     el('catImportCancel').addEventListener('click', () => {
       if (state.catImportBusy) return;
-      _catImportSequence++; state.catImportPreview = null; state.catImportReport = null;
+      state.catImportReport = null;
       state.catImportOpen = false;
-      _catImportParsed = null;
+      _catImportFile = null;
       renderCategories();
     });
   }

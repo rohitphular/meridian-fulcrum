@@ -1,5 +1,5 @@
 import { state } from '../core/state.js';
-import { el, esc, getSymbol, toBase, exportSubscriptions, openContextMenu, syncStatusIcon, recordStatusIcon } from '../core/utils.js';
+import { el, esc, getSymbol, toBase, exportSubscriptions, openContextMenu, syncStatusIcon, recordStatusIcon, renderImportResult } from '../core/utils.js';
 import { showLoading, hideLoading, showMsg } from '../core/ui.js';
 import { ExpenseAPI } from '../core/api.js';
 
@@ -519,14 +519,14 @@ function _renderTable(subs) {
     </div>`;
 }
 
-let _importParsed = null;
 let _subMenuKey = null;
+let _subImportFile = null;
 let _subImportResult = null;
 let _subImportBusy = false;
-let _subImportRetry = false;
-let _subImportRead = 0;
 
 // ── CSV import ────────────────────────────────────────────────────────────────
+// The server parses and validates the file; the browser only uploads the raw
+// text and renders the outcome.
 
 function _renderImportPanel() {
   return `
@@ -536,99 +536,16 @@ function _renderImportPanel() {
       <div class="field form-grid-span-2">
         <label for="subImportFile">CSV file</label>
         <input type="file" id="subImportFile" accept=".csv"${_subImportBusy ? ' disabled' : ''}>
-        <div class="field-hint">Required: subscription_name, subscription_amount_local, frequency, source_account, and the applicable day_of_week or day_of_month. Optional: id, counterparty_name, tx_type, major_category, minor_category, description, record_status, subscription_start_date_local, subscription_end_date_local, subscription_timezone_local. Start date is required for quarterly and annual schedules. Dates require a timezone. Sync and audit columns are accepted; the server manages their values.</div>
+        <div class="field-hint">Required: subscription_name, subscription_amount_local, frequency, source_account, and the applicable day_of_week or day_of_month. Optional: id, counterparty_name, tx_type, major_category, minor_category, description, record_status, subscription_start_date_local, subscription_end_date_local, subscription_timezone_local. Start date is required for quarterly and annual schedules. Dates require a timezone. Sync and audit columns are accepted; the server manages their values. The server checks the whole file first and imports nothing if any row is invalid.</div>
       </div>
     </div>
     <div id="subImportStatus">${_subImportResult ?? ''}</div>
     <div class="form-actions">
-      <button class="btn btn-primary" id="subImportConfirm"${_subImportBusy || _importParsed === null ? ' disabled' : ''}>${_subImportBusy ? 'Importing…' : _subImportRetry ? 'Retry failed rows' : 'Import'}</button>
+      <button class="btn btn-primary" id="subImportConfirm"${_subImportBusy || _subImportFile === null ? ' disabled' : ''}>${_subImportBusy ? 'Importing…' : 'Import'}</button>
       <button class="btn btn-secondary" id="subImportCancel"${_subImportBusy ? ' disabled' : ''}>Close</button>
     </div>
     <div class="pin-error" id="subImportError" role="alert"></div>
   </div>`;
-}
-
-// Preserve quoted newlines and physical CSV line numbers in import diagnostics.
-function _subscriptionCsvRecords(source) {
-  const text = source.replace(/^\uFEFF/, '');
-  const records = [];
-  let values = [], value = '', quoted = false, closed = false, line = 1, rowLine = 1;
-  for (let index = 0; index < text.length; index++) {
-    const char = text[index];
-    if (quoted) {
-      if (char === '"' && text[index + 1] === '"') { value += '"'; index++; }
-      else if (char === '"') { quoted = false; closed = true; }
-      else { value += char; if (char === '\n' || (char === '\r' && text[index + 1] !== '\n')) line++; }
-    } else if (char === '"' && value === '' && !closed) quoted = true;
-    else if (char === ',' || char === '\n' || char === '\r') {
-      values.push(value); value = ''; closed = false;
-      if (char !== ',') {
-        if (values.some(cell => cell.trim() !== '')) records.push({ values, line: rowLine });
-        values = []; line++; rowLine = line;
-        if (char === '\r' && text[index + 1] === '\n') index++;
-      }
-    } else if (closed || char === '"') return { records: [], errors: [`Row ${line}: invalid characters after a quoted CSV field.`] };
-    else value += char;
-  }
-  if (quoted) return { records: [], errors: [`Row ${rowLine}: a quoted CSV field is not closed.`] };
-  values.push(value);
-  if (values.some(cell => cell.trim() !== '')) records.push({ values, line: rowLine });
-  return { records, errors: [] };
-}
-
-function _parseSubscriptionsCsv(text) {
-  if (!_schemaReady()) return { subscriptions: [], errors: ['Subscription configuration is unavailable. Reload after deploying the updated backend.'] };
-  const parsed = _subscriptionCsvRecords(text);
-  if (parsed.errors.length > 0) return { subscriptions: [], errors: parsed.errors };
-  if (parsed.records.length === 0) return { subscriptions: [], errors: ['File is empty.'] };
-  const headers = parsed.records.shift().values.map(header => header.trim().toLowerCase().replace(/\s+/g, '_'));
-  if (new Set(headers).size !== headers.length) return { subscriptions: [], errors: ['CSV contains duplicate column headers.'] };
-  const required = ['subscription_name', 'subscription_amount_local', 'frequency', 'source_account'];
-  const missing = required.filter(header => !headers.includes(header));
-  if (missing.length > 0) return { subscriptions: [], errors: [`Missing required headers: ${missing.join(', ')}.`] };
-  const subscriptions = [], errors = [], seenIds = new Set();
-  const fields = ['id', ...required, 'record_status', 'subscription_timezone_local', 'counterparty_name', 'day_of_month', 'day_of_week',
-    'tx_type', 'major_category', 'minor_category', 'description', 'subscription_start_date_local', 'subscription_end_date_local'];
-  const acceptedHeaders = new Set([...fields, 'sync_status', 'sync_date', 'sync_notes', 'created_at', 'updated_at']);
-  const unknown = headers.filter(header => !acceptedHeaders.has(header));
-  if (unknown.length > 0) return { subscriptions: [], errors: [`Unknown CSV headers: ${unknown.map(header => header === '' ? '[blank]' : header).join(', ')}.`] };
-  for (const record of parsed.records) {
-    if (record.values.length !== headers.length) {
-      errors.push(`Row ${record.line}: expected ${headers.length} columns, found ${record.values.length}.`);
-      continue;
-    }
-    const row = Object.fromEntries(headers.map((header, index) => [header, record.values[index].trim()]));
-    for (const field of ['subscription_start_date_local', 'subscription_end_date_local']) {
-      if (row[field] !== undefined) row[field] = _localTimestamp(row[field]);
-    }
-    const rowErrors = _subscriptionErrors(row);
-    for (const field of ['id', 'source_account']) {
-      if (row[field] !== undefined && row[field] !== '' && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(row[field])) rowErrors.push(`${field} must be a UUID`);
-    }
-    if (row.id !== undefined && row.id !== '') {
-      row.id = row.id.toLowerCase();
-      if (seenIds.has(row.id)) rowErrors.push('duplicate id in CSV');
-      seenIds.add(row.id);
-    }
-    if (rowErrors.length > 0) {
-      errors.push(`Row ${record.line}: ${rowErrors.join('; ')}.`);
-      continue;
-    }
-    const subscription = { csv_row_num: record.line };
-    fields.forEach(field => {
-      if (row[field] !== undefined && !(row[field] === '' && ['id', 'record_status'].includes(field))) subscription[field] = row[field];
-    });
-    subscription.source_account = subscription.source_account.toLowerCase();
-    subscription.subscription_amount_local = row.subscription_amount_local;
-    subscriptions.push(subscription);
-  }
-  return { subscriptions, errors };
-}
-
-function _renderImportStatus({ subscriptions, errors }) {
-  if (errors.length > 0) return `<div class="pin-error" role="alert">${errors.map(error => esc(error)).join('<br>')}</div><p class="field-hint">Correct the CSV errors and select the file again before importing.</p>`;
-  if (subscriptions.length === 0) return '<p class="placeholder">No rows ready to import.</p>';
-  return `<p class="field-hint">${subscriptions.length} subscription${subscriptions.length !== 1 ? 's' : ''} ready to import</p>`;
 }
 
 function _refreshImportPanel() {
@@ -636,8 +553,8 @@ function _refreshImportPanel() {
   if (status !== null) status.innerHTML = _subImportResult ?? '';
   const button = el('subImportConfirm');
   if (button !== null) {
-    button.disabled = _subImportBusy || _importParsed === null;
-    button.textContent = _subImportBusy ? 'Importing…' : _subImportRetry ? 'Retry failed rows' : 'Import';
+    button.disabled = _subImportBusy || _subImportFile === null;
+    button.textContent = _subImportBusy ? 'Importing…' : 'Import';
   }
   for (const id of ['subImportFile', 'subImportCancel', 'subImportBtn', 'subAddBtn']) {
     const node = el(id);
@@ -645,79 +562,63 @@ function _refreshImportPanel() {
   }
 }
 
-async function _readSubscriptionImport(file) {
+function _chooseSubscriptionImport(file) {
   if (_subImportBusy) return;
-  const read = ++_subImportRead;
-  _importParsed = null;
-  _subImportRetry = false;
-  _subImportResult = '<p class="field-hint">Reading CSV…</p>';
-  const error = el('subImportError');
-  if (error !== null) error.textContent = '';
-  _refreshImportPanel();
-  try {
-    const parsed = _parseSubscriptionsCsv(await file.text());
-    if (read !== _subImportRead || !state.subImportOpen) return;
-    _importParsed = parsed.errors.length === 0 && parsed.subscriptions.length > 0 ? parsed.subscriptions : null;
-    _subImportResult = `<p class="field-hint">${esc(file.name)}</p>` + _renderImportStatus(parsed);
-  } catch (_) {
-    if (read !== _subImportRead) return;
-    _subImportResult = '<p class="pin-error">Unable to read the CSV. Select the file again.</p>';
-  }
+  _subImportFile = file ?? null;
+  _subImportResult = _subImportFile === null ? null : `<p class="field-hint">${esc(_subImportFile.name)} selected</p>`;
   _refreshImportPanel();
 }
 
-async function _submitImport(subscriptions) {
-  if (_subImportBusy || !Array.isArray(subscriptions) || subscriptions.length === 0) return;
+function _renderImportOutcome(res) {
+  return renderImportResult(res);
+}
+
+async function _submitImport() {
+  if (_subImportBusy || _subImportFile === null) return;
+  const file = _subImportFile;
   _subImportBusy = true;
   _refreshImportPanel();
   const error = el('subImportError');
   if (error !== null) error.textContent = '';
   showLoading();
+  let csv;
   try {
-    const res = await ExpenseAPI.createSubscriptionsBulk({ subscriptions });
-    if (res?.ok === false && typeof res.error === 'string' && (!Array.isArray(res.results) || res.results.length === 0)) {
+    csv = await file.text();
+  } catch (_) {
+    _subImportFile = null;
+    _subImportResult = '<p class="pin-error" role="alert">Unable to read the CSV. Select the file again.</p>';
+    _subImportBusy = false;
+    _refreshImportPanel();
+    hideLoading();
+    return;
+  }
+  try {
+    const res = await ExpenseAPI.createSubscriptionsBulk({ csv });
+    _subImportFile = null;
+    const topLevel = res?.ok === false && typeof res.error === 'string' && !Array.isArray(res.errors) && (!Array.isArray(res.results) || res.results.length === 0);
+    if (topLevel) {
       const uncertain = res.error === 'request_failed';
-      if (uncertain) {
-        _importParsed = null;
-        document.dispatchEvent(new CustomEvent('et:reload'));
-      }
+      if (uncertain) document.dispatchEvent(new CustomEvent('et:reload'));
       _subImportResult = `<p class="pin-error" role="alert">Import failed: ${esc(res.error)}${uncertain ? '. Some rows may have been saved. Reload and check before importing again.' : ''}</p>`;
       showMsg('Import failed: ' + res.error, 'warn');
       return;
     }
-    const results = res?.results;
-    const indexed = Array.isArray(results) ? results.map((result, position) => ({ result, index: result?.index ?? position })) : [];
-    if (indexed.length !== subscriptions.length || new Set(indexed.map(item => item.index)).size !== subscriptions.length ||
-      indexed.some(({ result, index }) => !Number.isInteger(index) || subscriptions[index] === undefined || typeof result?.ok !== 'boolean')) {
-      _importParsed = null;
-      _subImportResult = '<p class="pin-error" role="alert">The server returned an incomplete import result. Some rows may have been saved. Reload and check before importing again.</p>';
-      document.dispatchEvent(new CustomEvent('et:reload'));
-      return;
-    }
-    const failed = indexed.filter(({ result }) => !result.ok);
-    const created = indexed.filter(({ result }) => result.ok && result.action === 'created').length;
-    const updated = indexed.filter(({ result }) => result.ok && result.action === 'updated').length;
-    const unchanged = indexed.filter(({ result }) => result.ok && result.action === 'unchanged').length;
-    const summary = `${created} created · ${updated} updated · ${unchanged} unchanged · ${failed.length} failed`;
-    const rows = failed.map(({ result, index }) => {
-      const row = subscriptions[index];
-      return `<tr><td>${esc(row.csv_row_num ?? index + 2)}</td><td>${esc(row.subscription_name)}</td><td>${esc(result.error ?? 'unknown_error')}</td></tr>`;
-    }).join('');
-    _subImportResult = `<p class="field-hint">${esc(summary)}</p>` + (rows === '' ? '' :
-      `<div class="table-wrap"><table class="acc-table"><thead><tr><th>CSV row</th><th>Name</th><th>Reason</th></tr></thead><tbody>${rows}</tbody></table></div>`);
-    _importParsed = failed.length > 0 ? failed.map(({ index }) => subscriptions[index]) : null;
-    _subImportRetry = failed.length > 0;
-    state.subImportOpen = true;
-    showMsg(summary, failed.length > 0 ? 'warn' : 'success');
-    if (created + updated > 0) document.dispatchEvent(new CustomEvent('et:reload'));
+    _subImportResult = _renderImportOutcome(res);
+    const results = Array.isArray(res?.results) ? res.results : [];
+    const saved = results.filter(result => result?.ok === true).length;
+    const failed = results.length - saved;
+    if (Array.isArray(res?.errors)) showMsg('Import rejected: ' + (res.error ?? 'invalid_csv'), 'warn');
+    else showMsg(`${saved} imported · ${failed} failed`, failed > 0 ? 'warn' : 'success');
+    if (saved > 0) document.dispatchEvent(new CustomEvent('et:reload'));
   } catch (_) {
-    _importParsed = null;
-    _subImportRetry = false;
+    _subImportFile = null;
     _subImportResult = '<p class="pin-error" role="alert">Connection error. Some rows may have been saved. Reload and check before importing again.</p>';
     console.warn('[subscriptions] _submitImport: error=connection_error');
     document.dispatchEvent(new CustomEvent('et:reload'));
   } finally {
     _subImportBusy = false;
+    const input = el('subImportFile');
+    if (input !== null) input.value = '';
     _refreshImportPanel();
     hideLoading();
   }
@@ -773,13 +674,14 @@ function _attachEvents() {
 
   el('subImportBtn')?.addEventListener('click', () => {
     if (_subImportBusy) return;
-    _subImportRead++;
     if (state.subImportOpen) {
       state.subImportOpen = false;
-      _importParsed = null;
+      _subImportFile = null;
       _subImportResult = null;
     } else {
       state.subImportOpen = true;
+      _subImportFile = null;
+      _subImportResult = null;
       state.subDeleteRow = null;
       state.subAddOpen    = false;
       state.subEditRow    = null;
@@ -789,26 +691,21 @@ function _attachEvents() {
   }, { signal });
 
   el('subImportFile')?.addEventListener('change', event => {
-    const file = event.target.files[0];
-    if (file !== undefined) _readSubscriptionImport(file);
+    _chooseSubscriptionImport(event.target.files[0]);
   }, { signal });
 
-  el('subImportConfirm')?.addEventListener('click', () => {
-    if (_importParsed !== null) _submitImport(_importParsed);
-  }, { signal });
+  el('subImportConfirm')?.addEventListener('click', () => { _submitImport(); }, { signal });
 
   el('subImportCancel')?.addEventListener('click', () => {
     if (_subImportBusy) return;
-    _subImportRead++;
     state.subImportOpen = false;
-    _importParsed = null;
+    _subImportFile = null;
     _subImportResult = null;
     renderSubscriptions();
   }, { signal });
 
   el('subAddBtn')?.addEventListener('click', () => {
     if (_subImportBusy) return;
-    _subImportRead++;
     if (state.subAddOpen || state.subEditRow !== null) {
       state.subAddOpen  = false;
       state.subEditRow  = null;
@@ -817,7 +714,8 @@ function _attachEvents() {
       state.subAddOpen    = true;
       state.subDeleteRow  = null;
       state.subImportOpen = false;
-      _importParsed       = null;
+      _subImportFile      = null;
+      _subImportResult    = null;
     }
     renderSubscriptions();
   }, { signal });

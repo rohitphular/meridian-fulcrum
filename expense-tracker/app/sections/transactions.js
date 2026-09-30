@@ -1,5 +1,5 @@
 import { state } from '../core/state.js';
-import { el, esc, fmtDateTime, fmtDateTimeCompact, fmtNative, fmtBase, nowLocalISO, toDateInputVal, exportData, getSymbol, openContextMenu, closeContextMenu, syncStatusIcon, recordStatusIcon, parseCsvRecords } from '../core/utils.js';
+import { el, esc, fmtDateTime, fmtDateTimeCompact, fmtNative, fmtBase, nowLocalISO, toDateInputVal, exportData, getSymbol, openContextMenu, closeContextMenu, syncStatusIcon, recordStatusIcon, renderImportResult, importErrorText } from '../core/utils.js';
 import { showLoading, hideLoading, showMsg } from '../core/ui.js';
 import { filteredTx, getRangeBounds } from '../core/daterange.js';
 import { ExpenseAPI } from '../core/api.js';
@@ -12,12 +12,10 @@ const METADATA_CACHE_KEY = 'et_metadata_v1';
 const METADATA_TTL_MS    = 6 * 60 * 60 * 1000;
 
 let filterOpen         = false;
-let _txImportParsed    = null;
-let _txImportReadSequence = 0;
+let _txImportFile   = null;   // file chosen in the import panel; read only on Import
 let _txImportBusy = false;
-let _txImportRetry = false;
 let _filterEventsAbort = null;
-let _txImportResult  = null;   // persists failure table HTML across re-renders
+let _txImportResult  = null;   // persists the import outcome HTML across re-renders
 let _txMenuKey      = null;
 let _txEventsAbort  = null;
 let _accTypeSel     = new Set();
@@ -36,6 +34,12 @@ function _transactionError(code) {
     incomplete_location_coordinates: 'Enter both latitude and longitude, or clear both.',
     latitude_out_of_range: 'Latitude must be between −90 and 90.',
     longitude_out_of_range: 'Longitude must be between −180 and 180.',
+    unknown_account_id: 'The account is not available. Choose an active account; deleted accounts cannot be used.',
+    missing_csv: 'The file is empty.',
+    invalid_csv: 'The file is not valid CSV.',
+    csv_has_no_rows: 'The file has a header row but no transactions.',
+    invalid_csv_headers: 'The CSV header row is not valid.',
+    invalid_csv_rows: 'Some rows in the file are invalid.',
   };
   return messages[code] ?? (typeof code === 'string' && code !== '' ? code : '[no error code]');
 }
@@ -220,7 +224,7 @@ function _fmtBeneficiaries(str) {
   }).join(' &middot; ');
 }
 
-// Location enrichment is optional and must not leave an import waiting forever.
+// Location enrichment in the add/edit form is optional and must not leave the form waiting forever.
 async function _locationData(url) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 5000);
@@ -321,6 +325,18 @@ function _acctOptsWithHints(accounts, allowedTypesStr, selectedId = '') {
   return filtered.map(a =>
     `<option value="${esc(a.id)}" ${a.id === selectedId ? 'selected' : ''}>${esc(a.account_name)} (${esc(a.account_currency_local)})</option>`
   ).join('');
+}
+
+// Edits may keep a row on its inactive/locked (closed) account, which the backend
+// accepts; only active accounts are offered as a new choice.
+function _editAccountOpts(allowedTypesStr, currentId, selectedId) {
+  const actives = state.accounts.filter(a => a.record_status === 'active');
+  const opts    = _acctOptsWithHints(actives, allowedTypesStr, selectedId);
+  const current = state.accounts.find(a => a.id === currentId);
+  if (current === undefined || current.record_status === 'deleted'
+      || _filterAccountsByTypes(actives, allowedTypesStr).some(a => a.id === currentId)) return opts;
+  const status = current.record_status === 'active' ? '' : ` · ${esc(current.record_status)}`;
+  return `<option value="${esc(current.id)}" ${current.id === selectedId ? 'selected' : ''}>${esc(current.account_name)} (${esc(current.account_currency_local)})${status}</option>${opts}`;
 }
 
 // ── Transaction schema helpers ────────────────────────────────────────────────
@@ -444,10 +460,9 @@ export function renderTransactions() {
 
   el('txImportBtn').addEventListener('click', () => {
     if (_txImportBusy) return;
-    _txImportReadSequence++;
     if (state.txImportOpen) {
       state.txImportOpen = false;
-      _txImportParsed = null;
+      _txImportFile = null;
       _txImportResult = null;
     } else {
       state.txImportOpen = true;
@@ -460,7 +475,6 @@ export function renderTransactions() {
 
   el('txAddBtn').addEventListener('click', () => {
     if (_txImportBusy) return;
-    _txImportReadSequence++;
     if (anyAddOpen) {
       state.txAddOpen = false;
       state.txViewRow = null;
@@ -468,23 +482,20 @@ export function renderTransactions() {
     } else {
       state.txAddOpen = true;
       state.txImportOpen = false;
-      _txImportParsed = null;
+      _txImportFile = null;
     }
     renderTransactions();
   });
 
   if (state.txImportOpen) {
-    el('txImportFile').addEventListener('change', e => _readTxImport(e.target.files[0]));
-    el('txImportConfirm').addEventListener('click', () => {
-      if (_txImportParsed !== null) _submitTxImport(_txImportParsed, true);
-    });
+    el('txImportFile').addEventListener('change', e => _chooseTxImportFile(e.target.files[0]));
+    el('txImportConfirm').addEventListener('click', () => _submitTxImport(_txImportFile));
     _updateTxImportControls();
 
     el('txImportCancel').addEventListener('click', () => {
       if (_txImportBusy) return;
-      _txImportReadSequence++;
       state.txImportOpen = false;
-      _txImportParsed = null;
+      _txImportFile = null;
       _txImportResult = null;
       renderTransactions();
     });
@@ -1037,11 +1048,10 @@ function _afRefreshToAccountField() {
 
 
 
-// ── Financial hard-block rules 1–6 ───────────────────────────────────────────
+// ── Financial hard-block rules ───────────────────────────────────────────────
 // Returns null on pass, or a multi-line error string on block.
 // Rules 1 & 3 — insufficient balance (asset accounts).
 // Credit-limit checks require revolving-credit details, which list_accounts does not expose.
-// Rule 5     — money-out from a loan account (with exemption for interest/charges).
 // Rule 6     — FX transfer: source_amount_local and target_amount_local may differ for cross-currency transfers.
 
 function _checkBalanceRules(transaction_type, sourceAccount, isTransfer, amount, txDate, txTimezone = '') {
@@ -1072,22 +1082,6 @@ function _checkBalanceRules(transaction_type, sourceAccount, isTransfer, amount,
 
   return null;
 }
-
-// Rule 5 — block money-out from a loan account.
-// Exemption: major_category === 'Debt & finance' AND minor_category === 'Interest & charges'.
-// Returns null on pass, or the error string on block.
-function _checkRule5(transaction_type, sourceAccount, major_category, minor_category) {
-  if (transaction_type !== 'money-out') return null;
-  if (sourceAccount === undefined || sourceAccount === null) return null;
-  const loanTypes = (state.accountSchema !== undefined && state.accountSchema !== null && state.accountSchema.loan_sub_types !== undefined && state.accountSchema.loan_sub_types !== null) ? state.accountSchema.loan_sub_types : [];
-  if (sourceAccount.type !== 'liability' || !loanTypes.includes(sourceAccount.sub_type)) return null;
-  if (major_category === 'debt-finance' && minor_category === 'interest-charges') return null;
-  return (
-    `Cannot record money-out from a loan account.\n` +
-    `Loan accounts track what you owe. To record a loan fee or charge, add it as a money-out from your current account, or record it directly in the sheet.`
-  );
-}
-
 
 async function _saveTransaction() {
   const btn   = el('afSubmit');
@@ -1139,9 +1133,6 @@ async function _saveTransaction() {
   const target_amount = targetText === '' ? source_amount : targetText;
   const balanceError  = _checkBalanceRules(tx_type, sourceAcc, isTransfer, Number(source_amount), dateRaw, tx_timezone);
   if (balanceError) { errEl.textContent = balanceError; return; }
-
-  const rule5Error    = _checkRule5(tx_type, sourceAcc, major_category, minor_category);
-  if (rule5Error) { errEl.textContent = rule5Error; return; }
 
   btn.disabled = true; btn.textContent = 'Saving…';
   showLoading();
@@ -1266,12 +1257,11 @@ function _renderTxForm(tx, mode) {
   }
 
   // Edit mode — single-row edit: one account_id, one tx_amount_local (no source/target split)
-  const activeAccounts = state.accounts.filter(a => a.record_status === 'active');
   const _editCat       = _getCat(tx.tx_type, tx.major_category, tx.minor_category);
   const _editAccTypes  = tx.tx_type === 'money-out'
     ? ((_editCat !== null && _editCat !== undefined && _editCat.source_account_types !== undefined && _editCat.source_account_types !== null) ? _editCat.source_account_types : '')
     : ((_editCat !== null && _editCat !== undefined && _editCat.target_account_types !== undefined && _editCat.target_account_types !== null) ? _editCat.target_account_types : '');
-  const accountOpts    = _acctOptsWithHints(activeAccounts, _editAccTypes, tx.account_id);
+  const accountOpts    = _editAccountOpts(_editAccTypes, tx.account_id, tx.account_id);
   const typeOpts       = _txTypes().map(t =>
     `<option value="${esc(t.value)}" ${tx.tx_type === t.value ? 'selected' : ''}>${esc(t.label)}</option>`
   ).join('');
@@ -1405,6 +1395,7 @@ function _renderTxDelete(tx) {
 }
 
 function _attachTxEditCascadeEvents() {
+  const originalAccountId = el('txEditAccount')?.value ?? '';
   const _refreshAccountOpts = () => {
     const type     = el('txEditType').value;
     const major    = el('txEditMajor').value;
@@ -1413,11 +1404,10 @@ function _attachTxEditCascadeEvents() {
     const typeHint = type === 'money-out'
       ? ((cat !== null && cat !== undefined && cat.source_account_types !== undefined && cat.source_account_types !== null) ? cat.source_account_types : '')
       : ((cat !== null && cat !== undefined && cat.target_account_types !== undefined && cat.target_account_types !== null) ? cat.target_account_types : '');
-    const actives  = state.accounts.filter(a => a.record_status === 'active');
     const acctEl   = el('txEditAccount');
     if (acctEl) {
       const prev   = acctEl.value;
-      acctEl.innerHTML = `<option value="">— select —</option>${_acctOptsWithHints(actives, typeHint, prev)}`;
+      acctEl.innerHTML = `<option value="">— select —</option>${_editAccountOpts(typeHint, originalAccountId, prev)}`;
       if (prev) acctEl.value = prev;
     }
   };
@@ -1501,9 +1491,6 @@ async function _saveEdit() {
 
   const balanceErrorEdit = _checkBalanceRules(tx_type, acctPR, false, Number(tx_amount_local), dateRaw, oldTx?.tx_timezone_local ?? '');
   if (balanceErrorEdit) { errEl.textContent = balanceErrorEdit; return; }
-
-  const rule5ErrorEdit = _checkRule5(tx_type, acctEdit, major_category, minor_category);
-  if (rule5ErrorEdit) { errEl.textContent = rule5ErrorEdit; return; }
 
   showLoading();
   try {
@@ -1939,6 +1926,7 @@ function _renderTxImportPanel() {
         <input type="file" id="txImportFile" accept=".csv">
         <div class="field-hint">Columns: id (optional), tx_date_local, tx_timezone_local, tx_type, source_account, target_account, source_amount_local, target_amount_local, major_category, minor_category, description, counterparty_name, tx_tags, beneficiaries, user_location_area, user_location_city, user_location_country, user_location_latitude, user_location_longitude, record_status (optional; leave blank to preserve existing status)</div>
         <div class="field-hint">Accounts accept names or UUIDs. When names repeat, the category's account types must identify one account.</div>
+        <div class="field-hint">The file is checked when you import. A formatting or account-name problem on any line stops the whole import; other rows that fail are listed by line while the rest are saved.</div>
       </div>
     </div>
     <div id="txImportStatus">${_txImportResult !== null ? _txImportResult : ''}</div>
@@ -1950,230 +1938,22 @@ function _renderTxImportPanel() {
   </div>`;
 }
 
-function _parseTxCsv(text) {
-  const decoded = parseCsvRecords(text);
-  if (decoded.errors.length > 0) return { transactions: [], errors: decoded.errors };
-  const records = decoded.records;
-  if (records.length === 0) return { transactions: [], errors: ['File is empty.'] };
-
-  const headers = records[0].values.map(h => h.trim().toLowerCase().replace(/\s+/g, '_'));
-  if (headers.includes('') || new Set(headers).size !== headers.length) return { transactions: [], errors: ['CSV has blank or duplicate column headers.'] };
-  const missing = ['tx_date_local', 'tx_type', 'major_category', 'minor_category'].filter(key => !headers.includes(key));
-  if (!headers.includes('source_amount_local') && !headers.includes('target_amount_local')) missing.push('source_amount_local or target_amount_local');
-  if (missing.length > 0) return { transactions: [], errors: ['Missing required headers: ' + missing.join(', ')] };
-  const accounts = state.accounts ?? [];
-  const resolveAccount = (value, field, category, rowErrors) => {
-    if (value === undefined || value.trim() === '') return '';
-    const key = value.trim().toLowerCase();
-    let matches = accounts.filter(account => String(account.id).toLowerCase() === key);
-    if (matches.length === 0) {
-      matches = accounts.filter(account => String(account.account_name).trim().toLowerCase() === key);
-      // Only disambiguate names. An explicit UUID must never be redirected by hints.
-      if (matches.length > 1 && category !== null) {
-        const eligible = _filterAccountsByTypes(matches, category[field + '_types']);
-        if (eligible.length === 1) { return eligible[0].id; }
-      }
-    }
-    if (matches.length !== 1) {
-      const reason = matches.length === 0 ? 'unknown' : 'ambiguous';
-      const guidance = matches.length > 1 ? '; category rules do not identify one account. Use an account UUID to choose explicitly.' : '';
-      rowErrors.push(`${reason} account: "${value}" (${field})${guidance}`);
-      return '';
-    }
-    return matches[0].id;
-  };
-
-  const transactions = [];
-  const errors       = [];
-
-  for (let i = 1; i < records.length; i++) {
-    const vals = records[i].values;
-    if (vals.length !== headers.length) { errors.push(`Row ${records[i].line}: expected ${headers.length} columns, found ${vals.length}`); continue; }
-    const row  = {};
-    headers.forEach((h, idx) => { row[h] = (vals[idx] !== undefined && vals[idx] !== null ? vals[idx] : '').trim(); });
-
-    const rowErrors = [];
-    if (row.tx_date_local === '')    rowErrors.push('missing tx_date_local');
-    if (row.tx_type === '')         rowErrors.push('missing tx_type');
-    if ((row.source_amount_local ?? '') === '' && (row.target_amount_local ?? '') === '') rowErrors.push('missing amount (source_amount_local or target_amount_local)');
-    if (row.major_category === '')  rowErrors.push('missing major_category');
-    if (row.minor_category === '')  rowErrors.push('missing minor_category');
-    const numericValues = {};
-    for (const field of ['source_amount_local', 'target_amount_local', 'user_location_latitude', 'user_location_longitude']) {
-      const value = row[field];
-      numericValues[field] = '';
-      if (value === undefined || value === '') continue;
-      if (!/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(value) || !Number.isFinite(Number(value))) {
-        rowErrors.push(`invalid ${field}: expected a finite decimal number without grouping separators`);
-        continue;
-      }
-      numericValues[field] = field.endsWith('_amount_local') ? value : Number(value);
-    }
-    const hasRecordStatus = row.record_status !== undefined && row.record_status !== '';
-    if (hasRecordStatus) {
-      const recordStatuses = state.transactionSchema?.record_statuses;
-      if (!Array.isArray(recordStatuses) || recordStatuses.length === 0) {
-        rowErrors.push('record_status cannot be validated: transaction status schema is unavailable; reload after updating the backend');
-      } else if (!recordStatuses.includes(row.record_status)) {
-        rowErrors.push(`invalid record_status: "${row.record_status}" (expected ${recordStatuses.join(', ')})`);
-      }
-    }
-
-    // Require exactly one active category with the full key before using its hints.
-    const categories = (state.categories ?? []).filter(category => category.record_status === 'active'
-      && category.tx_type_key === row.tx_type && category.major_category_key === row.major_category
-      && category.minor_category_key === row.minor_category);
-    const category = categories.length === 1 ? categories[0] : null;
-    const sourceId = resolveAccount(row.source_account, 'source_account', category, rowErrors);
-    const targetId = resolveAccount(row.target_account, 'target_account', category, rowErrors);
-
-    if (rowErrors.length) { errors.push(`Row ${records[i].line}: ${rowErrors.join('; ')}`); continue; }
-
-    transactions.push({
-      id:                      row.id,
-      ...(hasRecordStatus ? { record_status: row.record_status } : {}),
-      tx_date_local:            row.tx_date_local.replace('T', ' '),
-      tx_timezone_local:        (row.tx_timezone_local        !== undefined && row.tx_timezone_local        !== null && row.tx_timezone_local        !== '') ? row.tx_timezone_local        : '',
-      tx_type:                  row.tx_type,
-      source_account:           sourceId,
-      target_account:           targetId,
-      user_location_area:       (row.user_location_area       !== undefined && row.user_location_area       !== null && row.user_location_area       !== '') ? row.user_location_area       : '',
-      user_location_city:       (row.user_location_city       !== undefined && row.user_location_city       !== null && row.user_location_city       !== '') ? row.user_location_city       : '',
-      user_location_country:    (row.user_location_country    !== undefined && row.user_location_country    !== null && row.user_location_country    !== '') ? row.user_location_country    : '',
-      user_location_latitude:   numericValues.user_location_latitude,
-      user_location_longitude:  numericValues.user_location_longitude,
-      source_amount_local:      numericValues.source_amount_local,
-      target_amount_local:      numericValues.target_amount_local,
-      major_category:           row.major_category,
-      minor_category:           row.minor_category,
-      description:              (row.description       !== undefined && row.description       !== null && row.description       !== '') ? row.description       : '',
-      counterparty_name:        (row.counterparty_name !== undefined && row.counterparty_name !== null && row.counterparty_name !== '') ? row.counterparty_name : '',
-      tx_tags:                  (row.tx_tags           !== undefined && row.tx_tags           !== null && row.tx_tags           !== '') ? row.tx_tags           : '',
-      beneficiaries:            (row.beneficiaries     !== undefined && row.beneficiaries     !== null && row.beneficiaries     !== '') ? row.beneficiaries     : '',
-      _src_name:                row.source_account,
-      _tgt_name:                row.target_account,
-    });
-  }
-
-  return { transactions, errors };
-}
-
-function _renderTxImportStatus(parsed) {
-  const { transactions, errors } = parsed;
-  const errHtml = errors.length
-    ? `<div class="pin-error" style="margin-bottom:8px">${errors.map(e => esc(e)).join('<br>')}</div>`
-    : '';
-  if (transactions.length === 0) return errHtml + '<p class="placeholder">No valid rows found.</p>';
-  const countMsg = `${transactions.length} transaction${transactions.length !== 1 ? 's' : ''} ready to import` +
-    (errors.length ? ` · correct ${errors.length} error${errors.length !== 1 ? 's' : ''} before importing` : '');
-  return `${errHtml}<p style="font-size:13px;color:var(--muted);margin:0">${countMsg}</p>`;
-}
-
-const _TX_IMPORT_CHUNK = 25;
-
-async function _geocodeImportRows(rows) {
+// The backend parses and validates the file; the browser only sends its text
+// and renders the outcome (summary, line-numbered failures, or file errors).
+function _chooseTxImportFile(file) {
+  if (_txImportBusy) return;
+  _txImportFile = file ?? null;
+  _txImportResult = null;
   const status = el('txImportStatus');
-
-  // Forward: has area/city/country but missing lat+lon.
-  const fwdPairs = new Map();
-  rows.forEach(r => {
-    if (r.user_location_latitude !== undefined && r.user_location_latitude !== null && r.user_location_latitude !== '') return;
-    if (r.user_location_longitude !== undefined && r.user_location_longitude !== null && r.user_location_longitude !== '') return;
-    const area    = ((r.user_location_area    !== undefined && r.user_location_area    !== null) ? r.user_location_area    : '').trim();
-    const city    = ((r.user_location_city    !== undefined && r.user_location_city    !== null) ? r.user_location_city    : '').trim();
-    const country = ((r.user_location_country !== undefined && r.user_location_country !== null) ? r.user_location_country : '').trim();
-    if (area === '' && city === '' && country === '') return;
-    const key = area + '|' + city + '|' + country;
-    if (!fwdPairs.has(key)) fwdPairs.set(key, { area, city, country });
-  });
-
-  // Reverse: has lat+lon but missing all of area/city/country.
-  const revPairs = new Map();
-  rows.forEach(r => {
-    if (r.user_location_latitude === undefined || r.user_location_latitude === null || r.user_location_latitude === '') return;
-    if (r.user_location_longitude === undefined || r.user_location_longitude === null || r.user_location_longitude === '') return;
-    if ((r.user_location_area !== undefined && r.user_location_area !== null && r.user_location_area !== '') ||
-        (r.user_location_city !== undefined && r.user_location_city !== null && r.user_location_city !== '') ||
-        (r.user_location_country !== undefined && r.user_location_country !== null && r.user_location_country !== '')) return;
-    const key = String(r.user_location_latitude).trim() + '|' + String(r.user_location_longitude).trim();
-    if (!revPairs.has(key)) revPairs.set(key, { lat: r.user_location_latitude, lon: r.user_location_longitude });
-  });
-
-  const total = fwdPairs.size + revPairs.size;
-  if (total === 0) return rows; // nothing to do — skip with zero delay
-
-  const fwdResolved = new Map();
-  const revResolved = new Map();
-  let done = 0;
-
-  const showGeoProgress = () => {
-    if (status === null || status === undefined) return;
-    status.innerHTML = `
-      <p style="font-size:13px;color:var(--muted);margin:0 0 6px">
-        Geocoding… ${done} / ${total} unique locations
-      </p>
-      <div style="height:4px;border-radius:2px;background:var(--border)">
-        <div style="height:100%;border-radius:2px;background:var(--ember);width:${Math.round(done/total*100)}%;transition:width .3s"></div>
-      </div>`;
-  };
-
-  for (const [key, { area, city, country }] of fwdPairs) {
-    done++;
-    showGeoProgress();
-    try {
-      const q   = encodeURIComponent([area, city, country].filter(v => v !== undefined && v !== null && v !== '').join(', '));
-      const data = await _locationData(`https://nominatim.openstreetmap.org/search?q=${q}&format=json&limit=1`);
-      if (data !== null && data !== undefined && data[0] !== undefined && data[0] !== null) fwdResolved.set(key, { lat: parseFloat(data[0].lat).toFixed(6), lon: parseFloat(data[0].lon).toFixed(6) });
-    } catch (_) {}
-    if (done < total) await new Promise(r => setTimeout(r, 1050));
-  }
-
-  for (const [key, { lat, lon }] of revPairs) {
-    done++;
-    showGeoProgress();
-    try {
-      const data = await _locationData(`https://nominatim.openstreetmap.org/reverse?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}&format=json`);
-      if (data !== null && data !== undefined && data.address !== undefined && data.address !== null) {
-        const addr = data.address;
-        const _revArea = (addr.suburb !== undefined && addr.suburb !== null) ? addr.suburb
-          : ((addr.neighbourhood !== undefined && addr.neighbourhood !== null) ? addr.neighbourhood
-          : ((addr.county !== undefined && addr.county !== null) ? addr.county : ''));
-        const _revCity = (addr.city !== undefined && addr.city !== null) ? addr.city
-          : ((addr.town !== undefined && addr.town !== null) ? addr.town
-          : ((addr.village !== undefined && addr.village !== null) ? addr.village
-          : ((addr.municipality !== undefined && addr.municipality !== null) ? addr.municipality : '')));
-        const _revCountry = (addr.country !== undefined && addr.country !== null) ? addr.country : '';
-        revResolved.set(key, { area: _revArea, city: _revCity, country: _revCountry });
-      }
-    } catch (_) {}
-    if (done < total) await new Promise(r => setTimeout(r, 1050));
-  }
-
-  return rows.map(r => {
-    const out = Object.assign({}, r);
-    if ((out.user_location_latitude === undefined || out.user_location_latitude === null || out.user_location_latitude === '') &&
-        (out.user_location_longitude === undefined || out.user_location_longitude === null || out.user_location_longitude === '')) {
-      const area    = ((r.user_location_area    !== undefined && r.user_location_area    !== null) ? r.user_location_area    : '').trim();
-      const city    = ((r.user_location_city    !== undefined && r.user_location_city    !== null) ? r.user_location_city    : '').trim();
-      const country = ((r.user_location_country !== undefined && r.user_location_country !== null) ? r.user_location_country : '').trim();
-      const coords  = fwdResolved.get(area + '|' + city + '|' + country);
-      if (coords !== undefined && coords !== null) { out.user_location_latitude = coords.lat; out.user_location_longitude = coords.lon; }
-    } else if ((r.user_location_area === undefined || r.user_location_area === null || r.user_location_area === '') &&
-               (r.user_location_city === undefined || r.user_location_city === null || r.user_location_city === '') &&
-               (r.user_location_country === undefined || r.user_location_country === null || r.user_location_country === '')) {
-      const key  = String(r.user_location_latitude).trim() + '|' + String(r.user_location_longitude).trim();
-      const addr = revResolved.get(key);
-      if (addr) { out.user_location_area = addr.area; out.user_location_city = addr.city; out.user_location_country = addr.country; }
-    }
-    return out;
-  });
+  if (status !== null) status.innerHTML = '';
+  _updateTxImportControls();
 }
 
 function _updateTxImportControls() {
   const button = el('txImportConfirm');
   if (button !== null) {
-    button.disabled = _txImportBusy || _txImportParsed === null;
-    button.textContent = _txImportBusy ? 'Importing…' : _txImportRetry && _txImportParsed !== null ? 'Retry failed rows' : 'Import';
+    button.disabled = _txImportBusy || _txImportFile === null;
+    button.textContent = _txImportBusy ? 'Importing…' : 'Import';
   }
   for (const id of ['txImportFile', 'txImportCancel', 'txImportBtn', 'txAddBtn']) {
     const control = el(id);
@@ -2181,92 +1961,72 @@ function _updateTxImportControls() {
   }
 }
 
-async function _readTxImport(file) {
-  if (_txImportBusy) return;
-  const sequence = ++_txImportReadSequence;
-  _txImportParsed = null;
-  _txImportResult = null;
-  _txImportRetry = false;
-  const status = el('txImportStatus');
-  if (status !== null) status.innerHTML = '';
-  _updateTxImportControls();
-  if (file === undefined) return;
-  try {
-    const text = await file.text();
-    if (sequence !== _txImportReadSequence || !state.txImportOpen) return;
-    const parsed = _parseTxCsv(text);
-    _txImportParsed = parsed.errors.length === 0 && parsed.transactions.length > 0 ? parsed.transactions : null;
-    _txImportResult = _renderTxImportStatus(parsed);
-    el('txImportStatus').innerHTML = _txImportResult;
-  } catch (_) {
-    if (sequence !== _txImportReadSequence || !state.txImportOpen) return;
-    _txImportResult = '<p class="pin-error">Could not read this CSV. Choose the file again.</p>';
-    el('txImportStatus').innerHTML = _txImportResult;
-  } finally {
-    if (sequence === _txImportReadSequence) _updateTxImportControls();
-  }
+// Bulk import matches existing rows by id only, so id-less rows insert again on every import.
+function _txImportWithoutIdNotice(count) {
+  if (!(count > 0)) return '';
+  return `<p class="field-hint" style="color:var(--ember);margin:4px 0 0">${count} row${count !== 1 ? 's have' : ' has'} no id; every import of this file inserts ${count !== 1 ? 'them' : 'it'} as new transaction${count !== 1 ? 's' : ''}. Export after importing to get ids for a safe re-import.</p>`;
 }
 
-async function _submitTxImport(transactions, geocode = false) {
-  if (_txImportBusy || transactions.length === 0) return;
+function _renderTxImportOutcome(response) {
+  const notice = (response?.created ?? 0) > 0 ? _txImportWithoutIdNotice(response.without_id) : '';
+  const message = code => { const text = _transactionError(code); return text === code ? importErrorText(code) : text; };
+  return renderImportResult(response, { message, notice });
+}
+
+async function _submitTxImport(file) {
+  if (_txImportBusy || file === null || file === undefined) return;
   _txImportBusy = true;
   _updateTxImportControls();
   showLoading();
   let changed = false;
   let uncertain = false;
-  let created = 0;
-  let updated = 0;
-  const outcomes = [];
   try {
-    const prepared = geocode ? await _geocodeImportRows(transactions) : transactions;
-    const payload = prepared.map(tx => {
-      const clean = { ...tx };
-      delete clean._src_name;
-      delete clean._tgt_name;
-      return clean;
-    });
-    for (let offset = 0; offset < payload.length; offset += _TX_IMPORT_CHUNK) {
-      const chunk = payload.slice(offset, offset + _TX_IMPORT_CHUNK);
-      const progress = el('txImportStatus');
-      if (progress !== null) progress.textContent = `Importing ${offset} / ${payload.length} rows…`;
-      const response = await ExpenseAPI.createTransactionsBulk({ transactions: chunk });
-      if (!Array.isArray(response?.results) || response.results.length !== chunk.length
-          || !response.results.every(result => typeof result?.ok === 'boolean')) {
-        uncertain = true;
-        throw new Error(response?.error ?? 'incomplete_import_response');
-      }
-      response.results.forEach((result, index) => {
-        outcomes.push({ ...result, tx: prepared[offset + index] });
-        if (result.ok) {
-          changed = true;
-          if (result.action === 'created') created++;
-          else updated++;
-        }
-      });
+    let csv;
+    try {
+      csv = await file.text();
+    } catch (_) {
+      _txImportResult = '<p class="pin-error" role="alert">Could not read this CSV. Choose the file again.</p>';
+      return;
     }
-    const failures = outcomes.filter(result => !result.ok);
-    if (failures.length === 0) {
-      _txImportParsed = null;
+    const progress = el('txImportStatus');
+    if (progress !== null) progress.textContent = 'Importing…';
+    const response = await ExpenseAPI.createTransactionsBulk({ csv });
+    if (Array.isArray(response?.errors) || (typeof response?.error === 'string' && !Array.isArray(response?.results))) {
+      _txImportResult = Array.isArray(response.errors)
+        ? _renderTxImportOutcome(response)
+        : `<p class="pin-error" role="alert">${esc(_transactionError(response.error))} Nothing was imported.</p>`;
+      showMsg('Transaction import failed. Review the reasons in the import panel.', 'warn');
+      return;
+    }
+    if (!Array.isArray(response?.results) || !response.results.every(result => typeof result?.ok === 'boolean')) {
+      uncertain = true;
+      throw new Error(response?.error ?? 'incomplete_import_response');
+    }
+    const created = response.created ?? 0;
+    const updated = response.updated ?? 0;
+    const failed = response.results.filter(result => !result.ok).length;
+    changed = created + updated > 0;
+    _txImportResult = _renderTxImportOutcome(response);
+    if (failed === 0 && !(created > 0 && response.without_id > 0)) {
       _txImportResult = null;
       state.txImportOpen = false;
       showMsg(`${created} created · ${updated} updated`);
+    } else if (failed === 0) {
+      showMsg(`${created} created · ${updated} updated`);
     } else {
-      _txImportParsed = failures.map(result => result.tx);
-      _txImportRetry = true;
-      _txImportResult = `<p>${created} created · ${updated} updated · ${failures.length} failed</p>
-        <div class="table-wrap"><table><thead><tr><th>Failed transaction</th><th>Reason</th></tr></thead><tbody>${failures.map(result =>
-          `<tr><td>${esc([result.tx.tx_date_local, result.tx.counterparty_name, result.tx.description].filter(value => value !== undefined && value !== '').join(' · '))}</td><td>${esc(_transactionError(result.error))}</td></tr>`
-        ).join('')}</tbody></table></div>`;
-      showMsg(`${failures.length} transaction rows failed. Review their reasons and retry only those rows.`, 'warn');
+      showMsg(`${failed} transaction row${failed !== 1 ? 's' : ''} failed. Fix those lines in the file and import it again.`, 'warn');
     }
   } catch (error) {
     uncertain = true;
-    _txImportParsed = null;
-    const message = `Import stopped: ${error?.message ?? 'connection_error'}. Some rows may have been saved. Refresh and check before choosing the file again.`;
+    const message = `Import stopped: ${error?.message ?? 'connection_error'}. Some rows may have been saved. Refresh and check before importing the file again.`;
     _txImportResult = `<p class="pin-error" role="alert">${esc(message)}</p>`;
     showMsg(message, 'warn');
   } finally {
+    // The chosen file has been sent (or could not be read); choose it again to re-import.
+    _txImportFile = null;
     _txImportBusy = false;
+    const input = el('txImportFile');
+    if (input !== null) input.value = '';
     const status = el('txImportStatus');
     if (status !== null && _txImportResult !== null) status.innerHTML = _txImportResult;
     _updateTxImportControls();

@@ -39,8 +39,8 @@ def test_hyphen_policy_migration_preserves_ids_references_audits_and_ownership(d
         assert _one(database_client, f"SELECT account_type_id FROM {table}") == (current_id,)
     # A policy refresh does not authorize a second identity adoption.
     assert account_types.upsert_account_types(database_client, RecordingSheets(), [_row()]) == 1
-    assert account_types.upsert_account_types(database_client, RecordingSheets(), [_row(id=str(current_id), is_loan=True)]) == 0
-    assert _one(database_client, "SELECT id,is_loan,detail_sheet,sync_status FROM account_types WHERE account_subtype_key='current'") == (current_id, True, "account_deposit", "in-sync")
+    assert account_types.upsert_account_types(database_client, RecordingSheets(), [_row(id=str(current_id))]) == 0
+    assert _one(database_client, "SELECT id,detail_sheet,sync_status FROM account_types WHERE account_subtype_key='current'") == (current_id, "account_deposit", "in-sync")
 
 
 @pytest.mark.parametrize("database_client", [19], indirect=True)
@@ -112,9 +112,9 @@ def test_detail_eligibility_follows_existing_custom_catalog_policy_and_freezes_w
     assert account_details.sync_details(database_client, "account_deposit", [detail])["created"] == 1
     with pytest.raises(ValueError, match="account_detail_policy_mismatch"):
         account_details.sync_details(database_client, "account_liability_credit_card", [{**detail, "credit_limit_local": "0"}])
-    # Loan classification is an explicit independent source value.
-    assert account_types.upsert_account_types(database_client, RecordingSheets(), [{**source, "is_loan": True, "sync_status": "update-pending"}]) == 0
-    assert _one(database_client, "SELECT is_loan,detail_sheet FROM account_types WHERE id=%s", (source["id"],)) == (True, "account_deposit")
+    # The retired loan flag is gone after all migrations; the detail policy is unaffected.
+    assert _one(database_client, "SELECT count(*) FROM information_schema.columns WHERE table_name='account_types' AND column_name='is_loan'") == (0,)
+    assert _one(database_client, "SELECT detail_sheet FROM account_types WHERE id=%s", (source["id"],)) == ("account_deposit",)
 
 
 def test_detail_commit_locks_configuration_policy_against_concurrent_edits(database_client: Any) -> None:

@@ -142,7 +142,7 @@ function transactionFixture() {
   };
   const elements = Object.fromEntries(Object.entries(values).map(([key, value]) => [key, { value }]));
   elements.afSubmit = { disabled: false }; elements.afError = { textContent: '' };
-  const state = { transactions: [], accountSchema: { loan_sub_types: [] }, accountMap: {
+  const state = { transactions: [], accountSchema: {}, accountMap: {
     from: { id: 'from', type: 'investment', account_currency_local: 'GBP', current_value_local: '1e20' },
     to: { id: 'to', type: 'investment', account_currency_local: 'USD', current_value_local: '1000' },
   }, categories: [{ tx_type_key: 'money-out', major_category_key: 'transfer', minor_category_key: 'transfer', source_account_mandatory: true, target_account_mandatory: true }] };
@@ -210,7 +210,7 @@ test('late suggestions update only their panel and retain the active transaction
 
 test('mobile delete cards contain confirmation actions including blocked account and rate deletions', () => {
   const state = { accDeleteRow: 2, accDeleteBlocked: { referenced_count: 1 }, accounts: [{ _row: 2, id: 'a', type: 'asset', account_name: '<Bank>', account_currency_local: 'GBP' }],
-    accountSchema: { type_labels: { asset: 'Assets' }, type_groups: {}, loan_sub_types: [] }, quoteCurrency: 'GBP',
+    accountSchema: { type_labels: { asset: 'Assets' }, type_groups: {} }, quoteCurrency: 'GBP',
     catDeleteRow: 2, categories: [], catSchema: {}, rates: [{ currency: 'USD' }], rateDeleteCurrency: 'USD', rateDeleteBlocked: { error: 'currency_in_use_by_accounts', referenced_count: 1 } };
   const accounts = load('app/sections/accounts.js', { state, getSymbol: () => '£', toBase: () => 0 }, ['_renderTable']);
   const accountHtml = accounts._renderTable(state.accounts);

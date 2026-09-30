@@ -1,0 +1,12 @@
+// Loads the shared import-result renderer from app/core/utils.js for panel tests,
+// which evaluate section files without their ES module imports.
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+const source = fs.readFileSync(path.join(__dirname, '../../app/core/utils.js'), 'utf8');
+const start = source.indexOf('export function importErrorText');
+const end = source.indexOf('export async function shareSnapshot');
+const esc = value => String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+const context = vm.createContext({ esc });
+vm.runInContext(source.slice(start, end).replace(/\bexport (?=function)/g, '') + '\nthis.helpers = { renderImportResult, importErrorText };', context);
+module.exports = () => ({ ...context.helpers });

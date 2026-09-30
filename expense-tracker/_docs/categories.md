@@ -10,7 +10,7 @@ Schema reference: [data-model.md § Category](data-model.md#category).
 - Filter list by type, major, minor, search, account hint flags, subscription eligibility, record status
 - Soft-delete (`record_status → deleted`) with restore; lock (`record_status → locked`) prevents any further edits or deletes
 - Declare per-category account-type hints used by the transaction form
-- CSV bulk import — upload a CSV file in the import panel; preview before committing
+- CSV bulk import — upload a CSV file in the import panel; the server parses, validates and imports it and returns per-line results
 
 ## Rules
 
@@ -42,8 +42,8 @@ When a category with these hints is used on a transaction:
 2. Account subtype hints are not enforced server-side.
 3. The transaction form pre-filters the account dropdowns to the allowed types so the user cannot easily pick a forbidden combination.
 
-Example from the default seed:
-- `money-out / Debt & finance / Loan repayment`: target mandatory; target type ∈ {7 loan types}
+Example from `local/files/category_master.csv`:
+- `money-out / Debt repayment / Loan repayment`: target mandatory; target type ∈ {`auto-loan`, `heloc`, `personal-loan`, `debt-consolidation`}
 
 Categories without hints have no account-type constraints.
 
@@ -57,7 +57,7 @@ No automatic seeding exists. Categories must be populated via the bulk CSV impor
 |---|---|
 | `list_categories` | Return all rows |
 | `create_category` | Validate required fields; duplicate check → `duplicate_category`; append; stamps `created_at`, `updated_at`, `sync_status = create-pending`, and a UUID `id`. If `body.id` is provided (e.g. from a seeded CSV import), that value is used; otherwise a UUID is generated. `record_status` is always written as `active` on create — passing any other value (including `'inactive'`) returns `invalid_record_status`. The add form therefore only offers `active` as a choice. Returns `{ ok: true, id: '<uuid>' }`. |
-| `create_categories_bulk` | Accept `categories[]`; validate and match UUIDs case-insensitively, generating a UUID when absent. Preserve lifecycle and existing `created_at`; queue sync status. Locked rows accept an identical retry only. Return `{ ok, created, updated, skipped, failed, results }` with row-specific diagnostics. |
+| `create_categories_bulk` | Accept `{ csv, dry_run? }` — the raw `category_master.csv` text — via `importCategoriesCsv` (`api/category-import.gs`). Parse and format-validate the whole file (see [CSV import](#csv-import)); any format error returns `{ ok: false, error: 'invalid_csv_rows', errors: ['Row N: …'] }` and writes nothing. `dry_run: true` stops after format validation, reads no Sheet, and returns `{ ok: true, dry_run: true, rows }`. Otherwise the shaped rows go to the internal `createCategoriesBulk({ categories })`, which validates and matches UUIDs case-insensitively, generates a UUID when absent, preserves lifecycle and existing `created_at`, queues sync status, and accepts only an identical retry for locked rows. Returns `{ ok, created, updated, skipped, failed, results, rows }`; each result also carries its CSV `line` and `label` (`major → minor`). |
 | `update_category` | Validate required fields (including optional `record_status` if present); locked guard; FK check if composite key is changing (see below); overwrite the row; stamps `updated_at`. `record_status` is written only if present in the request body — if absent, the existing status is preserved. To restore a deleted category, pass `record_status: 'active'` via this action. Referenced key changes cannot be forced; update dependencies through an explicit migration. |
 | `delete_category` | Locked guard; soft-delete (`record_status → deleted`); stamps `updated_at` |
 
@@ -77,14 +77,14 @@ If `record_status` is present in the request body, it is validated against the a
 
 ### `create_categories_bulk` — prerequisites, retries, and diagnostics
 
-The backend reads and validates `account_types` once before a hinted import. A missing or empty catalog returns `account_types_missing`; a legacy 12-column catalog or underscore classification keys returns `account_types_migration_required`. Neither condition creates or changes `category_master`. Deploy the current backend and import the complete 14-column `account_types.csv` through **Configure → Account Types** before retrying categories. See [Account Types migration](account-types.md). Invalid catalog headers, policies, or identities return `invalid_account_types`.
+The backend reads and validates `account_types` once before a hinted import. A missing or empty catalog returns `account_types_missing`; a legacy 12-column catalog or underscore classification keys returns `account_types_migration_required`. Neither condition creates or changes `category_master`. Deploy the current backend and import the complete 13-column `account_types.csv` through **Configure → Account Types** before retrying categories. See [Account Types migration](account-types.md). Invalid catalog headers, policies, or identities return `invalid_account_types`.
 
 Hints must resolve to active or locked catalog subtypes, or the existing broad `investment` hint. A legacy CSV token such as `credit_card` becomes `credit-card` only when that canonical value exists in the eligible Sheet catalog. Unknown or unavailable tokens are rejected, never silently removed. Both individual investment subtypes and the broad investment hint retain their meaning.
 
-The complete batch is validated before writes begin. Valid rows can import while invalid rows are reported. Every row result contains zero-based `index`, UUID `key`, and `ok`; an integer `csv_row_num` supplied by the caller is echoed. Successful results have `action: created`, `updated`, or `unchanged`. Failures contain an error code, `field`, `reason`, and `invalid_values` where applicable. For example:
+The complete batch is validated before writes begin. Valid rows can import while invalid rows are reported. Every row result contains zero-based `index`, UUID `key`, and `ok`; an integer `csv_row_num` supplied by the caller is echoed. The CSV endpoint also adds the physical CSV `line` and the category `label`. Successful results have `action: created`, `updated`, or `unchanged`. Failures contain an error code, `field`, `reason`, and `invalid_values` where applicable. For example:
 
 ```json
-{"index":4,"csv_row_num":9,"key":"<uuid>","ok":false,"error":"invalid_target_account_types","field":"target_account_types","invalid_values":["unknown-subtype"],"reason":"invalid_target_account_types"}
+{"index":4,"csv_row_num":9,"line":9,"label":"Portfolio → Fund return","key":"<uuid>","ok":false,"error":"invalid_target_account_types","field":"target_account_types","invalid_values":["unknown-subtype"],"reason":"invalid_target_account_types"}
 ```
 
 Imports preserve valid `record_status` values (`active`, `inactive`, `deleted`, `locked`); blank or omitted status retains an existing row's status and defaults a new row to active. Imported audit and sync values are ignored: creation uses server timestamps, replacement preserves `created_at`, and every write queues sync and clears the previous sync date/notes. An identical locked retry is counted in `skipped` and makes no write; any modification of a locked row is rejected. Duplicate UUIDs within the same upload are rejected for every duplicate occurrence. Replacements recheck the physical row's UUID immediately before writing. Duplicate composite keys across UUIDs are rejected before their rows are written; an already-ambiguous Sheet fails the whole import preflight.
@@ -116,6 +116,7 @@ Changing an existing category's derived composite key is rejected when transacti
 | `invalid_existing_category_id`, `duplicate_existing_category_key` | Bulk import | Existing category UUIDs or composite keys are malformed/duplicated; response identifies the Sheet row |
 | `category_id_exists` | create | Supplied UUID already exists; use an ID-based replacement import |
 | `stale_row`, `category_write_failed` | Bulk import | Row identity changed after validation, or the Sheet write failed; retry after resolving the reported cause |
+| `missing_csv`, `invalid_csv`, `csv_has_no_rows`, `invalid_csv_headers`, `invalid_csv_rows` | CSV import | The uploaded file is empty, malformed, has bad headers, or has invalid rows; `errors[]` lists `Row N: …` messages and nothing is written |
 
 ## CSV import
 
@@ -124,7 +125,7 @@ The import panel (accessible via the **Import** button in the section header) ac
 | Column | Required | Notes |
 |---|---|---|
 | `id` | No | UUID identifying the row to insert or replace. Omit to create a new UUID. |
-| `tx_type_key` | Yes | Must match a transaction type from the category schema. Invalid values are reported before submission. |
+| `tx_type_key` | Yes | Must match a transaction type from the category schema. Invalid values reject the file before any write. |
 | `major_category_label` | Yes | |
 | `minor_category_label` | Yes | |
 | `description` | No | |
@@ -139,13 +140,19 @@ The import panel (accessible via the **Import** button in the section header) ac
 
 An `id` column is optional in the CSV. When present, the value is used as the UUID for newly created rows, allowing pre-assigned UUIDs from seed files to be preserved (useful for cross-entity FK references in seed data). A matching `id` selects the replacement row. Re-imports without IDs cannot replace existing rows; an existing composite key returns `duplicate_category`. Keep IDs in repeat imports. Audit columns (`sync_status`, `sync_date`, `sync_notes`, `created_at`, `updated_at`) are accepted in exported CSVs but ignored on import; the backend manages these values and preserves an existing row's `created_at`.
 
-Derived columns (`tx_type_label`, `major_category_key`, `minor_category_key`) are computed by the backend from the label fields via `slugify` and `TX_TYPE_LABEL_MAP` — they are never read from the CSV. If present in the file (e.g. exported CSVs that include all sheet columns), they are silently ignored by the parser.
+Derived columns (`tx_type_label`, `major_category_key`, `minor_category_key`) are computed by the backend from the label fields via `slugify` and `TX_TYPE_LABEL_MAP` — they are never read from the CSV. If present in the file (e.g. exported CSVs that include all sheet columns), they are silently ignored by the server.
 
-The preview supports quoted commas, escaped quotes, and multiline fields, and identifies physical CSV row numbers. Missing or duplicate headers, inconsistent row widths, invalid UUIDs, and invalid boolean/status values block submission until the file is corrected. Boolean values must be `true`, `false`, or blank, case-insensitively.
+The browser only reads the file and sends its raw text; parsing and validation run on the server (`importCategoriesCsv`, using the shared `parseCsvImport` in `api/csv-import.gs`). Quoted commas, escaped quotes, multiline fields and a UTF-8 BOM are supported, and errors identify physical CSV line numbers. Header names are trimmed, lowercased, and spaces become underscores. The whole file is rejected, with nothing written, when:
 
-Before submission, the panel checks that Account Types is populated and upgraded. If the dev Sheet still uses underscore keys or the old 12-column layout, deploy the updated backend, reload the app, then import the complete updated `local/files/account_types.csv` through **Configure → Account Types**. Afterwards import `local/files/category_master.csv`. Matching UUIDs update the rows already imported and preserve identity.
+- the file is empty or has no data rows (`missing_csv`, `csv_has_no_rows`), or quoting is malformed (`invalid_csv`);
+- a header is blank or duplicated, or `tx_type_key`, `major_category_label` or `minor_category_label` is missing (`invalid_csv_headers`);
+- any row has the wrong column count, a blank required field, an unknown `tx_type_key` or `record_status`, a malformed `id`, a boolean other than `true`/`false` (case-insensitive) or blank, or an `id` that repeats an earlier row case-insensitively (`invalid_csv_rows`, one `Row N: …` message per bad row).
 
-After submission, the panel stays open with created, updated, unchanged, and failed counts. Every rejected row remains visible with its CSV row number, category, field, explanation, and backend error code. **Retry failed rows** submits only the rejected rows. Successful mutations dispatch `et:reload`, and their report survives that refresh. A connection failure or malformed response leaves the outcome uncertain: reload and reselect the UUID-bearing CSV before retrying. Choosing another file or closing the panel clears the previous report.
+Only `id` (lowercased), the three required fields, `description`, `record_status`, `tag_keywords`, `counterparty_examples`, `source_account_types` and `target_account_types` are forwarded, plus the three booleans as real booleans. Blank `record_status` and blank booleans are omitted so server defaults apply.
+
+Account-type hints are checked against the `account_types` Sheet only in a real run. A hinted import returns `account_types_missing` or `account_types_migration_required` before any write when the catalog is absent or not upgraded. In that case, import the complete updated `local/files/account_types.csv` through **Configure → Account Types**, then import `local/files/category_master.csv`. Matching UUIDs update the rows already imported and preserve identity.
+
+After submission, the panel stays open with created, updated, unchanged and failed counts. Every rejected row appears with its CSV line, category, field, explanation and backend error code. A rejected file shows the server's `Row N: …` messages as a list. There is no preview and no failed-rows-only retry. Fix the file and import it again; UUID-bearing rows that were already saved update in place. Successful mutations dispatch `et:reload`, and the report survives that refresh. A connection failure or malformed response leaves the outcome uncertain: reload before importing again. Choosing another file or closing the panel clears the previous report.
 
 ## Column positions
 

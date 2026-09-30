@@ -15,38 +15,6 @@ function load(file, globals, expose) {
 }
 const account = { id: 'a0000000-0000-4000-8000-000000000001', account_name: 'Bank' };
 const state = { accounts: [account], transactionSchema: { record_statuses: ['active', 'inactive', 'deleted', 'locked'] } };
-const utils = load('core/utils.js', { state }, ['parseCsvRecords']);
-const txParser = () => load('sections/transactions.js', { state, ...utils }, ['_parseTxCsv']);
-const csv = (rows, columns = Object.keys(rows[0])) => columns.join(',') + '\r\n' + rows.map(row => columns.map(key => '"' + String(row[key] ?? '').replaceAll('"','""') + '"').join(',')).join('\r\n');
-const transaction = extra => ({ tx_date_local: '2026-09-25 10:00:42.123456', tx_type: 'money-out', source_account: 'Bank', source_amount_local: '90071992547409.91', major_category: 'food', minor_category: 'groceries', description: 'Line one\r\nLine two, "quoted"', ...extra });
-
-test('transaction CSV round-trip accepts quoted multiline descriptions and preserves exact amount text', () => {
-  const result = txParser()._parseTxCsv(csv([transaction()]));
-  assert.equal(result.errors.length, 0, result.errors.join('; '));
-  assert.equal(result.transactions[0].description, transaction().description);
-  assert.equal(result.transactions[0].source_amount_local, '90071992547409.91');
-});
-
-test('transaction CSV header failures are actionable instead of throwing or accepting overwritten columns', () => {
-  const parser = txParser();
-  for (const source of ['id\na', 'tx_date_local,tx_date_local\none,two', 'id,\na,b']) {
-    assert.doesNotThrow(() => {
-      const result = parser._parseTxCsv(source);
-      assert.ok(result.errors.length > 0);
-      assert.equal(result.transactions.length, 0);
-    });
-  }
-});
-
-test('account and extension CSVs accept multiline exported fields and reject duplicate headers', () => {
-  const parser = load('sections/accounts.js', { ...utils }, ['_parseGenericCsv']);
-  const result = parser._parseGenericCsv(csv([{ id: 'a', description: 'one\nsecond, "quoted"', opening_value_local: '90071992547409.91' }]));
-  assert.equal(result.errors.length, 0);
-  assert.equal(result.rows[0].description, 'one\nsecond, "quoted"');
-  assert.equal(result.rows[0].opening_value_local, '90071992547409.91');
-  assert.ok(parser._parseGenericCsv('id,id\na,b').errors.length > 0);
-});
-
 test('standalone money-in exports its amount on the populated target account', () => {
   const row = { id: 'income', account_id: account.id, tx_type: 'money-in', tx_amount_local: '123456789.123456789' };
   const { exportData } = load('core/utils.js', { state: { transactions: [row], accountMap: { [account.id]: account } }, _exportData: (format, rows) => rows }, ['exportData']);
@@ -55,64 +23,6 @@ test('standalone money-in exports its amount on the populated target account', (
   assert.equal(exported.target_account, account.account_name);
   assert.equal(exported.target_amount_local, row.tx_amount_local);
 });
-
-function importFixture(kind, respond) {
-  const isTx = kind === 'transaction';
-  const prefix = isTx ? '_txImport' : '_import';
-  const nodes = {};
-  const messages = [];
-  const calls = [];
-  const events = [];
-  const context = { ...state, txImportOpen: true, accImportOpen: true };
-  const globals = {
-    state: context, ...utils, esc: value => String(value).replaceAll('<', '&lt;'),
-    el: id => nodes[id] ??= { disabled: false, textContent: '', innerHTML: '' },
-    showLoading() {}, hideLoading() {}, showMsg: text => messages.push(text),
-    document: { dispatchEvent: event => events.push(event) }, CustomEvent: class {},
-    ExpenseAPI: { [isTx ? 'createTransactionsBulk' : 'importAccountData']: async payload => {
-      calls.push(isTx ? payload.transactions : payload.rows);
-      return respond(payload, calls.length);
-    } },
-  };
-  const methods = load(isTx ? 'sections/transactions.js' : 'sections/accounts.js', globals,
-    [isTx ? '_submitTxImport' : '_submitImport', isTx ? '_readTxImport' : '_readAccountImport',
-     `snapshot: () => ({ parsed: ${prefix}Parsed, busy: ${prefix}Busy, result: ${prefix}Result })`]);
-  return { ...methods, nodes, messages, calls, events, context,
-    submit: rows => isTx ? methods._submitTxImport(rows) : methods._submitImport('account_master', rows),
-    read: file => isTx ? methods._readTxImport(file) : methods._readAccountImport(file) };
-}
-
-for (const kind of ['transaction', 'account']) {
-  test(`${kind} import retries only known failures and reports an incomplete outcome without retrying`, async () => {
-    const fixture = importFixture(kind, (_payload, count) => count === 1
-      ? { results: [{ ok: true, action: 'created' }, { ok: false, error: '<invalid>' }] }
-      : { results: [] });
-    await fixture.submit([{ id: 'saved' }, { id: 'failed' }]);
-    assert.deepEqual(Array.from(fixture.snapshot().parsed, row => row.id), ['failed']);
-    assert.match(fixture.snapshot().result, /&lt;invalid>/);
-    assert.equal(fixture.events.length, 1);
-    await fixture.submit(fixture.snapshot().parsed);
-    assert.deepEqual(Array.from(fixture.calls[1], row => row.id), ['failed']);
-    assert.equal(fixture.snapshot().parsed, null);
-    assert.match(fixture.snapshot().result, /Some rows may have been saved/);
-    assert.equal(fixture.snapshot().busy, false);
-    assert.equal(fixture.events.length, 2);
-  });
-
-  test(`${kind} file reader ignores old completion and blocks partial invalid files`, async () => {
-    const fixture = importFixture(kind, () => { throw new Error('unexpected write'); });
-    let resolveOld;
-    const old = fixture.read({ text: () => new Promise(resolve => { resolveOld = resolve; }) });
-    const row = kind === 'transaction' ? transaction({ description: 'new' }) : { id: 'new', description: 'new' };
-    await fixture.read({ text: async () => csv([row]) });
-    resolveOld(csv([kind === 'transaction' ? transaction({ description: 'old' }) : { id: 'old' }]));
-    await old;
-    assert.equal(fixture.snapshot().parsed[0].description, 'new');
-    await fixture.read({ text: async () => csv([row]) + '\n"unterminated' });
-    assert.equal(fixture.snapshot().parsed, null);
-    assert.equal(fixture.calls.length, 0);
-  });
-}
 
 test('transaction export preserves lifecycle and rejects transfers that would lose per-leg data', () => {
   const parent = { id: 'parent', tx_type: 'money-out', account_id: 'a', tx_amount_local: '10', record_status: 'inactive' };
@@ -193,4 +103,16 @@ test('optional location enrichment ends after its deadline and clears the timer'
   assert.equal(duration, 5000);
   timer(); await assert.rejects(lookup, /AbortError/);
   assert.equal(cleared, true);
+});
+
+test('edit form keeps a closed account selectable for its own row but never offers it as a new choice', () => {
+  const closed = { id: 'c1', account_name: 'Finio-1', account_currency_local: 'GBP', record_status: 'inactive', sub_type: 'personal-loan' };
+  const open = { id: 'o1', account_name: 'Bank', account_currency_local: 'GBP', record_status: 'active', sub_type: 'current' };
+  const gone = { id: 'd1', account_name: 'Gone', account_currency_local: 'GBP', record_status: 'deleted', sub_type: 'current' };
+  const ctx = load('sections/transactions.js', { state: { ...state, accounts: [closed, open, gone] }, esc: String }, ['_editAccountOpts']);
+  const own = ctx._editAccountOpts('', 'c1', 'c1');
+  assert.match(own, /value="c1" selected>Finio-1 \(GBP\) · inactive/);
+  assert.match(own, /value="o1"/);
+  assert.doesNotMatch(ctx._editAccountOpts('', 'o1', 'o1'), /c1|d1/);
+  assert.doesNotMatch(ctx._editAccountOpts('', 'd1', 'd1'), /d1/);
 });

@@ -43,9 +43,9 @@ Schema reference: [data-model.md § Account](data-model.md#account).
 
 Liabilities are stored as negative values. The UI displays `abs(current_value_local)` — user always inputs and sees a positive number, accompanied by a `−` prefix or an "owed" label to indicate the direction. This follows standard double-entry convention: liabilities cancel against assets in a single `SUM(all current_value_local)` to produce Net Worth.
 
-### Account sub-types and loan_sub_types
+### Account sub-types
 
-Account subtype choices and labels come from active or locked rows in the `account_types` Sheet, managed in [Configure → Account Types](account-types.md) and exposed by `get_account_schema`. The existing 22-row catalog is imported from its CSV; code contains no default subtype list and Configure cannot add new classifications. `loan_sub_types` is derived from the available rows whose `is_loan` flag is true. Detail eligibility comes from each row's `detail_sheet` value. Classification keys use hyphens; column names such as `sub_type` retain underscores.
+Account subtype choices and labels come from active or locked rows in the `account_types` Sheet, managed in [Configure → Account Types](account-types.md) and exposed by `get_account_schema`. The existing 16-row catalog is imported from its CSV; code contains no default subtype list and Configure cannot add new classifications. Detail eligibility comes from each row's `detail_sheet` value. Classification keys use hyphens; column names such as `sub_type` retain underscores.
 
 ### Immutable after creation
 
@@ -96,10 +96,10 @@ Four cards above the table, always in the selected display currency and always u
 | `list_accounts` | Return all rows; no defaults seeded |
 | `create_account` | Validate required fields (including `opening_value_local`, `account_opening_date_local`); negate value for liabilities; assign UUID `id` (supplied IDs must be valid UUIDs; new values are written lowercase and an existing UUID returns `account_id_exists`); store the validated canonical `local_timezone` from the frontend (captured from browser); store `account_opening_date_local` as-is (no UTC conversion); write `opening_value_local` to sheet; stamp `created_at`, `sync_status = create-pending`; append. `current_value_local` is NOT written at create time — it is computed at read time by `_buildAccountNetMap`. Returns `{ ok: true, id: '<uuid>' }`. |
 | `create_accounts_bulk` | Accept `accounts[]`; validate and insert or replace each row by `id`; match supplied UUIDs case-insensitively; preserve the existing UUID spelling, `created_at`, and omitted lifecycle status on replacement; advance `sync_status`. Existing duplicate UUIDs fail before row writes. Return `{ ok, created, updated, failed, results }` with result entries `{ key, ok, action?, error? }` |
-| `update_account` | Validate editable fields only; locked guard → `record_locked`; duplicate `account_name` check → `duplicate_account` (deleted accounts excluded from the collision check); advance `sync_status`; stamp `updated_at`. Editable fields: `account_name`, `sub_type`, `account_closing_date_local`, `description`, `record_status`. Valid `record_status` values for update: `active`, `inactive`, `locked` only — `deleted` is rejected with `invalid_record_status`. |
+| `update_account` | Validate editable fields only; locked guard → `record_locked`; renaming to another non-deleted account's `account_name` → `duplicate_account` (unchanged names are not checked, so existing shared names stay editable); advance `sync_status`; stamp `updated_at`. Editable fields: `account_name`, `sub_type`, `account_closing_date_local`, `description`, `record_status`. Valid `record_status` values for update: `active`, `inactive`, `locked` only — `deleted` is rejected with `invalid_record_status`. |
 | `delete_account` | Locked guard; FK check → `account_in_use`; soft-delete (`record_status → deleted`) |
 | `restore_account` | Verifies record is in `deleted` state; sets `record_status → active` |
-| `get_account_schema` | Return the type taxonomy and all sub-type enums. Response shape: `{ types: { value, label, group }[], asset_sub_types: string[], investment_sub_types: string[], liability_sub_types: string[], loan_sub_types: string[] }` — frontend uses this to drive forms without hard-coding |
+| `get_account_schema` | Return the type taxonomy and all sub-type enums. Response shape: `{ types: { value, label, group }[], asset_sub_types: string[], investment_sub_types: string[], liability_sub_types: string[], subtypes_by_type: { [type]: string[] }, subtype_labels: { [subtype]: string }, type_labels: { [type]: string } }` — frontend uses this to drive forms without hard-coding |
 
 ## Error codes
 
@@ -110,7 +110,7 @@ Four cards above the table, always in the selected display currency and always u
 | `missing_sub_type` | create | `sub_type` not provided for a type that requires one |
 | `missing_opening_date_local` | create | `account_opening_date_local` is absent or empty |
 | `invalid_sub_type` | create, update | `sub_type` is not valid for the given account type |
-| `invalid_account_type` | create | Account type is not one of `asset`, `investment`, `liability` |
+| `invalid_account_type` | create, import | Account type is blank or not a family key in the `account_types` Sheet |
 | `unknown_currency` | create | `account_currency_local` is not present in the rates store (currency is immutable post-create) |
 | `missing_opening_value_local` | create | `opening_value_local` is absent or null |
 | `invalid_opening_value_local` | create/import | Opening value is not a finite decimal number/string |
@@ -124,8 +124,8 @@ Four cards above the table, always in the selected display currency and always u
 | `invalid_local_timezone` | create/import/update | Supplied timezone is not a recognized IANA zone |
 | `ambiguous_local_time`, `nonexistent_local_time` | create/import/update | Date falls inside a DST fold/gap; `field` identifies the date |
 | `stale_record` | update/delete/restore | `expected_id` differs from the UUID now at that row; reload before retrying |
-| `duplicate_account` | update | Another non-deleted account already has the same `account_name` (deleted accounts are excluded from the collision check) |
-| `invalid_record_status` | update | `record_status` is not one of `active`, `inactive`, `locked` |
+| `duplicate_account` | update | A rename matches another non-deleted account's `account_name`; an unchanged name is never rejected |
+| `invalid_record_status` | create, update, import | `record_status` is not an allowed lifecycle value for the operation (`deleted` is never accepted on update) |
 | `missing_row_num` | update, delete, restore | `row_num` not provided |
 | `invalid_row` | update, delete, restore | `row_num` is out of bounds |
 | `record_locked` | update, delete | Account is locked |
@@ -177,7 +177,7 @@ Column positions are append-only — never change an existing position.
 
 ## CSV import
 
-The Accounts import panel requires a file type and a CSV file. It sends `{ file_type, rows }` to `import_account_data`. See [account-imports.md](account-imports.md) for all supported types and detail-tab schemas.
+The Accounts import panel requires a file type and a CSV file. It sends the raw file text as `{ file_type, csv }` to `import_account_data`; the server (`importAccountDataCsv` in `account-import.gs`) parses, validates and imports it. The browser does no parsing, preview or validation. See [account-imports.md](account-imports.md) for the request/response contract, all supported types and detail-tab schemas.
 
 For `account_master`, these columns are supported:
 
@@ -196,6 +196,6 @@ For `account_master`, these columns are supported:
 | `record_status` | No | Supplied valid status is retained. Omitted/blank means `active` for new IDs and preserves the current status on replacement. |
 | `description` | No | Notes. |
 
-IDs are validated before account writes. A single create cannot append an existing UUID; bulk import rejects ambiguous duplicate identities already present in the Sheet. Repeating an incoming UUID updates the same row and preserves the latest lifecycle state in that batch. Audit fields are managed by the backend. `current_value_local` is computed and is never imported. Replacements may update name, subtype, closing date, description and lifecycle. They cannot change the legal entity, type, currency, timezone, opening date/value or an existing tracking timestamp: those fields are immutable in PostgreSQL too. Semantically equal decimal/date forms and timezone aliases preserve the original stored value. Omitted optional immutable fields retain their previous value; a previously blank tracking timestamp may be initialized once. A mismatch returns `field_not_editable` with the field name before the row is written. Existing locked rows return `record_locked`; import never unlocks them.
+IDs are validated before account writes. A single create cannot append an existing UUID; bulk import rejects ambiguous duplicate identities already present in the Sheet. A CSV that repeats an `id` (case-insensitive) is rejected with `duplicate_id` before anything is written; rows without an `id` are not compared. Audit fields are managed by the backend. `current_value_local` is computed and is never imported. Replacements may update name, subtype, closing date, description and lifecycle. They cannot change the legal entity, type, currency, timezone, opening date/value or an existing tracking timestamp: those fields are immutable in PostgreSQL too. Semantically equal decimal/date forms and timezone aliases preserve the original stored value. Omitted optional immutable fields retain their previous value; a previously blank tracking timestamp may be initialized once. A mismatch returns `field_not_editable` with the field name before the row is written. Existing locked rows return `record_locked`; import never unlocks them.
 
-Results: `N created · M updated · K failed`. Each result contains `{ key, ok, action?, error? }`. Keep IDs stable for repeat imports; omitting IDs creates new records.
+Format errors (UUID syntax, required fields, decimal/date/timezone/status syntax, currency shape, duplicate ids) reject the whole file with `invalid_csv_rows` and `errors: ['Row N: <code>']`; nothing is written. Rows that pass then go through full account validation (taxonomy, known currency, immutable fields, locked rows), which may fail individual rows while the others are saved. Results: `N created · M updated · K failed`. Each result contains `{ line, key, ok, action?, error?, field? }`, where `line` is the row's physical line in the CSV. The panel lists failed lines; correct the file and import it again (re-importing is safe because rows match by `id`). Keep IDs stable for repeat imports; omitting IDs creates new records.

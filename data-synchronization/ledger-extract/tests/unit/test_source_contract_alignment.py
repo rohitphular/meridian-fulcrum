@@ -86,7 +86,6 @@ def test_catalog_policies_are_source_data_without_fixed_classification_keys(gas_
             account_type_label="Custom family",
             account_subtype_key="custom-subtype",
             account_subtype_label="Custom subtype",
-            is_loan="TRUE",
             detail_sheet=detail_sheet,
             record_status=status,
         )
@@ -94,7 +93,6 @@ def test_catalog_policies_are_source_data_without_fixed_classification_keys(gas_
         assert result["id"] == IDENTITY
         assert result["account_type_key"] == "custom-family"
         assert result["account_subtype_key"] == "custom-subtype"
-        assert result["is_loan"] is True
         assert result["detail_sheet"] == detail_sheet
         assert result["record_status"] == status
         assert not set(DETAIL_SYNC_METADATA[1:]).intersection(result)

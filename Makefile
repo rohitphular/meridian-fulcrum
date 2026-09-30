@@ -80,6 +80,19 @@ api-deploy: ## Deploy GAS backend (interactive: pick env)
 api-logs: ## Open GAS executions page in browser (interactive: pick env)
 	bash expense-tracker/cicd/logs.sh
 
+.PHONY: factory-reset
+factory-reset: ## Delete and re-import the CSV-backed Sheet tabs from local/files (interactive: pick env)
+	@echo ""; \
+	echo "  1) dev"; \
+	echo "  2) prod"; \
+	echo ""; \
+	printf "Select environment: "; read -r CHOICE; \
+	if [ "$$CHOICE" = "1" ]; then ENV="dev"; \
+	elif [ "$$CHOICE" = "2" ]; then ENV="prod"; \
+	else echo "Invalid choice '$$CHOICE'. Enter 1 or 2."; exit 1; \
+	fi; \
+	bash expense-tracker/scripts/factory-reset.sh "$$ENV"
+
 ##@ Data Synchronization
 
 .PHONY: data-sync

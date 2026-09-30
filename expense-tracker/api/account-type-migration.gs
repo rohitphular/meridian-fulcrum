@@ -1,4 +1,4 @@
-// Pass the parsed complete 14-column CSV rows. Policy values come from that CSV,
+// Pass the parsed complete 13-column CSV rows. Policy values come from that CSV,
 // never from an embedded catalog. The UI's CSV import runs the same preflight.
 function migrateAccountTypeKeys(catalogRows) {
   const lock = LockService.getScriptLock();

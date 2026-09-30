@@ -4,7 +4,7 @@ Extracts `account_types`, the `category_master`, `account_master`, `transaction_
 
 This is the current implementation contract as of 2026-09-24. [`_docs/`](_docs/README.md) contains the current column-by-column Sheet → database mappings, generated fields and explicit gaps. See [usage](./_runbooks/USAGE-INSTRUCTIONS.md) and the [review report](./_runbooks/REVIEW-2026-09-23.md).
 
-Account-type configuration is managed in expense-tracker under **Configure → Account Types**. Initialize/import its Sheet tab before running the enabled extractor. Migrations 0019–0020 preserve existing category links and UUID ownership, convert key values to hyphens, and require a fourteen-column source policy refresh before dependent synchronization. No runtime seed or subtype catalog is supplied; see [account types](_docs/account-types.md).
+Account-type configuration is managed in expense-tracker under **Configure → Account Types**. Initialize/import its Sheet tab before running the enabled extractor. Migrations 0019–0020 preserve existing category links and UUID ownership, convert key values to hyphens, and require a source policy refresh (migration 0022 later drops the unused `is_loan` flag) before dependent synchronization. No runtime seed or subtype catalog is supplied; see [account types](_docs/account-types.md).
 
 The category import's UI diagnostics and failed-row retry queue belong to expense-tracker; extraction consumes only rows successfully saved in the Sheet. Both modules resolve legacy underscore category hints only when the corresponding hyphenated subtype exists in the eligible catalog. Invalid hints fail explicitly. Deploy the current app, import the complete `account_types.csv` in Configure, then import categories before running extraction. A legacy twelve-column Account Types tab fails snapshot capture with `account_types_migration_required` and an upgrade instruction, before any entity writes; database migrations do not upgrade Sheet headers.
 
@@ -35,7 +35,7 @@ For every source and database column, see the [mapping index](_docs/README.md).
 
 | Source | Database | Identity and important behaviour |
 |---|---|---|
-| `account_types` | `account_types` | Source UUID claims an existing unmanaged classification once; managed identities and keys are immutable. Labels, lifecycle and explicit `is_loan`/`detail_sheet` policy come from the fourteen-column Sheet. Unknown classifications fail. |
+| `account_types` | `account_types` | Source UUID claims an existing unmanaged classification once; managed identities and keys are immutable. Labels, lifecycle and explicit `detail_sheet` policy come from the thirteen-column Sheet. Unknown classifications fail. |
 | `category_master` | `category_master`, source/target account-type junctions | Sheet UUID is the master PK. Unreferenced classification changes and both mappings commit together; changing a classification already used by transactions/subscriptions fails for explicit reconciliation. A different UUID cannot take over an existing classification. Unknown account-type hints fail; `investment` expands to investment subtypes. |
 | `account_master` | `account_master` | Sheet UUID is the PK. Current `account_currency_local`, `account_opening_date_local`, `account_closing_date_local`, and `tracking_start_date_local` map explicitly to database fields. Real opening and balance-tracking dates are separate. |
 | account detail tabs | Six tables named exactly like their Sheet tabs | Sheet UUID is the PK. All source fields are mapped; multiple IDs per account are supported. Mortgage and personal loans have separate tables. [Six detail mappings](_docs/account-details.md). |
@@ -74,7 +74,7 @@ No live Sheets or configured dev/prod databases were written during the Septembe
 
 ## Runtime and migrations
 
-The updated extractor requires migrations through `0021`. The next `make data-sync` applies pending migrations automatically before extraction: `0018` aligns detail tables, `0019–0020` add Sheet-owned Account Types and policies, and `0021` preserves optional subscription classification. Existing databases receive the table renames, loan split and requested fixed-income/P2P table drops from `0018`. Historical migrations remain unchanged so deployed databases and fresh installs converge to the same schema.
+The updated extractor requires migrations through `0022`. The next `make data-sync` applies pending migrations automatically before extraction: `0018` aligns detail tables, `0019–0020` add Sheet-owned Account Types and policies, `0021` preserves optional subscription classification, and `0022` drops the unused `account_types.is_loan` column. Existing databases receive the table renames, loan split and requested fixed-income/P2P table drops from `0018`. Historical migrations remain unchanged so deployed databases and fresh installs converge to the same schema.
 
 From this module directory:
 

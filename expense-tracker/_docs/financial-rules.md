@@ -10,7 +10,6 @@ The GAS API validates required fields, positive finite transaction amounts, cate
 | Existing category and required source/target accounts | Category-driven form | Enforced on create/import; category validation also applies to updates |
 | Account subtype hints | Dropdown filtering | Not enforced |
 | Insufficient asset/investment balance | Blocks interactive money-out against the computed balance | Not enforced; bulk historical import does not run this UI check |
-| Money-out from loan subtypes | Blocks interactive entry except `debt-finance` / `interest-charges` | Not enforced |
 | Credit-card limit | Not enforced | Not enforced; detail tabs are not joined into account responses |
 | Cross-currency transfer amount | Requires the amount for each currency | Explicit target amount required for different currencies; a missing target may default to source only when currencies match |
 

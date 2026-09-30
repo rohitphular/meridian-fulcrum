@@ -1,11 +1,5 @@
 function _accountTypeText(value) { return value === undefined || value === null ? '' : String(value).trim(); }
 function _accountTypeKey(value) { return _accountTypeText(value).replace(/_/g, '-'); }
-function _accountTypeBoolean(value) {
-  if (value === true || value === false) return value;
-  if (typeof value === 'string' && value.trim().toLowerCase() === 'true') return true;
-  if (typeof value === 'string' && value.trim().toLowerCase() === 'false') return false;
-  return null;
-}
 function _accountTypeRowIsBlank(row) {
   return getAccountTypeSheetColumns().every(function(key) { return _accountTypeText(row[key]) === ''; });
 }
@@ -25,11 +19,8 @@ function validateAccountTypeCreate(body, requireId, legacy) {
   for (const field of ['account_type_label', 'account_subtype_label']) {
     if (_accountTypeText(body[field]) === '') return { ok: false, error: 'missing_' + field };
   }
-  if (!legacy) {
-    if (_accountTypeBoolean(body.is_loan) === null) return { ok: false, error: 'invalid_is_loan' };
-    if (_accountTypeText(body.detail_sheet) !== '' && getAccountTypeDetailSheets().indexOf(body.detail_sheet) === -1)
-      return { ok: false, error: 'invalid_detail_sheet' };
-  }
+  if (!legacy && _accountTypeText(body.detail_sheet) !== '' && getAccountTypeDetailSheets().indexOf(body.detail_sheet) === -1)
+    return { ok: false, error: 'invalid_detail_sheet' };
   const status = _accountTypeText(body.record_status);
   if (status !== '' && ACCOUNT_TYPE_STATUSES.indexOf(status) === -1) return { ok: false, error: 'invalid_record_status' };
   return { ok: true };
@@ -62,7 +53,7 @@ function _validateAccountTypeReplacement(previous, replacement, migrating) {
   }
   if (previous.record_status === 'locked') {
     if (replacement.record_status === 'deleted') return { ok: false, error: 'record_locked' };
-    for (const field of ['account_type_label', 'account_subtype_label', 'description', 'is_loan', 'detail_sheet']) {
+    for (const field of ['account_type_label', 'account_subtype_label', 'description', 'detail_sheet']) {
       if (migrating && previous[field] === undefined) continue;
       if (previous[field] !== replacement[field]) return { ok: false, error: 'record_locked' };
     }

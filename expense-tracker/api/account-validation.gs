@@ -3,7 +3,8 @@
 // All validation is driven by ACCOUNT_SCHEMA (account-schema.gs).
 // =============================================================================
 
-function validateAccountCreate(body) {
+// Sheet-free checks shared by create and the CSV import dry run.
+function validateAccountFormat(body) {
   if (body === null || typeof body !== 'object' || Array.isArray(body)) return { ok: false, error: 'invalid_row' };
   if (body.id !== undefined && body.id !== null && String(body.id).trim() !== '' && isAccountUuid(body.id) === false) {
     return { ok: false, error: 'invalid_id' };
@@ -47,6 +48,15 @@ function validateAccountCreate(body) {
   if (recordStatus !== '' && getAccountSchemaField('record_status').enum_values.indexOf(recordStatus) === -1) {
     return { ok: false, error: 'invalid_record_status' };
   }
+  if (/^[A-Z]{3}$/.test(String(body.account_currency_local).trim().toUpperCase()) === false) return { ok: false, error: 'invalid_local_currency' };
+  return { ok: true };
+}
+
+function validateAccountCreate(body) {
+  const format = validateAccountFormat(body);
+  if (format.ok === false) return format;
+  const type = String(body.type).trim();
+  const subType = String(body.sub_type).trim();
 
   // Reference lookup is last, after pure validation has rejected malformed rows.
   const availableTypes = getAvailableAccountTypes();
@@ -54,7 +64,6 @@ function validateAccountCreate(body) {
   if (availableTypes.some(function(row) { return row.account_type_key === type && row.account_subtype_key === subType; }) === false)
     return { ok: false, error: 'invalid_sub_type' };
   const normCurrency = String(body.account_currency_local).trim().toUpperCase();
-  if (/^[A-Z]{3}$/.test(normCurrency) === false) return { ok: false, error: 'invalid_local_currency' };
   const knownCurrencies = Object.create(null);
   listRates().forEach(function(rate) {
     if (rate.currency !== undefined && rate.currency !== null) knownCurrencies[String(rate.currency).trim().toUpperCase()] = true;

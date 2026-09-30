@@ -37,7 +37,8 @@ function runtime() {
     Utilities: { getUuid: () => 'e0000000-0000-4000-8000-' + String(++generated).padStart(12, '0') },
   });
   for (const file of ['app-config.gs', 'app-utils.gs', 'sync-utils.gs', 'account-schema.gs', 'category-schema.gs',
-    'subscription-schema.gs', 'subscription-utils.gs', 'subscription-validation.gs', 'subscription-core.gs', 'category-core.gs']) {
+    'subscription-schema.gs', 'subscription-utils.gs', 'subscription-validation.gs', 'subscription-core.gs', 'category-core.gs',
+    'csv-import.gs', 'subscription-import.gs']) {
     vm.runInContext(fs.readFileSync(path.join(api, file), 'utf8'), ctx);
   }
   const sheet = new Sheet('subscription_master', [ctx.getSubscriptionSheetColumns()]);
@@ -327,4 +328,151 @@ test('DST validation handles half-hour transitions, not only one-hour European c
   assert.equal(ctx.validateSubscriptionCreate({ ...body, subscription_timezone_local: 'Australia/Lord_Howe', subscription_start_date_local: '2026-10-04 02:15:00' }).error, 'nonexistent_local_time');
   assert.equal(ctx.validateSubscriptionCreate({ ...body, subscription_timezone_local: 'Australia/Lord_Howe', subscription_start_date_local: '2026-04-05 01:45:00' }).error, 'ambiguous_local_time');
   assert.equal(ctx.validateSubscriptionCreate({ ...body, subscription_timezone_local: 'Australia/Lord_Howe', subscription_start_date_local: '2026-04-05 02:00:00' }).ok, true);
+});
+
+// ── CSV import endpoint (importSubscriptionsCsv) ─────────────────────────────
+// The browser uploads raw text; parsing and every format rule run here.
+const uuid = index => `a0000000-0000-4000-8000-${String(index).padStart(12, '0')}`;
+const csvRow = (index, overrides = {}) => ({ id: uuid(index), subscription_name: 'Subscription ' + index, subscription_amount_local: '12.50',
+  frequency: 'monthly', day_of_month: '1', source_account: ACCOUNT, ...overrides });
+const toCsv = (rows, columns = [...new Set(rows.flatMap(Object.keys))]) => columns.join(',') + '\r\n' + rows.map(row =>
+  columns.map(key => '"' + String(row[key] ?? '').replace(/"/g, '""') + '"').join(',')).join('\r\n');
+const plain = value => JSON.parse(JSON.stringify(value));
+const statuses = ['active', 'inactive', 'deleted', 'locked'];
+
+// Captures the rows the import forwards without touching any Sheet.
+function shapedImport(csv) {
+  const { ctx, sheet } = runtime();
+  const forwarded = [];
+  ctx.createSubscriptionsBulk = body => { forwarded.push(...body.subscriptions); return { ok: true, created: body.subscriptions.length, updated: 0, failed: 0,
+    results: body.subscriptions.map((row, index) => ({ index, key: row.id ?? '', ok: true, action: 'created' })) }; };
+  const result = ctx.importSubscriptionsCsv({ csv });
+  return { result: plain(result), rows: plain(forwarded), sheet };
+}
+const importErrors = csv => { const { result, rows } = shapedImport(csv); assert.equal(rows.length, 0); return (result.errors ?? []).join(' | ') + ' ' + result.error; };
+
+test('CSV import: headers, malformed quoting and ragged rows fail explicitly and write nothing', () => {
+  for (const [text, pattern] of [
+    ['', /missing_csv/],
+    ['subscription_name\nRent', /Missing required headers: subscription_amount_local, frequency, source_account.*invalid_csv_headers/],
+    ['subscription_name,subscription_name\nRent,Rent', /duplicate column headers.*invalid_csv_headers/],
+    [toCsv([csvRow(1)]) + '\nshort,row', /Row 3: expected 6 columns, found 2.*invalid_csv_rows/],
+    [toCsv([csvRow(1)]) + '\n"unclosed', /not closed.*invalid_csv/],
+    [toCsv([csvRow(1)]) + '\n"quoted"tail', /invalid characters.*invalid_csv/],
+    [toCsv([csvRow(1), csvRow(2, { subscription_amount_local: 'junk' })]), /Row 3: .*invalid_subscription_amount_local.*invalid_csv_rows/],
+  ]) assert.match(importErrors(text), pattern);
+  const { ctx, sheet } = runtime();
+  const result = ctx.importSubscriptionsCsv({ csv: toCsv([csvRow(1), csvRow(2, { frequency: 'daily' })]) });
+  assert.equal(result.error, 'invalid_csv_rows');
+  assert.equal(sheet.writes, 0);
+  assert.equal(sheet.rows.length, 1);
+});
+
+test('CSV import supports BOM, quoted commas, quotes and multiline notes with physical line numbers', () => {
+  const rows = [csvRow(1, { description: 'Line 1, "quoted"\r\nline 2' }), csvRow(2)];
+  const { result, rows: forwarded } = shapedImport('﻿' + toCsv(rows));
+  assert.equal(result.ok, true);
+  assert.equal(forwarded[0].description, rows[0].description);
+  assert.deepEqual(forwarded.map(row => row.csv_row_num), [2, 4]);
+  assert.deepEqual(result.results.map(row => row.line), [2, 4]);
+  assert.equal(result.rows, 2);
+});
+
+test('CSV import canonicalizes UUIDs and reports case-insensitive duplicate identities', () => {
+  const first = csvRow(1, { id: uuid(1).toUpperCase(), source_account: ACCOUNT.toUpperCase() });
+  const { rows } = shapedImport(toCsv([first]));
+  assert.equal(rows[0].id, uuid(1));
+  assert.equal(rows[0].source_account, ACCOUNT);
+  assert.match(importErrors(toCsv([first, csvRow(1)])), /Row 3: duplicate id in CSV \(duplicate_id_in_file\)/);
+  assert.match(importErrors(toCsv([csvRow(1, { id: 'old-id' })])), /id must be a UUID \(invalid_id\)/);
+  assert.match(importErrors(toCsv([csvRow(1, { source_account: 'Bank' })])), /source_account must be a UUID \(invalid_source_account\)/);
+});
+
+test('CSV import preserves supplied lifecycle but omits blank id/lifecycle and server-owned metadata', () => {
+  const { rows } = shapedImport(toCsv(statuses.map((record_status, index) => csvRow(index + 1, { record_status, sync_status: 'in-sync', created_at: 'past' }))));
+  assert.deepEqual(rows.map(row => row.record_status), statuses);
+  assert.ok(rows.every(row => row.sync_status === undefined && row.created_at === undefined));
+  const blank = shapedImport(toCsv([csvRow(1, { id: '', record_status: '' })])).rows[0];
+  assert.equal(Object.hasOwn(blank, 'record_status'), false);
+  assert.equal(Object.hasOwn(blank, 'id'), false);
+  assert.match(importErrors(toCsv([csvRow(1, { record_status: 'archived' })])), /invalid record_status/);
+});
+
+test('CSV import amounts reject prefixes, non-finite values, hex and locale separators and keep accepted text exactly', () => {
+  for (const value of ['12bad', '1,234.56', '1,25', 'Infinity', 'NaN', '0x10', '1e309', '1_000', '0', '-1']) {
+    assert.match(importErrors(toCsv([csvRow(1, { subscription_amount_local: value })])), /positive finite decimal/, value);
+  }
+  for (const value of ['.001', '+12.50', '1.2e2', '12.', '9007199254740993.123456789']) {
+    const { rows } = shapedImport(toCsv([csvRow(1, { subscription_amount_local: '  ' + value + '  ' })]));
+    assert.equal(rows[0].subscription_amount_local, value);
+  }
+});
+
+test('CSV import schedules reject missing anchors, invalid day fields, impossible dates and unqualified local times', () => {
+  for (const [overrides, pattern] of [
+    [{ frequency: '' }, /missing_frequency/],
+    [{ frequency: 'daily' }, /invalid_frequency/],
+    [{ subscription_name: '' }, /missing_name/],
+    [{ source_account: '' }, /missing_source_account/],
+    [{ frequency: 'quarterly' }, /start date is required/],
+    [{ frequency: 'weekly' }, /missing_day_of_week/],
+    [{ day_of_week: '8' }, /day_of_week must be a whole number/],
+    [{ day_of_month: '1.5' }, /whole number/],
+    [{ day_of_month: '' }, /missing_day_of_month/],
+    [{ tx_type: 'transfer' }, /invalid tx_type/],
+    [{ subscription_start_date_local: '2026-02-30', subscription_timezone_local: 'Europe/London' }, /real local date/],
+    [{ subscription_start_date_local: '2026-09-01 12:00:00Z', subscription_timezone_local: 'Europe/London' }, /real local date/],
+    [{ subscription_start_date_local: '2026-09-01' }, /timezone.*required/],
+    [{ subscription_timezone_local: 'Invalid/Zone' }, /invalid subscription_timezone_local/],
+    [{ subscription_start_date_local: '2026-03-29 01:30', subscription_timezone_local: 'Europe/London' }, /nonexistent_local_time/],
+    [{ subscription_start_date_local: '2026-09-02', subscription_end_date_local: '2026-09-01', subscription_timezone_local: 'Europe/London' }, /end date must not precede/],
+  ]) assert.match(importErrors(toCsv([csvRow(1, overrides)])), pattern, JSON.stringify(overrides));
+  const partial = shapedImport(toCsv([csvRow(1, { tx_type: 'money-out', day_of_week: '2' })])).rows[0];
+  assert.equal(partial.day_of_week, '2');
+  assert.equal(partial.tx_type, 'money-out');
+  const dated = shapedImport(toCsv([csvRow(1, { frequency: 'annual', subscription_start_date_local: '2026-09-01', subscription_end_date_local: '2027-09-01T12:13:14.123456', subscription_timezone_local: 'Europe/London' })])).rows[0];
+  assert.equal(dated.subscription_start_date_local, '2026-09-01 00:00:00');
+  assert.equal(dated.subscription_end_date_local, '2027-09-01 12:13:14.123456');
+  const minutes = shapedImport(toCsv([csvRow(1, { subscription_start_date_local: '2026-09-01T08:30', subscription_timezone_local: 'Europe/London' })])).rows[0];
+  assert.equal(minutes.subscription_start_date_local, '2026-09-01 08:30:00');
+});
+
+test('CSV import rejects unknown headers while accepting all sync/audit headers without forwarding them', () => {
+  for (const header of ['notes', 'record_stats', 'next_payment_date']) {
+    assert.match(importErrors(toCsv([csvRow(1, { [header]: 'unexpected' })])), new RegExp('Unknown CSV headers: ' + header + '.*invalid_csv_headers'));
+  }
+  assert.match(importErrors(toCsv([csvRow(1, { '': 'unexpected' })])), /blank or duplicate column headers/);
+  const { rows } = shapedImport(toCsv([csvRow(1, { record_status: 'inactive', sync_status: 'in-sync', sync_date: 'ignored', sync_notes: 'ignored', created_at: 'ignored', updated_at: 'ignored' })]));
+  assert.equal(rows[0].record_status, 'inactive');
+  assert.deepEqual(Object.keys(rows[0]).sort(), ['csv_row_num', 'day_of_month', 'frequency', 'id', 'record_status', 'source_account', 'subscription_amount_local', 'subscription_name']);
+});
+
+test('CSV import rejects numeric timezone offsets while IANA fixed zones remain valid', () => {
+  for (const zone of ['+05:30', '-04:00', '+0530', '+05', '-00:00']) {
+    assert.match(importErrors(toCsv([csvRow(1, { subscription_timezone_local: zone })])), /invalid subscription_timezone_local/, zone);
+  }
+  assert.equal(shapedImport(toCsv([csvRow(1, { subscription_timezone_local: 'Etc/GMT-5' })])).rows.length, 1);
+});
+
+test('CSV import dry_run validates without reading or writing any Sheet', () => {
+  const { ctx, sheet } = runtime();
+  ctx.getOrCreateSheet = name => { throw new Error('dry run read ' + name); };
+  assert.deepEqual(plain(ctx.importSubscriptionsCsv({ csv: toCsv([csvRow(1), csvRow(2)]), dry_run: true })), { ok: true, dry_run: true, rows: 2 });
+  assert.equal(ctx.importSubscriptionsCsv({ csv: toCsv([csvRow(1, { frequency: 'daily' })]), dry_run: true }).error, 'invalid_csv_rows');
+  assert.equal(sheet.writes, 0);
+});
+
+test('CSV import real run upserts through createSubscriptionsBulk and tags every result with its CSV line', () => {
+  const { ctx, sheet, value } = runtime();
+  const csv = toCsv([csvRow(1), csvRow(2, { source_account: OTHER_ID }), csvRow(3, { minor_category: 'rent', tx_type: 'money-out', major_category: 'housing', subscription_amount_local: '12.005' })]);
+  const result = plain(ctx.importSubscriptionsCsv({ csv }));
+  assert.equal(result.ok, false);
+  assert.equal(result.rows, 3);
+  assert.deepEqual([result.created, result.updated, result.failed], [2, 0, 1]);
+  assert.deepEqual(result.results.map(row => [row.line, row.ok, row.error ?? row.action]), [[2, true, 'created'], [3, false, 'unknown_source_account'], [4, true, 'created']]);
+  assert.equal(sheet.rows.length, 3);
+  assert.equal(value(sheet.rows[2], 'subscription_amount_local'), '12.005');
+  const again = plain(ctx.importSubscriptionsCsv({ csv: toCsv([csvRow(1, { subscription_name: 'Renamed' })]) }));
+  assert.deepEqual([again.updated, again.results[0].line, again.results[0].action], [1, 2, 'updated']);
+  assert.equal(value(sheet.rows[1], 'subscription_name'), 'Renamed');
 });

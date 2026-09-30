@@ -75,10 +75,13 @@ class SnapshotSheetsClient(SheetsClient):
     @staticmethod
     def _parse_snapshot(name: str, values: list[list[Any]]) -> tuple[list[str], list[dict[str, Any]]]:
         headers = values[0] if values else []
-        legacy_type_headers = set(HEADERS["account_types"]) - {"is_loan", "detail_sheet"}
+        legacy_type_headers = set(HEADERS["account_types"]) - {"detail_sheet"}
         if name == "account_types" and len(headers) == len(legacy_type_headers) and set(headers) == legacy_type_headers:
             logger.error("_parse_snapshot: entity=account_types error=account_types_migration_required action=import_complete_updated_account_types_csv_in_expense_tracker_configure")
             raise ValueError("account_types_migration_required")
+        if name == "account_types" and "is_loan" in headers:
+            logger.error("_parse_snapshot: entity=account_types error=account_types_is_loan_column_present action=delete_is_loan_column_from_account_types_sheet")
+            raise ValueError("account_types_is_loan_column_present")
         if len(headers) != len(set(headers)) or set(headers) != set(HEADERS[name]):
             raise ValueError(f"sheet_header_mismatch:{name}")
         rows = []

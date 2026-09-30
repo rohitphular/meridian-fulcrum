@@ -169,7 +169,13 @@ function validateTransactionUpdate(body, oldRow, catMap) {
   const catKey = body.tx_type + '|' + major + '|' + minor;
   if (!resolvedCatMap[catKey]) return { ok: false, error: 'unknown_category' };
 
-  const finErr = _validateFinancialRules(body, oldRow !== undefined ? oldRow : null);
+  // An edit that keeps the row's account may target an inactive/locked (closed) account,
+  // matching bulk import; moving a row onto a different account still requires an active one.
+  const keepsAccount = oldRow !== undefined && oldRow !== null
+    && body.account_id !== undefined && body.account_id !== null
+    && String(body.account_id) === String(oldRow[txColIndex('account_id')]);
+  const finErr = _validateFinancialRules(body, oldRow !== undefined ? oldRow : null,
+    keepsAccount ? _loadAccountMap({ include_closed: true }) : undefined);
   if (!finErr.ok) return finErr;
 
   return { ok: true };

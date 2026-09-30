@@ -77,11 +77,13 @@ Migration 0018 gives each supported extension table the exact Sheet name and spl
 
 Migration 0019 adds the `account_types` Sheet extraction contract, lifecycle/sync fields and safe one-time adoption of existing unmanaged catalog UUIDs with category links retained. Initialize this source from the current CSV in Configure → Account Types before running the enabled extractor; no runtime seed is supplied.
 
-Migration 0020 converts account-type/subtype key values to hyphens, preserves UUIDs/FKs and appends source-owned `is_loan`/`detail_sheet` policy. It clears database type sync state to require a fourteen-column source refresh. Initial normal-sync performs that refresh even for source in-sync rows. Dependent account/category/detail lookups require Sheet ownership and completed policy sync; enable `account_types` in older configs before this initial run. New classifications are rejected; extraction only manages existing database catalog pairs.
+Migration 0020 converts account-type/subtype key values to hyphens, preserves UUIDs/FKs and appends source-owned `is_loan`/`detail_sheet` policy. It clears database type sync state to require a source refresh. Migration 0022 then drops the unused `is_loan` column; delete it from the `account_types` Sheet tab too. Initial normal-sync performs that refresh even for source in-sync rows. Dependent account/category/detail lookups require Sheet ownership and completed policy sync; enable `account_types` in older configs before this initial run. New classifications are rejected; extraction only manages existing database catalog pairs.
 
 Upgrade the source separately: deploy expense-tracker and import the complete current `account_types.csv` in Configure before retrying category import or extraction. A legacy twelve-column tab raises `account_types_migration_required` before entity writes. Database migration does not alter the Sheet. Categories rejected by the UI have not reached the source tab and cannot be recovered by hard-sync; complete their source import first.
 
 Migration 0021 permits subscriptions without a category and retains their optional source classification fields. It preserves existing identities and relationships; see [subscriptions](subscription-master.md).
+
+Migration 0022 drops the unused `account_types.is_loan` column. Delete the matching column from the `account_types` Sheet tab; the extractor stops with `account_types_is_loan_column_present` while it remains.
 
 Current commands from the module directory:
 
@@ -97,6 +99,6 @@ A live run writes both PostgreSQL and Sheet sync metadata. Documentation validat
 
 ## Generated model caveat
 
-`database/models/` is incomplete and several models are stale; `account_types.py` has been regenerated through migration 0020. Runtime writers do not consume these models. The model-generation config lists only ledger migrations, but a fresh schema also needs currency migrations before ledger rate foreign keys can be created. Current mapping inventories are checked against migrations and runtime SQL. Resolve the prerequisite build order before relying on `make generate-models`.
+`database/models/` is incomplete and several models are stale; `account_types.py` reflects migrations through 0022. Runtime writers do not consume these models. The model-generation config lists only ledger migrations, but a fresh schema also needs currency migrations before ledger rate foreign keys can be created. Current mapping inventories are checked against migrations and runtime SQL. Resolve the prerequisite build order before relying on `make generate-models`.
 
 The source master tabs and entity toggles now use `account_master`, `category_master`, `transaction_master` and `subscription_master`. PostgreSQL already uses those names. Run the [GAS master-tab rename helper](../../../expense-tracker/_docs/master-sheet-names.md) for legacy tabs before starting the renamed extractor.

@@ -62,7 +62,7 @@ export const state = {
   rateDeleteCurrency: null,
   rateDeleteBlocked:  null,   // { error, referenced_count } when delete is refused — paired with rateDeleteCurrency
 
-  accountSchema:      null,  // Sheet-derived types, subtypes_by_type, labels and loan_sub_types
+  accountSchema:      null,  // Sheet-derived types, subtypes_by_type, and labels
   transactionSchema:  null,  // { types, categorisation_fields, transfer_fields }
   categorySchema:     null,  // { types, account_types }
   subscriptionSchema: null, // { frequencies, tx_types, record_statuses, default_timezone }
@@ -84,7 +84,6 @@ export const state = {
   },
 
   catImportOpen:  false,
-  catImportPreview: null,
   catImportReport: null,
   catImportBusy: false,
 

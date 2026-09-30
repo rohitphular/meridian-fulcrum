@@ -8,15 +8,19 @@ Source is split into per-domain `.gs` modules. GAS flattens them all into one na
 
 | Group | Files | Purpose |
 |---|---|---|
-| App | `app-auth.gs`, `app-config.gs`, `app-router.gs`, `app-utils.gs` | Auth, config, HTTP routing, shared helpers |
-| Sheet layout | `sheet-order.gs` | Arrange existing tabs on spreadsheet open or through the Expense Tracker menu |
+| App | `app-auth.gs`, `app-config.gs`, `app-router.gs`, `app-utils.gs`, `sync-utils.gs` | Auth, config, HTTP routing, shared helpers, sync-status helpers |
+| Sheet layout | `sheet-order.gs`, `master-migration.gs` | Arrange existing tabs on spreadsheet open or through the Expense Tracker menu; one-time `migrateMasterSheetNames()` |
+| Account types | `account-type-core.gs`, `account-type-schema.gs`, `account-type-utils.gs`, `account-type-validation.gs`, `account-type-migration.gs` | Sheet-owned classification catalog: list, edit, soft-delete/restore, CSV import and legacy key migration |
 | Accounts | `account-core.gs`, `account-schema.gs`, `account-utils.gs`, `account-validation.gs` | Account CRUD, schema, validation |
-| Transactions | `transaction-core.gs`, `transaction-schema.gs`, `transaction-utils.gs`, `transaction-validation.gs` | Transaction CRUD, schema, validation |
+| Transactions | `transaction-core.gs`, `transaction-schema.gs`, `transaction-utils.gs`, `transaction-validation.gs`, `transaction-suggestions.gs` | Transaction CRUD, schema, validation, entry suggestions |
 | Categories | `category-core.gs`, `category-schema.gs`, `category-utils.gs`, `category-validation.gs` | Category CRUD, schema, validation |
 | Import | `import-core.gs`, `import-registry.gs` | Account master/detail CSV validation and ID-based replacement |
 | Subscriptions | `subscription-core.gs`, `subscription-schema.gs`, `subscription-utils.gs`, `subscription-validation.gs` | Recurring obligations and schedule calculation |
 | Rates | `rate-core.gs`, `rate-schema.gs`, `rate-validation.gs` | FX rate CRUD, schema, validation |
-| Advisor | `advisor-core.gs` | LLM advisor endpoint |
+| Advisor & insights | `advisor-core.gs`, `insights-core.gs` | LLM advisor endpoint; read pre-computed insight payloads |
+| CSV import | `csv-import.gs`, `account-type-import.gs`, `category-import.gs`, `account-import.gs`, `subscription-import.gs`, `transaction-import.gs` | Server-side CSV parsing and validation for every import endpoint (`{ csv, dry_run }`), writing through the entity bulk functions |
+| Factory reset | `factory-reset.gs` | `factory_reset_delete_sheets` for `make factory-reset`; see [cicd/README.md](../cicd/README.md#factory-reset-make-factory-reset) |
+| Retired | `workflow-engine.gs` | Placeholder only; balances are computed at read time |
 | Manifest | `appsscript.json` | GAS runtime config — timezone, V8 engine, web app access |
 | clasp link | `.clasp.json` | Links this directory to a GAS project. Committed with `"scriptId": "${SCRIPT_ID_PLACEHOLDER}"`; the real `scriptId` is written by `cicd/deploy.sh` at deploy time and reverted on exit. |
 

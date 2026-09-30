@@ -1380,3 +1380,27 @@ test('advisor provider failures never expose provider bodies or caught error tex
   assert.equal(ctx._callOpenAi(sensitive, 'system', []).content, 'Valid answer');
   assert.equal(JSON.stringify(logs).includes(sensitive), false);
 });
+
+test('accounts that already share a name stay editable, but a rename cannot create a new collision', () => {
+  const { ctx, account } = accountImporter();
+  assert.equal(ctx.createAccount(account).ok, true);
+  assert.equal(ctx.createAccount({ ...account, id: 'e0000000-0000-4000-8000-00000000abcd' }).ok, true);
+  assert.equal(ctx.createAccount({ ...account, id: 'e0000000-0000-4000-8000-00000000abce', account_name: 'Other bank' }).ok, true);
+  assert.equal(ctx.updateAccount({ row_num: 3, account_name: account.account_name, description: 'unchanged name' }).ok, true);
+  assert.equal(ctx.updateAccount({ row_num: 4, account_name: ` ${account.account_name.toUpperCase()} ` }).error, 'duplicate_account');
+  assert.equal(ctx.updateAccount({ row_num: 4, account_name: 'Other bank renamed' }).ok, true);
+});
+
+test('editing a historical row keeps its closed account valid, but moving a row onto a closed account is rejected', () => {
+  const ctx = runtime(['app-config.gs', 'app-utils.gs', 'transaction-schema.gs', 'transaction-validation.gs']);
+  const closed = 'c0000000-0000-4000-8000-000000000001', active = 'c0000000-0000-4000-8000-000000000002';
+  ctx._loadAccountMap = opts => (opts !== undefined && opts.include_closed === true ? { [closed]: {}, [active]: {} } : { [active]: {} });
+  ctx._buildCategoryMap = () => ({ 'money-in|transfers|in': {} });
+  const oldRow = ctx.getTransactionSheetColumns().map(() => '');
+  oldRow[ctx.txColIndex('account_id')] = closed;
+  oldRow[ctx.txColIndex('tx_timezone_local')] = 'Europe/London';
+  const body = { row_num: 2, tx_date_local: '2026-08-03 10:00:00', tx_type: 'money-in', tx_amount_local: '10', account_id: closed, major_category: 'transfers', minor_category: 'in', description: 'edited' };
+  assert.equal(ctx.validateTransactionUpdate(body, oldRow).ok, true);
+  oldRow[ctx.txColIndex('account_id')] = active;
+  assert.equal(ctx.validateTransactionUpdate(body, oldRow).error, 'unknown_account_id');
+});

@@ -38,7 +38,7 @@ Transfers use two `money-out` / `money-in` rows linked via `parent_tx_id`. Cross
 
 ## Account classification
 
-The `account_types` Sheet owns the existing 22 classifications, their display labels, loan flags and supported detail tabs. Account choices and category hints read that configuration; the application does not seed or maintain a second subtype catalog. See [Account Types](account-types.md) for the 14-column contract and the initial CSV import.
+The `account_types` Sheet owns the existing 16 classifications, their display labels and supported detail tabs. Account choices and category hints read that configuration; the application does not seed or maintain a second subtype catalog. See [Account Types](account-types.md) for the 13-column contract and the initial CSV import.
 
 Asset and investment balances retain their supplied sign. Liabilities are modelled as accounts with negative balances; the UI displays the amount owed as a magnitude. There is no separate debt entity.
 

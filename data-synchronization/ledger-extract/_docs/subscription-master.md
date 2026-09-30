@@ -74,7 +74,7 @@ The extractor binds aware datetimes to `TIMESTAMPTZ`: PostgreSQL stores an insta
 | Names and identity | Interactive create/update/restore checks duplicate nondeleted names; CSV uses UUID identity. | Uniqueness is on `subscription_id`, not `name`; repeated names with different UUIDs stay separate. |
 | Audit | GAS owns Sheet audit timestamps; CSV metadata is ignored as input. | Database audit timestamps track ingestion independently; acknowledgements touch only the three sync columns. |
 
-Older database dates may have been interpreted using the SQL session's timezone. A hard-sync of valid source values with explicit zones corrects those instants; missing historical zones are never inferred. The local 21-row CSV now has a blank timezone column for the user to fill per row before import.
+Older database dates may have been interpreted using the SQL session's timezone. A hard-sync of valid source values with explicit zones corrects those instants; missing historical zones are never inferred. The local 21-row CSV supplies an explicit timezone on every row.
 
 Migrations 0012 and 0021 preserve optional start/classification. Migration 0021 backfills existing classification from resolved categories without changing IDs or audit timestamps. No new migration is required by this review. Subscription extraction is enabled in the supplied config, so the canonical `subscription_master` tab and all required source values must be ready before running it.
 

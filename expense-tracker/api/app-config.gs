@@ -68,4 +68,4 @@ const AUDIT_COLUMNS = [
 // VALID_TYPES removed — use VALID_TRANSACTION_TYPES from transaction-schema.gs
 // DEFAULT_RATES removed — defined in rate-core.gs
 
-// Account classifications, labels, loan flags and detail eligibility live in account_types.
+// Account classifications, labels and detail eligibility live in account_types.

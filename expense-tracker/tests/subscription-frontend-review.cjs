@@ -2,6 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const importResultHelpers = require('./support/import-result.cjs');
 const { test } = require('node:test');
 
 const source = fs.readFileSync(path.join(__dirname, '../app/sections/subscriptions.js'), 'utf8')
@@ -13,9 +14,6 @@ const subscription = index => ({
   id: uuid(index), subscription_name: 'Subscription ' + index, subscription_amount_local: '12.50',
   frequency: 'monthly', day_of_month: '1', source_account: uuid(100),
 });
-const csv = (rows, columns = [...new Set(rows.flatMap(Object.keys))]) => columns.join(',') + '\r\n' + rows.map(row =>
-  columns.map(key => '"' + String(row[key] ?? '').replace(/"/g, '""') + '"').join(',')
-).join('\r\n');
 const esc = value => String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 
 function fixture(overrides = {}) {
@@ -32,10 +30,10 @@ function fixture(overrides = {}) {
   const requests = [], reloads = [], messages = [], exports = [];
   const api = { createSubscriptionsBulk: async payload => {
     requests.push(payload);
-    return { ok: true, results: payload.subscriptions.map((row, index) => ({ index, ok: true, action: 'created', key: row.id })) };
+    return { ok: true, created: 1, updated: 0, failed: 0, rows: 1, results: [{ index: 0, line: 2, ok: true, action: 'created', key: uuid(1) }] };
   } };
   let loading = 0;
-  const context = vm.createContext({
+  const context = vm.createContext({ ...importResultHelpers(),
     state, ExpenseAPI: api, esc, el: id => elements[id] ?? null,
     openContextMenu: (button, items, select) => select('csv'), exportSubscriptions: (format, rows) => exports.push({ format, rows }),
     getSymbol: () => '£', toBase: (value, currency) => currency === 'UNKNOWN' || currency === '' ? NaN : value,
@@ -45,155 +43,94 @@ function fixture(overrides = {}) {
     document: { dispatchEvent: event => reloads.push(event.type) },
     CustomEvent: class { constructor(type) { this.type = type; } }, AbortController,
   });
-  vm.runInContext(source + '\nthis.exposed = {_subscriptionErrors,_parseSubscriptionsCsv,_readSubscriptionImport,_submitImport,_renderImportPanel,_renderForm,_renderTable,_txTypeOpts,_majorOpts,_minorOpts,_dueDays,_toMonthly,_collectForm,_saveAdd,_attachEvents,renderSubscriptions,pending:()=>_importParsed};', context);
+  vm.runInContext(source + '\nthis.exposed = {_subscriptionErrors,_chooseSubscriptionImport,_submitImport,_renderImportPanel,_renderForm,_renderTable,_txTypeOpts,_majorOpts,_minorOpts,_dueDays,_toMonthly,_collectForm,_saveAdd,_attachEvents,renderSubscriptions,pending:()=>_subImportFile};', context);
   return { ...context.exposed, state, elements, requests, reloads, messages, exports, api, loading: () => loading };
 }
-const select = async (context, rows) => context._readSubscriptionImport({ name: 'subscription_master.csv', text: async () => csv(rows) });
+const file = (text, name = 'subscription_master.csv') => ({ name, text: async () => text });
 
-test('CSV headers, malformed quoting and ragged rows fail explicitly and block submission', async () => {
+test('import panel uploads the raw file text and never parses or validates CSV in the browser', async () => {
   const f = fixture();
-  for (const [text, pattern] of [
-    ['subscription_name\nRent', /Missing required headers/],
-    ['subscription_name,subscription_name\nRent,Rent', /duplicate column headers/],
-    [csv([subscription(1)]) + '\nshort,row', /expected .* columns/],
-    [csv([subscription(1)]) + '\n"unclosed', /not closed/],
-    [csv([subscription(1)]) + '\n"quoted"tail', /invalid characters/],
-  ]) assert.match(f._parseSubscriptionsCsv(text).errors.join(), pattern);
-  await f._readSubscriptionImport({ name: 'bad.csv', text: async () => csv([subscription(1), { ...subscription(2), subscription_amount_local: 'junk' }]) });
+  assert.doesNotMatch(source, /_parseSubscriptionsCsv|_subscriptionCsvRecords|Retry failed rows|_renderImportStatus/);
+  assert.equal(f.elements.subImportConfirm.disabled, false);
+  f._chooseSubscriptionImport(undefined);
+  assert.equal(f.elements.subImportConfirm.disabled, true);
+  const raw = '﻿id,subscription_name\r\n"x","not, validated here"\r\nragged';
+  f._chooseSubscriptionImport(file(raw, '<b>subs</b>.csv'));
+  assert.match(f.elements.subImportStatus.innerHTML, /&lt;b&gt;subs&lt;\/b&gt;\.csv selected/);
+  assert.equal(f.elements.subImportConfirm.disabled, false);
+  await f._submitImport();
+  assert.deepEqual(JSON.parse(JSON.stringify(f.requests)), [{ csv: raw }]);
   assert.equal(f.pending(), null);
   assert.equal(f.elements.subImportConfirm.disabled, true);
-  assert.match(f._renderImportPanel(), /Correct the CSV errors/);
-});
-
-test('CSV supports BOM, quoted commas, quotes and multiline notes with physical row numbers', () => {
-  const f = fixture();
-  const rows = [{ ...subscription(1), description: 'Line 1, "quoted"\r\nline 2' }, subscription(2)];
-  const result = f._parseSubscriptionsCsv('\uFEFF' + csv(rows));
-  assert.equal(result.errors.length, 0);
-  assert.equal(result.subscriptions[0].description, rows[0].description);
-  assert.deepEqual(Array.from(result.subscriptions, row => row.csv_row_num), [2, 4]);
-});
-
-test('CSV UUIDs are canonicalized and case-insensitive duplicate identities are reported', () => {
-  const f = fixture();
-  const first = { ...subscription(1), id: uuid(1).toUpperCase(), source_account: uuid(100).toUpperCase() };
-  const result = f._parseSubscriptionsCsv(csv([first]));
-  assert.equal(result.errors.length, 0);
-  assert.equal(result.subscriptions[0].id, uuid(1));
-  assert.equal(result.subscriptions[0].source_account, uuid(100));
-  assert.match(f._parseSubscriptionsCsv(csv([first, subscription(1)])).errors.join(), /duplicate id/);
-  assert.match(f._parseSubscriptionsCsv(csv([{ ...subscription(1), id: 'old-id' }])).errors.join(), /id must be a UUID/);
-  assert.match(f._parseSubscriptionsCsv(csv([{ ...subscription(1), source_account: 'Bank' }])).errors.join(), /source_account must be a UUID/);
-});
-
-test('CSV preserves supplied lifecycle choices but omits blank lifecycle and server-owned metadata', () => {
-  const f = fixture();
-  const result = f._parseSubscriptionsCsv(csv(statuses.map((record_status, index) => ({ ...subscription(index + 1), record_status, sync_status: 'in-sync', created_at: 'past' }))));
-  assert.equal(result.errors.length, 0);
-  assert.deepEqual(Array.from(result.subscriptions, row => row.record_status), statuses);
-  assert.ok(result.subscriptions.every(row => row.sync_status === undefined && row.created_at === undefined));
-  const blank = f._parseSubscriptionsCsv(csv([{ ...subscription(1), record_status: '' }]));
-  assert.equal(Object.hasOwn(blank.subscriptions[0], 'record_status'), false);
-  assert.match(f._parseSubscriptionsCsv(csv([{ ...subscription(1), record_status: 'archived' }])).errors.join(), /invalid record_status/);
-});
-
-test('CSV amounts reject prefixes, non-finite values, hex and locale separators', () => {
-  const f = fixture();
-  for (const value of ['12bad', '1,234.56', '1,25', 'Infinity', 'NaN', '0x10', '1e309', '1_000', '0', '-1']) {
-    const result = f._parseSubscriptionsCsv(csv([{ ...subscription(1), subscription_amount_local: value }]));
-    assert.equal(result.subscriptions.length, 0, value);
-    assert.match(result.errors.join(), /positive finite decimal/);
-  }
-  for (const value of ['.001', '+12.50', '1.2e2', '12.']) {
-    const result = f._parseSubscriptionsCsv(csv([{ ...subscription(1), subscription_amount_local: value }]));
-    assert.equal(result.errors.length, 0, value);
-    assert.equal(result.subscriptions[0].subscription_amount_local, value);
-  }
-});
-
-test('CSV schedules reject missing anchors, invalid day fields, impossible dates and unqualified local times', () => {
-  const f = fixture();
-  for (const [overrides, pattern] of [
-    [{ frequency: 'quarterly' }, /start date is required/],
-    [{ day_of_week: '8' }, /day_of_week must be a whole number/],
-    [{ day_of_month: '1.5' }, /whole number/],
-    [{ subscription_start_date_local: '2026-02-30', subscription_timezone_local: 'Europe/London' }, /real local date/],
-    [{ subscription_start_date_local: '2026-09-01' }, /timezone.*required/],
-    [{ subscription_timezone_local: 'Invalid/Zone' }, /invalid subscription_timezone_local/],
-    [{ subscription_start_date_local: '2026-09-02', subscription_end_date_local: '2026-09-01', subscription_timezone_local: 'Europe/London' }, /end date must not precede/],
-  ]) assert.match(f._parseSubscriptionsCsv(csv([{ ...subscription(1), ...overrides }])).errors.join(), pattern);
-  const partial = f._parseSubscriptionsCsv(csv([{ ...subscription(1), tx_type: 'money-out', day_of_week: '2' }]));
-  assert.equal(partial.errors.length, 0);
-  assert.equal(partial.subscriptions[0].day_of_week, '2');
-  assert.equal(partial.subscriptions[0].tx_type, 'money-out');
-  const result = f._parseSubscriptionsCsv(csv([{ ...subscription(1), frequency: 'annual', subscription_start_date_local: '2026-09-01', subscription_end_date_local: '2027-09-01T12:13:14.123456', subscription_timezone_local: 'Europe/London' }]));
-  assert.equal(result.errors.length, 0);
-  assert.equal(result.subscriptions[0].subscription_start_date_local, '2026-09-01 00:00:00');
-  assert.equal(result.subscriptions[0].subscription_end_date_local, '2027-09-01 12:13:14.123456');
-});
-
-test('schema provides frequency, lifecycle and transaction choices; unavailable schema cannot import', () => {
-  const f = fixture();
-  f.state.transactionSchema = { types: ['transfer', 'money-in', 'money-out'] };
-  assert.doesNotMatch(f._txTypeOpts(), /transfer/);
-  f.state.subscriptionSchema.tx_types = ['custom'];
-  f.state.subscriptionSchema.record_statuses = ['review'];
-  const result = f._parseSubscriptionsCsv(csv([{ ...subscription(1), tx_type: 'custom', major_category: 'major', minor_category: 'minor', record_status: 'review' }]));
-  assert.equal(result.errors.length, 0);
-  assert.match(f._txTypeOpts(), /custom/);
-  f.state.subscriptionSchema = null;
-  assert.match(f._parseSubscriptionsCsv(csv([subscription(1)])).errors.join(), /configuration is unavailable/);
-  f.renderSubscriptions();
-  assert.match(f.elements.subscriptionsContent.innerHTML, /configuration is unavailable/);
-});
-
-test('failed-only retry retains physical rows, actionable reasons and escaped labels across renders', async () => {
-  const f = fixture();
-  await select(f, [subscription(1), { ...subscription(2), subscription_name: '<script>bad</script>' }]);
-  f.api.createSubscriptionsBulk = async payload => {
-    f.requests.push(payload);
-    return { ok: false, results: [{ index: 1, ok: false, error: '<missing_rate>' }, { index: 0, ok: true, action: 'created' }] };
-  };
-  await f._submitImport(f.pending());
-  assert.equal(f.pending().length, 1);
-  assert.equal(f.pending()[0].id, uuid(2));
-  assert.equal(f.pending()[0].csv_row_num, 3);
-  assert.match(f._renderImportPanel(), /Retry failed rows/);
-  assert.match(f._renderImportPanel(), /&lt;missing_rate&gt;/);
-  assert.doesNotMatch(f._renderImportPanel(), /<script>/);
-  f.renderSubscriptions();
-  assert.equal(f.elements.subImportConfirm.disabled, false);
-  f.api.createSubscriptionsBulk = async payload => {
-    f.requests.push(payload);
-    return { ok: true, results: [{ index: 0, ok: true, action: 'updated' }] };
-  };
-  await f._submitImport(f.pending());
-  assert.equal(f.requests[1].subscriptions.length, 1);
-  assert.equal(f.pending(), null);
+  assert.deepEqual(f.reloads, ['et:reload']);
   assert.equal(f.loading(), 0);
-  assert.deepEqual(f.reloads, ['et:reload', 'et:reload']);
+});
+
+test('server results render a summary and a line-numbered, escaped failure table', async () => {
+  const f = fixture();
+  f.api.createSubscriptionsBulk = async payload => {
+    f.requests.push(payload);
+    return { ok: false, created: 1, updated: 1, failed: 2, rows: 4, results: [
+      { index: 0, line: 2, ok: true, action: 'created' },
+      { index: 1, line: 5, ok: false, error: '<unknown_source_account>', key: uuid(2) },
+      { index: 2, line: 7, ok: true, action: 'updated' },
+      { index: 3, line: 9, ok: false, error: 'field_invalid', field: 'day_of_month', invalid_values: ['<32>'] },
+    ] };
+  };
+  f._chooseSubscriptionImport(file('csv text'));
+  await f._submitImport();
+  const html = f._renderImportPanel();
+  assert.match(html, /1 created · 1 updated · 2 failed/);
+  assert.match(html, /<td class="td-mono">5<\/td><td class="import-result-reason">&lt;unknown source account&gt;\.<div class="td-mono td-muted">&lt;unknown_source_account&gt;<\/div><\/td><td>a0000000-0000-4000-8000-000000000002<\/td>/);
+  assert.match(html, /<td class="td-mono">9<\/td><td class="import-result-reason">Field invalid\.<div class="td-mono td-muted">field_invalid<\/div><\/td><td>day_of_month · &lt;32&gt;<\/td>/);
+  assert.doesNotMatch(html, /<unknown_source_account>|Retry/);
+  assert.deepEqual(f.reloads, ['et:reload']);
+  assert.equal(f.messages.at(-1).kind, 'warn');
+});
+
+test('invalid-file responses render every server error as a list and nothing reloads', async () => {
+  const f = fixture();
+  f.api.createSubscriptionsBulk = async () => ({ ok: false, error: 'invalid_csv_rows', errors: ['Row 3: invalid frequency (invalid_frequency).', 'Row 4: <bad>'] });
+  f._chooseSubscriptionImport(file('csv text'));
+  await f._submitImport();
+  const html = f._renderImportPanel();
+  assert.match(html, /<li>Row 3: invalid frequency \(invalid_frequency\)\.<\/li><li>Row 4: &lt;bad&gt;/);
+  assert.match(html, /Nothing was imported/);
+  assert.equal(f.reloads.length, 0);
+  assert.equal(f.pending(), null);
 });
 
 test('top-level backend failures remain visible even when results is an empty list', async () => {
   const f = fixture();
-  await select(f, [subscription(1)]);
   f.api.createSubscriptionsBulk = async () => ({ ok: false, error: 'invalid_existing_subscription_id', results: [] });
-  await f._submitImport(f.pending());
-  assert.match(f._renderImportPanel(), /invalid_existing_subscription_id/);
-  assert.equal(f.pending().length, 1);
+  f._chooseSubscriptionImport(file('csv text'));
+  await f._submitImport();
+  assert.match(f._renderImportPanel(), /Import failed: invalid_existing_subscription_id/);
   assert.equal(f.reloads.length, 0);
 });
 
-test('duplicate clicks cannot post twice and uncertain network outcomes require checking before retry', async () => {
+test('request_failed after a partial server write warns and reloads instead of replaying', async () => {
   const f = fixture();
-  await select(f, [subscription(1)]);
+  f.api.createSubscriptionsBulk = async () => ({ ok: false, error: 'request_failed' });
+  f._chooseSubscriptionImport(file('csv text'));
+  await f._submitImport();
+  assert.equal(f.pending(), null);
+  assert.match(f._renderImportPanel(), /request_failed.*Some rows may have been saved/);
+  assert.deepEqual(f.reloads, ['et:reload']);
+});
+
+test('duplicate clicks cannot post twice and uncertain network outcomes require checking before importing again', async () => {
+  const f = fixture();
   let reject;
   f.api.createSubscriptionsBulk = payload => { f.requests.push(payload); return new Promise((_, rejectFn) => { reject = rejectFn; }); };
-  const pending = f._submitImport(f.pending());
-  await f._submitImport(f.pending());
+  f._chooseSubscriptionImport(file('csv text'));
+  const pending = f._submitImport();
+  await f._submitImport();
+  await new Promise(done => setImmediate(done));
   assert.equal(f.requests.length, 1);
   assert.equal(f.elements.subImportFile.disabled, true);
   assert.equal(f.elements.subImportCancel.disabled, true);
+  f._chooseSubscriptionImport(file('other'));
   reject(new Error('network'));
   await pending;
   assert.equal(f.pending(), null);
@@ -202,25 +139,25 @@ test('duplicate clicks cannot post twice and uncertain network outcomes require 
   assert.equal(f.loading(), 0);
 });
 
-test('incomplete or duplicate response indexes never create a blind retry batch', async () => {
-  for (const results of [[], [{ index: 0, ok: true }, { index: 0, ok: false }], [{ index: 5, ok: false }, { index: 0, ok: true }]]) {
-    const f = fixture();
-    await select(f, [subscription(1), subscription(2)]);
-    f.api.createSubscriptionsBulk = async () => ({ ok: true, results });
-    await f._submitImport(f.pending());
-    assert.equal(f.pending(), null);
-    assert.match(f._renderImportPanel(), /incomplete import result/);
-  }
+test('schema provides transaction choices; unavailable schema blocks the section', () => {
+  const f = fixture();
+  f.state.transactionSchema = { types: ['transfer', 'money-in', 'money-out'] };
+  assert.doesNotMatch(f._txTypeOpts(), /transfer/);
+  f.state.subscriptionSchema.tx_types = ['custom'];
+  assert.match(f._txTypeOpts(), /custom/);
+  f.state.subscriptionSchema = null;
+  f.renderSubscriptions();
+  assert.match(f.elements.subscriptionsContent.innerHTML, /configuration is unavailable/);
 });
 
-test('newer file selection wins when reads finish out of order', async () => {
+test('amount text reaches the form API payload without financial precision loss', async () => {
   const f = fixture();
-  let resolve;
-  const older = f._readSubscriptionImport({ name: 'old.csv', text: () => new Promise(done => { resolve = done; }) });
-  await select(f, [subscription(2)]);
-  resolve(csv([subscription(1)]));
-  await older;
-  assert.equal(f.pending()[0].id, uuid(2));
+  const amount = '9007199254740993.123456789';
+  const values = { subFrequency: 'monthly', subDayOfMonth: '1', subName: 'Test', subCounterparty: '', subAmount: '  ' + amount + '  ', subSourceAccount: uuid(100), subTxType: '', subMajor: '', subMinor: '', subDescription: '', subTimezone: '', subStartDate: '', subEndDate: '' };
+  Object.entries(values).forEach(([id, value]) => { f.elements[id] = { value }; });
+  f.api.createSubscription = async payload => { f.requests.push(payload); return { ok: true }; };
+  await f._saveAdd();
+  assert.equal(f.requests[0].subscription_amount_local, amount);
 });
 
 test('due-day labels use each subscription timezone instead of the browser day', () => {
@@ -283,15 +220,6 @@ test('subscription search leaves the focused input in place while updating table
   assert.match(f.elements.subTableResults.innerHTML, /No subscriptions match/);
 });
 
-test('request_failed after a partial server write cannot blindly replay the full file', async () => {
-  const f = fixture();
-  await select(f, [subscription(1)]);
-  f.api.createSubscriptionsBulk = async () => ({ ok: false, error: 'request_failed' });
-  await f._submitImport(f.pending());
-  assert.equal(f.pending(), null);
-  assert.match(f._renderImportPanel(), /request_failed.*Some rows may have been saved/);
-});
-
 test('archived or no-longer-eligible selected category keys remain visible during edits', () => {
   const f = fixture({ categories: [{ tx_type_key: 'money-out', major_category_key: 'housing', major_category_label: 'Housing', minor_category_key: 'rent', minor_category_label: 'Rent', is_subscription_eligible: false, record_status: 'active' }] });
   assert.match(f._majorOpts('money-out', 'housing'), /value="housing" selected disabled/);
@@ -306,44 +234,6 @@ test('CSV export follows current filters instead of including hidden subscriptio
   f.elements.subExportBtn.handlers.click();
   assert.equal(f.exports[0].rows.length, 1);
   assert.equal(f.exports[0].rows[0].id, uuid(2));
-});
-
-test('amount text reaches both import and form API payloads without financial precision loss', async () => {
-  const f = fixture();
-  const amount = '9007199254740993.123456789';
-  const parsed = f._parseSubscriptionsCsv(csv([{ ...subscription(1), subscription_amount_local: '  ' + amount + '  ' }]));
-  assert.equal(parsed.errors.length, 0);
-  assert.equal(parsed.subscriptions[0].subscription_amount_local, amount);
-  await f._submitImport(parsed.subscriptions);
-  assert.equal(f.requests[0].subscriptions[0].subscription_amount_local, amount);
-  const values = { subFrequency: 'monthly', subDayOfMonth: '1', subName: 'Test', subCounterparty: '', subAmount: '  ' + amount + '  ', subSourceAccount: uuid(100), subTxType: '', subMajor: '', subMinor: '', subDescription: '', subTimezone: '', subStartDate: '', subEndDate: '' };
-  Object.entries(values).forEach(([id, value]) => { f.elements[id] = { value }; });
-  f.api.createSubscription = async payload => { f.requests.push(payload); return { ok: true }; };
-  await f._saveAdd();
-  assert.equal(f.requests[1].subscription_amount_local, amount);
-});
-
-test('unknown CSV headers are rejected while all six lifecycle/sync/audit headers are accepted', () => {
-  const f = fixture();
-  for (const header of ['notes', 'record_stats', 'next_payment_date', '']) {
-    const parsed = f._parseSubscriptionsCsv(csv([{ ...subscription(1), [header]: 'unexpected' }]));
-    assert.equal(parsed.subscriptions.length, 0);
-    assert.match(parsed.errors.join(), /Unknown CSV headers/);
-  }
-  const parsed = f._parseSubscriptionsCsv(csv([{ ...subscription(1), record_status: 'inactive', sync_status: 'in-sync', sync_date: 'ignored', sync_notes: 'ignored', created_at: 'ignored', updated_at: 'ignored' }]));
-  assert.equal(parsed.errors.length, 0);
-  assert.equal(parsed.subscriptions[0].record_status, 'inactive');
-  for (const key of ['sync_status', 'sync_date', 'sync_notes', 'created_at', 'updated_at']) assert.equal(Object.hasOwn(parsed.subscriptions[0], key), false);
-});
-
-test('numeric timezone offsets fail before API submission while IANA fixed zones remain valid', () => {
-  const f = fixture();
-  for (const zone of ['+05:30', '-04:00', '+0530', '+05', '-00:00']) {
-    const parsed = f._parseSubscriptionsCsv(csv([{ ...subscription(1), subscription_timezone_local: zone }]));
-    assert.match(parsed.errors.join(), /invalid subscription_timezone_local/);
-  }
-  const parsed = f._parseSubscriptionsCsv(csv([{ ...subscription(1), subscription_timezone_local: 'Etc/GMT-5' }]));
-  assert.equal(parsed.errors.length, 0);
 });
 
 test('partial and unknown stored classification survives unrelated form edits without becoming new catalog choices', () => {
@@ -363,4 +253,14 @@ test('partial and unknown stored classification survives unrelated form edits wi
   assert.equal(body.major_category, 'historic');
   assert.equal(body.minor_category, 'historic-minor');
   assert.equal(f._subscriptionErrors(body).length, 0);
+});
+
+test('a local file-read failure is reported without claiming a server write or reloading', async () => {
+  const f = fixture();
+  f._chooseSubscriptionImport({ name: 'bad.csv', text: async () => { throw new Error('read'); } });
+  await f._submitImport();
+  assert.equal(f.requests.length, 0);
+  assert.equal(f.reloads.length, 0);
+  assert.match(f._renderImportPanel(), /Unable to read the CSV/);
+  assert.equal(f.loading(), 0);
 });

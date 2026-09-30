@@ -12,7 +12,6 @@ HEADERS = {
         "account_subtype_key",
         "account_subtype_label",
         "description",
-        "is_loan",
         "detail_sheet",
         "record_status",
         "sync_status",

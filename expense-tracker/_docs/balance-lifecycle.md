@@ -72,7 +72,7 @@ if old.account_id == new.account_id and old row contributed to the tracked balan
     if old.tx_type == 'money-out': post_reversal_balance += old.tx_amount_local
 ```
 
-Pass `post_reversal_balance` to Rules 1–2 in [financial-rules.md](financial-rules.md). This adjustment is needed because `current_value_local` already includes the old row's contribution, so checking the raw balance against the new amount would incorrectly double-count it.
+Pass `post_reversal_balance` to the insufficient asset/investment balance check in [financial-rules.md](financial-rules.md). This adjustment is needed because `current_value_local` already includes the old row's contribution, so checking the raw balance against the new amount would incorrectly double-count it.
 
 For transfers, apply the same reversal logic independently to both legs before checking either.
 

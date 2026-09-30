@@ -6,9 +6,9 @@ const { test } = require('node:test');
 const API = path.join(__dirname, '../api');
 const ID = 'a0000000-0000-4000-8000-000000000001';
 const OTHER_ID = 'a0000000-0000-4000-8000-000000000002';
-const TYPE_COLUMNS = ['id', 'account_type_key', 'account_type_label', 'account_subtype_key', 'account_subtype_label', 'description', 'is_loan', 'detail_sheet', 'record_status', 'sync_status', 'sync_date', 'sync_notes', 'created_at', 'updated_at'];
-const LEGACY_COLUMNS = TYPE_COLUMNS.filter(key => !['is_loan', 'detail_sheet'].includes(key));
-const TYPE = { id: ID, account_type_key: 'investment', account_type_label: 'Investments', account_subtype_key: 'fund-position', account_subtype_label: 'Funds', description: '', is_loan: false, detail_sheet: '', record_status: 'active' };
+const TYPE_COLUMNS = ['id', 'account_type_key', 'account_type_label', 'account_subtype_key', 'account_subtype_label', 'description', 'detail_sheet', 'record_status', 'sync_status', 'sync_date', 'sync_notes', 'created_at', 'updated_at'];
+const LEGACY_COLUMNS = TYPE_COLUMNS.filter(key => key !== 'detail_sheet');
+const TYPE = { id: ID, account_type_key: 'investment', account_type_label: 'Investments', account_subtype_key: 'fund-position', account_subtype_label: 'Funds', description: '', detail_sheet: '', record_status: 'active' };
 class Sheet {
   constructor(name, rows = []) { this.name = name; this.rows = rows.map(row => row.slice()); this.writes = 0; this.reads = 0; }
   getName() { return this.name; }
@@ -28,7 +28,7 @@ function runtime(types = typeSheet()) {
   let uuid = 10;
   const ss = { getSheets: () => sheets, getSheetByName: name => sheets.find(sheet => sheet.name === name), insertSheet: name => { const sheet = new Sheet(name); sheets.push(sheet); return sheet; } };
   const ctx = vm.createContext({ console: { log() {}, error() {} }, SpreadsheetApp: { getActiveSpreadsheet: () => ss }, Utilities: { getUuid: () => 'f0000000-0000-4000-8000-' + String(++uuid).padStart(12, '0') } });
-  for (const file of ['app-config.gs', 'sync-utils.gs', 'app-utils.gs', 'import-registry.gs', 'account-type-schema.gs', 'account-type-validation.gs', 'account-type-utils.gs', 'category-schema.gs', 'category-utils.gs', 'category-validation.gs', 'category-core.gs']) vm.runInContext(fs.readFileSync(path.join(API, file), 'utf8'), ctx);
+  for (const file of ['app-config.gs', 'sync-utils.gs', 'app-utils.gs', 'import-registry.gs', 'account-type-schema.gs', 'account-type-validation.gs', 'account-type-utils.gs', 'category-schema.gs', 'category-utils.gs', 'category-validation.gs', 'category-core.gs', 'csv-import.gs', 'category-import.gs']) vm.runInContext(fs.readFileSync(path.join(API, file), 'utf8'), ctx);
   return { ctx, sheets, table: () => sheets.find(sheet => sheet.name === 'category_master') };
 }
 function category(overrides = {}) {
@@ -60,7 +60,7 @@ test('missing or legacy account_types stops hinted imports before any category w
 });
 
 test('malformed catalog returns prerequisite reason and inactive classifications stay unavailable', () => {
-  const malformed = runtime(typeSheet([{ ...TYPE, is_loan: '' }]));
+  const malformed = runtime(typeSheet([{ ...TYPE, detail_sheet: 'invented_detail' }]));
   assert.equal(malformed.ctx.createCategoriesBulk({ categories: [category()] }).error, 'invalid_account_types');
   assert.equal(malformed.table(), undefined);
   const { ctx, table } = runtime(typeSheet([{ ...TYPE, record_status: 'inactive' }]));
@@ -237,4 +237,122 @@ test('direct category business edits queue normal sync and revision without touc
   const writes = sheet.writes;
   assert.equal(ctx.markCategoryEditPending({ range: { getSheet: () => sheet, getColumn: () => ctx.catColIndex('sync_status') + 1, getNumColumns: () => 3 } }), true);
   assert.equal(sheet.writes, writes);
+});
+
+// ── importCategoriesCsv: server-side CSV parsing and format validation ──────
+const CSV_COLUMNS = ['id', 'tx_type_key', 'major_category_label', 'minor_category_label', 'record_status'];
+function csvText(rows, columns = CSV_COLUMNS) {
+  return columns.join(',') + '\r\n' + rows.map(row => columns.map(key => '"' + String(row[key] ?? '').replace(/"/g, '""') + '"').join(',')).join('\r\n');
+}
+const csvRow = (index, overrides = {}) => ({ id: `a0000000-0000-4000-8000-${String(index).padStart(12, '0')}`, tx_type_key: 'money-out', major_category_label: 'Group', minor_category_label: 'Item ' + index, record_status: 'active', ...overrides });
+function importing(types) {
+  const env = runtime(types); const calls = [];
+  const bulk = env.ctx.createCategoriesBulk;
+  env.ctx.createCategoriesBulk = body => { calls.push(plain(body)); return bulk(body); };
+  return { ...env, calls, run: body => plain(env.ctx.importCategoriesCsv(body)) };
+}
+
+test('CSV import keeps UUIDs, multiline cells and physical line numbers; exported extra columns are ignored', () => {
+  const { run, calls, table, ctx } = importing();
+  const rows = [csvRow(1), csvRow(2, { description: 'Quoted, "description"\r\nsecond line', record_status: 'inactive' }), csvRow(3, { id: csvRow(3).id.toUpperCase() })];
+  const columns = [...CSV_COLUMNS, 'description', 'created_at', 'major_category_key', 'tx_type_label'];
+  const result = run({ csv: '﻿' + csvText(rows.map(row => ({ ...row, created_at: 'untrusted', major_category_key: 'ignored-key', tx_type_label: 'Ignored' })), columns) });
+  assert.equal(result.ok, true); assert.equal(result.created, 3); assert.equal(result.rows, 3);
+  const sent = calls[0].categories;
+  assert.deepEqual(sent.map(row => row.csv_row_num), [2, 3, 5]);
+  assert.equal(sent[1].description, rows[1].description);
+  assert.equal(sent[1].record_status, 'inactive');
+  assert.equal(sent[2].id, csvRow(3).id);
+  for (const field of ['created_at', 'major_category_key', 'tx_type_label']) assert.equal(sent[0][field], undefined);
+  assert.deepEqual(result.results.map(item => item.line), [2, 3, 5]);
+  assert.equal(result.results[0].label, 'Group → Item 1');
+  assert.equal(table().getLastRow(), 4);
+  assert.equal(stored(ctx, table()).major_category_key, 'group');
+});
+
+test('CSV file-level errors: missing/duplicate headers, ragged rows, malformed quoting, empty file', () => {
+  const { run, calls, table } = importing();
+  const cases = [
+    ['tx_type_key\nmoney-out', 'invalid_csv_headers', /Missing required headers: major_category_label, minor_category_label/],
+    ['tx_type_key,tx_type_key\nmoney-out,money-out', 'invalid_csv_headers', /duplicate column/],
+    ['tx_type_key,major_category_label,minor_category_label\nmoney-out,One', 'invalid_csv_rows', /Row 2: expected 3 columns, found 2/],
+    [csvText([csvRow(1)]) + '\n"unclosed', 'invalid_csv', /not closed/],
+    [csvText([csvRow(1)]) + '\n"quoted"tail', 'invalid_csv', /invalid characters/],
+    ['tx_type_key,major_category_label,minor_category_label\n', 'csv_has_no_rows', null],
+    ['', 'missing_csv', null],
+  ];
+  for (const [csv, error, pattern] of cases) {
+    const result = run({ csv });
+    assert.equal(result.ok, false); assert.equal(result.error, error, csv);
+    if (pattern !== null) assert.match(result.errors.join(), pattern);
+  }
+  assert.equal(run({}).error, 'missing_csv');
+  assert.equal(calls.length, 0); assert.equal(table(), undefined);
+});
+
+test('CSV row validation reports every bad row by line and writes nothing', () => {
+  const { run, calls, table } = importing();
+  const columns = [...CSV_COLUMNS, 'source_account_mandatory', 'target_account_mandatory', 'is_subscription_eligible'];
+  const rows = [
+    csvRow(1),
+    csvRow(2, { id: 'bad' }),
+    csvRow(3, { tx_type_key: 'sideways' }),
+    csvRow(4, { record_status: 'archived' }),
+    csvRow(5, { source_account_mandatory: 'yes', is_subscription_eligible: '1' }),
+    csvRow(6, { major_category_label: '', minor_category_label: '' }),
+    csvRow(7, { tx_type_key: '' }),
+    csvRow(1, { minor_category_label: 'Duplicate', id: csvRow(1).id.toUpperCase() }),
+  ];
+  const result = run({ csv: csvText(rows, columns) });
+  assert.equal(result.error, 'invalid_csv_rows');
+  assert.deepEqual(result.errors, [
+    'Row 3: invalid_id (id: bad).',
+    'Row 4: invalid_transaction_type (tx_type_key: sideways).',
+    'Row 5: invalid_record_status (record_status: archived).',
+    'Row 6: invalid_boolean (source_account_mandatory: yes).',
+    'Row 7: missing_major_category (major_category_label).',
+    'Row 8: invalid_transaction_type (tx_type_key).',
+    'Row 9: id repeats row 2.',
+  ]);
+  assert.equal(calls.length, 0); assert.equal(table(), undefined);
+});
+
+test('CSV booleans accept TRUE/FALSE in any case, become real booleans, and blanks are omitted with record_status', () => {
+  const { run, calls, ctx, table } = importing();
+  const columns = ['tx_type_key', 'major_category_label', 'minor_category_label', 'record_status', 'source_account_mandatory', 'target_account_mandatory', 'is_subscription_eligible'];
+  const result = run({ csv: csvText([csvRow(1, { record_status: '', source_account_mandatory: 'FALSE', target_account_mandatory: 'True', is_subscription_eligible: '' })], columns) });
+  assert.equal(result.ok, true);
+  const sent = calls[0].categories[0];
+  assert.equal(sent.source_account_mandatory, false); assert.equal(sent.target_account_mandatory, true);
+  assert.equal('is_subscription_eligible' in sent, false); assert.equal('record_status' in sent, false); assert.equal('id' in sent, false);
+  assert.equal(stored(ctx, table()).record_status, 'active');
+  assert.equal(stored(ctx, table()).target_account_mandatory, true);
+});
+
+test('dry run validates format without reading or writing any Sheet', () => {
+  const types = typeSheet(); const { run, calls, sheets } = importing(types);
+  const ss = { getSheets: () => { throw new Error('sheet access in dry run'); }, getSheetByName: () => { throw new Error('sheet access in dry run'); }, insertSheet: () => { throw new Error('sheet access in dry run'); } };
+  const env = importing(types); env.ctx.SpreadsheetApp = { getActiveSpreadsheet: () => ss };
+  const columns = [...CSV_COLUMNS, 'target_account_types'];
+  assert.deepEqual(env.run({ csv: csvText([csvRow(1, { target_account_types: 'unknown-hint' }), csvRow(2)], columns), dry_run: true }), { ok: true, dry_run: true, rows: 2 });
+  assert.equal(env.run({ csv: csvText([csvRow(1, { id: 'bad' })]), dry_run: true }).error, 'invalid_csv_rows');
+  assert.equal(env.calls.length, 0); assert.equal(types.reads, 0); assert.equal(types.writes, 0);
+  assert.equal(calls.length, 0); assert.equal(sheets.length, 1);
+  assert.equal(run({ csv: csvText([csvRow(1)]), dry_run: 'true' }).created, 1);
+});
+
+test('server prerequisites and per-row bulk failures surface with CSV line and label', () => {
+  const missing = importing(null);
+  const columns = [...CSV_COLUMNS, 'source_account_types'];
+  const blocked = missing.run({ csv: csvText([csvRow(1, { source_account_types: 'fund-position' })], columns) });
+  assert.equal(blocked.error, 'account_types_missing'); assert.deepEqual(blocked.results, []); assert.equal(blocked.rows, 1);
+  assert.equal(importing(typeSheet([TYPE], LEGACY_COLUMNS)).run({ csv: csvText([csvRow(1, { source_account_types: 'investment' })], columns) }).error, 'account_types_migration_required');
+  const { run, table } = importing();
+  const result = run({ csv: csvText([csvRow(1, { source_account_types: 'old_key' }), csvRow(2, { source_account_types: 'investment' })], columns) });
+  assert.equal(result.ok, false); assert.equal(result.created, 1); assert.equal(result.failed, 1);
+  assert.equal(result.results[0].line, 2); assert.equal(result.results[0].label, 'Group → Item 1');
+  assert.equal(result.results[0].error, 'invalid_source_account_types'); assert.equal(result.results[0].field, 'source_account_types');
+  assert.deepEqual(result.results[0].invalid_values, ['old_key']);
+  assert.equal(result.results[1].line, 3); assert.equal(result.results[1].action, 'created');
+  assert.equal(table().getLastRow(), 2);
 });
