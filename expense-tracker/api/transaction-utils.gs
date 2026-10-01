@@ -8,7 +8,7 @@ function generateTransactionId() {
   return Utilities.getUuid();
 }
 
-// Keep caller decimal text intact until ledger-extract rounds to currency minor units.
+// Keep caller decimal text intact until ledger-sheet-extract rounds to currency minor units.
 function transactionDecimal(value) {
   return typeof value === 'string' ? value.trim() : value;
 }

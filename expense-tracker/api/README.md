@@ -22,7 +22,7 @@ Source is split into per-domain `.gs` modules. GAS flattens them all into one na
 | Views | `view-config.gs`, `view-home.gs`, `view-transactions.gs`, `view-accounts.gs`, `view-config-lists.gs`, `view-subscriptions.gs`, `view-categories.gs` | Ready-to-render view models, form options and exports for each screen (see [View GETs](#view-gets)) |
 | Insights | `insights-registry.gs`, `insights-cashflow.gs`, `insights-comparisons.gs`, `insights-categories.gs`, `insights-networth.gs`, `insights-counterparty-geo.gs` | `get_insight`: registry, dispatcher, shared `ins*` helpers and one compute function per insight |
 | CSV import | `csv-import.gs`, `account-type-import.gs`, `category-import.gs`, `account-import.gs`, `subscription-import.gs`, `transaction-import.gs` | Server-side CSV parsing and validation for every import endpoint (`{ csv, dry_run }`), writing through the entity bulk functions |
-| Factory reset | `factory-reset.gs` | `factory_reset_delete_sheets` for `make factory-reset`; see [cicd/README.md](../cicd/README.md#factory-reset-make-factory-reset) |
+| Factory reset | `factory-reset.gs` | `factory_reset_delete_sheets` for the [ledger-sheet-load](../../data-synchronization/ledger-sheet-load/README.md) job's sheet-rebuild mode; `fill_csv_ids` (csv-import.gs) for both modes |
 | Retired | `workflow-engine.gs` | Placeholder only; balances are computed at read time |
 | Manifest | `appsscript.json` | GAS runtime config — timezone, V8 engine, web app access |
 | clasp link | `.clasp.json` | Links this directory to a GAS project. Committed with `"scriptId": "${SCRIPT_ID_PLACEHOLDER}"`; the real `scriptId` is written by `cicd/deploy.sh` at deploy time and reverted on exit. |
@@ -61,7 +61,7 @@ The frontend is a pure renderer: every screen reads a view GET that returns conv
 | `get_category_form_options` | `view-categories.gs` | — | yes |
 | `get_insight` | `insights-registry.gs` | `id`, `period` (+ `from`/`to`), `tab`, `drill` (JSON), insight params (`window`, `top_n`, `sort`, `sort_dir`, `compare`) | yes |
 
-Raw GETs kept outside the registry: `verify`, `get_advisor_history`, `get_suggested_transactions`; `list_transactions`, `list_categories`, `list_accounts`, `list_subscriptions` (used by `scripts/factory-reset.sh` to recreate tabs); `list_account_types` and `list_rates` (the previous frontend's refresh — remove once the current frontend is deployed everywhere); `get_account_schema` (router test). The `get_*_schema` (other than accounts), `get_transaction_metadata` and `get_computed_insights` routes were removed: schemas travel in `get_app_context`, filter suggestions in `get_transaction_facets`.
+Raw GETs kept outside the registry: `verify`, `get_advisor_history`, `get_suggested_transactions`; `list_transactions`, `list_categories`, `list_accounts`, `list_subscriptions` (used by the ledger-sheet-load job's sheet-rebuild mode to recreate tabs); `list_account_types` and `list_rates` (the previous frontend's refresh — remove once the current frontend is deployed everywhere); `get_account_schema` (router test). The `get_*_schema` (other than accounts), `get_transaction_metadata` and `get_computed_insights` routes were removed: schemas travel in `get_app_context`, filter suggestions in `get_transaction_facets`.
 
 ## Where the IDs live
 
@@ -106,7 +106,7 @@ Run the regression suite, deploy through `expense-tracker/cicd/deploy.sh dev`, a
 
 ## Source integrity
 
-Spreadsheet tab order is configured by `EXPENSE_TRACKER_SHEET_ORDER` in `app-config.gs`. The bound spreadsheet's `onOpen()` handler applies it; **Expense Tracker → Arrange sheet tabs** reapplies it on demand. `ensureExpenseTrackerSheetOrder()` is also available in the Apps Script editor, and over HTTP as the PIN-protected POST action `arrange_sheet_tabs` (used as the last step of `make factory-reset`; it takes its own script lock, so the router runs it before the POST lock). Missing tabs stay absent, custom tabs retain their relative order at the end, and tab contents/IDs are untouched. See [spreadsheet tab order](../_docs/sheet-order.md) for the sequence and retry behavior.
+Spreadsheet tab order is configured by `EXPENSE_TRACKER_SHEET_ORDER` in `app-config.gs`. The bound spreadsheet's `onOpen()` handler applies it; **Expense Tracker → Arrange sheet tabs** reapplies it on demand. `ensureExpenseTrackerSheetOrder()` is also available in the Apps Script editor, and over HTTP as the PIN-protected POST action `arrange_sheet_tabs` (used as the last step of the ledger-sheet-load job; it takes its own script lock, so the router runs it before the POST lock). Missing tabs stay absent, custom tabs retain their relative order at the end, and tab contents/IDs are untouched. See [spreadsheet tab order](../_docs/sheet-order.md) for the sequence and retry behavior.
 
 All master row-number mutations accept `expected_id` and `expected_updated_at`; the frontend sends the UUID and source revision from its current snapshot. A moved row or changed revision returns `stale_record` before writing, preventing stale forms on another device from replacing newer values. Sync acknowledgements do not change the source revision. Legacy callers may omit these checks for compatibility. Script-lock serialization does not prevent external Sheet edits during a request.
 

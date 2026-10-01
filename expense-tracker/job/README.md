@@ -13,7 +13,7 @@ Before enabling this processor for current Sheets, implement and test single-leg
 Offline guard tests can use the ledger module's existing Python test environment from the repository root:
 
 ```bash
-uv run --project data-synchronization/ledger-extract --locked python -m pytest expense-tracker/job/tests/unit
+uv run --project data-synchronization/ledger-sheet-extract --locked python -m pytest expense-tracker/job/tests/unit
 ```
 
 No live Sheet data or credentials are needed by these tests.

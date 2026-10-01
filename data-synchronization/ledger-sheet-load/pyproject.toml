@@ -1,0 +1,35 @@
+[project]
+name = "ledger-sheet-load"
+version = "0.1.0"
+description = "Load local ledger CSV files into the expense-tracker Google Sheet through its GAS web app"
+requires-python = ">=3.12"
+dependencies = [
+    "pyyaml>=6.0",
+    "py-logging",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+py-logging = { git = "git+ssh://git@github.com/rohitphular/meridian-common-libs.git", subdirectory = "py-logging" }
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.9",
+]
+
+[tool.ruff]
+line-length = 200
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

@@ -80,23 +80,10 @@ api-deploy: ## Deploy GAS backend (interactive: pick env)
 api-logs: ## Open GAS executions page in browser (interactive: pick env)
 	bash expense-tracker/cicd/logs.sh
 
-.PHONY: factory-reset
-factory-reset: ## Delete and re-import the CSV-backed Sheet tabs from local/files (interactive: pick env)
-	@echo ""; \
-	echo "  1) dev"; \
-	echo "  2) prod"; \
-	echo ""; \
-	printf "Select environment: "; read -r CHOICE; \
-	if [ "$$CHOICE" = "1" ]; then ENV="dev"; \
-	elif [ "$$CHOICE" = "2" ]; then ENV="prod"; \
-	else echo "Invalid choice '$$CHOICE'. Enter 1 or 2."; exit 1; \
-	fi; \
-	bash expense-tracker/scripts/factory-reset.sh "$$ENV"
-
 ##@ Data Synchronization
 
 .PHONY: data-sync
-data-sync: ## Run a data-synchronization module (pick module + env; ledger-extract also asks sync mode)
+data-sync: ## Run a data-synchronization module (pick module + env; the module asks for its own mode)
 	@echo ""; \
 	i=1; \
 	for dir in data-synchronization/*/; do \
@@ -124,20 +111,7 @@ data-sync: ## Run a data-synchronization module (pick module + env; ledger-extra
 	elif [ "$$ENV_CHOICE" = "2" ]; then ENV="prod"; \
 	else echo "Invalid choice '$$ENV_CHOICE'. Enter 1 or 2."; exit 1; \
 	fi; \
-	set -- "$$ENV"; \
-	if [ "$$selected" = "data-synchronization/ledger-extract/" ]; then \
-		echo ""; \
-		echo "  1) normal-sync — skip existing in-sync records"; \
-		echo "  2) hard-sync — include in-sync records"; \
-		echo ""; \
-		printf "Select sync mode: "; read -r SYNC_CHOICE; \
-		case "$$SYNC_CHOICE" in \
-			1) ;; \
-			2) set -- "$$@" --reprocess ;; \
-			*) echo "Invalid choice '$$SYNC_CHOICE'. Enter 1 or 2."; exit 1 ;; \
-		esac; \
-	fi; \
-	bash "$${selected}cicd/start-up.sh" "$$@"
+	bash "$${selected}cicd/start-up.sh" "$$ENV"
 
 ##@ Job
 

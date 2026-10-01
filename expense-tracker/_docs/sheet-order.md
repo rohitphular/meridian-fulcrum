@@ -40,4 +40,4 @@ The implementation uses the native [Spreadsheet tab-movement and selection metho
 
 ## HTTP action
 
-The PIN-protected POST action `arrange_sheet_tabs` runs the same `ensureExpenseTrackerSheetOrder()` and returns its result (`{ ok, changed, moved }` or an error such as `busy_retry`). `make factory-reset` calls it as its final step.
+The PIN-protected POST action `arrange_sheet_tabs` runs the same `ensureExpenseTrackerSheetOrder()` and returns its result (`{ ok, changed, moved }` or an error such as `busy_retry`). The [ledger-sheet-load](../../data-synchronization/ledger-sheet-load/README.md) job calls it as its final step in both modes.

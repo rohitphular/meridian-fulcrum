@@ -2,13 +2,13 @@
 
 **Status:** DONE
 **Depends on:** no external modules — within this module: 0003 and 0004 require 0001 (`currency_master` must exist); 0005 requires 0002 (`currency_rates` and views must exist)
-**Required by:** ledger-extract transactions module (amounts stored as BIGINT in minor units)
+**Required by:** ledger-sheet-extract transactions module (amounts stored as BIGINT in minor units)
 
 ---
 
 ## Context
 
-The `ledger-extract` transactions module stores `tx_amount_local` and `tx_amount_base` as `BIGINT` in currency minor units. The minor unit factor for any currency is `10^decimal_places` from `currency_master`.
+The `ledger-sheet-extract` transactions module stores `tx_amount_local` and `tx_amount_base` as `BIGINT` in currency minor units. The minor unit factor for any currency is `10^decimal_places` from `currency_master`.
 
 `currency_master` already has the `decimal_places` column. This task covers three enhancements:
 
@@ -196,7 +196,7 @@ WHERE table_name = 'currency_rates' AND column_name = 'rate_value';
 
 ## Impact on other modules
 
-- `ledger-extract`: reads `currency_master.decimal_places` and `minor_unit_name` at job startup; reads `currency_rates.rate_value` at per-row processing. All three migrations must run before the transactions module is executed.
+- `ledger-sheet-extract`: reads `currency_master.decimal_places` and `minor_unit_name` at job startup; reads `currency_rates.rate_value` at per-row processing. All three migrations must run before the transactions module is executed.
 - No other active consumer exists.
 
 ## Review clarification (2026-09-23)

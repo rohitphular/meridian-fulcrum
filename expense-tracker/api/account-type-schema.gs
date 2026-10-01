@@ -1,4 +1,4 @@
-// CSV and ledger-extract share these columns. Upgrade old layouts explicitly.
+// CSV and ledger-sheet-extract share these columns. Upgrade old layouts explicitly.
 const ACCOUNT_TYPE_STATUSES = ['active', 'inactive', 'deleted', 'locked'];
 const ACCOUNT_TYPE_SCHEMA = {};
 [

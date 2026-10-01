@@ -8,7 +8,7 @@
 // Returns physical line numbers so row errors point at the line in the file.
 // Values stay text: IDs and decimal amounts are never reinterpreted.
 function parseCsvRecords(source) {
-  const text = String(source).replace(/^﻿/, '');
+  const text = String(source).replace(/^\uFEFF/, '');
   const records = [];
   let values = [], value = '', quoted = false, closed = false, line = 1, rowLine = 1;
   for (let index = 0; index < text.length; index++) {
@@ -66,4 +66,42 @@ function csvRowErrors(errors) {
 
 function isDryRun(body) {
   return body !== undefined && body !== null && body.dry_run === true;
+}
+
+// ── Fill missing ids ──────────────────────────────────────────────────────────
+
+// Minimal quoting (comma, quote or line break), matching how the local CSVs are
+// written, so unchanged rows keep their exact text.
+function _csvCell(value) {
+  const text = String(value);
+  return /[",\r\n]/.test(text) ? '"' + text.replace(/"/g, '""') + '"' : text;
+}
+
+// body: { csv } → { ok, csv, filled, rows }. Gives every data row with a blank
+// `id` cell a new lowercase UUID and returns the file text; nothing is written
+// to any Sheet. A file with no blank ids (or no id column) comes back untouched.
+function fillCsvIds(body) {
+  if (body === undefined || body === null || typeof body.csv !== 'string' || body.csv.trim() === '') return { ok: false, error: 'missing_csv' };
+  const source = body.csv;
+  const decoded = parseCsvRecords(source);
+  if (decoded.errors.length > 0) return { ok: false, error: 'invalid_csv', errors: decoded.errors };
+  if (decoded.records.length === 0) return { ok: false, error: 'csv_has_no_rows' };
+  const headers = decoded.records[0].values.map(function(header) { return header.trim().toLowerCase(); });
+  const idColumn = headers.indexOf('id');
+  const rows = decoded.records.length - 1;
+  if (idColumn === -1) return { ok: true, csv: source, filled: 0, rows: rows, id_column: false };
+  let filled = 0;
+  decoded.records.slice(1).forEach(function(record) {
+    if (record.values.length <= idColumn || record.values[idColumn].trim() !== '') return;
+    record.values[idColumn] = Utilities.getUuid().toLowerCase();
+    filled++;
+  });
+  if (filled === 0) return { ok: true, csv: source, filled: 0, rows: rows, id_column: true };
+  const text = source.replace(/^\uFEFF/, '');
+  const newline = text.indexOf('\r\n') !== -1 ? '\r\n' : '\n';
+  const lines = decoded.records.map(function(record) { return record.values.map(_csvCell).join(','); });
+  const trailing = /\r?\n$/.test(text) ? newline : '';
+  const bom = source.charAt(0) === '\uFEFF' ? '\uFEFF' : '';
+  console.log('fillCsvIds: rows=' + rows + ' filled=' + filled);
+  return { ok: true, csv: bom + lines.join(newline) + trailing, filled: filled, rows: rows, id_column: true };
 }

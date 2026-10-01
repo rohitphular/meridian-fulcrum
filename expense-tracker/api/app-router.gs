@@ -43,7 +43,7 @@ function _dispatchGet(e) {
   }
   recordAccess(meta, true);
 
-  // Raw list GETs kept for scripts/factory-reset.sh (recreates tabs) and, until
+  // Raw list GETs kept for data-synchronization/ledger-sheet-load (recreates tabs) and, until
   // the phase-5 frontend is deployed, the previous frontend's refresh
   // (list_account_types, list_rates). The app itself reads view actions only;
   // schemas travel in get_app_context. getOrCreateSheet() appends new columns.
@@ -70,7 +70,7 @@ function _routerResetRequest() {
 }
 
 // POST actions that never change ledger / catalog data (cached views stay valid).
-const _ROUTER_NON_DATA_POST_ACTIONS = ['advisor_chat', 'clear_advisor_history'];
+const _ROUTER_NON_DATA_POST_ACTIONS = ['advisor_chat', 'clear_advisor_history', 'fill_csv_ids'];
 
 // True when a POST may have changed data: success, or a partial bulk result
 // that still created / updated rows. Dry runs never write.
@@ -210,6 +210,7 @@ function _dispatchPost(body) {
   if (body.action === 'delete_subscription')       return json(deleteSubscription(body));
   if (body.action === 'restore_subscription')      return json(restoreSubscription(body));
   if (body.action === 'factory_reset_delete_sheets') return json(factoryResetDeleteSheets(body));
+  if (body.action === 'fill_csv_ids')               return json(fillCsvIds(body));
 
   return json({ ok: false, error: 'unknown_action' });
 }

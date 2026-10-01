@@ -1,6 +1,6 @@
 // =============================================================================
 // FULCRUM FORGE — Factory reset: delete the CSV-backed tabs
-// Driven by expense-tracker/scripts/factory-reset.sh, which then recreates the
+// Driven by data-synchronization/ledger-sheet-load (sheet-rebuild), which then recreates the
 // tabs through the list endpoints and re-imports each CSV through its entity's
 // own CSV import endpoint (the same one the app uses).
 // =============================================================================

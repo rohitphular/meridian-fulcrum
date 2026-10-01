@@ -52,7 +52,8 @@ fi
 if [[ -z "$MODE_ARG" ]]; then
   echo "  1) Daily — rolling last 365 days"
   echo "  2) Historical — full load from local CSV files"
-  read -r -p "Select (1/2): " CHOICE
+  # printf, not read -p: bash only shows a read prompt on a terminal, and make pipes stdin.
+  printf "Select (1/2): "; CHOICE=""; read -r CHOICE || true
   case "$CHOICE" in
     1) MODE_ARG="daily" ;;
     2) MODE_ARG="historical" ;;

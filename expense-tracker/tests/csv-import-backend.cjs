@@ -3,7 +3,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const { test } = require('node:test');
-const ctx = vm.createContext({});
+let uuid = 0;
+const ctx = vm.createContext({ console: { log() {} }, Utilities: { getUuid: () => 'ABCDEF00-0000-4000-8000-' + String(++uuid).padStart(12, '0') } });
 const plain = value => JSON.parse(JSON.stringify(value));
 vm.runInContext(fs.readFileSync(path.join(__dirname, '../api/csv-import.gs'), 'utf8'), ctx);
 
@@ -36,4 +37,18 @@ test('imports normalise headers, trim cells and attach CSV lines; file-level pro
   assert.deepEqual(Array.from(counts.errors), ['Row 2: expected 2 columns, found 1.', 'Row 3: expected 2 columns, found 3.']);
   assert.equal(ctx.isDryRun({ dry_run: true }), true);
   assert.equal(ctx.isDryRun({ dry_run: 'true' }), false);
+});
+
+test('fill_csv_ids adds a lowercase UUID to blank ids only and keeps every other byte', () => {
+  const source = '\uFEFFid,description,amount\r\nkeep-1,"Line one\nLine, two",10.50\r\n,plain,1\r\n  ,"q ""x""",2\r\n';
+  const result = ctx.fillCsvIds({ csv: source });
+  assert.equal(result.ok, true);
+  assert.equal(result.filled, 2);
+  assert.equal(result.csv, '\uFEFFid,description,amount\r\nkeep-1,"Line one\nLine, two",10.50\r\nabcdef00-0000-4000-8000-000000000001,plain,1\r\nabcdef00-0000-4000-8000-000000000002,"q ""x""",2\r\n');
+  const untouched = 'id,a\nx,1';
+  assert.equal(ctx.fillCsvIds({ csv: untouched }).csv, untouched);
+  assert.equal(ctx.fillCsvIds({ csv: untouched }).filled, 0);
+  assert.equal(ctx.fillCsvIds({ csv: 'name,a\n,1' }).id_column, false);
+  assert.equal(ctx.fillCsvIds({ csv: 'id,a\n"open' }).error, 'invalid_csv');
+  assert.equal(ctx.fillCsvIds({}).error, 'missing_csv');
 });

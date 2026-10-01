@@ -14,7 +14,7 @@ All entity shapes. Field types are abstract — choose a concrete type appropria
 
 ## Account type configuration
 
-`account_types` has 13 columns: stable UUID, group key/label, subtype key/label, description, `detail_sheet`, then `record_status`, `sync_status`, `sync_date`, `sync_notes`, `created_at`, `updated_at`. The Sheet is the catalog authority for account/category choices and detail eligibility. The supplied CSV retains the existing 16 UUIDs; there is no application seed or separate catalog list in code. Classification key values use hyphens, while field names and Sheet identifiers retain underscores. See the [full configuration contract](account-types.md) and [database mapping](../../data-synchronization/ledger-extract/_docs/account-types.md).
+`account_types` has 13 columns: stable UUID, group key/label, subtype key/label, description, `detail_sheet`, then `record_status`, `sync_status`, `sync_date`, `sync_notes`, `created_at`, `updated_at`. The Sheet is the catalog authority for account/category choices and detail eligibility. The supplied CSV retains the existing 16 UUIDs; there is no application seed or separate catalog list in code. Classification key values use hyphens, while field names and Sheet identifiers retain underscores. See the [full configuration contract](account-types.md) and [database mapping](../../data-synchronization/ledger-sheet-extract/_docs/account-types.md).
 
 ## Account
 

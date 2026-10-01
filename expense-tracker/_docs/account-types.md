@@ -43,7 +43,7 @@ Configure → Account Types → Import uploads the chosen file's raw text (`{ cs
 
 Failures in steps 1–3 return `invalid_csv_rows` (or the CSV parse code) with `errors: ['Row <line>: …']`, where the line is the physical line in the file. Nothing is written. A step 4 failure rejects the whole batch with its error code. Success returns `created`, `updated`, `failed: 0`, `rows` and one `results[]` entry per row, each carrying its CSV `line`.
 
-`dry_run: true` runs steps 1–3 only and returns `{ ok: true, dry_run: true, rows }`. It never reads or writes a Sheet, so the factory-reset preflight can run it against a spreadsheet that still has the retired `is_loan` column.
+`dry_run: true` runs steps 1–3 only and returns `{ ok: true, dry_run: true, rows }`. It never reads or writes a Sheet, so the ledger-sheet-load check step can run it against a spreadsheet that still has the retired `is_loan` column.
 
 ## Choices and policy rules
 
@@ -76,8 +76,8 @@ Mutations carry `row_num` and the expected `id`; mismatches return `stale_row`. 
 
 Classifications are never removed by an import: an import only updates rows whose UUID already exists. To retire one (as with `bonds`, `commodities`, `isa`, `p2p-lending`, `medical-loan` and `student-loan` on 2026-09-29), keep its row and soft-delete it, in this order:
 
-1. Import the updated `category_master.csv` that no longer lists the subtype in any hint, then run ledger-extract while the types are still active. Categories must release their links first: the app rejects `delete` with `account_type_in_use`, and ledger-extract rejects a retired type that database category links still reference (`referenced_type_cannot_be_retired`), which stops the run before categories are processed.
-2. Soft-delete each type in Configure → Account Types, then run ledger-extract again.
+1. Import the updated `category_master.csv` that no longer lists the subtype in any hint, then run ledger-sheet-extract while the types are still active. Categories must release their links first: the app rejects `delete` with `account_type_in_use`, and ledger-sheet-extract rejects a retired type that database category links still reference (`referenced_type_cannot_be_retired`), which stops the run before categories are processed.
+2. Soft-delete each type in Configure → Account Types, then run ledger-sheet-extract again.
 
 Do not delete the Sheet rows. A physically removed row leaves the database copy active, Sheet-managed and in-sync, so extraction keeps accepting references to it.
 
@@ -87,7 +87,7 @@ Do not delete the Sheet rows. A physically removed row leaves the database copy 
 2. In Configure → Account Types, import the **complete 13-column CSV**. The upgrade must list every UUID already in the legacy Sheet (`complete_account_type_catalog_required` otherwise), so a legacy Sheet that still holds the six classifications retired on 2026-09-29 cannot be upgraded with the current 16-row CSV: upgrade it with a complete catalog first, then retire them as described above. An old 12-column catalog remains readable, but choices and edits require this upgrade; policy values are never guessed from removed constants.
 3. The import preflights every existing catalog identity plus account/category Sheet headers, UUIDs and references. Missing catalog rows, changed identities, normalization collisions, unknown references or malformed policies stop before writing.
 4. The catalog's header and data rows are written together in the 13-column layout. Existing account `type` / `sub_type` and category hint tokens are normalized from underscores to hyphens, with sync state queued before key changes. Only changed reference cells and their sync/update fields are written: unrelated financial cells, formulas, UUIDs and creation timestamps are preserved.
-5. Run ledger-extract after the Sheet upgrade. It processes account types before categories/accounts and applies its database migrations through the normal startup flow. See the [Sheet-to-database mapping](../../data-synchronization/ledger-extract/_docs/account-types.md).
+5. Run ledger-sheet-extract after the Sheet upgrade. It processes account types before categories/accounts and applies its database migrations through the normal startup flow. See the [Sheet-to-database mapping](../../data-synchronization/ledger-sheet-extract/_docs/account-types.md).
 
 An Apps Script editor alternative is `migrateAccountTypeKeys(catalogRows)`, passing the parsed complete CSV as an array of objects with all business/policy values. The helper uses the same preflight and holds a script lock. Running it again preserves identities and normalized references; as an import, it queues source catalog rows again.
 

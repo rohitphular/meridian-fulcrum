@@ -8,7 +8,6 @@ Backend deploy pipeline. Pushes `.gs` source to a GAS project draft and promotes
 |---|---|
 | `envs.json` | Single source of truth for both envs' Script ID + Deployment ID + /exec URL. Edited by hand. |
 | `deploy.sh` | Backend deploy pipeline — takes env as required first arg; pure clasp (no git). |
-| `../scripts/factory-reset.sh` | Deletes and re-imports the CSV-backed Sheet tabs through the GAS web app. See [Factory reset](#factory-reset-make-factory-reset). |
 
 ## Prerequisites
 
@@ -120,18 +119,9 @@ clasp deploy --deploymentId "<paste from envs.json>" --description "your descrip
 #    (which flips to env's scriptId, then trap restores placeholder on exit).
 ```
 
-## Factory reset (`make factory-reset`)
+## Loading local CSV files into the Sheet
 
-Rebuilds one environment's spreadsheet from `local/files/*.csv`. Run it from the repository root and pick an environment. The target calls `expense-tracker/scripts/factory-reset.sh <env>`, which only makes HTTP calls to the deployed GAS web app. Deploy the current backend first: the delete endpoint is new and the import endpoints now take raw CSV.
-
-1. **Confirm and sign in.** Type the environment name, then enter your PIN (hidden) and a fresh authenticator code. The script calls `verify`, as the app's login does. Credentials are never passed as command arguments. Like the app, GET calls carry the PIN in the request URL.
-2. **Preflight.** Every CSV is sent to its entity's import endpoint with `dry_run: true`, which only parses and validates it without reading or writing any Sheet. Any error stops the run before anything is deleted.
-3. **Delete.** `factory_reset_delete_sheets` deletes the 11 CSV-backed tabs: `account_types`, `category_master`, `account_master`, the six account detail tabs, `subscription_master` and `transaction_master`. It requires `confirm: "factory-reset"` and the environment's `spreadsheet_id` from `envs.json`, so a script pointed at the wrong spreadsheet deletes nothing. Every other tab is kept, including `dummy`, `rates`, `audit_access`, `advisor_chat` and `computed_insights`.
-4. **Recreate.** The existing `list_transactions`, `list_categories`, `list_accounts` and `list_subscriptions` calls recreate those tabs with current headers. `account_types` and the detail tabs are created by their own imports; no endpoint creates them empty.
-5. **Import.** Each file goes, in dependency order, to the same import endpoint the app uses: `create_account_types_bulk`, `create_categories_bulk`, `import_account_data` (with `file_type`) for the account master and six detail tabs, `create_subscriptions_bulk`, then `create_transactions_bulk` for every `transaction_master_*.csv`. One request per file.
-6. **Arrange tabs.** `arrange_sheet_tabs` reapplies the configured tab order through the existing `ensureExpenseTrackerSheetOrder()` (sheet-order.gs). Retained tabs not in the order, such as `dummy`, move to the end.
-
-The run stops at the first response that is not `ok` or that reports failed rows, and prints that response. It never retries: repeated wrong PINs lock the caller. `rates` must already hold every account currency. Optional overrides: `FACTORY_RESET_DATA_DIR` (CSV folder) and `FACTORY_RESET_ENVS_FILE` (environment registry).
+Loading `local/files` into an environment's Sheet (sheet-rebuild or sheet-sync) is the [ledger-sheet-load](../../data-synchronization/ledger-sheet-load/README.md) data-synchronization job: `make data-sync` → `ledger-sheet-load`. It only calls the deployed GAS web app, so deploy the current backend first.
 
 ## Safety notes
 

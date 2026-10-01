@@ -1,0 +1,30 @@
+# Folder holding the source CSV files, relative to the repository root.
+# LSL_DATA_DIR overrides it (absolute path), e.g. to load a copy.
+data_dir: local/files
+
+# Every file goes to its entity's own CSV import endpoint, the same one the app uses.
+# Order follows data dependencies; file_type selects the account import target.
+datasets:
+  - { file: account_types.csv,                   action: create_account_types_bulk }
+  - { file: category_master.csv,                 action: create_categories_bulk }
+  - { file: account_master.csv,                  action: import_account_data, file_type: account_master }
+  - { file: account_deposit_details.csv,         action: import_account_data, file_type: account_deposit }
+  - { file: account_investment_property.csv,     action: import_account_data, file_type: account_investment_property }
+  - { file: account_investment_stocks.csv,       action: import_account_data, file_type: account_investment_stocks }
+  - { file: account_liability_credit_card.csv,   action: import_account_data, file_type: account_liability_credit_card }
+  - { file: account_liability_mortgage.csv,      action: import_account_data, file_type: account_liability_mortgage }
+  - { file: account_liability_personal_loan.csv, action: import_account_data, file_type: account_liability_personal_loan }
+  - { file: subscription_master.csv,             action: create_subscriptions_bulk }
+
+# Monthly transaction files, loaded last in file-name order.
+transaction_files:
+  pattern: transaction_master_*.csv
+  action: create_transactions_bulk
+
+# sheet-rebuild only: list endpoints that recreate their tab after the delete.
+# account_types and the detail tabs are created by their own imports.
+recreate_actions:
+  - list_transactions
+  - list_categories
+  - list_accounts
+  - list_subscriptions

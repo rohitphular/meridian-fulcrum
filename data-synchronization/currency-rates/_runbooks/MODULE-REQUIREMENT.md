@@ -15,7 +15,7 @@ The `currency-rates` module manages two PostgreSQL tables that underpin all mult
 
 ### Base currency is XAU (1 gram of gold)
 
-All financial transactions in `ledger-extract` are stored in a base currency for unified analysis. The base currency is XAU, defined as **1 gram of gold** — not 1 troy ounce. This is a deliberate design choice. A rate_value of 76 for GBP means "76 GBP = 1 gram of gold."
+All financial transactions in `ledger-sheet-extract` are stored in a base currency for unified analysis. The base currency is XAU, defined as **1 gram of gold** — not 1 troy ounce. This is a deliberate design choice. A rate_value of 76 for GBP means "76 GBP = 1 gram of gold."
 
 ### BIGINT minor units require decimal_places
 
@@ -23,7 +23,7 @@ Transaction amounts are stored as BIGINT integers in currency minor units (e.g. 
 
 ### Daily rates drive base-amount computation
 
-For every non-XAU transaction, `ledger-extract` looks up the rate for `(quote_currency_code, rate_date)` from `currency_rates` and computes `tx_amount_base = tx_amount_local / rate_value`. This allows all transactions to be compared in a single denomination regardless of original currency.
+For every non-XAU transaction, `ledger-sheet-extract` looks up the rate for `(quote_currency_code, rate_date)` from `currency_rates` and computes `tx_amount_base = tx_amount_local / rate_value`. This allows all transactions to be compared in a single denomination regardless of original currency.
 
 ---
 

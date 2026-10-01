@@ -4,6 +4,8 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { test } = require('node:test');
 const API = path.join(__dirname, '../api');
+// The loader job that calls these endpoints lives in data-synchronization/ledger-sheet-load.
+const LOADER = path.join(__dirname, '../../data-synchronization/ledger-sheet-load');
 
 class Sheet {
   constructor(name, rows = []) { this.name = name; this.rows = rows.map(row => row.slice()); }
@@ -77,8 +79,8 @@ test('router exposes the delete action behind the PIN check, and imports use the
   for (const [action, handler] of [['create_account_types_bulk', 'importAccountTypesCsv'], ['create_categories_bulk', 'importCategoriesCsv'],
     ['import_account_data', 'importAccountDataCsv'], ['create_subscriptions_bulk', 'importSubscriptionsCsv'], ['create_transactions_bulk', 'importTransactionsCsv']])
     assert.match(post, new RegExp(`'${action}'\\)\\s+return json\\(${handler}\\(body\\)\\)`));
-  const script = fs.readFileSync(path.join(__dirname, '../scripts/factory-reset.sh'), 'utf8');
-  for (const action of ['create_account_types_bulk', 'create_categories_bulk', 'import_account_data', 'create_subscriptions_bulk', 'create_transactions_bulk']) assert.ok(script.includes(action));
+  const datasets = fs.readFileSync(path.join(LOADER, 'config.yaml'), 'utf8');
+  for (const action of ['create_account_types_bulk', 'create_categories_bulk', 'import_account_data', 'create_subscriptions_bulk', 'create_transactions_bulk']) assert.ok(datasets.includes(action));
 });
 
 test('arrange_sheet_tabs reuses the existing sheet-order code outside the POST lock, after the PIN check', () => {
@@ -99,7 +101,22 @@ test('arrange_sheet_tabs reuses the existing sheet-order code outside the POST l
   const denied = runtimeFor(false);
   assert.equal(denied.post({ action: 'arrange_sheet_tabs', pin: 'bad' }).error, 'auth');
   assert.equal(denied.seen.order, 0);
-  const script = fs.readFileSync(path.join(__dirname, '../scripts/factory-reset.sh'), 'utf8');
-  assert.ok(script.indexOf('arrange_sheet_tabs') > script.indexOf('create_transactions_bulk'), 'tab ordering is the last step');
-  assert.match(script, /\[6\/6\] Arranging sheet tabs/);
+  assert.match(fs.readFileSync(path.join(LOADER, 'steps/order_tabs.py'), 'utf8'), /post\("arrange_sheet_tabs"\)/);
+});
+
+test('ledger-sheet-load only calls actions the router serves; delete and fill ids keep their server contracts', () => {
+  const router = fs.readFileSync(path.join(API, 'app-router.gs'), 'utf8');
+  const config = fs.readFileSync(path.join(LOADER, 'config.yaml'), 'utf8');
+  const steps = ['fill_ids', 'check_files', 'drop_tabs', 'load_data', 'order_tabs'].map(name => fs.readFileSync(path.join(LOADER, `steps/${name}.py`), 'utf8')).join('\n');
+  const loader = fs.readFileSync(path.join(LOADER, 'core/loader.py'), 'utf8');
+  const actions = new Set([
+    ...[...config.matchAll(/action: ([a-z_]+)/g)].map(match => match[1]),
+    ...[...config.matchAll(/^  - (list_[a-z_]+)$/gm)].map(match => match[1]),
+    ...[...(steps + loader).matchAll(/client\.(?:get|post)\("([a-z_]+)"/g)].map(match => match[1]),
+  ]);
+  for (const action of ['verify', 'fill_csv_ids', 'factory_reset_delete_sheets', 'arrange_sheet_tabs', 'list_accounts', 'create_transactions_bulk']) assert.ok(actions.has(action), action);
+  for (const action of actions) assert.match(router, new RegExp(`'${action}'`), `router serves ${action}`);
+  assert.match(steps, /confirm="factory-reset", spreadsheet_id=context\.spreadsheet_id/);
+  assert.ok(!fs.existsSync(path.join(__dirname, '../scripts')), 'the bash scripts moved to the Python module');
+  assert.doesNotMatch(fs.readFileSync(path.join(__dirname, '../../Makefile'), 'utf8'), /factory-reset/);
 });
