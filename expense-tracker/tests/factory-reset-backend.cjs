@@ -80,3 +80,26 @@ test('router exposes the delete action behind the PIN check, and imports use the
   const script = fs.readFileSync(path.join(__dirname, '../scripts/factory-reset.sh'), 'utf8');
   for (const action of ['create_account_types_bulk', 'create_categories_bulk', 'import_account_data', 'create_subscriptions_bulk', 'create_transactions_bulk']) assert.ok(script.includes(action));
 });
+
+test('arrange_sheet_tabs reuses the existing sheet-order code outside the POST lock, after the PIN check', () => {
+  const runtimeFor = pinOk => {
+    const ctx = vm.createContext({ console: { log() {}, error() {}, warn() {} } });
+    vm.runInContext(fs.readFileSync(path.join(API, 'app-router.gs'), 'utf8'), ctx);
+    const seen = { order: 0, lock: 0 };
+    Object.assign(ctx, {
+      json: value => value, extractMeta: () => ({ ip: 'test' }), checkLocked: () => false, checkPin: () => pinOk, recordAccess() {},
+      ensureExpenseTrackerSheetOrder: () => { seen.order++; return { ok: true, changed: true, moved: 3 }; },
+      LockService: { getScriptLock: () => { seen.lock++; return { tryLock: () => true, releaseLock() {} }; } },
+    });
+    return { post: body => ctx.doPost({ postData: { contents: JSON.stringify(body) } }), seen };
+  };
+  const allowed = runtimeFor(true);
+  assert.deepEqual(JSON.parse(JSON.stringify(allowed.post({ action: 'arrange_sheet_tabs', pin: 'x' }))), { ok: true, changed: true, moved: 3 });
+  assert.deepEqual(allowed.seen, { order: 1, lock: 0 });
+  const denied = runtimeFor(false);
+  assert.equal(denied.post({ action: 'arrange_sheet_tabs', pin: 'bad' }).error, 'auth');
+  assert.equal(denied.seen.order, 0);
+  const script = fs.readFileSync(path.join(__dirname, '../scripts/factory-reset.sh'), 'utf8');
+  assert.ok(script.indexOf('arrange_sheet_tabs') > script.indexOf('create_transactions_bulk'), 'tab ordering is the last step');
+  assert.match(script, /\[6\/6\] Arranging sheet tabs/);
+});

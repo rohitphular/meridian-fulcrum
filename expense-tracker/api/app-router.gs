@@ -127,6 +127,10 @@ function _dispatchPostRequest(e) {
   }
   recordAccess(meta, true);
 
+  // Tab ordering takes the script lock itself (sheet-order.gs), so it runs
+  // before the POST lock; it moves tabs only and never changes data.
+  if (body.action === 'arrange_sheet_tabs') return json(ensureExpenseTrackerSheetOrder());
+
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(10000)) return json({ ok: false, error: 'busy_retry' });
   try {

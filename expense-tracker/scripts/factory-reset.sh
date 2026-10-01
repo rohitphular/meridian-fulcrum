@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Factory-reset the expense-tracker spreadsheet for one environment.
 # Deletes the 11 CSV-backed tabs (every other tab, including 'dummy', 'rates' and
-# the audit log, is kept), recreates them and re-imports local/files/*.csv.
+# the audit log, is kept), recreates them, re-imports local/files/*.csv and
+# finally reapplies the configured tab order.
 # All work is done by the GAS web app; this script only makes HTTP calls.
 #
 # Usage:
@@ -118,12 +119,12 @@ import_body() {
 # ── 1. Sign in (PIN + authenticator code, as the app does) ───────────────────
 
 echo ""
-echo "[1/5] Verifying credentials…"
+echo "[1/6] Verifying credentials…"
 expect_ok "verify" "$(gas_get verify "totp=$FR_TOTP")"
 
 # ── 2. Preflight: every file must parse before anything is deleted ───────────
 
-echo "[2/5] Checking CSV files…"
+echo "[2/6] Checking CSV files…"
 for entry in "${IMPORTS[@]}"; do
   response="$(import_body "$entry" true | gas_post)"
   expect_ok "preflight ${entry%%|*}" "$response"
@@ -132,7 +133,7 @@ done
 
 # ── 3. Delete the CSV-backed tabs ────────────────────────────────────────────
 
-echo "[3/5] Deleting tabs…"
+echo "[3/6] Deleting tabs…"
 response="$(jq -n --arg id "$SPREADSHEET_ID" \
   '{ action: "factory_reset_delete_sheets", pin: env.FR_PIN, ua: "factory-reset.sh", confirm: "factory-reset", spreadsheet_id: $id }' | gas_post)"
 expect_ok "delete sheets" "$response"
@@ -140,7 +141,7 @@ echo "      deleted: $(jq -r '.deleted | join(", ")' <<< "$response")"
 
 # ── 4. Recreate tabs through the existing list endpoints ─────────────────────
 
-echo "[4/5] Recreating tabs…"
+echo "[4/6] Recreating tabs…"
 for action in "${RECREATE_ACTIONS[@]}"; do
   expect_ok "$action" "$(gas_get "$action")"
   echo "      $action"
@@ -148,12 +149,19 @@ done
 
 # ── 5. Import every dataset in dependency order ──────────────────────────────
 
-echo "[5/5] Importing data…"
+echo "[5/6] Importing data…"
 for entry in "${IMPORTS[@]}"; do
   response="$(import_body "$entry" false | gas_post)"
   expect_ok "import ${entry%%|*}" "$response"
   printf '      %-40s %s created · %s updated\n' "${entry%%|*}" "$(jq -r '.created // 0' <<< "$response")" "$(jq -r '.updated // 0' <<< "$response")"
 done
+
+# ── 6. Reset the tab order through the existing sheet-order code ─────────────
+
+echo "[6/6] Arranging sheet tabs…"
+response="$(jq -n '{ action: "arrange_sheet_tabs", pin: env.FR_PIN, ua: "factory-reset.sh" }' | gas_post)"
+expect_ok "arrange sheet tabs" "$response"
+echo "      $(jq -r 'if .changed then "tabs arranged (\(.moved) moved)" else "tabs already in order" end' <<< "$response")"
 
 echo ""
 echo "Factory reset complete for $ENV_ARG."

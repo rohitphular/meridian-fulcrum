@@ -37,3 +37,7 @@ You can also run `ensureExpenseTrackerSheetOrder()` directly from the Apps Scrip
 - A script lock serializes arrangement with app writes. Busy execution returns `busy_retry`; try the menu again. Service failures may leave a partially arranged workbook; rerunning completes the order without rebuilding any tab. Restoration failures are reported rather than claimed successful.
 
 The implementation uses the native [Spreadsheet tab-movement and selection methods](https://developers.google.com/apps-script/reference/spreadsheet/spreadsheet#moveActiveSheet(Integer)). This code change does not deploy the backend or rearrange a live spreadsheet by itself.
+
+## HTTP action
+
+The PIN-protected POST action `arrange_sheet_tabs` runs the same `ensureExpenseTrackerSheetOrder()` and returns its result (`{ ok, changed, moved }` or an error such as `busy_retry`). `make factory-reset` calls it as its final step.
