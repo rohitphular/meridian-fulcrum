@@ -38,5 +38,7 @@ select = ["E", "F", "I"]
 quote-style = "double"
 
 [tool.pytest.ini_options]
+# importlib: unit and integration tests may share a file name (no __init__.py in job modules).
+addopts = "--import-mode=importlib"
 pythonpath = ["."]
 testpaths = ["tests"]

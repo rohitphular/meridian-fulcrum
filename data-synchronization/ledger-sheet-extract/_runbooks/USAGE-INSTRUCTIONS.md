@@ -7,18 +7,18 @@ The [README](../README.md) is the current behaviour and storage contract. [`_doc
 The four master tabs must be named `account_master`, `category_master`, `transaction_master` and `subscription_master`. For legacy plural tab names, deploy the updated expense-tracker backend and run `migrateMasterSheetNames()` once in the bound Apps Script editor before extraction. See [the full upgrade procedure](../../../expense-tracker/_docs/master-sheet-names.md). The corresponding database tables already have these names, and the renamed local CSVs preserve all data.
 
 - Python 3.12+, uv, and SSH access to the private shared-library Git sources.
-- A reachable PostgreSQL database with the currency-rates migrations applied and rates covering your account snapshots and transaction dates. Ledger migrations depend on those tables.
+- A reachable PostgreSQL database with the currency-database-load migrations applied and rates covering your account snapshots and transaction dates. Ledger migrations depend on those tables.
 - A Google service account with Sheets write access and Drive metadata read access to the selected spreadsheet. Acknowledgements update only sync metadata.
-- `cicd/envs.json` configured for dev/prod. The selected spreadsheet ID is exported as `LE_SPREADSHEET_ID` after loading the environment file, so a stale value in that file cannot override the selected Sheet.
+- `cicd/envs.json` configured for dev/prod. The selected spreadsheet ID is exported as `LSE_SPREADSHEET_ID` after loading the environment file, so a stale value in that file cannot override the selected Sheet.
 - Secrets in `meridian-fulcrum/infrastructure/.env.dev` or `.env.prod` (not the repository root).
 
 | Variable | Use |
 |---|---|
 | `FULCRUM_DB_HOST`, `FULCRUM_DB_PORT` | Database address; both required |
 | `FULCRUM_DB_USER`, `FULCRUM_DB_PASSWORD`, `FULCRUM_DB_NAME` | Database credentials/name |
-| `LE_SERVICE_ACCOUNT_FILE` | Service-account JSON key file path |
-| `MERIDIAN_LOG_ROOT` | Shared logger output directory |
-| `LE_SPREADSHEET_ID` | Set by launcher from `cicd/envs.json`; required when invoking Python directly |
+| `LSE_SERVICE_ACCOUNT_FILE` | Service-account JSON key file path |
+| `MERIDIAN_LOG_ROOT` | Shared log root; the launcher logs under `$MERIDIAN_LOG_ROOT/<module>/` |
+| `LSE_SPREADSHEET_ID` | Set by launcher from `cicd/envs.json`; required when invoking Python directly |
 
 ## Running and reprocessing
 
@@ -26,10 +26,10 @@ The four master tabs must be named `account_master`, `category_master`, `transac
 # From the module directory
 make run ENV=dev                     # asks for the sync mode
 make run ENV=dev MODE=normal-sync
-bash cicd/start-up.sh prod normal-sync
+bash cicd/start-up.sh --interactive prod normal-sync
 
 # After reviewing dependencies and data, replay existing in-sync rows as well:
-bash cicd/start-up.sh dev hard-sync
+bash cicd/start-up.sh --interactive dev hard-sync
 ```
 
 From the repository root, `make data-sync` asks for the module and environment; the launcher then asks for the sync mode unless one was passed:
@@ -55,7 +55,7 @@ Avoid editing the Sheet while extraction runs. The job detects source changes be
 
 ## Toggles
 
-The supplied config enables both `transaction_master` and `subscription_master`. Deploy the updated expense-tracker backend for transaction UUID/lifecycle import guards and direct Sheet edit tracking. Existing in-sync rows edited before that deployment need one hard-sync to revalidate their current contents. Both transfer directions must have matching category keys, and currency-rates must provide each transaction's exact UTC-date valuation rate. Subscription sync needs no exchange rate: it stores local-currency obligations. Deploy its matching schema/CRUD/schedule fixes too, fill the local subscription CSV's timezone per dated row, and import it before dev hard-sync. Quarterly/annual subscriptions need a start timestamp as their month anchor. Source reads no longer auto-expire lifecycle state; expiry is a computed calendar status.
+The supplied config enables both `transaction_master` and `subscription_master`. Deploy the updated expense-tracker backend for transaction UUID/lifecycle import guards and direct Sheet edit tracking. Existing in-sync rows edited before that deployment need one hard-sync to revalidate their current contents. Both transfer directions must have matching category keys, and currency-database-load must provide each transaction's exact UTC-date valuation rate. Subscription sync needs no exchange rate: it stores local-currency obligations. Deploy its matching schema/CRUD/schedule fixes too, fill the local subscription CSV's timezone per dated row, and import it before dev hard-sync. Quarterly/annual subscriptions need a start timestamp as their month anchor. Source reads no longer auto-expire lifecycle state; expiry is a computed calendar status.
 
 Each entity's `enabled` setting in `config.yaml` determines which tabs are read in both normal-sync and hard-sync. Enable only tabs that exist in the selected spreadsheet. For example, to sync account masters and deposit details alongside categories:
 
@@ -99,10 +99,10 @@ Inspect master and six detail-tab `sync_notes` for expected validation failures.
 | `transaction_error:database_transfer_relationships_changed_retry` | Another database writer changed transfer links after planning. Retry against the updated state; the current group was rolled back. |
 | HTTP 429 / `sheets_api_rate_limit_exhausted` | The job batches source reads, paces requests and waits through bounded quota retries. If exhausted, let other jobs sharing the service account finish and retry after quota refills. No quota increase or row deletion is required. |
 | Missing account/category | Sync dependencies first, including historical/inactive records |
-| `currency_rate_not_found` | Backfill the exact UTC transaction date; crypto weekends may have no rate under the current currency-rates policy |
+| `currency_rate_not_found` | Backfill the exact UTC transaction date; crypto weekends may have no rate under the current currency-database-load policy |
 | Missing account snapshot rate | Supply a tracking/opening date and load a rate on or before that local date |
 | Detail identity collision or account move | Preserve the existing UUID association; explicitly reconcile legacy collisions rather than overwriting or regenerating IDs |
-| Detail valuation rate missing/invalid | Load compatible historical rates using currency-rates, or correct the supplied evaluation reference/date |
+| Detail valuation rate missing/invalid | Load compatible historical rates using currency-database-load, or correct the supplied evaluation reference/date |
 | Account subtype conflicts with detail rows | Reconcile retained detail records/property links before changing the master subtype |
 | Unknown or mismatched detail source provenance | Reconcile the stored source/table association; do not relabel legacy records automatically |
 | Immutable account fields differ | Explicitly reconcile source and DB history; the job will not silently change identity/currency/opening balance |

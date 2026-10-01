@@ -83,18 +83,18 @@ api-logs: ## Open GAS executions page in browser (interactive: pick env)
 ##@ Data Synchronization
 
 .PHONY: data-sync
-data-sync: ## Run a data-synchronization module (pick module + env; the module asks for its own mode)
+data-sync: ## Run one data-synchronization module interactively (pick module + env; the module asks for its own mode)
 	@echo ""; \
 	i=1; \
 	for dir in data-synchronization/*/; do \
-		[ -f "$${dir}cicd/start-up.sh" ] && printf "  %d) %s\n" "$$i" "$$(basename $$dir)" && i=$$((i+1)); \
+		[ -f "$${dir}cicd/start-up.sh" ] && [ "$$(basename $$dir)" != consolidated-pipeline ] && printf "  %d) %s\n" "$$i" "$$(basename $$dir)" && i=$$((i+1)); \
 	done; \
 	echo ""; \
 	printf "Select module: "; read -r CHOICE; \
 	i=1; \
 	selected=""; \
 	for dir in data-synchronization/*/; do \
-		if [ -f "$${dir}cicd/start-up.sh" ]; then \
+		if [ -f "$${dir}cicd/start-up.sh" ] && [ "$$(basename $$dir)" != consolidated-pipeline ]; then \
 			[ "$$i" = "$$CHOICE" ] && selected="$$dir" && break; \
 			i=$$((i+1)); \
 		fi; \
@@ -111,26 +111,8 @@ data-sync: ## Run a data-synchronization module (pick module + env; the module a
 	elif [ "$$ENV_CHOICE" = "2" ]; then ENV="prod"; \
 	else echo "Invalid choice '$$ENV_CHOICE'. Enter 1 or 2."; exit 1; \
 	fi; \
-	bash "$${selected}cicd/start-up.sh" "$$ENV"
+	bash "$${selected}cicd/start-up.sh" --interactive "$$ENV"
 
-##@ Job
-
-.PHONY: job-setup
-job-setup: ## Create venv and install job dependencies
-	python3 -m venv expense-tracker/job/.venv
-	expense-tracker/job/.venv/bin/pip install -r expense-tracker/job/requirements.txt
-	@echo "Setup done. venv is at expense-tracker/job/.venv"
-
-.PHONY: job-start
-job-start: ## Run expense-tracker jobs (ENV=dev|prod, JOB=name optional)
-	@echo ""; \
-	echo "  1) dev"; \
-	echo "  2) prod"; \
-	echo ""; \
-	printf "Select environment: "; read -r CHOICE; \
-	if [ "$$CHOICE" = "1" ]; then ENV="dev"; \
-	elif [ "$$CHOICE" = "2" ]; then ENV="prod"; \
-	else echo "Invalid choice '$$CHOICE'. Enter 1 or 2."; exit 1; \
-	fi; \
-	JOB_ARG=$${JOB:+--job $$JOB}; \
-	expense-tracker/job/.venv/bin/python expense-tracker/job/runner.py --env $$ENV $$JOB_ARG
+.PHONY: consolidated-pipeline
+consolidated-pipeline: ## Run the data-synchronization pipeline from data-synchronization/consolidated-pipeline/pipeline.json (CONFIG=path optional)
+	bash data-synchronization/consolidated-pipeline/cicd/start-up.sh $(if $(CONFIG),--config "$(CONFIG)")

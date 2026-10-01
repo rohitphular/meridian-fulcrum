@@ -121,3 +121,15 @@ def test_unknown_mode_is_rejected_before_any_call(data_dir: Path) -> None:
     with pytest.raises(ValueError, match="invalid_mode"):
         LedgerSheetLoadJob(_context(client, data_dir)).run("rebuild", "123456")
     assert client.calls == []
+
+
+def test_run_without_a_code_skips_sign_in_after_a_pipeline_sign_in(data_dir: Path) -> None:
+    client = FakeClient()
+    LedgerSheetLoadJob(_context(client, data_dir)).run("sheet-sync", None)
+    assert _steps(client) == ["fill_csv_ids", "import(dry_run=True)", "import(dry_run=False)", "arrange_sheet_tabs"]
+
+
+def test_sign_in_alone_only_calls_verify(data_dir: Path) -> None:
+    client = FakeClient()
+    LedgerSheetLoadJob(_context(client, data_dir)).sign_in("123456")
+    assert client.calls == [("GET", "verify", {"totp": "123456"})]

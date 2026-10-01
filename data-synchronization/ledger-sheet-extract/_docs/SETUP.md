@@ -61,7 +61,7 @@ The six upgraded detail tabs carry the same six lifecycle/sync/audit columns as 
 
 ## Runtime and schema prerequisites
 
-The selected spreadsheet comes from `cicd/envs.json`; database credentials and service-account key path come from `infrastructure/.env.<env>`. Runtime uses the committed lockfile. Currency migrations run in the separate currency-rates module and must precede ledger migration 0004 and other rate-dependent objects.
+The selected spreadsheet comes from `cicd/envs.json`; database credentials and service-account key path come from `infrastructure/.env.<env>`. Runtime uses the committed lockfile. Currency migrations run in the separate currency-database-load module and must precede ledger migration 0004 and other rate-dependent objects.
 
 Ledger migrations 0011–0013 add `account_master.tracking_start_date_local`, optional subscription start dates and applied-rate snapshots. Old account/transaction `applied_rate_value` remains NULL until deliberate replay; the migration cannot reconstruct which mutable rate was used historically. Migration 0009 retains old constraint names but standardises the rate-reference **column** name to `currency_rate_id`.
 
@@ -92,7 +92,7 @@ make lint
 make test-unit
 make test-integration
 make run ENV=dev MODE=normal-sync
-bash cicd/start-up.sh dev hard-sync
+bash cicd/start-up.sh --interactive dev hard-sync
 ```
 
 A live run writes both PostgreSQL and Sheet sync metadata. Documentation validation does not require a live run. Run during a quiet editing window: there is no distributed transaction or atomic conditional Sheet acknowledgement. See [implementation notes](implementation-learning.md) for remaining mapping decisions.

@@ -2,7 +2,7 @@
 
 These are current mapping documents, checked against the expense-tracker GAS schemas/import registry and the ledger-sheet-extract transform, writer and migration code. They replace the former task plans. They describe the local code contract, not an inspection of a live Google Sheet or deployed database.
 
-Currency-rate synchronization belongs exclusively to the [currency-rates module](../../currency-rates/README.md). Ledger-extract only reads its database rates for monetary conversions; rates are outside this Sheet-to-database mapping scope.
+Currency-rate synchronization belongs exclusively to the [currency-database-load module](../../currency-database-load/README.md). Ledger-extract only reads its database rates for monetary conversions; rates are outside this Sheet-to-database mapping scope.
 
 ## Entity documents
 
@@ -23,7 +23,7 @@ The four master tabs contain **85 source columns**, account-type configuration a
 
 Each entity document lists source columns in Sheet order with their destination and transformation. Database-only or related-table sections account for columns not directly copied from the source. “Not persisted” means exactly that; it does not imply the job stores the field elsewhere. For detail rows, retained legacy columns without a source remain NULL; the family documents identify each one.
 
-Database inventories reflect the complete migration chain through 0022, including `tracking_start_date_local`, `applied_rate_value`, nullable subscription start dates and account type/subtype keys and labels. They do not treat stale generated models as the schema. The ledger migration chain defines **18 tables**, including reserved tables; currency tables are separate dependencies owned by currency-rates.
+Database inventories reflect the complete migration chain through 0022, including `tracking_start_date_local`, `applied_rate_value`, nullable subscription start dates and account type/subtype keys and labels. They do not treat stale generated models as the schema. The ledger migration chain defines **18 tables**, including reserved tables; currency tables are separate dependencies owned by currency-database-load.
 
 ## Primary source references
 

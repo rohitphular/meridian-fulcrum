@@ -31,7 +31,7 @@ def migration(path: Path) -> Any:
 
 
 def apply_migrations(client: Any, ledger_version: int | None = None) -> None:
-    for module_root in (MODULE_ROOT.parent / "currency-rates", MODULE_ROOT):
+    for module_root in (MODULE_ROOT.parent / "currency-database-load", MODULE_ROOT):
         for path in sorted((module_root / "migrations").glob("[0-9][0-9][0-9][0-9]_*.py")):
             if module_root == MODULE_ROOT and ledger_version is not None and int(path.name[:4]) > ledger_version:
                 continue

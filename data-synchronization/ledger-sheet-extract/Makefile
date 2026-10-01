@@ -12,7 +12,7 @@ help:
 .PHONY: run
 run: ## Run the extract job — ENV=dev|prod required, MODE=normal-sync|hard-sync optional  (e.g. make run ENV=dev MODE=normal-sync)
 	@[ -n "$(ENV)" ] || (echo "Usage: make run ENV=dev|prod"; exit 1)
-	bash cicd/start-up.sh "$(ENV)" "$(MODE)"
+	bash cicd/start-up.sh --interactive "$(ENV)" "$(MODE)"
 
 ##@ Dev
 

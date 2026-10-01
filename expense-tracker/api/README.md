@@ -112,7 +112,7 @@ All master row-number mutations accept `expected_id` and `expected_updated_at`; 
 
 Local date/time and decimal validation is shared in `app-utils.gs`. Transactions and account dates are checked against the extraction contracts; subscription schedule helpers use the same DST resolver. Sync and audit metadata are source-owned on every mutation.
 
-Insights are computed on request by `get_insight`. The old `get_computed_insights` route and `insights-core.gs` were removed; the Python job under `job/` that filled the `computed_insights` tab is documented as incompatible with the current source model and nothing reads that tab any more.
+Insights are computed on request by `get_insight`. The old `get_computed_insights` route and `insights-core.gs` were removed; the retired Python job that filled the `computed_insights` tab has been removed, and nothing reads that tab any more.
 
 Positional Sheet contracts reject unknown trailing columns as well as renamed/reordered headers. Appending missing schema columns remains supported. Extra legacy fields require an explicit migration before either the app or extractor can accept the tab.
 

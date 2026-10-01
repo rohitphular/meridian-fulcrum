@@ -29,3 +29,5 @@ _volume/
 **/*.pyc
 **/*.pyo
 
+# Data-synchronization pipeline config (per machine; copy pipeline.example.json)
+data-synchronization/consolidated-pipeline/pipeline.json

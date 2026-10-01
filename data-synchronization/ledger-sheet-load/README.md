@@ -35,7 +35,8 @@ ledger-sheet-load/
 ├── pyproject.toml / uv.lock
 ├── cicd/
 │   ├── envs.json            # script_url + spreadsheet_id per environment (non-secret)
-│   └── start-up.sh          # env + mode selection, env loading, locked sync, run
+│   ├── check.sh             # mandatory check: env, mode, settings (no installs or writes)
+│   └── start-up.sh          # runs check.sh, env loading, locked sync, run
 ├── core/
 │   ├── config.py            # config.yaml and environment variables
 │   ├── credentials.py       # PIN / authenticator prompts
@@ -56,8 +57,10 @@ From the repository root, `make data-sync` → `ledger-sheet-load` → environme
 ```bash
 make run ENV=dev                       # asks for the mode
 make run ENV=dev MODE=sheet-sync
-bash cicd/start-up.sh prod sheet-rebuild
+bash cicd/start-up.sh --interactive prod sheet-rebuild
 ```
+
+Unattended (the [consolidated-pipeline](../consolidated-pipeline/README.md), or `bash cicd/start-up.sh [--config FILE] [--stage N]`): env and mode come from the pipeline config, nothing is prompted, and the PIN and code are read from stdin, one per line. A `sheet-rebuild` stage needs `"confirm": "<env>"` in the config, standing in for typing the env name. `--sign-in-only` checks the PIN and code and stops; `--skip-sign-in` reads only the PIN and skips `verify` (the pipeline uses these to sign in once, while the code is fresh, before any stage runs). `cicd/check.sh` validates the settings first on every run (`start-up.sh` always runs it); run on its own, as the pipeline does, it also prints `credentials=gas-pin-totp` so the pipeline knows to ask for them.
 
 Deploy the current expense-tracker backend first: the job relies on `fill_csv_ids`, `factory_reset_delete_sheets`, `arrange_sheet_tabs` and the `dry_run` import contract.
 

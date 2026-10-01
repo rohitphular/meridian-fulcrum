@@ -9,7 +9,7 @@ from py_logging import get_logger
 
 import core.config as config
 from core.context import LoadContext
-from core.credentials import read_credentials
+from core.credentials import read_credentials, read_credentials_from_stdin
 from core.datasets import Dataset, collect_datasets
 from core.gas_client import GasClient
 from core.loader import MODES, LedgerSheetLoadJob
@@ -43,23 +43,45 @@ def _confirm(mode: str, env: str, spreadsheet_id: str, data_dir: Path, datasets:
     return input("Continue? [y/N] ").strip() in ("y", "Y")
 
 
-def main() -> None:
+def _parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Load local ledger CSV files into the expense-tracker Sheet")
     parser.add_argument("--env", required=True, help="Environment name, shown in the confirmation")
     parser.add_argument("--mode", required=True, choices=MODES, help="sheet-rebuild: delete, recreate and reload the tabs; sheet-sync: update rows by id and add new ones")
+    parser.add_argument("--interactive", action="store_true", help="Prompt for confirmation, PIN and authenticator code (default: unattended, credentials on stdin)")
+    parser.add_argument("--confirm", default="", help="Unattended sheet-rebuild only: must equal --env, standing in for typing it")
+    sign_in = parser.add_mutually_exclusive_group()
+    sign_in.add_argument("--sign-in-only", action="store_true", help="Unattended: check the PIN and code, then stop")
+    sign_in.add_argument("--skip-sign-in", action="store_true", help="Unattended: the pipeline already signed in; read only the PIN")
     args = parser.parse_args()
-    logger.info(f"runner: start=true env={args.env} mode={args.mode}")
+    if args.interactive and (args.confirm or args.sign_in_only or args.skip_sign_in):
+        parser.error("--confirm, --sign-in-only and --skip-sign-in are for unattended runs")
+    return args
+
+
+def main() -> None:
+    args = _parse_arguments()
+    logger.info(f"runner: start=true env={args.env} mode={args.mode} interactive={args.interactive}")
     try:
         settings = config.load_config()
         data_dir = config.data_dir(settings)
         datasets = collect_datasets(settings, data_dir)
         spreadsheet_id = config.spreadsheet_id()
-        if not _confirm(args.mode, args.env, spreadsheet_id, data_dir, datasets):
-            logger.info("runner: cancelled=true nothing_changed=true")
-            sys.exit(1)
-        pin, totp = read_credentials()
-        context = LoadContext(GasClient(config.script_url(), pin), data_dir, datasets, spreadsheet_id, settings)
-        LedgerSheetLoadJob(context).run(args.mode, totp)
+        if args.interactive:
+            if not _confirm(args.mode, args.env, spreadsheet_id, data_dir, datasets):
+                logger.info("runner: cancelled=true nothing_changed=true")
+                sys.exit(1)
+            pin, totp = read_credentials()
+        else:
+            if args.mode == "sheet-rebuild" and args.confirm != args.env:
+                raise ValueError("rebuild_not_confirmed")
+            pin, code = read_credentials_from_stdin(with_code=not args.skip_sign_in)
+            totp = code
+        job = LedgerSheetLoadJob(LoadContext(GasClient(config.script_url(), pin), data_dir, datasets, spreadsheet_id, settings))
+        if args.sign_in_only:
+            job.sign_in(totp or "")
+            logger.info("runner: complete sign_in_only=true")
+            return
+        job.run(args.mode, totp)
     except (KeyboardInterrupt, EOFError):
         logger.error("runner: job_failed reason=interrupted")
         sys.exit(1)

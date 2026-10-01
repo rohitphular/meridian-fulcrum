@@ -15,7 +15,7 @@ The [README](../README.md) is the current behaviour contract: modes, steps and w
 
 | Variable | Purpose |
 |---|---|
-| `MERIDIAN_LOG_ROOT` | Shared logger output directory |
+| `MERIDIAN_LOG_ROOT` | Shared log root; the launcher logs under `$MERIDIAN_LOG_ROOT/<module>/` |
 | `LSL_SCRIPT_URL` | Set by the launcher from `cicd/envs.json`; required when invoking Python directly |
 | `LSL_SPREADSHEET_ID` | Set by the launcher from `cicd/envs.json`; required when invoking Python directly |
 | `LSL_DATA_DIR` | Optional absolute path to load a different CSV folder (default: `local/files`) |
@@ -29,8 +29,10 @@ make data-sync                         # pick ledger-sheet-load, then env, then 
 # From the module directory
 make run ENV=dev                       # asks for the mode
 make run ENV=dev MODE=sheet-sync
-bash cicd/start-up.sh prod sheet-rebuild
+bash cicd/start-up.sh --interactive prod sheet-rebuild
 ```
+
+Unattended runs (the default, used by the [consolidated-pipeline](../../consolidated-pipeline/README.md)) take env and mode from the pipeline config and read the PIN and code from stdin; a `sheet-rebuild` stage needs `"confirm": "<env>"`. See the README for `--sign-in-only`, `--skip-sign-in` and `cicd/check.sh`.
 
 The launcher validates the environment and mode before anything runs, loads the env file, exports the selected `script_url` and `spreadsheet_id` (so a stale value in the env file cannot override them), syncs the committed lockfile and runs the job. The job lists the files, shows what it is about to do and asks for confirmation (type the environment name for sheet-rebuild; `y` for sheet-sync) before it asks for the PIN.
 
@@ -40,6 +42,8 @@ Typical order after editing the CSVs: `ledger-sheet-load` (sheet-sync) → `ledg
 
 | Failure reason | Meaning / action |
 |---|---|
+| `rebuild_not_confirmed` | Unattended sheet-rebuild without `"confirm": "<env>"` in its pipeline stage; nothing changed |
+| `pin_required` / `invalid_authenticator_code` | Unattended run with no PIN, or a code that is not 6 digits, on stdin |
 | `missing_file:<file>` / `missing_transaction_files` | A file listed in `config.yaml` is missing, or there is no `transaction_master_*.csv` in the data folder |
 | `auth:sign_in` / `totp_invalid:sign_in` | Wrong PIN or authenticator code. Do not retry repeatedly: wrong PINs lock the caller |
 | `locked:<step>` | The backend locked the caller after failed PINs; wait for the lock to expire |

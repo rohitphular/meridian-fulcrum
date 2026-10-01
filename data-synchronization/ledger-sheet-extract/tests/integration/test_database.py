@@ -863,7 +863,7 @@ def test_detail_migrations_preserve_supported_legacy_columns(database_client: An
         cursor.execute("DROP SCHEMA public CASCADE")
         cursor.execute("CREATE SCHEMA public")
     database_client.commit()
-    for module_root in (MODULE_ROOT.parent / "currency-rates", MODULE_ROOT):
+    for module_root in (MODULE_ROOT.parent / "currency-database-load", MODULE_ROOT):
         for path in sorted((module_root / "migrations").glob("[0-9][0-9][0-9][0-9]_*.py")):
             if module_root == MODULE_ROOT and int(path.name[:4]) >= 15:
                 continue

@@ -25,7 +25,7 @@ The frontend is a pure renderer. Every screen reads a server view GET (`get_app_
 - Open panels are keyed by record id; mutations send `id` + `row_num` + `updated_at` of the row in hand and the server's `stale_record` check stays. An `auth` / `locked` answer to any view GET reopens the PIN gate.
 - Removed GET routes: `get_computed_insights` (+ `insights-core.gs`), `get_transaction_metadata`, `get_{transaction,category,rate,subscription,account_type}_schema`. Kept raw GETs: `list_transactions/categories/accounts/subscriptions` (ledger-sheet-load rebuild), `list_account_types` / `list_rates` (previous frontend; remove after the new frontend is live), `get_account_schema`.
 - Deploy order: GAS first (new actions `get_transaction_facets`, `export_accounts`, `export_account_types`), then the frontend.
-- The optional Python insights job under `job/` remains incompatible and unused; nothing reads the `computed_insights` tab.
+- The retired Python insights job (`job/`, `make job-setup` / `make job-start`) was removed on 2026-10-01; nothing reads the `computed_insights` tab.
 
 ## Current model
 

@@ -46,14 +46,14 @@ All four supported source lifecycle values (`active`, `inactive`, `deleted`, `lo
 
 ### Money and rates
 
-The [currency-rates module](../currency-rates/README.md) owns rate fetching, synchronization and backfills. Ledger-extract only reads `currency_master` and `currency_rates` to convert ledger amounts; it does not synchronize the Sheet's rates tab or write currency reference/rate records.
+The [currency-database-load module](../currency-database-load/README.md) owns rate fetching, synchronization and backfills. Ledger-extract only reads `currency_master` and `currency_rates` to convert ledger amounts; it does not synchronize the Sheet's rates tab or write currency reference/rate records.
 
 - Sheet amounts are major units. `Decimal` arithmetic rounds HALF_UP to the currency's minor unit precision, then checks PostgreSQL BIGINT bounds. NaN, infinity, invalid amounts and out-of-range values fail before a financial write. Sheets numeric cells themselves can already have lost precision; the extractor cannot recover digits missing at the source.
 - XAU means **one gram of gold**, stored as **nanograms** (`decimal_places=9`). A rate means local major units per gram. Base conversion uses the rounded, stored local amount, ensuring local/base values refer to the same money: `base_minor = round_half_up((local_minor / 10^local_dp) / rate × 10^9)`.
 - Account opening balances preserve source signs: assets/investments may be positive or negative, including overdrawn accounts; liabilities remain nonpositive. Migration `0017` aligns both local and base constraints with the source contract without rewriting existing balances.
 - Account valuation uses the tracking snapshot's local date, or the real opening date for legacy rows without a tracking date. The latest rate **on or before that date** is selected. There is currently no maximum carry-forward age. Nonzero foreign balances require a dated snapshot and a rate; zero foreign balances may have no rate reference.
 - Ordinary account fields declared immutable are checked against the stored record; mismatches fail explicitly. The newly introduced tracking date can be populated once when the stored value is NULL. Replay recomputes base valuation at that same source snapshot date, so corrected rates can be applied with `--reprocess`.
-- Transactions use the **UTC transaction date** and an exact-date XAU rate. Missing rates fail the row/group rather than using today's rate. Crypto rate gaps can therefore block crypto transactions; required backfills belong to the currency-rates module.
+- Transactions use the **UTC transaction date** and an exact-date XAU rate. Missing rates fail the row/group rather than using today's rate. Crypto rate gaps can therefore block crypto transactions; required backfills belong to the currency-database-load module.
 - New and replayed accounts/transactions store `applied_rate_value`, the exact rate used in their conversion, independently of the mutable `currency_rates` reference. A later provider correction cannot change this evidence. Old records keep NULL until an explicit replay; the migration never guesses historical rates. In-sync rows are not automatically revalued—use `--reprocess` when desired.
 - Account and detail valuations retain shared locks on currency precision and the selected rate until commit, matching transaction/subscription reference protection. Account precision is reloaded for every row after prior commits release locks.
 - Detail monetary totals use the same minor-unit conversion. Signed stock quantities/per-unit prices retain `NUMERIC(38,18)` precision. Foreign property current values use their evaluation date only; stocks may also specify a rate ID; historical costs/principals/payments with no matching valuation date retain NULL base amounts. The six [detail mappings](_docs/account-details.md) specify these omissions and XAU identity conversion.
@@ -84,10 +84,10 @@ make test-unit
 make test-integration   # requires local PostgreSQL server binaries
 make run ENV=dev MODE=normal-sync
 # Explicitly revalidate existing in-sync records (runs the job with --reprocess):
-bash cicd/start-up.sh dev hard-sync
+bash cicd/start-up.sh --interactive dev hard-sync
 ```
 
-The launcher takes `dev|prod [normal-sync|hard-sync]` (it asks for the mode when omitted), selects the spreadsheet from `cicd/envs.json`, loads `../../infrastructure/.env.<env>`, syncs the committed lockfile, runs pending ledger migrations, then runs the job. It does not upgrade shared libraries on every run. `make upgrade-libs` is an explicit maintenance action.
+The launcher reads env and mode from the [pipeline config](../consolidated-pipeline/README.md) by default; `--interactive dev|prod [normal-sync|hard-sync]` takes them as arguments (and asks for a missing mode). It selects the spreadsheet from `cicd/envs.json`, loads `../../infrastructure/.env.<env>`, syncs the committed lockfile, runs pending ledger migrations, then runs the job. It does not upgrade shared libraries on every run. `make upgrade-libs` is an explicit maintenance action.
 
 Currency tables, their migrations and the required historical rates must exist first. Migrations 0011–0013 add account tracking metadata, permit blank subscription starts, and capture applied rates. Migration 0005 now refuses to drop a nonempty legacy `transactions` table; migrate legacy history explicitly before retrying. This guard cannot recover a legacy table already dropped by an earlier run.
 
@@ -101,7 +101,7 @@ Migration 0017 permits signed asset/investment opening snapshots while retaining
 
 Property source schema no longer has `evaluation_currency_rate_id`. Upgrade an existing property tab with `migrateAccountPropertyRateColumn()`, then run one hard-sync to revalue existing records by evaluation date. Historical values in the retired database column remain untouched and are never used for current property valuation. Fixed-income/P2P extension contracts and import support have been removed.
 
-Required environment variables: `FULCRUM_DB_HOST`, `FULCRUM_DB_PORT`, `FULCRUM_DB_USER`, `FULCRUM_DB_PASSWORD`, `FULCRUM_DB_NAME`, `LE_SERVICE_ACCOUNT_FILE`, and `MERIDIAN_LOG_ROOT`. Direct Python invocation also needs `LE_SPREADSHEET_ID`; the launcher sets it from the chosen environment registry. Never print credentials or service-account key contents.
+Required environment variables: `FULCRUM_DB_HOST`, `FULCRUM_DB_PORT`, `FULCRUM_DB_USER`, `FULCRUM_DB_PASSWORD`, `FULCRUM_DB_NAME`, `LSE_SERVICE_ACCOUNT_FILE`, and `MERIDIAN_LOG_ROOT`. Direct Python invocation also needs `LSE_SPREADSHEET_ID`; the launcher sets it from the chosen environment registry. Never print credentials or service-account key contents.
 
 ## Code map
 

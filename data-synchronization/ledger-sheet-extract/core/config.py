@@ -33,8 +33,8 @@ def db_config() -> ConnectionConfig:
 
 
 def spreadsheet_id() -> str:
-    return os.environ["LE_SPREADSHEET_ID"]
+    return os.environ["LSE_SPREADSHEET_ID"]
 
 
 def service_account_file() -> str:
-    return os.environ["LE_SERVICE_ACCOUNT_FILE"]
+    return os.environ["LSE_SERVICE_ACCOUNT_FILE"]
