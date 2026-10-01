@@ -89,7 +89,8 @@ function _listParams(overrides = {}) {
 async function _loadList() {
   const seq = ++_listSeq;
   _listLoading = true;
-  _refreshListParts();
+  // Every list request (open, filter, sort, page) shows the loader, as on Transactions.
+  showLoading();
   try {
     const res = await ExpenseAPI.view(LIST_VIEW, _listParams());
     if (seq !== _listSeq) return;
@@ -106,6 +107,7 @@ async function _loadList() {
     console.error('[categories] list view failed:', err);
     _listError = 'Connection error. Categories could not be refreshed.';
   } finally {
+    hideLoading();
     if (seq === _listSeq) {
       _listLoading = false;
       _refreshListParts();
@@ -468,7 +470,7 @@ function _renderList() {
   const { data } = response;
   const notice = _listError !== null
     ? `<p class="pin-error" role="alert">${esc(_listError)} Showing the last loaded list.</p>`
-    : _listLoading ? '<p class="field-hint" aria-live="polite">Refreshing…</p>' : '';
+    : '';
   return `${notice}
     <div class="cat-count-bar">
       <span class="cat-count">${esc(data.count)} ${data.count === 1 ? 'category' : 'categories'}</span>

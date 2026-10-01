@@ -4,7 +4,7 @@ import { showLoading, hideLoading, showMsg } from '../core/ui.js';
 import { ExpenseAPI } from '../core/api.js';
 
 // Transactions render what the server returns (api/view-transactions.gs):
-// - list_transactions_view: filtered / sorted / paged rows, totals
+// - list_transactions_view: filtered / sorted / paged rows
 // - get_transaction_facets: filter-bar options (once per data refresh)
 // - get_transaction(id): the view panel
 // - get_transaction_form_options: add / edit option trees (category rules,
@@ -125,7 +125,9 @@ function _loadList(key) {
   let request;
   try { request = ExpenseAPI.view('list_transactions_view', _listParams()); }
   catch (error) { request = Promise.reject(error); }
-  Promise.resolve(request).then(res => {
+  // Every page, sort or filter change waits on the server, so show the loader.
+  showLoading();
+  Promise.resolve(request).finally(hideLoading).then(res => {
     if (seq !== _listSeq) return;
     if (res?.ok === true) {
       _list = res.data;
@@ -487,7 +489,7 @@ function _renderView() {
   });
 }
 
-// Filter bar, totals and table: everything that depends on the list payload.
+// Filter bar and table: everything that depends on the list payload.
 function _listRegionHtml() {
   const list = _list;
   const warnRows = list?.warn_rows ?? [];
@@ -496,7 +498,6 @@ function _listRegionHtml() {
     ${_renderFilterBar()}
     ${_listError !== null ? `<p class="pin-error" role="alert">${esc(_listError)}</p>` : ''}
     ${warnRows.length ? `<div class="warning-count" id="warnToggle">⚠ ${warnRows.length} row${warnRows.length > 1 ? 's' : ''} have warnings — click to expand</div>` : ''}
-    ${list ? _renderTotals(list) : ''}
     ${list ? _renderTxTable(list) : (_listError === null ? loadingCard : '')}`;
 }
 
@@ -530,19 +531,6 @@ async function _exportTransactions(format) {
   } finally {
     hideLoading();
   }
-}
-
-// Income / spending exclude deleted rows and own-account transfers (server totals).
-function _renderTotals(list) {
-  const totals = list.totals;
-  if (totals === undefined || totals === null) return '';
-  const missing = Array.isArray(totals.missing_currencies) && totals.missing_currencies.length > 0
-    ? ` <span class="badge badge-warn" title="No rate for ${esc(totals.missing_currencies.join(', '))}">?</span>` : '';
-  return `<div class="tx-totals" style="display:flex;gap:16px;flex-wrap:wrap;font-size:var(--text-sm);color:var(--muted);margin:8px 0">
-    <span>In <strong class="td-mono">${esc(totals.money_in?.display ?? '—')}</strong></span>
-    <span>Out <strong class="td-mono">${esc(totals.money_out?.display ?? '—')}</strong></span>
-    <span>Net <strong class="td-mono">${esc(totals.net_display ?? '—')}</strong>${missing}</span>
-  </div>`;
 }
 
 function _amountCell(amount) {

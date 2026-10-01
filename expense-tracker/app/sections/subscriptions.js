@@ -11,6 +11,7 @@ import { ExpenseAPI } from '../core/api.js';
 //   frequencies and day labels for the add / edit form.
 const LIST_VIEW = 'list_subscriptions_view';
 const FORM_VIEW = 'get_subscription_form_options';
+const ESTIMATE_VIEW = 'get_subscription_estimate';
 const PAGE_SIZES = ['all', 10, 25, 50];
 
 function _schemaReady() {
@@ -30,6 +31,73 @@ let _subDraft = null;          // pending filter edits; applied to state.subFilt
 let _formOptions = null;       // { key, data } for the open add / edit form
 let _formOptionsError = null;
 let _formSeq = 0;
+
+// ── Estimate selection ────────────────────────────────────────────────────────
+// Which subscriptions the monthly estimate covers is UI state for this visit
+// only; the server computes every figure. null = all active (the default).
+let _selectMode = false;
+let _selection = null;
+let _estimateRes = null;
+let _estimateLoading = false;
+let _estimateSeq = 0;
+let _estimateTimer = null;
+
+function _defaultSelectedIds() {
+  return _listPayload()?.data.summary.estimate?.selected_ids ?? [];
+}
+
+function _setSelection(next) {
+  _selection = next;
+  if (_selection === null) {
+    clearTimeout(_estimateTimer);
+    _estimateSeq++;
+    _estimateRes = null;
+    _estimateLoading = false;
+    _refreshTablePart();
+    return;
+  }
+  _scheduleEstimate();
+}
+
+// Taps are batched so a run of quick selections costs one server request.
+function _scheduleEstimate() {
+  clearTimeout(_estimateTimer);
+  _estimateLoading = true;
+  _refreshTablePart();
+  _estimateTimer = setTimeout(_loadEstimate, 450);
+}
+
+async function _loadEstimate() {
+  if (_selection === null) return;
+  const seq = ++_estimateSeq;
+  const ids = Array.from(_selection);
+  try {
+    const res = await ExpenseAPI.view(ESTIMATE_VIEW, { ids: ids.length === 0 ? 'none' : ids });
+    if (seq !== _estimateSeq || _selection === null) return;
+    _estimateRes = res;
+  } catch (err) {
+    if (seq !== _estimateSeq) return;
+    console.error('[subscriptions] estimate failed:', err);
+    _estimateRes = { ok: false, message: 'Connection error. The estimate could not be updated.' };
+  }
+  _estimateLoading = false;
+  _refreshTablePart();
+}
+
+function _toggleSelected(id) {
+  const sub = _rowById(id);
+  if (sub === null || sub.selectable !== true) return;
+  const next = new Set(_selection ?? _defaultSelectedIds());
+  const key = String(id).toLowerCase();
+  if (next.has(key)) next.delete(key); else next.add(key);
+  _setSelection(next);
+}
+
+function _isSelected(sub) {
+  if (sub.selectable !== true) return false;
+  const key = String(sub.id).toLowerCase();
+  return _selection === null ? _defaultSelectedIds().includes(key) : _selection.has(key);
+}
 
 function _listPayload() {
   const response = state.views?.[LIST_VIEW];
@@ -83,7 +151,8 @@ function _listParams(overrides = {}) {
 async function _loadList() {
   const seq = ++_listSeq;
   _listLoading = true;
-  _refreshListParts();
+  // Every list request (open, filter, sort, page) shows the loader, as on Transactions.
+  showLoading();
   try {
     const res = await ExpenseAPI.view(LIST_VIEW, _listParams());
     if (seq !== _listSeq) return;
@@ -91,6 +160,7 @@ async function _loadList() {
       state.views[LIST_VIEW] = res;
       _listError = null;
       _subPage = res.data.page ?? 1;
+      if (_selection !== null) _scheduleEstimate();
     } else {
       console.warn('[subscriptions] list view failed:', res?.error);
       _listError = res?.message || (res?.error ? `Subscriptions could not be loaded: ${res.error}` : 'Subscriptions could not be loaded.');
@@ -100,6 +170,7 @@ async function _loadList() {
     console.error('[subscriptions] list view failed:', err);
     _listError = 'Connection error. Subscriptions could not be refreshed.';
   } finally {
+    hideLoading();
     if (seq === _listSeq) {
       _listLoading = false;
       _refreshListParts();
@@ -387,12 +458,59 @@ function _renderSubFilterBar() {
 
 const _money = value => Number(value).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
+function _subCells(sub, sym) {
+  const amtFmt  = `${sub.currency_symbol}${sub.amount.native === null ? '—' : _money(sub.amount.native)}/${sub.frequency_short}`;
+  const baseAmt = sub.is_foreign ? (sub.monthly.quote === null ? '—' : `${sym}${_money(sub.monthly.quote)}/mo`) : '';
+  let nextText = sub.schedule_status === 'expired' ? 'Expired' : sub.schedule_status === 'invalid' ? 'Invalid schedule' : '—';
+  let duePart = '';
+  if (sub.is_scheduled && sub.next_payment_date !== '') {
+    const [ny, nm, nd] = sub.next_payment_date.split('-').map(Number);
+    nextText = new Date(ny, nm - 1, nd).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+    const diffDays = sub.due_in_days;
+    duePart = diffDays === null ? '' : diffDays === 0 ? 'today' : diffDays === 1 ? 'tomorrow' : diffDays > 0 ? `in ${diffDays}d` : `${Math.abs(diffDays)}d overdue`;
+  }
+  return { amtFmt, baseAmt, nextText, duePart, accName: sub.account_name !== '' ? sub.account_name : '—' };
+}
+
+function _selectAttrs(sub) {
+  if (!_selectMode) return '';
+  if (sub.selectable !== true) return ' aria-disabled="true"';
+  return ` data-sub-select="${esc(sub.id)}" role="checkbox" aria-checked="${_isSelected(sub)}" tabindex="0"`;
+}
+
+function _renderSubCard(sub, sym) {
+  const id = sub.id;
+  if (state.subDeleteRow === id) {
+    return `<div class="sub-card">
+      <span class="confirm-text">Delete <strong>${esc(sub.subscription_name)}</strong>?</span>
+      <span class="row-actions">
+        <button class="btn-link danger" data-action="sub-confirm-delete" data-row="${esc(id)}">Yes, delete</button>
+        <button class="btn-link" data-action="sub-cancel-delete">Cancel</button>
+      </span>
+    </div>`;
+  }
+  const c = _subCells(sub, sym);
+  const selected = _selectMode && _isSelected(sub);
+  const side = _selectMode
+    ? `<span class="sub-check${selected ? ' is-on' : ''}" aria-hidden="true">${selected ? '✓' : ''}</span>`
+    : `${recordStatusIcon(sub.record_status)}${syncStatusIcon(sub.sync_status)}
+       <button class="tx-menu-trigger" data-action="sub-menu" data-row="${esc(id)}" title="Actions">⋮</button>`;
+  return `<div class="sub-card${sub.is_scheduled ? '' : ' is-unscheduled'}${selected ? ' is-selected' : ''}"${_selectAttrs(sub)}>
+    <div class="sub-card-main">
+      <div class="sub-card-name">${esc(sub.subscription_name)}</div>
+      <div class="sub-card-meta">${esc(c.accName)} · ${esc(c.nextText)}${c.duePart !== '' ? ` <span class="sub-card-due">(${esc(c.duePart)})</span>` : ''}</div>
+    </div>
+    <div class="sub-card-amt td-mono">${esc(c.amtFmt)}${c.baseAmt !== '' ? `<div class="td-base-amt">${esc(c.baseAmt)}</div>` : ''}</div>
+    <div class="sub-card-side">${side}</div>
+  </div>`;
+}
+
 function _renderSubRow(sub, sym) {
   const row = sub.id;
 
   if (state.subDeleteRow === row) {
     return `<tr>
-      <td colspan="5">
+      <td colspan="${_selectMode ? 6 : 5}">
         <span class="confirm-text">Delete <strong>${esc(sub.subscription_name)}</strong>?</span>
         <span style="display:inline-flex;gap:8px;margin-left:16px">
           <button class="btn-link danger" data-action="sub-confirm-delete" data-row="${esc(row)}">Yes, delete</button>
@@ -421,7 +539,12 @@ function _renderSubRow(sub, sym) {
 
   const accName = sub.account_name !== '' ? sub.account_name : '—';
 
-  return `<tr${sub.is_scheduled ? '' : ' style="opacity:0.6"'}>
+  const selected = _selectMode && _isSelected(sub);
+  const checkCell = _selectMode
+    ? `<td class="sub-check-cell">${sub.selectable === true ? `<span class="sub-check${selected ? ' is-on' : ''}" aria-hidden="true">${selected ? '✓' : ''}</span>` : ''}</td>`
+    : '';
+  return `<tr class="${selected ? 'is-selected' : ''}"${sub.is_scheduled ? '' : ' style="opacity:0.6"'}${_selectAttrs(sub)}>
+    ${checkCell}
     <td>${esc(sub.subscription_name)}</td>
     <td class="td-truncate" title="${esc(accName)}">${esc(accName)}</td>
     <td class="td-nowrap">${nextCell}</td>
@@ -429,7 +552,7 @@ function _renderSubRow(sub, sym) {
     <td style="text-align:right;white-space:nowrap">
       ${recordStatusIcon(sub.record_status)}
       ${syncStatusIcon(sub.sync_status)}
-      <button class="tx-menu-trigger" data-action="sub-menu" data-row="${esc(row)}" title="Actions">⋮</button>
+      ${_selectMode ? '' : `<button class="tx-menu-trigger" data-action="sub-menu" data-row="${esc(row)}" title="Actions">⋮</button>`}
     </td>
   </tr>`;
 }
@@ -457,31 +580,45 @@ function _renderTable(response = _listPayload()) {
   const quoteCurrency = quote?.currency ?? state.quoteCurrency;
   const notice = _listError !== null
     ? `<p class="pin-error" role="alert">${esc(_listError)} Showing the last loaded list.</p>`
-    : _listLoading ? '<p class="field-hint" aria-live="polite">Refreshing…</p>' : '';
+    : '';
 
   const thSort = (col, label) => {
     const active = state.subSort.col === col;
     return `<th class="${active ? `sort-${state.subSort.dir}` : ''}" data-sub-sort="${esc(col)}">${esc(label)}</th>`;
   };
   const { summary } = data;
-  const partial = summary.missing_rate_count > 0;
+  const custom = _selection !== null;
+  const estimateError = custom && _estimateRes !== null && _estimateRes.ok !== true ? (_estimateRes.message || 'The estimate could not be updated.') : null;
+  const est = custom && _estimateRes?.ok === true ? _estimateRes.data.estimate : summary.estimate;
+  const stale = _estimateLoading || (custom && _estimateRes === null);
+  // The chosen count is known locally at once; the money waits for the server.
+  const scope = custom ? `${_selection.size} selected` : `All ${est.considered_count} active`;
+  const moneyText = value => `${sym}${_money(value)}`;
 
   return `${notice}
-    <div class="summary-grid" style="margin-bottom:20px">
+    <div class="summary-grid" style="margin-bottom:12px">
       <div class="summary-card">
         <div class="summary-card-label">Scheduled / Total</div>
         <div class="summary-card-value">${esc(summary.scheduled_count)} / ${esc(summary.total_count)}</div>
       </div>
-      <div class="summary-card">
+      <div class="summary-card sub-estimate${stale ? ' is-stale' : ''}" aria-busy="${stale}">
         <div class="summary-card-label">Est. monthly amount</div>
-        <div class="summary-card-value">${esc(sym)}${esc(_money(summary.est_monthly_quote))}${partial ? ' (partial)' : ''}</div>
+        <div class="summary-card-value">${esc(moneyText(est.out_quote))}${est.partial ? ' (partial)' : ''}</div>
+        <div class="summary-card-sub">${esc(scope)}${stale ? ' · updating…' : ''}${est.in_quote > 0 ? ` · income ${esc(moneyText(est.in_quote))}` : ''}</div>
       </div>
     </div>
-    <p class="field-hint" style="margin-bottom:12px">Amounts converted to ${esc(quoteCurrency)}. Quarterly ÷ 3, Annual ÷ 12, Weekly × 52 ÷ 12. Includes incoming and outgoing scheduled amounts.${partial ? ` ${esc(summary.missing_rate_count)} subscription(s) could not be converted; check account currencies and rates.` : ''}</p>
+    <div class="sub-estimate-actions">
+      <button class="btn btn-secondary btn-sm" id="subSelectBtn" aria-pressed="${_selectMode}">${_selectMode ? 'Done' : 'Choose subscriptions'}</button>
+      ${custom ? '<button class="btn-link" id="subSelReset">Use all active</button>' : ''}
+    </div>
+    ${estimateError !== null ? `<p class="pin-error" role="alert">${esc(estimateError)}</p>` : ''}
+    <p class="field-hint" style="margin-bottom:12px">Amounts converted to ${esc(quoteCurrency)}. Quarterly ÷ 3, Annual ÷ 12, Weekly × 52 ÷ 12. Covers outgoing scheduled payments.${est.partial ? ` ${esc(est.missing_rate_count)} subscription(s) could not be converted; check account currencies and rates.` : ''}</p>
     ${data.rows.length === 0 ? `<p class="placeholder">No subscriptions match the current filters.</p>` : `
+    <div class="sub-cards">${data.rows.map(s => _renderSubCard(s, sym)).join('')}</div>
     <div class="table-wrap acc-table-wrap${state.subDeleteRow !== null ? ' acc-has-active' : ''}">
       <table class="acc-table">
         <thead><tr>
+          ${_selectMode ? '<th class="sub-check-cell"></th>' : ''}
           ${thSort('subscription_name', 'Name')}
           <th>Account</th>
           ${thSort('next_payment_date', 'Next payment')}
@@ -491,7 +628,30 @@ function _renderTable(response = _listPayload()) {
         <tbody>${data.rows.map(s => _renderSubRow(s, sym)).join('')}</tbody>
       </table>
     </div>`}
-    ${data.pages > 1 || data.page_size !== 'all' || data.total > 10 ? _renderPager(data) : ''}`;
+    ${data.pages > 1 || data.page_size !== 'all' || data.total > 10 ? _renderPager(data) : ''}
+    ${_selectMode ? _renderSelectBar(data, est, stale, moneyText) : ''}`;
+}
+
+// Pinned to the bottom while choosing, so the figure stays in view on a phone.
+function _renderSelectBar(data, est, stale, moneyText) {
+  const matching = Array.isArray(data.selectable_ids) ? data.selectable_ids : [];
+  return `<div class="sub-select-bar" role="region" aria-label="Estimate for the chosen subscriptions">
+    <div class="sub-select-total${stale ? ' is-stale' : ''}" aria-live="polite">
+      <strong>${esc(moneyText(est.out_quote))}</strong>/mo · ${esc(_selection === null ? 'all active' : `${_selection.size} selected`)}
+    </div>
+    <div class="sub-select-actions">
+      <button class="btn btn-secondary btn-sm" id="subSelAll">All active</button>
+      ${data.active_filter_count > 0 ? `<button class="btn btn-secondary btn-sm" id="subSelMatching">Matching (${esc(matching.length)})</button>` : ''}
+      <button class="btn btn-secondary btn-sm" id="subSelNone">None</button>
+      <button class="btn btn-primary btn-sm" id="subSelDone">Done</button>
+    </div>
+  </div>`;
+}
+
+function _refreshTablePart() {
+  const table = el('subTableResults');
+  if (table !== null) table.innerHTML = _renderTable();
+  el('subscriptionsContent')?.classList?.toggle('is-selecting', _selectMode);
 }
 
 let _subMenuKey = null;
@@ -637,6 +797,7 @@ function _render() {
     <div id="subTableResults">${_renderTable()}</div>
   `;
 
+  content.classList?.toggle('is-selecting', _selectMode);
   _attachEvents();
   _refreshImportPanel();
 }
@@ -834,6 +995,18 @@ function _attachEvents() {
 
   content.addEventListener('click', e => {
     if (_subImportBusy) return;
+    const selectBtn = e.target.closest('#subSelectBtn, #subSelDone, #subSelAll, #subSelNone, #subSelMatching, #subSelReset');
+    if (selectBtn !== null) {
+      if (selectBtn.id === 'subSelectBtn') _selectMode = !_selectMode;
+      if (selectBtn.id === 'subSelDone') _selectMode = false;
+      if (selectBtn.id === 'subSelAll' || selectBtn.id === 'subSelReset') { _setSelection(null); return; }
+      if (selectBtn.id === 'subSelNone') { _setSelection(new Set()); return; }
+      if (selectBtn.id === 'subSelMatching') { _setSelection(new Set(_listPayload()?.data.selectable_ids ?? [])); return; }
+      _refreshTablePart();
+      return;
+    }
+    const pick = _selectMode ? e.target.closest('[data-sub-select]') : null;
+    if (pick !== null) { _toggleSelected(pick.dataset.subSelect); return; }
     const sort = e.target.closest('th[data-sub-sort]');
     if (sort !== null) {
       const col = sort.dataset.subSort;
@@ -899,6 +1072,14 @@ function _attachEvents() {
     }
     if (action === 'sub-cancel-delete')  { state.subDeleteRow = null; _render(); }
     if (action === 'sub-confirm-delete') { _confirmDelete(row); }
+  }, { signal });
+
+  content.addEventListener('keydown', e => {
+    if (!_selectMode || (e.key !== ' ' && e.key !== 'Enter')) return;
+    const pick = e.target.closest('[data-sub-select]');
+    if (pick === null) return;
+    e.preventDefault();
+    _toggleSelected(pick.dataset.subSelect);
   }, { signal });
 
   el('subExportBtn')?.addEventListener('click', () => {

@@ -86,6 +86,7 @@ All subscription endpoints are routed through the single `/exec` GAS endpoint.
 | Action | Method | Description |
 |---|---|---|
 | `list_subscriptions_view` | GET | View model: filtered / sorted / paged rows with schedule fields, display labels, quote amounts, `allowed_actions`, summary (scheduled count, estimated monthly amount). |
+| `get_subscription_estimate` | GET | Monthly estimate for chosen subscriptions: `ids` = comma-separated UUIDs, `none` for an empty choice, or blank for all active (scheduled) subscriptions. Returns `estimate` `{mode, considered_count, selected_ids, out_quote, in_quote, net_quote, missing_rate_count, missing_currencies, partial, ignored_ids}`. Unknown or unscheduled ids are listed in `ignored_ids`, never counted. |
 | `get_subscription_form_options` | GET | Accounts, eligible categories, frequencies, day labels and the edited row (`id`). |
 | `list_subscriptions` | GET | Raw rows, all lifecycle states, with computed schedule fields (kept for `scripts/factory-reset.sh`; the app does not call it). |
 | `create_subscription` | POST | Validates identity, schedule and references, checks duplicate nondeleted names, and appends a row. |
@@ -127,3 +128,11 @@ The current local `local/files/subscription_master.csv` has 21 monthly definitio
 Column positions remain unchanged at 21; all six lifecycle/sync/audit fields are present in their historical positions. Do not reorder a live tab to place them at the end. No new Sheet or database migration is required for this review; ledger migrations through 0022 remain required.
 
 Deploy the updated backend and frontend together, reload the app, correct any displayed schedule/reference errors, and run dev hard-sync once. Invalid historical dates/zones are reported rather than guessed. Subscriptions remain planning definitions: there is no automatic payment posting, holiday adjustment, time-of-day execution or link to a generated transaction.
+
+## Monthly estimate and choosing subscriptions
+
+The summary card shows **Est. monthly payments** (outgoing subscriptions), plus monthly **Income** (money-in subscriptions) and **Net**, all converted to the quote currency on the server. By default it covers every active, scheduled subscription (`summary.estimate`, `mode: 'all_active'`).
+
+**Choose subscriptions** turns on select mode: tap a card (phone) or row (desktop) to add or remove it. Only scheduled subscriptions can be chosen. A bar pinned to the bottom of the screen keeps the figure in view with **All active**, **Matching (n)** (when filters are applied: every scheduled subscription matching the filters across pages, from `selectable_ids`), **None** and **Done**. **Use all active** returns to the default.
+
+The browser only keeps the chosen ids for the current visit (nothing is saved). Taps are batched for about half a second into one `get_subscription_estimate` request; the old figure stays dimmed with "updating…" until the new one arrives. On phones the list renders as cards.

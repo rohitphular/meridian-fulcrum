@@ -280,7 +280,7 @@ test('mobile delete cards contain confirmation actions including blocked account
   const rateContent = { innerHTML: '' };
   state.views = { list_rates_view: { ok: true, data: { rows: [{ currency: 'USD', symbol: '$', rate: 97.7, rate_label: '97.70', updated_at: '', is_base: false, allowed_actions: ['edit', 'delete'], used_by_accounts: ['<Brokerage>'] }] } } };
   const rates = load('app/sections/rates.js', { state, el: id => (id === 'ratesContent' ? rateContent : null), closeContextMenu() {},
-    ExpenseAPI: { view: () => new Promise(() => {}) } }, ['renderRates'], '_attachRateEvents = () => {};');
+    showLoading() {}, hideLoading() {}, ExpenseAPI: { view: () => new Promise(() => {}) } }, ['renderRates'], '_attachRateEvents = () => {};');
   rates.renderRates();
   assert.match(rateContent.innerHTML, /<div class="rate-cards">[\s\S]*record-confirm-card[\s\S]*rate-cancel-delete/);
   assert.match(rateContent.innerHTML, /used by: <strong>&lt;Brokerage&gt;<\/strong>/);

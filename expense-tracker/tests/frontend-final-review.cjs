@@ -91,9 +91,10 @@ test('transactions.js is a renderer: no client collections, conversion or list l
 test('the list is requested with the applied query, older responses are dropped and deep links become params', async () => {
   const calls = [], pending = [];
   const state = { filters: { types: [] }, views: {} };
-  let renders = 0;
+  let renders = 0, loading = 0, loaderShown = 0;
   const ctx = load('sections/transactions.js', {
     state, console: { warn() {}, error() {}, log() {} },
+    showLoading: () => { loading++; loaderShown++; }, hideLoading: () => { loading--; },
     ExpenseAPI: { view: (action, params) => { calls.push([action, JSON.parse(JSON.stringify(params))]); return new Promise(resolve => pending.push(resolve)); } },
   }, ['_loadList', '_listParams', '_consumeDeepLink', 'list: () => _list', 'query: () => _query', 'setRender: fn => { _renderListRegion = fn; }']);
   ctx.setRender(() => { renders++; });
@@ -103,12 +104,14 @@ test('the list is requested with the applied query, older responses are dropped 
   });
   ctx._loadList('first');
   ctx._loadList('second');
+  assert.deepEqual([loaderShown, loading], [2, 2], 'each page/sort/filter request shows the loader while it is pending');
   pending[1]({ ok: true, data: { rows: [{ id: 'new' }], page: 1 } });
   pending[0]({ ok: true, data: { rows: [{ id: 'old' }], page: 1 } });
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(ctx.list().rows[0].id, 'new');
   assert.equal(state.views.transactions.data.rows[0].id, 'new');
   assert.equal(renders, 1);
+  assert.equal(loading, 0, 'the loader hides once every request settles, including the dropped one');
   assert.deepEqual(calls.map(call => call[0]), ['list_transactions_view', 'list_transactions_view']);
   // Accounts / categories / subscriptions deep-link by assigning state.filters.
   state.filters = { types: [], accounts: ['acc-1'], major: ['food'], minor: [], user_location_country: '', tag: '', search: 'Tesco' };
@@ -120,4 +123,9 @@ test('the list is requested with the applied query, older responses are dropped 
   assert.deepEqual([Array.from(ctx.query().account_ids), ctx.query().counterparty, ctx.query().search, ctx.query().range], [['acc-2'], 'Netflix', '', 'all']);
   ctx._consumeDeepLink();
   assert.equal(ctx.query().counterparty, 'Netflix', 'a handoff is consumed once');
+});
+
+test('the transactions screen has no In / Out / Net totals strip', () => {
+  const source = fs.readFileSync(path.join(root, 'sections/transactions.js'), 'utf8');
+  assert.doesNotMatch(source, /_renderTotals|tx-totals|net_display|money_in/);
 });

@@ -100,15 +100,8 @@ test('locked rows are view-only; a deleted historical child never replaces the l
   assert.deepEqual(Array.from(rows[ID(42)].allowed_actions), ['view']);
 });
 
-test('totals exclude deleted rows and own-account transfers; missing rates are reported, not summed', () => {
-  const totals = list(runtime()).data.totals;
-  assert.equal(totals.count, 10);
-  assert.deepEqual(plain(totals.money_in), { count: 1, quote: 2500, display: '£2,500.00' });   // brokerage USD money-in has no rate
-  // money-out: 45.5 + 100 + ₹1050 (=£10) + 60 + 12; the deleted 20 and the 300 transfer are excluded.
-  assert.deepEqual(plain(totals.money_out), { count: 5, quote: 227.5, display: '£227.50' });
-  assert.equal(totals.net_display, '£2,272.50');
-  assert.deepEqual([totals.transfer_legs, totals.deleted], [2, 1]);
-  assert.deepEqual(Array.from(totals.missing_currencies), ['USD']);
+test('the list carries no In/Out/Net totals; currencies without a rate are reported as a warning', () => {
+  assert.equal(list(runtime()).data.totals, undefined);
   const response = list(runtime());
   assert.ok(response.warnings.some(w => w.code === 'missing_rate' && w.currencies.includes('USD')));
 });

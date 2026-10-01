@@ -31,7 +31,7 @@ Income, spending, savings, cash-flow, category, tag, counterparty, geography and
 - **Transfers between own accounts are excluded.** A row is an own-transfer leg when it is a child (`parent_tx_id` set) or a parent with a live child. Loan, credit-card and mortgage repayments, account-to-account moves and currency exchanges are all transfer pairs, so repayment and paydown insights read ledger balances or the transfer pairs instead of flows.
 - `money-in` is income, `money-out` is spending.
 
-Balance replays (current balances, net-worth trends, balances at a date) still include transfer legs, because they move money between accounts. The Transactions list shows every leg, including transfer legs and deleted rows; only its totals apply the rule above.
+Balance replays (current balances, net-worth trends, balances at a date) still include transfer legs, because they move money between accounts. The Transactions list shows every leg, including transfer legs and deleted rows, and has no income/spending totals.
 
 ## Periods and dates
 

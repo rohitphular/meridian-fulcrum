@@ -24,6 +24,7 @@ const _VWSUB_DEFAULT_TIMEZONE = 'Europe/London';
 function viewSubscriptionsRegister(actions) {
   actions.list_subscriptions_view = { handler: function(ctx) { return vwSubListView(ctx); }, cache: true, ttl: 300 };
   actions.get_subscription_form_options = { handler: function(ctx) { return vwSubFormOptions(ctx); }, cache: true, ttl: 600 };
+  actions.get_subscription_estimate = { handler: function(ctx) { return vwSubEstimateView(ctx); }, cache: true, ttl: 300 };
 }
 
 function _vwSubText(value) {
@@ -134,6 +135,9 @@ function _vwSubRow(sub, accountsById, categoryLabels, fx, now) {
     is_foreign: currency !== '' && currency !== fx.quote_currency,
     category_label: categoryLabels[categoryKey] !== undefined ? categoryLabels[categoryKey] : '',
     is_scheduled: scheduled,
+    // Only scheduled subscriptions take part in the monthly estimate.
+    selectable: scheduled,
+    flow: _vwSubText(sub.tx_type) === 'money-in' ? 'in' : 'out',
     next_payment_date: nextDate,
     due_in_days: scheduled && nextDate !== '' ? vwSubDueInDays(nextDate, sub.subscription_timezone_local, now) : null,
     allowed_actions: vwSubAllowedActions(status),
@@ -230,19 +234,8 @@ function vwSubBuildList(subs, accounts, categories, fx, params, now) {
   const categoryLabels = _vwSubCategoryLabels(categories);
   const all = subs.map(function(sub) { return _vwSubRow(sub, accountsById, categoryLabels, fx, now); });
 
-  // Summary covers every subscription (not the filtered set), as the section shows it.
-  let estimate = 0, missing = 0, scheduledCount = 0;
-  const missingCurrencies = [];
-  all.forEach(function(row) {
-    if (!row.is_scheduled) return;
-    scheduledCount++;
-    if (row.monthly.quote === null) {
-      missing++;
-      if (row.account_currency !== '') missingCurrencies.push(row.account_currency);
-      return;
-    }
-    estimate += row.monthly.quote;
-  });
+  // Summary covers every scheduled subscription (not the filtered set).
+  const estimate = vwSubEstimate(all, null);
 
   const query = search.toLowerCase();
   const filtered = all.filter(function(row) {
@@ -274,16 +267,17 @@ function vwSubBuildList(subs, accounts, categories, fx, params, now) {
 
   return {
     ok: true,
-    warning: fxMissingRateWarning(missingCurrencies, fx),
+    warning: fxMissingRateWarning(estimate.missing_currencies, fx),
     data: {
       summary: {
-        scheduled_count: scheduledCount,
+        scheduled_count: estimate.considered_count,
         total_count: all.length,
-        est_monthly_quote: estimate,
-        missing_rate_count: missing,
-        partial: missing > 0,
+        estimate: estimate,
       },
       rows: paged.rows,
+      // Every scheduled subscription matching the filters, across all pages,
+      // for "select all matching".
+      selectable_ids: filtered.filter(function(row) { return row.selectable; }).map(function(row) { return String(row.id).toLowerCase(); }),
       total: paged.total,
       page: paged.page,
       page_size: paged.page_size,
@@ -298,6 +292,65 @@ function vwSubBuildList(subs, accounts, categories, fx, params, now) {
       },
     },
   };
+}
+
+// Monthly estimate over scheduled subscriptions. ids === null → all of them
+// (the default); otherwise only the listed ids (case-insensitive). Ids that are
+// unknown or not scheduled are reported, never counted. Out = payments,
+// In = money-in subscriptions; a missing rate leaves the row out and marks the
+// estimate partial rather than converting 1:1.
+function vwSubEstimate(rows, ids) {
+  const wanted = ids === null ? null : Object.create(null);
+  if (ids !== null) ids.forEach(function(id) { wanted[String(id).toLowerCase()] = true; });
+  const out = { mode: ids === null ? 'all_active' : 'selected', considered_count: 0, selected_ids: [],
+    out_quote: 0, in_quote: 0, net_quote: 0, missing_rate_count: 0, missing_currencies: [], partial: false, ignored_ids: [] };
+  const seen = Object.create(null);
+  rows.forEach(function(row) {
+    const id = String(row.id).toLowerCase();
+    if (wanted !== null && wanted[id] !== true) return;
+    seen[id] = true;
+    if (!row.selectable) { if (wanted !== null) out.ignored_ids.push(id); return; }
+    out.considered_count++;
+    out.selected_ids.push(id);
+    if (row.monthly.quote === null) {
+      out.missing_rate_count++;
+      if (row.account_currency !== '' && out.missing_currencies.indexOf(row.account_currency) === -1) out.missing_currencies.push(row.account_currency);
+      return;
+    }
+    if (row.flow === 'in') out.in_quote += row.monthly.quote;
+    else out.out_quote += row.monthly.quote;
+  });
+  if (wanted !== null) Object.keys(wanted).forEach(function(id) { if (seen[id] !== true) out.ignored_ids.push(id); });
+  out.net_quote = out.in_quote - out.out_quote;
+  out.partial = out.missing_rate_count > 0;
+  return out;
+}
+
+// ids param: '' → all scheduled (default); 'none' → empty selection; csv of UUIDs.
+function _vwSubEstimateIds(value) {
+  const text = _vwSubText(value);
+  if (text === '') return { ok: true, ids: null };
+  if (text === 'none') return { ok: true, ids: [] };
+  const ids = text.split(',').map(function(id) { return id.trim(); }).filter(function(id) { return id !== ''; });
+  const bad = ids.filter(function(id) { return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id) === false; });
+  if (bad.length > 0) return { ok: false, error: vmError('invalid_filter', 'ids', 'Selected subscriptions must be listed by id.') };
+  return { ok: true, ids: ids };
+}
+
+function vwSubBuildEstimate(subs, accounts, categories, fx, params, now) {
+  const parsed = _vwSubEstimateIds(params.ids);
+  if (parsed.ok === false) return parsed;
+  const accountsById = _vwSubById(accounts);
+  const categoryLabels = _vwSubCategoryLabels(categories);
+  const rows = subs.map(function(sub) { return _vwSubRow(sub, accountsById, categoryLabels, fx, now); });
+  const estimate = vwSubEstimate(rows, parsed.ids);
+  return { ok: true, data: { estimate: estimate }, warning: fxMissingRateWarning(estimate.missing_currencies, fx) };
+}
+
+function vwSubEstimateView(ctx) {
+  const built = vwSubBuildEstimate(vmLoad('subscriptions'), vmLoad('accounts_raw'), vmLoad('categories'), vmFx(ctx), ctx.params, new Date());
+  if (built.ok === false) return built.error;
+  return vmEnvelope(ctx, built.data, [built.warning]);
 }
 
 function vwSubListView(ctx) {

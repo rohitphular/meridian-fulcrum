@@ -149,7 +149,7 @@ Transaction CSV import is parsed and validated on the backend (`api/transaction-
 
 | Operation | Behaviour |
 |---|---|
-| `list_transactions_view` | GET filtered / sorted / paged rows shaped for the table, `warn_rows` and totals (income / spending exclude deleted rows and own-account transfers); see [api/README.md](../api/README.md#view-gets) for params |
+| `list_transactions_view` | GET filtered / sorted / paged rows shaped for the table and `warn_rows` (no totals); every page, sort or filter request shows the loading overlay while it is pending; see [api/README.md](../api/README.md#view-gets) for params |
 | `get_transaction_facets` | GET filter-bar options (types, account types, accounts, majors / minors, location and tag suggestions, ranges, sort columns, page sizes) |
 | `get_transaction` / `get_transaction_form_options` / `get_transaction_prefill` | GET the view panel record with its counter leg; add / edit option trees; copy and mark-as-subscription prefill |
 | `export_transactions` | GET compact import rows for the list filters (lossy transfers refused with `transfer_export_lossy`) |

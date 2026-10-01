@@ -37,7 +37,9 @@ const viewRow = (index, extra = {}) => ({
 });
 function listResponse(rows, summary = {}) {
   return { ok: true, quote: { currency: 'GBP', symbol: '£', rate_available: true }, warnings: [], data: {
-    summary: { scheduled_count: rows.filter(row => row.is_scheduled).length, total_count: rows.length, est_monthly_quote: 0, missing_rate_count: 0, partial: false, ...summary },
+    summary: { scheduled_count: rows.filter(row => row.is_scheduled).length, total_count: rows.length,
+      estimate: { mode: 'all_active', considered_count: rows.filter(row => row.is_scheduled).length, selected_ids: rows.filter(row => row.is_scheduled).map(row => String(row.id).toLowerCase()),
+        out_quote: 0, in_quote: 0, net_quote: 0, missing_rate_count: 0, missing_currencies: [], partial: false, ignored_ids: [] }, ...summary },
     rows, total: rows.length, page: 1, page_size: 'all', pages: 1, sort: { col: 'next_payment_date', dir: 'asc' },
     filters: {}, active_filter_count: 0, facets: { majors: [{ key: 'housing', label: 'Housing' }], frequencies: OPTIONS.frequencies, statuses: statuses.map(value => ({ value, label: value })) } } };
 }
@@ -62,8 +64,10 @@ function fixture(overrides = {}) {
     return { ok: true, created: 1, updated: 0, failed: 0, rows: 1, results: [{ index: 0, line: 2, ok: true, action: 'created', key: uuid(1) }] };
   } };
   let loading = 0;
+  const timers = [];
   const context = importResultHelpers.context({
     state, ExpenseAPI: api, esc, el: id => elements[id] ?? null,
+    setTimeout: fn => { timers.push(fn); return timers.length; }, clearTimeout: () => { timers.length = 0; },
     openContextMenu: (button, items, select) => select('csv'), exportSubscriptions: (format, rows) => exports.push({ format, rows }),
     recordStatusIcon: status => status, syncStatusIcon: () => '',
     showLoading: () => loading++, hideLoading: () => loading--, showMsg: (message, kind) => messages.push({ message, kind }),
@@ -71,8 +75,9 @@ function fixture(overrides = {}) {
     document: { dispatchEvent: event => reloads.push(event.type) },
     CustomEvent: class { constructor(type) { this.type = type; } }, AbortController,
   });
-  vm.runInContext(source + '\nthis.exposed = {_chooseSubscriptionImport,_submitImport,_renderImportPanel,_renderForm,_renderTable,_txTypeOpts,_majorSelectHtml,_minorSelectHtml,_collectForm,_saveAdd,_saveEdit,_toggle,_attachEvents,_listParams,_loadList,_loadFormOptions,renderSubscriptions,setOptions:data=>{_formOptions={key:_formKey(),data};},pending:()=>_subImportFile};', context);
-  return { ...context.exposed, state, elements, requests, reloads, messages, exports, views, api, loading: () => loading };
+  vm.runInContext(source + '\nthis.exposed = {_chooseSubscriptionImport,_submitImport,_renderImportPanel,_renderForm,_renderTable,_txTypeOpts,_majorSelectHtml,_minorSelectHtml,_collectForm,_saveAdd,_saveEdit,_toggle,_attachEvents,_listParams,_loadList,_loadFormOptions,renderSubscriptions,setOptions:data=>{_formOptions={key:_formKey(),data};},pending:()=>_subImportFile,_toggleSelected,_setSelection,_isSelected,selection:()=>_selection,setSelectMode:v=>{_selectMode=v;}};', context);
+  const runTimers = async () => { const due = timers.splice(0); for (const fn of due) await fn(); };
+  return { ...context.exposed, state, elements, requests, reloads, messages, exports, views, api, loading: () => loading, runTimers };
 }
 const file = (text, name = 'subscription_master.csv') => ({ name, text: async () => text });
 
@@ -199,14 +204,19 @@ test('the table renders the server summary, due-in days and quote amounts withou
     viewRow(3, { is_foreign: true, monthly: { native: 5, currency: 'ZZZ', currency_symbol: 'ZZZ ', quote: null }, due_in_days: 12 }),
     viewRow(4, { is_scheduled: false, schedule_status: 'expired', next_payment_date: '', due_in_days: null, record_status: 'active' }),
   ];
-  const html = f._renderTable(listResponse(rows, { scheduled_count: 3, total_count: 5, est_monthly_quote: 1234.5, missing_rate_count: 1, partial: true }));
+  const estimate = { mode: 'all_active', considered_count: 3, selected_ids: [], out_quote: 1234.5, in_quote: 2000, net_quote: 765.5,
+    missing_rate_count: 1, missing_currencies: ['ZZZ'], partial: true, ignored_ids: [] };
+  const html = f._renderTable(listResponse(rows, { scheduled_count: 3, total_count: 5, estimate }));
   assert.match(html, /3 \/ 5/);
   assert.match(html, /£1,234\.50 \(partial\)/);
+  assert.match(html, /All 3 active/);
+  assert.match(html, /income £2,000\.00/);
   assert.match(html, /1 subscription\(s\) could not be converted/);
   assert.match(html, /\(today\)/);
   assert.match(html, /\(2d overdue\)/);
   assert.match(html, /\(in 12d\)/);
   assert.match(html, /₹1,000\.00\/qtr<span class="td-base-amt">£3\.17\/mo/);
+  assert.match(html, /class="sub-cards"/, 'phones get a card per subscription');
   assert.match(html, /td-base-amt">—</);
   assert.match(html, /Expired/);
   assert.match(html, /data-sub-sort="amount_monthly_quote"/);
@@ -392,4 +402,40 @@ test('reopening a form with cached options renders at once and an unchanged refr
   f.api.respond = () => ({ ok: true, data: { ...OPTIONS, source_accounts: [] } });
   await f._loadFormOptions();
   assert.match(f.elements.subFormWrap.innerHTML, /New subscription/);
+});
+
+test('choosing subscriptions asks the server for the estimate; the browser only tracks which ids are chosen', async () => {
+  const f = fixture();
+  const rows = [viewRow(1), viewRow(2), viewRow(3, { is_scheduled: false, selectable: false })].map(row => ({ selectable: row.is_scheduled, flow: 'out', ...row }));
+  f.state.views.list_subscriptions_view = listResponse(rows);
+  const estimateCalls = () => f.views.filter(call => call.action === 'get_subscription_estimate');
+  f.api.respond = (action, params) => action === 'get_subscription_estimate'
+    ? { ok: true, quote: { symbol: '£' }, data: { estimate: { mode: 'selected', considered_count: 1, selected_ids: [], out_quote: 12.5, in_quote: 0, net_quote: -12.5, missing_rate_count: 0, missing_currencies: [], partial: false, ignored_ids: [] } } }
+    : listResponse(rows);
+  f.setSelectMode(true);
+  assert.equal(f._isSelected(rows[0]), true, 'by default every active subscription counts');
+  assert.equal(f._isSelected(rows[2]), false);
+  let html = f._renderTable();
+  assert.match(html, /data-sub-select="a0000000-0000-4000-8000-000000000001"/);
+  assert.doesNotMatch(html, /data-sub-select="a0000000-0000-4000-8000-000000000003"/, 'unscheduled subscriptions cannot be chosen');
+  assert.match(html, /class="sub-select-bar"/);
+  assert.doesNotMatch(html, /data-action="sub-menu"/, 'row menus are hidden while choosing');
+  f._toggleSelected(uuid(2));
+  f._toggleSelected(uuid(3));
+  assert.deepEqual(Array.from(f.selection()), [uuid(1)]);
+  assert.equal(estimateCalls().length, 0, 'taps are batched before the request');
+  assert.match(f._renderTable(), /aria-busy="true"/);
+  await f.runTimers();
+  assert.deepEqual(estimateCalls().map(call => call.params), [{ ids: [uuid(1)] }]);
+  html = f._renderTable();
+  assert.match(html, /£12\.50/);
+  assert.match(html, /1 selected/);
+  assert.match(html, /Use all active/);
+  f._setSelection(new Set());
+  await f.runTimers();
+  assert.deepEqual(estimateCalls().at(-1).params, { ids: 'none' });
+  f._setSelection(null);
+  assert.equal(f.selection(), null);
+  assert.match(f._renderTable(), /All 2 active/);
+  assert.doesNotMatch(source, /reduce\(|monthly\.quote \+|out_quote \+/, 'the browser never adds amounts up');
 });

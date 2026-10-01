@@ -216,12 +216,15 @@ function _viewRow(id) {
 async function _loadView() {
   const seq = ++_viewSeq;
   let response;
+  // Every list request (open, filter, sort, page) shows the loader, as on Transactions.
+  showLoading();
   try {
     response = await ExpenseAPI.view(LIST_VIEW, {
       search: state.accountTypeSearch, status: state.accountTypeStatus === 'all' ? '' : state.accountTypeStatus,
       type: state.accountTypeFilterType === 'all' ? '' : state.accountTypeFilterType,
     });
   } catch (error) { console.error('[configure] list view failed:', error); response = null; }
+  finally { hideLoading(); }
   if (seq !== _viewSeq) return;
   if (response?.ok !== true) _viewError = response?.message || 'Account types could not be loaded. Check your connection and refresh.';
   else { _viewError = ''; state.views[LIST_VIEW] = response; }

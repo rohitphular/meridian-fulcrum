@@ -24,8 +24,11 @@ function _rateRow(currency) {
 async function _loadView() {
   const seq = ++_viewSeq;
   let response;
+  // Every list request (open, filter, sort, page) shows the loader, as on Transactions.
+  showLoading();
   try { response = await ExpenseAPI.view(LIST_VIEW, { sort: _sort.col, dir: _sort.dir }); }
   catch (error) { console.error('[rates] list view failed:', error); response = null; }
+  finally { hideLoading(); }
   if (seq !== _viewSeq) return;
   if (response?.ok !== true) {
     _viewError = response?.message || 'Currencies could not be loaded. Check your connection and refresh.';

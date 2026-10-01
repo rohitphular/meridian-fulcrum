@@ -16,7 +16,7 @@
 // - Transfer pairing always runs over the full sheet (ldgPairLegs), never over
 //   the filtered or paged rows; filters only select rows.
 // - Rows keep every leg (both transfer legs, deleted rows) exactly as the table
-//   showed them; only totals apply ldgFlowKind (no deleted rows, no own transfers).
+//   showed them.
 // - Date filters use the recorded wall date (ldgTxDateKey); range=all (the
 //   default when absent) is unbounded at both ends. A row whose date
 //   cannot be read passes the date filter and is reported in warn_rows, as the
@@ -520,28 +520,9 @@ function vwTxListView(ctx) {
   const page = Math.min(paging.page, pages);
   const rows = ordered.slice((page - 1) * paging.page_size, page * paging.page_size);
 
-  // Totals: income / spending exclude deleted rows and own-account transfers.
-  const totals = { count: total, money_in: { count: 0, quote: 0 }, money_out: { count: 0, quote: 0 }, net_quote: 0,
-    transfer_legs: 0, deleted: 0, missing_currencies: [] };
-  const missing = Object.create(null);
+  // Currencies of the matched rows drive the missing-rate warning.
   const currencies = Object.create(null);
-  valid.forEach(function(tx, position) {
-    const row = shaped[position];
-    if (row.amount.currency !== '') currencies[row.amount.currency] = true;
-    if (row.record_status === 'deleted') totals.deleted += 1;
-    else if (row.is_transfer_leg) totals.transfer_legs += 1;
-    const kind = ldgFlowKind(tx, index.pairs);
-    if (kind === null) return;
-    const bucket = kind === 'income' ? totals.money_in : totals.money_out;
-    if (row.amount.quote === null) { missing[row.amount.currency === '' ? '(blank)' : row.amount.currency] = true; return; }
-    bucket.count += 1;
-    bucket.quote += row.amount.quote;
-  });
-  totals.net_quote = totals.money_in.quote - totals.money_out.quote;
-  totals.missing_currencies = Object.keys(missing).sort();
-  totals.money_in.display = _vwTxMoneyText(totals.money_in.quote, index.fx.quote_symbol);
-  totals.money_out.display = _vwTxMoneyText(totals.money_out.quote, index.fx.quote_symbol);
-  totals.net_display = _vwTxMoneyText(totals.net_quote, index.fx.quote_symbol);
+  shaped.forEach(function(row) { if (row.amount.currency !== '') currencies[row.amount.currency] = true; });
 
   const data = {
     rows: rows, total: total, page: page, page_size: paging.page_size, pages: pages, sort: sorted.sort,
@@ -553,7 +534,7 @@ function vwTxListView(ctx) {
       user_location_area: filters.user_location_area, tag: filters.tag, counterparty: filters.counterparty, search: filters.search,
     },
     active_filter_count: _vwTxActiveFilterCount(filters),
-    warn_rows: warnRows, totals: totals,
+    warn_rows: warnRows,
   };
   console.log('vwTxListView: matched=' + matched.length + ' valid=' + total + ' warn=' + warnRows.length + ' page=' + page + '/' + pages);
   return vmEnvelope(ctx, data, [fxMissingRateWarning(Object.keys(currencies), index.fx)]);

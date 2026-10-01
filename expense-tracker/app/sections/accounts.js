@@ -97,14 +97,18 @@ function _listParams() {
 async function _loadView() {
   const seq = ++_viewSeq;
   let response;
+  // Every list request (open, filter, sort, page) shows the loader, as on Transactions.
+  showLoading();
   try { response = await ExpenseAPI.view(LIST_VIEW, _listParams()); }
   catch (error) {
+    hideLoading();
     if (seq !== _viewSeq) return;
     console.error('[accounts] list view failed:', error);
     _viewError = 'Accounts could not be loaded. Check your connection and refresh.';
     _renderList();
     return;
   }
+  hideLoading();
   if (seq !== _viewSeq) return;
   if (response?.ok !== true) {
     console.warn('[accounts] list view failed:', response?.error);

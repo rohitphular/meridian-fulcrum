@@ -55,6 +55,7 @@ The frontend is a pure renderer: every screen reads a view GET that returns conv
 | `list_account_types_view` | `view-config-lists.gs` | `search`, `status`, `type`, `sort`, `dir` | yes |
 | `export_account_types` | `view-config-lists.gs` | — (whole catalog in the 13 import columns, `requires_migration`) | no |
 | `list_subscriptions_view` | `view-subscriptions.gs` | `statuses`, `major`, `frequency`, `search`, `sort_col`, `sort_dir`, `page`, `page_size` | yes (300 s) |
+| `get_subscription_estimate` | `view-subscriptions.gs` | `ids` (csv UUIDs, `none`, or blank = all active): monthly payments / income / net for the chosen subscriptions | yes (300 s) |
 | `get_subscription_form_options` | `view-subscriptions.gs` | `id` | yes |
 | `list_categories_view` | `view-categories.gs` | `type`, `major`, `minor`, `search`, `statuses`, `sort_col`, `sort_dir`, `page`, `page_size` | yes |
 | `get_category_form_options` | `view-categories.gs` | — | yes |

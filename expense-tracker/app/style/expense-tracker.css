@@ -849,6 +849,38 @@ td.td-truncate { max-width: 180px; overflow: hidden; text-overflow: ellipsis; wh
 
 .sub-card-due  { color: var(--ember); font-weight: 500; }
 
+/* Subscription cards (mobile list) and estimate selection */
+.sub-cards { display: none; }
+.sub-card { grid-template-columns: 1fr auto auto; }
+.sub-card.is-unscheduled { opacity: .6; }
+.sub-card-main { min-width: 0; }
+.sub-card-name { font-weight: 600; overflow-wrap: anywhere; }
+.sub-card-meta { font-size: var(--text-sm); color: var(--muted); margin-top: 2px; }
+.sub-card-amt { text-align: right; white-space: nowrap; font-size: var(--text-sm); }
+.sub-card-side { display: flex; align-items: center; gap: 4px; }
+[data-sub-select] { cursor: pointer; -webkit-tap-highlight-color: transparent; user-select: none; }
+.sub-card.is-selected { border-color: var(--ember); box-shadow: inset 3px 0 0 var(--ember); }
+tr.is-selected td { background: var(--row-hover); }
+.sub-check {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; border-radius: 50%;
+  border: 2px solid var(--hair-strong); color: var(--panel); font-size: 13px; font-weight: 700;
+}
+.sub-check.is-on { background: var(--ember); border-color: var(--ember); }
+.sub-check-cell { width: 36px; }
+.sub-estimate.is-stale .summary-card-value, .sub-select-total.is-stale { opacity: .5; transition: opacity .15s; }
+.sub-estimate-actions { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+.sub-select-bar {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 30;
+  display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;
+  padding: 10px 16px calc(10px + env(safe-area-inset-bottom));
+  background: var(--panel); border-top: 1px solid var(--hair-strong);
+  box-shadow: 0 -4px 16px rgba(0, 0, 0, .12);
+}
+.sub-select-total { font-size: var(--text-md); }
+.sub-select-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+#subscriptionsContent.is-selecting { padding-bottom: 120px; }
+
 .sub-card .row-actions { margin-top: 4px; }
 
 /* ── responsive ── */
@@ -891,6 +923,11 @@ td.td-truncate { max-width: 180px; overflow: hidden; text-overflow: ellipsis; wh
   /* Keep confirmation actions in cards on mobile, including blocked deletes. */
   .tx-table-wrap              { display: none; }
   .tx-cards                   { display: flex; flex-direction: column; gap: 10px; }
+
+  /* subscriptions use cards on phones */
+  .sub-cards                    { display: flex; flex-direction: column; gap: 10px; }
+  .sub-select-actions           { width: 100%; }
+  .sub-select-actions .btn      { flex: 1; }
 
   /* accounts */
   .acc-table-wrap               { display: none; }

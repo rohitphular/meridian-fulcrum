@@ -113,14 +113,19 @@ test('rows carry native and quote money, monthly equivalents, due-in days, label
 test('summary covers every subscription: scheduled count, total and the partial monthly estimate', () => {
   const runtime = appRuntime();
   const { summary } = runtime.list({ statuses: 'deleted' }).data;   // filters never change the summary
+  const est = summary.estimate;
   assert.equal(summary.scheduled_count, 4);
   assert.equal(summary.total_count, 8);
-  assert.equal(summary.missing_rate_count, 1);
-  assert.equal(summary.partial, true);
-  assert.ok(Math.abs(summary.est_monthly_quote - (1000 + 7 * 52 / 12 + 1000 / 8400 * 80)) < 1e-9);
-  const inr = runtime.list({ quote_currency: 'INR' });
-  assert.equal(inr.quote.symbol, '₹');
-  assert.ok(Math.abs(inr.data.summary.est_monthly_quote - ((1000 + 7 * 52 / 12) / 80 * 8400 + 1000)) < 1e-6);
+  assert.equal(est.mode, 'all_active');
+  assert.equal(est.considered_count, 4);
+  assert.equal(est.missing_rate_count, 1);
+  assert.equal(est.partial, true);
+  // Out + In covers the same scheduled set the single estimate used to sum.
+  assert.ok(Math.abs(est.out_quote + est.in_quote - (1000 + 7 * 52 / 12 + 1000 / 8400 * 80)) < 1e-9);
+  assert.ok(Math.abs(est.net_quote - (est.in_quote - est.out_quote)) < 1e-9);
+  const inr = runtime.list({ quote_currency: 'INR' }).data.summary.estimate;
+  assert.equal(runtime.list({ quote_currency: 'INR' }).quote.symbol, '₹');
+  assert.ok(Math.abs(inr.out_quote + inr.in_quote - ((1000 + 7 * 52 / 12) / 80 * 8400 + 1000)) < 1e-6);
 });
 
 test('status, major, frequency and search filters run on the server; an empty status selection is explicit', () => {
@@ -236,4 +241,29 @@ test('new view globals keep their file prefix', () => {
   for (const name of names) assert.match(name, /^(_?vwSub|_VWSUB|viewSubscriptionsRegister$)/, name);
   assert.doesNotMatch(source, /\?\?|\?\./);
   assert.ok(Sheet);
+});
+
+test('get_subscription_estimate covers the chosen subscriptions only, splits payments from income and ignores the unschedulable', () => {
+  const runtime = appRuntime();
+  const estimate = params => runtime.get({ action: 'get_subscription_estimate', ...params });
+  const all = estimate({}).data.estimate;
+  const listed = runtime.list({}).data.summary.estimate;
+  assert.deepEqual(plain(all), plain(listed), 'no ids = the all-active default the list shows');
+  const rent = estimate({ ids: ID(61).toUpperCase() }).data.estimate;
+  assert.equal(rent.mode, 'selected');
+  assert.equal(rent.considered_count, 1);
+  assert.ok(Math.abs(rent.out_quote + rent.in_quote - 1000) < 1e-9);
+  const none = estimate({ ids: 'none' }).data.estimate;
+  assert.deepEqual([none.considered_count, none.out_quote, none.in_quote, none.net_quote], [0, 0, 0, 0]);
+  const mixed = estimate({ ids: [ID(61), ID(65), 'b0000000-0000-4000-8000-000000000999'].join(',') }).data.estimate;
+  assert.equal(mixed.considered_count, 1, 'inactive and unknown ids are never counted');
+  assert.deepEqual(Array.from(mixed.ignored_ids).sort(), [ID(65), 'b0000000-0000-4000-8000-000000000999'].sort());
+  const broker = estimate({ ids: ID(64) }).data.estimate;
+  assert.equal(broker.partial, true, 'a missing rate marks the estimate partial instead of converting 1:1');
+  const bad = estimate({ ids: 'not-a-uuid' });
+  assert.equal(bad.error, 'invalid_filter');
+  assert.equal(bad.field, 'ids');
+  const list = runtime.list({ search: 'rent' }).data;
+  assert.ok(list.selectable_ids.includes(ID(61)), 'select-all-matching ids come from the server');
+  assert.ok(list.rows.every(row => typeof row.selectable === 'boolean' && (row.flow === 'in' || row.flow === 'out')));
 });
