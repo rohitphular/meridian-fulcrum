@@ -13,7 +13,7 @@ function load(globals, exports) {
     .replace(/^import\s[\s\S]*?from\s+['"][^'"]+['"];\s*/gm, '')
     .replace(/^export \{[^}]+\};/gm, '')
     .replace(/\bexport (?=(?:async )?function|const|let)/g, '');
-  const context = vm.createContext({ ...importResultHelpers(), ...globals });
+  const context = importResultHelpers.context({ ...globals });
   vm.runInContext(source + '\nglobalThis.testExports = {' + exports.join(',') + '};', context);
   return context.testExports;
 }

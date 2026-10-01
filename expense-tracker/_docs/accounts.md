@@ -80,26 +80,31 @@ Setting `record_status = inactive` removes the account from transaction form dro
 
 ## Net Worth summary
 
-Four cards above the table, always in the selected display currency and always unfiltered (filter panel does not affect these totals). Deleted accounts are excluded from all four cards; inactive and locked accounts are included.
+Four cards above the table, computed by `list_accounts_view` (`summary.cards`) in the selected quote currency and always unfiltered (the filter panel does not affect these totals). Deleted accounts are excluded from all four cards; inactive and locked accounts are included. The same net-worth definition is used on Home, in Insights and by the advisor; see [calculations](calculations.md#net-worth-assets-and-liabilities). A missing rate excludes that account and adds a `missing_rate` warning.
 
-| Card | Calculation |
+| Card | Calculation (server, `ldgNetWorth`) |
 |---|---|
-| **Total Assets** | Sum of `toBase(current_value_local, account_currency_local)` over all non-deleted `asset` and `investment` accounts |
-| **Total Liabilities** | Sum of `abs(toBase(current_value_local, account_currency_local))` over all non-deleted `liability` accounts |
-| **Net Worth** | `Total Assets − Total Liabilities`. Negative renders in ember/red. |
-| **Liquid Cash** | Sum of `toBase(current_value_local, account_currency_local)` over non-deleted accounts where `type = asset AND sub_type ∈ {current, savings, cash}` |
+| **Total Assets** | Current balance converted to the quote currency, summed over all non-deleted `asset` and `investment` accounts |
+| **Total Liabilities** | The same over all non-deleted `liability` accounts (negative = owed; the UI shows the magnitude) |
+| **Net Worth** | Assets + liabilities. Negative renders in ember/red. |
+| **Liquid Cash** | The same over non-deleted `asset` accounts whose account type maps to the `account_deposit` detail sheet |
+
+The account list itself (filters, sort, paging, group totals, display signs, labels, `allowed_actions`) is also returned by `list_accounts_view`; the browser only renders it.
 
 ## API surface
 
 | Operation | Behaviour |
 |---|---|
-| `list_accounts` | Return all rows; no defaults seeded |
+| `list_accounts_view` | GET view model for the Accounts tab: summary cards, groups with totals, rows with native and quote balances, facets; params `type`, `sub_type`, `currency`, `search`, `statuses`, `sort`, `dir`, `page`, `page_size` |
+| `get_account_form_options` | GET add / edit / import form choices (types, subtypes, currencies, statuses, editable fields of `id`) |
+| `export_accounts` | GET every account (all statuses, filters ignored) in the 13 `account_master` import columns, stored values only; the Export button downloads it as CSV / JSON |
+| `list_accounts` | Raw rows (kept for `scripts/factory-reset.sh`); the app does not call it |
 | `create_account` | Validate required fields (including `opening_value_local`, `account_opening_date_local`); negate value for liabilities; assign UUID `id` (supplied IDs must be valid UUIDs; new values are written lowercase and an existing UUID returns `account_id_exists`); store the validated canonical `local_timezone` from the frontend (captured from browser); store `account_opening_date_local` as-is (no UTC conversion); write `opening_value_local` to sheet; stamp `created_at`, `sync_status = create-pending`; append. `current_value_local` is NOT written at create time — it is computed at read time by `_buildAccountNetMap`. Returns `{ ok: true, id: '<uuid>' }`. |
 | `create_accounts_bulk` | Accept `accounts[]`; validate and insert or replace each row by `id`; match supplied UUIDs case-insensitively; preserve the existing UUID spelling, `created_at`, and omitted lifecycle status on replacement; advance `sync_status`. Existing duplicate UUIDs fail before row writes. Return `{ ok, created, updated, failed, results }` with result entries `{ key, ok, action?, error? }` |
 | `update_account` | Validate editable fields only; locked guard → `record_locked`; renaming to another non-deleted account's `account_name` → `duplicate_account` (unchanged names are not checked, so existing shared names stay editable); advance `sync_status`; stamp `updated_at`. Editable fields: `account_name`, `sub_type`, `account_closing_date_local`, `description`, `record_status`. Valid `record_status` values for update: `active`, `inactive`, `locked` only — `deleted` is rejected with `invalid_record_status`. |
 | `delete_account` | Locked guard; FK check → `account_in_use`; soft-delete (`record_status → deleted`) |
 | `restore_account` | Verifies record is in `deleted` state; sets `record_status → active` |
-| `get_account_schema` | Return the type taxonomy and all sub-type enums. Response shape: `{ types: { value, label, group }[], asset_sub_types: string[], investment_sub_types: string[], liability_sub_types: string[], subtypes_by_type: { [type]: string[] }, subtype_labels: { [subtype]: string }, type_labels: { [type]: string } }` — frontend uses this to drive forms without hard-coding |
+| `get_account_schema` | Return the type taxonomy and all sub-type enums. Response shape: `{ types: { value, label, group }[], asset_sub_types: string[], investment_sub_types: string[], liability_sub_types: string[], subtypes_by_type: { [type]: string[] }, subtype_labels: { [subtype]: string }, type_labels: { [type]: string } }` — no longer used by the app (forms use `get_account_form_options`; schemas arrive in `get_app_context`) |
 
 ## Error codes
 
@@ -136,6 +141,7 @@ Four cards above the table, always in the selected display currency and always u
 
 ## Form behaviour
 
+- The add and edit forms do no validation of their own. They submit what was entered; `validateAccountCreate` / `validateAccountUpdate` enforce every required field and value rule. Account validators do not yet return `message`, so the form shows its own copy for the returned code.
 - Currency dropdown is populated from the rates table — adding a new currency requires adding it to `rates` first.
 - Sub-type dropdown updates to the valid values for the selected type. `sub_type` is editable in the edit form.
 - `local_timezone` is NOT a form input — it is auto-detected from `Intl.DateTimeFormat().resolvedOptions().timeZone` in the browser and sent silently with the create payload. It is displayed as a disabled field in view/edit.

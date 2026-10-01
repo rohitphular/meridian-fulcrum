@@ -20,7 +20,8 @@ See [spreadsheet tab order](sheet-order.md) for the preferred layout and automat
 8. **[categories.md](categories.md)** — Two-level taxonomy, archive semantics, account-type hints, CSV import
 9. **[rates.md](rates.md)** — FX rates, upsert semantics, conversion function, row-level vs global rate priority
 10. **[subscriptions.md](subscriptions.md)** — Recurring payment obligations, 21-column schema, frequency, amount, account and category linkage
-11. **[insight.md](insight.md)** — Summary cards, monthly chart, category drilldown, per-account spend, date-range filter
+11. **[calculations.md](calculations.md)** — Product decisions applied by the server everywhere: net worth, income / spending exclusions, periods, conversion, caching
+12. **[insight/INSIGHT.md](insight/INSIGHT.md)** — The server-computed insight section and one doc per insight ([insight.md](insight.md) is the superseded early design)
 
 ## Historical
 

@@ -1,15 +1,28 @@
 import { state } from '../core/state.js';
-import { el, esc, fmtDateTime, fmtDateTimeCompact, fmtNative, fmtBase, nowLocalISO, toDateInputVal, exportData, getSymbol, openContextMenu, closeContextMenu, syncStatusIcon, recordStatusIcon, renderImportResult, importErrorText } from '../core/utils.js';
+import { el, esc, fmtDateTime, fmtDateTimeCompact, nowLocalISO, downloadExport, openContextMenu, closeContextMenu, syncStatusIcon, recordStatusIcon, renderImportResult, importErrorText, clearFormError, showFormError } from '../core/utils.js';
 import { showLoading, hideLoading, showMsg } from '../core/ui.js';
-import { filteredTx, getRangeBounds } from '../core/daterange.js';
 import { ExpenseAPI } from '../core/api.js';
-import { balanceMovementAffectsSnapshot } from '../core/date-utils.js';
 
-const SUGGESTIONS_CACHE_KEY = 'et_suggestions_v2';
+// Transactions render what the server returns (api/view-transactions.gs):
+// - list_transactions_view: filtered / sorted / paged rows, totals
+// - get_transaction_facets: filter-bar options (once per data refresh)
+// - get_transaction(id): the view panel
+// - get_transaction_form_options: add / edit option trees (category rules,
+//   eligible accounts per leg); the form only looks values up in the tree
+// - get_transaction_prefill: copy and mark-as-subscription
+// - export_transactions: compact import rows, downloaded as-is
+// The browser keeps UI state only: the applied query, the filter draft, the
+// open panel, and optional enrichment (geocoding, tag autocomplete).
+
+const SUGGESTIONS_CACHE_KEY = 'et_suggestions_v3';
 const SUGGESTIONS_TTL_MS    = 6 * 60 * 60 * 1000;
 
-const METADATA_CACHE_KEY = 'et_metadata_v1';
-const METADATA_TTL_MS    = 6 * 60 * 60 * 1000;
+const _DEFAULT_FILTERS = () => ({
+  range: 'last_30', from: '', to: '', types: [], account_ids: [], account_types: [], major: [], minor: [],
+  user_location_country: '', user_location_city: '', user_location_area: '', tag: '', counterparty: '', search: '',
+});
+const _ACTION_LABELS = { view: 'View', edit: 'Edit', copy: 'Copy', delete: 'Delete', restore: 'Restore', subscribe: 'Subscribe' };
+const _ACTION_KEYS   = { view: 'tx-view', edit: 'tx-edit', copy: 'tx-copy', delete: 'tx-delete', restore: 'tx-restore', subscribe: 'tx-mark-sub' };
 
 let filterOpen         = false;
 let _txImportFile   = null;   // file chosen in the import panel; read only on Import
@@ -18,15 +31,30 @@ let _filterEventsAbort = null;
 let _txImportResult  = null;   // persists the import outcome HTML across re-renders
 let _txMenuKey      = null;
 let _txEventsAbort  = null;
-let _accTypeSel     = new Set();
-let _siblingMap     = {};   // tx.id → sibling tx; rebuilt only when state.transactions reference changes
-let _siblingMapSrc  = null; // the state.transactions array that produced _siblingMap
+
+// Applied query (sent to list_transactions_view) and the filter-bar draft.
+let _query = { ..._DEFAULT_FILTERS(), sort_col: 'tx_date_local', sort_dir: 'desc', page: 1, page_size: 50 };
+let _draft = null;
+let _list = null;            // last list_transactions_view data
+let _listError = null;
+let _listKey = null;         // request key of the list on screen / in flight
+let _listSeq = 0;            // newest list request; older responses are dropped
+let _reloadSrc = null;       // state.context identity last seen: loadAll replaces it on every refresh
+let _reloadGen = 0;
+let _facets = null;          // last get_transaction_facets data (filter-bar options, page sizes)
+let _facetsGen = -1;         // _reloadGen the facets were requested for
+// Deep-link handoff from other sections: they assign a new state.filters object.
+let _filtersSrc = typeof state === 'object' && state !== null ? state.filters : undefined;
+// Open panel: { mode: 'add'|'view'|'edit'|'delete', id, row?, detail?, options?, prefill? }
+let _panel = null;
+let _addOptions = null;      // create-mode form options (reused until the next refresh)
 
 function _transactionError(code) {
   const messages = {
     stale_record: 'This record moved or changed. Refresh, then reopen it before trying again.',
     transfer_parent_deleted: 'A live linked transaction needs its original transfer. Delete the linked transaction first, or restore the original.',
     invalid_transfer_pair: 'A transfer must link different accounts and opposite money-in / money-out directions.',
+    // Bulk-import row results carry codes only; these keep their copy readable.
     invalid_tx_date_local: 'Enter a valid local date and time.',
     invalid_tx_timezone_local: 'The transaction timezone is invalid.',
     nonexistent_local_time: 'This time does not exist because the clocks moved forward. Choose a valid time.',
@@ -44,184 +72,270 @@ function _transactionError(code) {
   return messages[code] ?? (typeof code === 'string' && code !== '' ? code : '[no error code]');
 }
 
+// Server message first; the local map is a fallback for older responses.
+function _responseMessage(res) {
+  return typeof res?.message === 'string' && res.message !== '' ? res.message : _transactionError(res?.error);
+}
+
 function _suggestionKey(suggestion) {
   return suggestion.suggestion_key ?? JSON.stringify([suggestion.counterparty_name, suggestion.major_category, suggestion.minor_category, suggestion.account_id, suggestion.currency]);
 }
 
-function _buildSiblingMap(allTx) {
-  const byId = {};
-  allTx.forEach(tx => { if (tx.id) byId[tx.id] = tx; });
-  const out = {};
-  allTx.forEach(tx => {
-    if (tx.parent_tx_id === undefined || tx.parent_tx_id === null || String(tx.parent_tx_id).trim() === '') return;
-    const parent = byId[tx.parent_tx_id];
-    if (parent === undefined || parent === null) return;
-    out[tx.id]     = parent;
-    // An old deleted child must not hide a current transfer leg.
-    if (out[parent.id] === undefined || out[parent.id].record_status === 'deleted') out[parent.id] = tx;
-  });
-  return out;
+// ── Query params ──────────────────────────────────────────────────────────────
+
+function _filterParams(query) {
+  const params = { range: query.range, types: query.types, account_ids: query.account_ids, account_types: query.account_types,
+    major: query.major, minor: query.minor, user_location_country: query.user_location_country, user_location_city: query.user_location_city,
+    user_location_area: query.user_location_area, tag: query.tag, counterparty: query.counterparty, search: query.search };
+  if (query.range === 'custom') { params.from = query.from; params.to = query.to; }
+  return params;
 }
 
-function _dispatchTxAction(action, row) {
-  if (action === 'tx-view')           { state.txViewRow = row; state.txEditRow = null; state.txDeleteRow = null; state.txAddOpen = false; renderTransactions(); }
-  if (action === 'tx-cancel-view')    { state.txViewRow = null; renderTransactions(); }
-  if (action === 'tx-edit')           { state.txEditRow = row; state.txDeleteRow = null; state.txViewRow = null; state.txAddOpen = false; renderTransactions(); }
-  if (action === 'tx-cancel-edit')    { state.txEditRow = null; renderTransactions(); }
-  if (action === 'tx-save-edit')      { _saveEdit(); }
-  if (action === 'tx-delete')         { state.txDeleteRow = row; state.txEditRow = null; state.txViewRow = null; state.txAddOpen = false; renderTransactions(); }
-  if (action === 'tx-cancel-delete')  { state.txDeleteRow = null; renderTransactions(); }
-  if (action === 'tx-confirm-delete') { _confirmDelete(row); }
-  if (action === 'tx-restore')        { _restoreTx(row); }
-  if (action === 'tx-copy') {
-    const tx = state.transactions.find(t => t._row === row);
-    if (tx === undefined || tx === null) return;
-    const _copySibling = _siblingMap[tx.id] !== undefined ? _siblingMap[tx.id] : null;
-    // Reconstruct source/target for the add form (which still uses source/target format)
-    let _cpySrcAcc = '', _cpyTgtAcc = '', _cpySrcAmt = String(tx.tx_amount_local), _cpyTgtAmt = '';
-    if (tx.tx_type === 'money-out') {
-      _cpySrcAcc = (tx.account_id !== undefined && tx.account_id !== null) ? tx.account_id : '';
-      if (_copySibling !== null && _copySibling.tx_type === 'money-in') {
-        _cpyTgtAcc = (_copySibling.account_id !== undefined && _copySibling.account_id !== null) ? _copySibling.account_id : '';
-        _cpyTgtAmt = String(_copySibling.tx_amount_local);
+function _listParams() {
+  return { ..._filterParams(_query), sort_col: _query.sort_col, sort_dir: _query.sort_dir, page: _query.page, page_size: _query.page_size };
+}
+
+// Other sections deep-link by assigning a new state.filters object and
+// showing this section. Both the legacy shape ({ types, accounts, major,
+// minor, … }) and list_transactions_view param names ({ account_ids,
+// account_types, counterparty, range, from, to, … }) are accepted; the range
+// is kept unless the link names one.
+function _consumeDeepLink() {
+  if (state.filters === _filtersSrc) return;
+  _filtersSrc = state.filters;
+  const f = state.filters ?? {};
+  const list = value => Array.isArray(value) ? value.slice() : (typeof value === 'string' && value !== '' ? value.split(',') : []);
+  const text = value => typeof value === 'string' ? value : '';
+  Object.assign(_query, {
+    types: list(f.types), account_ids: list(f.account_ids ?? f.accounts), account_types: list(f.account_types),
+    major: list(f.major), minor: list(f.minor),
+    user_location_country: text(f.user_location_country), user_location_city: text(f.user_location_city),
+    user_location_area: text(f.user_location_area), tag: text(f.tag), counterparty: text(f.counterparty), search: text(f.search), page: 1,
+  });
+  if (typeof f.range === 'string' && f.range !== '') Object.assign(_query, { range: f.range, from: text(f.from), to: text(f.to) });
+  _draft = null;
+  _panel = null;
+}
+
+// ── Loading ───────────────────────────────────────────────────────────────────
+
+function _loadList(key) {
+  _listKey = key;
+  const seq = ++_listSeq;
+  let request;
+  try { request = ExpenseAPI.view('list_transactions_view', _listParams()); }
+  catch (error) { request = Promise.reject(error); }
+  Promise.resolve(request).then(res => {
+    if (seq !== _listSeq) return;
+    if (res?.ok === true) {
+      _list = res.data;
+      _listError = null;
+      state.views.transactions = res;
+      // The server clamps an out-of-range page; keep the query (and its key) in step.
+      if (Number.isInteger(res.data.page) && res.data.page !== _query.page) {
+        _query.page = res.data.page;
+        _listKey = _requestKey();
       }
     } else {
-      _cpyTgtAcc = (tx.account_id !== undefined && tx.account_id !== null) ? tx.account_id : '';
-      if (_copySibling !== null && _copySibling.tx_type === 'money-out') {
-        _cpySrcAcc = (_copySibling.account_id !== undefined && _copySibling.account_id !== null) ? _copySibling.account_id : '';
-        _cpySrcAmt = String(_copySibling.tx_amount_local);
-        _cpyTgtAmt = String(tx.tx_amount_local);
-      }
+      _listError = _responseMessage(res);
+      console.warn('[transactions] list_transactions_view failed:', res?.error);
     }
-    state.txCopyPrefill = {
-      tx_type:              (tx.tx_type              !== undefined && tx.tx_type              !== null) ? tx.tx_type              : '',
-      major_category:       (tx.major_category       !== undefined && tx.major_category       !== null) ? tx.major_category       : '',
-      minor_category:       (tx.minor_category       !== undefined && tx.minor_category       !== null) ? tx.minor_category       : '',
-      source_account:       _cpySrcAcc,
-      target_account:       _cpyTgtAcc,
-      source_amount:        _cpySrcAmt,
-      target_amount:        _cpyTgtAmt,
-      counterparty_name:    (tx.counterparty_name    !== undefined && tx.counterparty_name    !== null) ? tx.counterparty_name    : '',
-      user_location_area:   (tx.user_location_area   !== undefined && tx.user_location_area   !== null) ? tx.user_location_area   : '',
-      user_location_city:   (tx.user_location_city   !== undefined && tx.user_location_city   !== null) ? tx.user_location_city   : '',
-      user_location_country: (tx.user_location_country !== undefined && tx.user_location_country !== null) ? tx.user_location_country : '',
-      tx_tags:              (tx.tx_tags              !== undefined && tx.tx_tags              !== null) ? tx.tx_tags              : '',
-      description:          (tx.description          !== undefined && tx.description          !== null) ? tx.description          : '',
-    };
-    state.txAddOpen   = true;
-    state.txEditRow   = null;
-    state.txViewRow   = null;
-    state.txDeleteRow = null;
-    renderTransactions();
+    _renderListRegion();
+  }).catch(error => {
+    if (seq !== _listSeq) return;
+    console.error('[transactions] list_transactions_view failed:', error);
+    _listError = 'Connection lost. Refresh to try again.';
+    _renderListRegion();
+  });
+}
+
+// Facets do not depend on the list query, so they load once per data refresh
+// instead of riding on every list page.
+function _loadFacets() {
+  if (_facetsGen === _reloadGen) return;
+  const gen = _reloadGen;
+  _facetsGen = gen;
+  let request;
+  try { request = ExpenseAPI.view('get_transaction_facets'); }
+  catch (error) { request = Promise.reject(error); }
+  Promise.resolve(request).then(res => {
+    if (gen !== _reloadGen) return;
+    if (res?.ok === true) { _facets = res.data; _renderListRegion(); return; }
+    _facetsGen = -1;   // retried on the next render
+    console.warn('[transactions] get_transaction_facets failed:', res?.error);
+  }).catch(error => {
+    if (gen !== _reloadGen) return;
+    _facetsGen = -1;
+    console.error('[transactions] get_transaction_facets failed:', error);
+  });
+}
+
+function _loadSuggestions() {
+  if (state.suggestionsLoaded) return;
+  state.suggestionsLoaded = true;
+  try {
+    const raw = localStorage.getItem(SUGGESTIONS_CACHE_KEY);
+    if (raw !== null && raw !== undefined && raw !== '') {
+      const { suggestions, ts } = JSON.parse(raw);
+      if (Array.isArray(suggestions) && Date.now() - ts < SUGGESTIONS_TTL_MS) { state.suggestions = suggestions; return; }
+      localStorage.removeItem(SUGGESTIONS_CACHE_KEY);
+    }
+  } catch (_) {}
+  state.suggestionsFetching = true;
+  ExpenseAPI.getSuggestedTransactions().then(res => {
+    state.suggestionsFetching = false;
+    if (res.ok) {
+      state.suggestions = Array.isArray(res.data) ? res.data : [];
+      try { localStorage.setItem(SUGGESTIONS_CACHE_KEY, JSON.stringify({ suggestions: state.suggestions, ts: Date.now() })); } catch (_) {}
+    }
+    _refreshSuggestionsPanel();
+  }).catch(() => {
+    state.suggestionsFetching = false;
+    _refreshSuggestionsPanel();
+  });
+}
+
+// Fetches a view for the open panel; drops the answer if the panel changed.
+async function _panelRequest(panel, action, params) {
+  let res;
+  try { res = await ExpenseAPI.view(action, params); }
+  catch (error) {
+    console.error('[transactions] ' + action + ' failed:', error);
+    res = { ok: false, error: 'connection_error', message: 'Connection lost. Refresh to try again.' };
   }
-  if (action === 'tx-mark-sub') {
-    const tx = state.transactions.find(t => t._row === row);
-    if (tx === undefined || tx === null) return;
-    if (_isAlreadySubscribed(tx)) { showMsg('Already tracked as a subscription.', 'warn'); return; }
-    const _subAcct = (state.accountMap[tx.account_id] !== undefined && state.accountMap[tx.account_id] !== null) ? state.accountMap[tx.account_id] : {};
-    state.subPrefill = {
-      name:              (tx.counterparty_name !== undefined && tx.counterparty_name !== null) ? tx.counterparty_name : '',
-      counterparty_name: (tx.counterparty_name !== undefined && tx.counterparty_name !== null) ? tx.counterparty_name : '',
-      amount:            Number(tx.tx_amount_local),
-      source_account:    (tx.account_id !== undefined && tx.account_id !== null) ? tx.account_id : '',
-      tx_type:           (tx.tx_type !== undefined && tx.tx_type !== null) ? tx.tx_type : '',
-      major_category:    (tx.major_category !== undefined && tx.major_category !== null) ? tx.major_category : '',
-      minor_category:    (tx.minor_category !== undefined && tx.minor_category !== null) ? tx.minor_category : '',
-      tx_tags:           (tx.tx_tags !== undefined && tx.tx_tags !== null) ? tx.tx_tags : '',
-    };
-    state.subAddOpen = true;
-    document.dispatchEvent(new CustomEvent('et:show-section', { detail: 'subscriptions' }));
-  }
+  if (_panel !== panel) return null;
+  return res;
 }
 
-// ── Category dropdown helpers — respect record_status (greyed-out when archived) ──
-
-// Major <option> list for a transaction type. Values are major_category_key.
-// A major is active if at least one of its minors is active.
-function _catMajorOpts(type, selectedVal = '') {
-  const cats = state.categories.filter(c => c.tx_type_key === type);
-  const majors = [...new Map(cats.map(c => {
-    const active = cats.some(x => x.major_category_key === c.major_category_key && x.record_status === 'active');
-    return [c.major_category_key, { key: c.major_category_key, label: c.major_category_label, active }];
-  })).values()];
-  return `<option value="">— select —</option>` +
-    majors.map(({ key, label, active }) => {
-      const sel = selectedVal === key ? 'selected' : '';
-      return active
-        ? `<option value="${esc(key)}" ${sel}>${esc(label)}</option>`
-        : `<option value="${esc(key)}" ${sel} disabled style="color:var(--muted)">${esc(label)} (archived)</option>`;
-    }).join('');
+async function _createOptions() {
+  if (_addOptions !== null) return _addOptions;
+  let res;
+  try { res = await ExpenseAPI.view('get_transaction_form_options', { mode: 'create' }); }
+  catch (error) { console.error('[transactions] get_transaction_form_options failed:', error); return null; }
+  if (res?.ok !== true) { showMsg(_responseMessage(res), 'warn'); return null; }
+  _addOptions = res.data;
+  return _addOptions;
 }
 
-// Minor <option> list for a type + major key combo. Values are minor_category_key.
-function _catMinorOpts(type, majorKey, selectedVal = '') {
-  const cats = state.categories.filter(c => c.tx_type_key === type && c.major_category_key === majorKey);
-  return `<option value="">— select —</option>` +
-    cats.map(c => {
-      const sel = selectedVal === c.minor_category_key ? 'selected' : '';
-      return c.record_status === 'active'
-        ? `<option value="${esc(c.minor_category_key)}" ${sel}>${esc(c.minor_category_label)}</option>`
-        : `<option value="${esc(c.minor_category_key)}" ${sel} disabled style="color:var(--muted)">${esc(c.minor_category_label)} (archived)</option>`;
-    }).join('');
+async function _openAdd(prefill = null) {
+  const panel = { mode: 'add', prefill };
+  _panel = panel;
+  state.txImportOpen = false;
+  _txImportFile = null;
+  renderTransactions();
+  const options = await _createOptions();
+  if (_panel !== panel) return;
+  if (options === null) { _panel = null; renderTransactions(); return; }
+  panel.options = options;
+  renderTransactions();
 }
 
-// ── Account dropdown helpers — filter by category source/dest account types ──
-
-// Looks up a category by type + major_category_key + minor_category_key.
-function _getCat(type, majorKey, minorKey) {
-  if (type === undefined || type === null || String(type).trim() === '' ||
-      majorKey === undefined || majorKey === null || String(majorKey).trim() === '' ||
-      minorKey === undefined || minorKey === null || String(minorKey).trim() === '') return null;
-  const result = state.categories.find(c =>
-    c.tx_type_key        === type &&
-    c.major_category_key === majorKey &&
-    c.minor_category_key === minorKey
-  );
-  return result !== undefined ? result : null;
+async function _openView(id) {
+  const panel = { mode: 'view', id };
+  _panel = panel;
+  renderTransactions();
+  const res = await _panelRequest(panel, 'get_transaction', { id });
+  if (res === null) return;
+  if (res.ok !== true) { showMsg(_responseMessage(res), 'warn'); _panel = null; renderTransactions(); return; }
+  panel.detail = res.data.transaction;
+  renderTransactions();
 }
 
-// Normalizes stored major/minor values to keys — accepts both keys (new data)
-// and labels (old sheet data before migration). Returns {majorKey, minorKey}.
-function _normCatKeys(type, majorVal, minorVal) {
-  if (majorVal === undefined || majorVal === null || String(majorVal).trim() === '') return { majorKey: '', minorKey: '' };
-  const minorProvided = minorVal !== undefined && minorVal !== null && String(minorVal).trim() !== '';
-  // Try key match first
-  let cat = state.categories.find(c =>
-    c.tx_type_key        === type &&
-    c.major_category_key === majorVal &&
-    (!minorProvided || c.minor_category_key === minorVal)
-  );
-  if (cat !== undefined && cat !== null) return { majorKey: cat.major_category_key, minorKey: (minorVal !== undefined && minorVal !== null) ? minorVal : '' };
-  // Fall back to label match (old sheet data)
-  cat = state.categories.find(c =>
-    c.tx_type_key          === type &&
-    c.major_category_label === majorVal &&
-    (!minorProvided || c.minor_category_label === minorVal)
-  );
-  if (cat !== undefined && cat !== null) return { majorKey: cat.major_category_key, minorKey: (minorVal !== undefined && minorVal !== null && minorVal !== '') ? cat.minor_category_key : '' };
-  return { majorKey: majorVal, minorKey: (minorVal !== undefined && minorVal !== null) ? minorVal : '' };
+async function _openEdit(id) {
+  const panel = { mode: 'edit', id };
+  _panel = panel;
+  renderTransactions();
+  const res = await _panelRequest(panel, 'get_transaction_form_options', { mode: 'edit', id });
+  if (res === null) return;
+  if (res.ok !== true) { showMsg(_responseMessage(res), 'warn'); _panel = null; renderTransactions(); return; }
+  panel.options = res.data;
+  panel.detail = res.data.edit.record;
+  renderTransactions();
 }
 
-// Resolves stored keys (or legacy labels) to display string. Falls back gracefully.
-function _catLabel(type, majorVal, minorVal) {
-  if ((majorVal === undefined || majorVal === null || String(majorVal).trim() === '') &&
-      (minorVal === undefined || minorVal === null || String(minorVal).trim() === '')) return '—';
-  const { majorKey, minorKey } = _normCatKeys(type, majorVal, minorVal);
-  const cat = _getCat(type, majorKey, minorKey);
-  if (cat !== undefined && cat !== null) return cat.major_category_label + ' → ' + cat.minor_category_label;
-  return [majorVal, minorVal].filter(v => v !== undefined && v !== null && v !== '').join(' → ');
+async function _openCopy(id) {
+  let res;
+  try { res = await ExpenseAPI.view('get_transaction_prefill', { id, mode: 'copy' }); }
+  catch (error) { console.error('[transactions] get_transaction_prefill failed:', error); showMsg('Connection lost. Refresh to try again.', 'warn'); return; }
+  if (res?.ok !== true) { showMsg(_responseMessage(res), 'warn'); return; }
+  await _openAdd(res.data.prefill);
 }
 
-// Formats beneficiaries string (e.g. "Alice:60;Bob:40") as readable HTML chips.
-function _fmtBeneficiaries(str) {
-  if (str === undefined || str === null || String(str).trim() === '') return '—';
-  return str.split(';').map(part => {
-    const idx = part.indexOf(':');
-    if (idx === -1) return esc(part.trim());
-    const name = part.slice(0, idx).trim();
-    const pct  = part.slice(idx + 1).trim();
-    return `${esc(name)} <span style="color:var(--muted)">(${esc(pct)}%)</span>`;
-  }).join(' &middot; ');
+async function _markSubscription(id) {
+  let res;
+  try { res = await ExpenseAPI.view('get_transaction_prefill', { id, mode: 'subscribe' }); }
+  catch (error) { console.error('[transactions] get_transaction_prefill failed:', error); showMsg('Connection lost. Refresh to try again.', 'warn'); return; }
+  if (res?.ok !== true) { showMsg(_responseMessage(res), 'warn'); return; }
+  state.subPrefill = res.data.prefill;
+  state.subAddOpen = true;
+  document.dispatchEvent(new CustomEvent('et:show-section', { detail: 'subscriptions' }));
+}
+
+function _rowById(id) {
+  return (_list?.rows ?? []).find(row => row.id === id) ?? null;
+}
+
+function _dispatchTxAction(action, id) {
+  if (action === 'tx-view')           { _openView(id); }
+  if (action === 'tx-cancel-view')    { _panel = null; renderTransactions(); }
+  if (action === 'tx-edit')           { _openEdit(id); }
+  if (action === 'tx-cancel-edit')    { _panel = null; renderTransactions(); }
+  if (action === 'tx-save-edit')      { _saveEdit(); }
+  if (action === 'tx-delete')         { const row = _rowById(id); if (row !== null) { _panel = { mode: 'delete', id, row }; renderTransactions(); } }
+  if (action === 'tx-cancel-delete')  { _panel = null; renderTransactions(); }
+  if (action === 'tx-confirm-delete') { _confirmDelete(_panel?.mode === 'delete' ? _panel.row : _rowById(id)); }
+  if (action === 'tx-restore')        { _restoreTx(_rowById(id)); }
+  if (action === 'tx-copy')           { _openCopy(id); }
+  if (action === 'tx-mark-sub')       { _markSubscription(id); }
+}
+
+// ── Option-tree lookups (no rules in the browser) ────────────────────────────
+
+function _majorsFor(options, type) {
+  return options?.categories?.[type]?.majors ?? [];
+}
+
+function _minorFor(options, type, majorKey, minorKey) {
+  const major = _majorsFor(options, type).find(m => m.key === majorKey);
+  return major?.minors?.find(m => m.key === minorKey) ?? null;
+}
+
+// Leg rule for the chosen category: { source:{mandatory, account_set}, target:{…}, is_transfer }.
+function _legRule(options, type, majorKey, minorKey) {
+  return _minorFor(options, type, majorKey, minorKey) ?? options?.uncategorised?.[type] ?? null;
+}
+
+// Eligible account ids for one leg (a lookup in the server's account_sets).
+function _legAccountIds(options, leg) {
+  const ids = options?.account_sets?.[leg?.account_set];
+  return Array.isArray(ids) ? ids : [];
+}
+
+function _majorOptionsHtml(options, type, selected = '') {
+  return `<option value="">— select —</option>` + _majorsFor(options, type).map(major => major.active
+    ? `<option value="${esc(major.key)}" ${major.key === selected ? 'selected' : ''}>${esc(major.label)}</option>`
+    : `<option value="${esc(major.key)}" ${major.key === selected ? 'selected' : ''} disabled style="color:var(--muted)">${esc(major.label)} (archived)</option>`).join('');
+}
+
+function _minorOptionsHtml(options, type, majorKey, selected = '') {
+  const major = _majorsFor(options, type).find(m => m.key === majorKey);
+  return `<option value="">— select —</option>` + (major?.minors ?? []).map(minor => minor.active
+    ? `<option value="${esc(minor.key)}" ${minor.key === selected ? 'selected' : ''}>${esc(minor.label)}</option>`
+    : `<option value="${esc(minor.key)}" ${minor.key === selected ? 'selected' : ''} disabled style="color:var(--muted)">${esc(minor.label)} (archived)</option>`).join('');
+}
+
+function _accountOptionsHtml(options, ids, selected = '') {
+  const byId = new Map((options?.accounts ?? []).map(account => [account.id, account]));
+  return ids.map(id => byId.get(id)).filter(account => account !== undefined).map(account =>
+    `<option value="${esc(account.id)}" ${account.id === selected ? 'selected' : ''}>${esc(account.label)}</option>`).join('');
+}
+
+// Formats server-parsed beneficiaries as readable chips.
+function _beneficiariesHtml(list) {
+  if (!Array.isArray(list) || list.length === 0) return '—';
+  return list.map(entry => entry.pct === null || entry.pct === undefined
+    ? esc(entry.name)
+    : `${esc(entry.name)} <span style="color:var(--muted)">(${esc(entry.pct)}%)</span>`).join(' &middot; ');
 }
 
 // Location enrichment in the add/edit form is optional and must not leave the form waiting forever.
@@ -281,164 +395,35 @@ async function _reverseGeocode(latId, lonId, areaId, cityId, countryId) {
   } catch (_) {}
 }
 
-// ── Subscription eligibility helpers ─────────────────────────────────────────
+// ── Section render ────────────────────────────────────────────────────────────
 
-function _isCatSubEligible(tx) {
-  if (tx.major_category === undefined || tx.major_category === null || String(tx.major_category).trim() === '' ||
-      tx.minor_category === undefined || tx.minor_category === null || String(tx.minor_category).trim() === '') return false;
-  const { majorKey, minorKey } = _normCatKeys(tx.tx_type, tx.major_category, tx.minor_category);
-  const cat = _getCat(tx.tx_type, majorKey, minorKey);
-  if (cat === undefined || cat === null) return false;
-  return cat.is_subscription_eligible === true;
+function _requestKey() {
+  return JSON.stringify([_listParams(), state.quoteCurrency, _reloadGen]);
 }
 
-function _isAlreadySubscribed(tx) {
-  const normCp = (tx.counterparty_name !== undefined && tx.counterparty_name !== null ? tx.counterparty_name : '').trim().toLowerCase();
-  if (normCp === '') return false;
-  return state.subscriptions.some(s => {
-    if (s.record_status === 'deleted') return false;
-    const sCp = (s.counterparty_name !== undefined && s.counterparty_name !== null ? s.counterparty_name : '').trim().toLowerCase();
-    if (sCp !== normCp) return false;
-    if (String(s.source_account ?? '').toLowerCase() !== String(tx.account_id ?? '').toLowerCase()) return false;
-    // Subscriptions have no tags or transaction FK. Use the shared business
-    // fields as a suggestion heuristic; optional classification is a wildcard.
-    return ['tx_type', 'major_category', 'minor_category'].every(key => {
-      const selected = String(s[key] ?? '').trim();
-      return selected === '' || selected === String(tx[key] ?? '').trim();
-    });
-  });
-}
-
-// Category hints match either the account type or subtype, using Sheet-owned keys.
-// Keep all candidates when no types are configured; a blank hint cannot resolve ambiguity.
-function _filterAccountsByTypes(accounts, allowedTypesStr) {
-  const allowed = new Set(String(allowedTypesStr ?? '').split(',').map(key => key.trim().toLowerCase()).filter(key => key !== ''));
-  if (allowed.size === 0) { return accounts; }
-  return accounts.filter(account => [account.type, account.sub_type].some(key =>
-    allowed.has(String(key ?? '').trim().toLowerCase())
-  ));
-}
-
-// Returns <option> elements using the same category rules as CSV name resolution.
-function _acctOptsWithHints(accounts, allowedTypesStr, selectedId = '') {
-  const filtered = _filterAccountsByTypes(accounts, allowedTypesStr);
-  return filtered.map(a =>
-    `<option value="${esc(a.id)}" ${a.id === selectedId ? 'selected' : ''}>${esc(a.account_name)} (${esc(a.account_currency_local)})</option>`
-  ).join('');
-}
-
-// Edits may keep a row on its inactive/locked (closed) account, which the backend
-// accepts; only active accounts are offered as a new choice.
-function _editAccountOpts(allowedTypesStr, currentId, selectedId) {
-  const actives = state.accounts.filter(a => a.record_status === 'active');
-  const opts    = _acctOptsWithHints(actives, allowedTypesStr, selectedId);
-  const current = state.accounts.find(a => a.id === currentId);
-  if (current === undefined || current.record_status === 'deleted'
-      || _filterAccountsByTypes(actives, allowedTypesStr).some(a => a.id === currentId)) return opts;
-  const status = current.record_status === 'active' ? '' : ` · ${esc(current.record_status)}`;
-  return `<option value="${esc(current.id)}" ${current.id === selectedId ? 'selected' : ''}>${esc(current.account_name)} (${esc(current.account_currency_local)})${status}</option>${opts}`;
-}
-
-// ── Transaction schema helpers ────────────────────────────────────────────────
-
-function _txTypes() {
-  const all = (state.transactionSchema !== undefined && state.transactionSchema !== null && state.transactionSchema.types !== undefined && state.transactionSchema.types !== null) ? state.transactionSchema.types : [];
-  return all.filter(t => t.value === 'money-in' || t.value === 'money-out');
-}
-function _txTypeMap() {
-  return Object.fromEntries(_txTypes().map(t => [t.value, t.label]));
-}
-
+// Requests the list when the query, quote currency or data changed; otherwise
+// re-renders from the payload on screen (panel toggles never refetch).
 export function renderTransactions() {
   _txMenuKey = null;
-  if (state.transactions !== _siblingMapSrc) {
-    _siblingMap    = _buildSiblingMap(state.transactions);
-    _siblingMapSrc = state.transactions;
+  _consumeDeepLink();
+  if (state.context !== _reloadSrc) {
+    _reloadSrc = state.context;
+    _reloadGen++;
+    _addOptions = null;
   }
+  _loadFacets();
+  _loadSuggestions();
+  const key = _requestKey();
+  if (key !== _listKey) _loadList(key);
+  _renderView();
+}
 
-  // Load suggestions: serve from localStorage cache (6 h TTL), else fetch from API.
-  if (!state.suggestionsLoaded) {
-    state.suggestionsLoaded = true;
-    let servedFromCache = false;
-    try {
-      const raw = localStorage.getItem(SUGGESTIONS_CACHE_KEY);
-      if (raw !== null && raw !== undefined && raw !== '') {
-        const { suggestions, ts } = JSON.parse(raw);
-        if (Array.isArray(suggestions) && Date.now() - ts < SUGGESTIONS_TTL_MS) {
-          state.suggestions = suggestions;
-          servedFromCache = true;
-        } else {
-          localStorage.removeItem(SUGGESTIONS_CACHE_KEY);
-        }
-      }
-    } catch (_) {}
-
-    if (!servedFromCache) {
-      state.suggestionsFetching = true;
-      ExpenseAPI.getSuggestedTransactions().then(res => {
-        state.suggestionsFetching = false;
-        if (res.ok) {
-          state.suggestions = (res.data !== undefined && res.data !== null) ? res.data : [];
-          try {
-            localStorage.setItem(SUGGESTIONS_CACHE_KEY, JSON.stringify({ suggestions: state.suggestions, ts: Date.now() }));
-          } catch (_) {}
-        }
-        _refreshSuggestionsPanel();
-      }).catch(() => {
-        state.suggestionsFetching = false;
-        _refreshSuggestionsPanel();
-      });
-    }
-  }
-
-  // Load transaction metadata for datalist suggestions (6 h cache).
-  if (!state.metadataLoaded) {
-    state.metadataLoaded = true;
-    let metaFromCache = false;
-    try {
-      const raw = localStorage.getItem(METADATA_CACHE_KEY);
-      if (raw !== null && raw !== undefined && raw !== '') {
-        const { metadata, ts } = JSON.parse(raw);
-        if (metadata !== undefined && metadata !== null && Date.now() - ts < METADATA_TTL_MS) {
-          state.metadata = metadata;
-          metaFromCache = true;
-        } else {
-          localStorage.removeItem(METADATA_CACHE_KEY);
-        }
-      }
-    } catch (_) {}
-
-    if (!metaFromCache) {
-      ExpenseAPI.getTransactionMetadata().then(res => {
-        if (res.ok) {
-          state.metadata = {
-            countries:      (res.countries      !== undefined && res.countries      !== null) ? res.countries      : [],
-            cities:         (res.cities         !== undefined && res.cities         !== null) ? res.cities         : [],
-            areas:          (res.areas          !== undefined && res.areas          !== null) ? res.areas          : [],
-            counterparties: (res.counterparties !== undefined && res.counterparties !== null) ? res.counterparties : [],
-            tags:           (res.tx_tags        !== undefined && res.tx_tags        !== null) ? res.tx_tags        : [],
-          };
-          try {
-            localStorage.setItem(METADATA_CACHE_KEY, JSON.stringify({ metadata: state.metadata, ts: Date.now() }));
-          } catch (_) {}
-        }
-      }).catch(() => {});
-    }
-  }
-
+function _renderView() {
   const txEl = el('transactionsContent');
-  const rows = filteredTx();
-
-  const _rawTypes   = (state.transactionSchema !== undefined && state.transactionSchema !== null && state.transactionSchema.types !== undefined && state.transactionSchema.types !== null) ? state.transactionSchema.types : [];
-  const _validTypes = new Set(_rawTypes.length
-    ? _rawTypes.map(t => (typeof t === 'string' ? t : t.value))
-    : ['money-in', 'money-out']);
-  const validRows = rows.filter(tx =>  tx.id && tx.tx_date_local && _validTypes.has(tx.tx_type));
-  const warnRows  = rows.filter(tx => !tx.id || !tx.tx_date_local || !_validTypes.has(tx.tx_type));
-
-  const viewTx     = state.txViewRow !== null ? validRows.find(tx => tx._row === state.txViewRow) : null;
-  const editTx     = state.txEditRow !== null ? validRows.find(tx => tx._row === state.txEditRow) : null;
-  const anyAddOpen = state.txAddOpen || viewTx !== null || editTx !== null;
+  if (txEl === null || txEl === undefined) return;
+  const panel = _panel;
+  const anyAddOpen = panel !== null && (panel.mode === 'add' || panel.mode === 'view' || panel.mode === 'edit');
+  const loadingCard = `<div class="card" style="margin-bottom:16px;color:var(--muted)">Loading…</div>`;
 
   txEl.innerHTML = `
     <div class="sec-head">
@@ -448,14 +433,12 @@ export function renderTransactions() {
         <button class="btn btn-primary btn-sm" id="txAddBtn">${anyAddOpen ? '× Close' : '+ Add'}</button>
       </div>
     </div>
-    ${state.txImportOpen ? _renderTxImportPanel()        : ''}
-    ${state.txAddOpen    ? _renderAddForm()              : ''}
-    ${viewTx             ? _renderTxForm(viewTx, 'view') : ''}
-    ${editTx             ? _renderTxForm(editTx, 'edit') : ''}
-    ${_renderFilterBar()}
+    ${state.txImportOpen ? _renderTxImportPanel() : ''}
+    ${panel?.mode === 'add'  ? (panel.options ? _renderAddForm(panel.options) : loadingCard) : ''}
+    ${panel?.mode === 'view' ? (panel.detail ? _renderTxView(panel.detail) : loadingCard) : ''}
+    ${panel?.mode === 'edit' ? (panel.options ? _renderTxEdit(panel.options) : loadingCard) : ''}
     <div id="txSuggestions">${_renderSuggestionsPanel()}</div>
-    ${warnRows.length ? `<div class="warning-count" id="warnToggle">⚠ ${warnRows.length} row${warnRows.length > 1 ? 's' : ''} have warnings — click to expand</div>` : ''}
-    ${_renderTxTable(validRows, warnRows)}
+    <div id="txListRegion">${_listRegionHtml()}</div>
   `;
 
   el('txImportBtn').addEventListener('click', () => {
@@ -466,25 +449,15 @@ export function renderTransactions() {
       _txImportResult = null;
     } else {
       state.txImportOpen = true;
-      state.txAddOpen = false;
-      state.txViewRow = null;
-      state.txEditRow = null;
+      _panel = null;
     }
     renderTransactions();
   });
 
   el('txAddBtn').addEventListener('click', () => {
     if (_txImportBusy) return;
-    if (anyAddOpen) {
-      state.txAddOpen = false;
-      state.txViewRow = null;
-      state.txEditRow = null;
-    } else {
-      state.txAddOpen = true;
-      state.txImportOpen = false;
-      _txImportFile = null;
-    }
-    renderTransactions();
+    if (anyAddOpen) { _panel = null; renderTransactions(); return; }
+    _openAdd();
   });
 
   if (state.txImportOpen) {
@@ -502,135 +475,167 @@ export function renderTransactions() {
   }
 
   _attachSuggestionEvents();
-  _attachFilterEvents();
-  if (state.txAddOpen) _attachAddFormEvents();
-  if (editTx) _attachTxEditCascadeEvents();
-  _attachEvents();
+  if (panel?.mode === 'add' && panel.options) _attachAddFormEvents(panel);
+  if (panel?.mode === 'edit' && panel.options) _attachTxEditCascadeEvents(panel.options);
+  _attachListRegionEvents();
 
   el('txExportBtn').addEventListener('click', () => {
-    if (rows.length === 0) { showMsg('No transactions to export.', 'warn'); return; }
     openContextMenu(el('txExportBtn'), [
       { key: 'csv',  label: 'CSV'  },
       { key: 'json', label: 'JSON' },
-    ], key => {
-      try { exportData(key, rows); }
-      catch (error) { showMsg(error.message, 'warn'); }
-    });
+    ], key => { _exportTransactions(key); });
   });
+}
 
-  if (warnRows.length) {
-    el('warnToggle').addEventListener('click', () => el('warnTable').classList.toggle('hidden'));
+// Filter bar, totals and table: everything that depends on the list payload.
+function _listRegionHtml() {
+  const list = _list;
+  const warnRows = list?.warn_rows ?? [];
+  const loadingCard = `<div class="card" style="margin-bottom:16px;color:var(--muted)">Loading…</div>`;
+  return `
+    ${_renderFilterBar()}
+    ${_listError !== null ? `<p class="pin-error" role="alert">${esc(_listError)}</p>` : ''}
+    ${warnRows.length ? `<div class="warning-count" id="warnToggle">⚠ ${warnRows.length} row${warnRows.length > 1 ? 's' : ''} have warnings — click to expand</div>` : ''}
+    ${list ? _renderTotals(list) : ''}
+    ${list ? _renderTxTable(list) : (_listError === null ? loadingCard : '')}`;
+}
+
+function _attachListRegionEvents() {
+  _attachFilterEvents();
+  _attachEvents();
+  if ((_list?.warn_rows ?? []).length) {
+    el('warnToggle')?.addEventListener('click', () => el('warnTable').classList.toggle('hidden'));
   }
 }
 
-function _renderTxTable(validRows, warnRows) {
-  const sorted = _sortTx([...validRows]);
-  const total  = sorted.length;
-  const pages  = Math.max(1, Math.ceil(total / state.txPerPage));
-  if (state.txPage > pages) state.txPage = 1;
-  const start  = (state.txPage - 1) * state.txPerPage;
-  const paged  = sorted.slice(start, start + state.txPerPage);
+// A list response only replaces the list region, so a form the user is
+// filling in (or the import panel) is never re-rendered underneath them.
+function _renderListRegion() {
+  const region = el('txListRegion');
+  if (region === null || region === undefined) { _renderView(); return; }
+  region.innerHTML = _listRegionHtml();
+  _attachListRegionEvents();
+}
+
+async function _exportTransactions(format) {
+  showLoading();
+  try {
+    const res = await ExpenseAPI.view('export_transactions', _filterParams(_query));
+    if (res?.ok !== true) { showMsg(_responseMessage(res), 'warn'); return; }
+    if (!Array.isArray(res.data?.rows) || res.data.rows.length === 0) { showMsg('No transactions to export.', 'warn'); return; }
+    downloadExport(format, res.data);
+  } catch (error) {
+    console.error('[transactions] export_transactions failed:', error);
+    showMsg('Connection lost. Refresh to try again.', 'warn');
+  } finally {
+    hideLoading();
+  }
+}
+
+// Income / spending exclude deleted rows and own-account transfers (server totals).
+function _renderTotals(list) {
+  const totals = list.totals;
+  if (totals === undefined || totals === null) return '';
+  const missing = Array.isArray(totals.missing_currencies) && totals.missing_currencies.length > 0
+    ? ` <span class="badge badge-warn" title="No rate for ${esc(totals.missing_currencies.join(', '))}">?</span>` : '';
+  return `<div class="tx-totals" style="display:flex;gap:16px;flex-wrap:wrap;font-size:var(--text-sm);color:var(--muted);margin:8px 0">
+    <span>In <strong class="td-mono">${esc(totals.money_in?.display ?? '—')}</strong></span>
+    <span>Out <strong class="td-mono">${esc(totals.money_out?.display ?? '—')}</strong></span>
+    <span>Net <strong class="td-mono">${esc(totals.net_display ?? '—')}</strong>${missing}</span>
+  </div>`;
+}
+
+function _amountCell(amount) {
+  const native = esc(amount?.native_display ?? '—');
+  const quote = amount?.show_quote ? ` <span class="td-base-amt">${esc(amount.quote_display)}</span>` : '';
+  const missing = amount?.missing_rate ? ' <span class="badge badge-warn" title="Currency not in rates tab">?</span>' : '';
+  return native + quote + missing;
+}
+
+function _badgeClass(row) {
+  return row.badge === 'in' ? 'badge-et-in' : row.badge === 'out' ? 'badge-et-out' : 'badge-et-transfer';
+}
+
+function _renderTxTable(list) {
+  const rows = Array.isArray(list.rows) ? list.rows : [];
+  const sort = list.sort ?? { col: _query.sort_col, dir: _query.sort_dir };
+  const pages = list.pages ?? 1;
+  const page = list.page ?? 1;
+  const sizes = _facets?.page_sizes ?? [10, 25, 50];
 
   const thSort = (col, label) => {
-    const cls = state.txSort.col === col ? ` sort-${state.txSort.dir}` : '';
+    const cls = sort.col === col ? ` sort-${sort.dir}` : '';
     return `<th class="${cls}" data-sort="${esc(col)}">${esc(label)}</th>`;
   };
 
-  const rowData = paged.map(tx => {
-    if (state.txDeleteRow === tx._row) return {
-      tr: `<tr><td colspan="6">${_renderTxDelete(tx)}</td></tr>`,
-      card: `<div class="card record-confirm-card">${_renderTxDelete(tx)}</div>`,
+  const rowData = rows.map(row => {
+    if (_panel?.mode === 'delete' && _panel.id === row.id) return {
+      tr: `<tr><td colspan="6">${_renderTxDelete(row)}</td></tr>`,
+      card: `<div class="card record-confirm-card">${_renderTxDelete(row)}</div>`,
     };
-
-    const badgeCls    = tx.tx_type === 'money-in' ? 'badge-et-in' : tx.tx_type === 'money-out' ? 'badge-et-out' : 'badge-et-transfer';
-    const typeLabel   = (_txTypeMap()[tx.tx_type] !== undefined && _txTypeMap()[tx.tx_type] !== null) ? _txTypeMap()[tx.tx_type] : tx.tx_type;
-    const _txAccTbl   = (state.accountMap[tx.account_id] !== undefined && state.accountMap[tx.account_id] !== null) ? state.accountMap[tx.account_id] : {};
-    const txCur       = (_txAccTbl.account_currency_local !== undefined && _txAccTbl.account_currency_local !== null) ? _txAccTbl.account_currency_local : '';
-    const missingRate = state.rateMap[txCur] === undefined || state.rateMap[txCur] === null;
-    const displayAmt  = Number(tx.tx_amount_local);
-    const acctName    = (_txAccTbl.account_name !== undefined && _txAccTbl.account_name !== null) ? _txAccTbl.account_name : '—';
-    const _sibling    = (_siblingMap[tx.id] !== undefined && _siblingMap[tx.id] !== null) ? _siblingMap[tx.id] : null;
-    const _sibAccTbl  = _sibling !== null ? ((state.accountMap[_sibling.account_id] !== undefined && state.accountMap[_sibling.account_id] !== null) ? state.accountMap[_sibling.account_id] : {}) : null;
-    const _sibAccTblName = (_sibAccTbl !== null && _sibAccTbl !== undefined && _sibAccTbl.account_name !== undefined && _sibAccTbl.account_name !== null) ? _sibAccTbl.account_name : '—';
-    const acctLabel   = _sibAccTbl !== null
-      ? (tx.tx_type === 'money-out'
-          ? acctName + ' → ' + _sibAccTblName
-          : _sibAccTblName + ' → ' + acctName)
-      : acctName;
-    const catLabel  = _catLabel(tx.tx_type, tx.major_category, tx.minor_category);
-    const nativeAmt = fmtNative(displayAmt, txCur);
-    const baseAmt   = fmtBase(displayAmt, txCur);
-    const amtCell   = txCur !== state.quoteCurrency
-      ? `${esc(nativeAmt)} <span class="td-base-amt">${esc(baseAmt)}</span>`
-      : esc(nativeAmt);
-
+    const catLabel = row.category?.label ?? '—';
+    const dotCls = row.badge === 'in' ? 'tx-dot-in' : row.badge === 'out' ? 'tx-dot-out' : 'tx-dot-transfer';
+    const menu = `${recordStatusIcon(row.record_status)}
+          ${syncStatusIcon(row.sync_status)}
+          <button class="tx-menu-trigger" data-action="tx-menu" data-id="${esc(row.id)}" title="Actions">⋮</button>`;
     return {
       tr: `<tr>
-        <td class="td-mono td-nowrap">${esc(fmtDateTimeCompact(tx.tx_date_local))}</td>
-        <td><span class="badge ${badgeCls}">${typeLabel}</span></td>
-        <td class="td-truncate" title="${esc(acctLabel)}">${esc(acctLabel)}</td>
-        <td class="td-mono td-nowrap">${amtCell}${missingRate ? ' <span class="badge badge-warn" title="Currency not in rates tab">?</span>' : ''}</td>
+        <td class="td-mono td-nowrap">${esc(fmtDateTimeCompact(row.tx_date_local))}</td>
+        <td><span class="badge ${_badgeClass(row)}">${esc(row.tx_type_label)}</span></td>
+        <td class="td-truncate" title="${esc(row.account_label)}">${esc(row.account_label)}</td>
+        <td class="td-mono td-nowrap">${_amountCell(row.amount)}</td>
         <td class="td-truncate" title="${esc(catLabel)}">${esc(catLabel)}</td>
         <td style="text-align:right;white-space:nowrap">
-          ${recordStatusIcon(tx.record_status)}
-          ${syncStatusIcon(tx.sync_status)}
-          <button class="tx-menu-trigger" data-action="tx-menu" data-row="${tx._row}" title="Actions">⋮</button>
+          ${menu}
         </td>
       </tr>`,
-      card: (()=>{
-        const dotCls = tx.tx_type === 'money-in' ? 'tx-dot-in' : tx.tx_type === 'money-out' ? 'tx-dot-out' : 'tx-dot-transfer';
-        return `<div class="tx-card">
+      card: `<div class="tx-card">
           <div class="tx-card-body">
-            <div class="tx-card-name"><span class="tx-type-dot ${dotCls}">●</span> ${esc(fmtDateTimeCompact(tx.tx_date_local))} · ${esc(acctLabel)}</div>
+            <div class="tx-card-name"><span class="tx-type-dot ${dotCls}">●</span> ${esc(fmtDateTimeCompact(row.tx_date_local))} · ${esc(row.account_label)}</div>
             ${catLabel !== '—' ? `<div class="tx-card-cat">${esc(catLabel)}</div>` : ''}
           </div>
-          <div class="tx-card-amt td-mono">${esc(fmtNative(displayAmt, txCur))}</div>
+          <div class="tx-card-amt td-mono">${esc(row.amount?.native_display ?? '—')}</div>
           <div style="display:flex;align-items:center;gap:2px">
-            ${recordStatusIcon(tx.record_status)}
-            ${syncStatusIcon(tx.sync_status)}
-            <button class="tx-menu-trigger" data-action="tx-menu" data-row="${tx._row}" title="Actions">⋮</button>
+            ${menu}
           </div>
-        </div>`;
-      })()
+        </div>`,
     };
   });
 
-  const tableRows = rowData.map(d => d.tr).join('');
-  const cardRows  = rowData.map(d => d.card).join('');
-
+  const warnRows = list.warn_rows ?? [];
   const warnRowsHtml = warnRows.length ? `
     <tbody id="warnTable" class="hidden">
-      ${warnRows.map(tx => `<tr>
-        <td colspan="6"><span class="badge badge-warn">⚠ malformed</span> id=${esc(String(tx.id !== undefined && tx.id !== null ? tx.id : '?'))} type=${esc(tx.tx_type !== undefined && tx.tx_type !== null ? tx.tx_type : '?')} date=${esc(String(tx.tx_date_local !== undefined && tx.tx_date_local !== null ? tx.tx_date_local : '?'))}</td>
+      ${warnRows.map(row => `<tr>
+        <td colspan="6"><span class="badge badge-warn">⚠ malformed</span> id=${esc(row.id || '?')} type=${esc(row.tx_type || '?')} date=${esc(row.tx_date_local || '?')} (${esc(row.reason)})</td>
       </tr>`).join('')}
     </tbody>` : '';
 
   const pagination = `
     <div class="pagination">
-      <button class="btn btn-secondary btn-sm" id="prevPage" ${state.txPage <= 1 ? 'disabled' : ''}>← Prev</button>
-      <span>Page ${state.txPage} of ${pages} (${total} rows)</span>
+      <button class="btn btn-secondary btn-sm" id="prevPage" ${page <= 1 ? 'disabled' : ''}>← Prev</button>
+      <span>Page ${esc(page)} of ${esc(pages)} (${esc(list.total ?? 0)} rows)</span>
       <select id="txPerPage" class="per-page-select">
-        ${[10, 25, 50].map(n => `<option value="${n}" ${state.txPerPage === n ? 'selected' : ''}>${n} / page</option>`).join('')}
+        ${sizes.map(n => `<option value="${esc(n)}" ${Number(list.page_size) === n ? 'selected' : ''}>${esc(n)} / page</option>`).join('')}
       </select>
-      <button class="btn btn-secondary btn-sm" id="nextPage" ${state.txPage >= pages ? 'disabled' : ''}>Next →</button>
+      <button class="btn btn-secondary btn-sm" id="nextPage" ${page >= pages ? 'disabled' : ''}>Next →</button>
     </div>`;
 
   return `
     <div class="table-wrap tx-table-wrap">
       <table>
         <thead><tr>
-          ${thSort('tx_date_local','Date')}
-          ${thSort('tx_type','Type')}
-          ${thSort('account_id','Account')}
-          <th>Amount</th>
-          ${thSort('major_category','Category')}
+          ${thSort('tx_date_local', 'Date')}
+          ${thSort('tx_type', 'Type')}
+          ${thSort('account', 'Account')}
+          ${thSort('amount', 'Amount')}
+          ${thSort('category', 'Category')}
           <th style="width:40px"></th>
         </tr></thead>
-        <tbody>${tableRows}</tbody>
+        <tbody>${rowData.map(d => d.tr).join('')}</tbody>
         ${warnRowsHtml}
       </table>
     </div>
-    <div class="tx-cards">${cardRows}</div>
+    <div class="tx-cards">${rowData.map(d => d.card).join('')}</div>
     ${pagination}
   `;
 }
@@ -646,111 +651,62 @@ function _attachEvents() {
   content.querySelectorAll('th[data-sort]').forEach(th => {
     th.addEventListener('click', () => {
       const col = th.dataset.sort;
-      state.txSort.dir = state.txSort.col === col ? (state.txSort.dir === 'asc' ? 'desc' : 'asc') : 'asc';
-      state.txSort.col = col;
-      state.txPage = 1;
+      _query.sort_dir = _query.sort_col === col ? (_query.sort_dir === 'asc' ? 'desc' : 'asc') : 'asc';
+      _query.sort_col = col;
+      _query.page = 1;
       renderTransactions();
     }, { signal });
   });
 
-  el('prevPage').addEventListener('click', () => { state.txPage--; renderTransactions(); }, { signal });
-  el('nextPage').addEventListener('click', () => { state.txPage++; renderTransactions(); }, { signal });
-  el('txPerPage').addEventListener('change', e => { state.txPerPage = Number(e.target.value); state.txPage = 1; renderTransactions(); }, { signal });
+  el('prevPage')?.addEventListener('click', () => { _query.page = Math.max(1, _query.page - 1); renderTransactions(); }, { signal });
+  el('nextPage')?.addEventListener('click', () => { _query.page++; renderTransactions(); }, { signal });
+  el('txPerPage')?.addEventListener('change', e => { _query.page_size = Number(e.target.value); _query.page = 1; renderTransactions(); }, { signal });
 
   content.addEventListener('click', e => {
     const btn = e.target.closest('[data-action]');
     if (btn === null || btn === undefined) return;
     const action = btn.dataset.action;
-    const row    = btn.dataset.row ? Number(btn.dataset.row) : null;
+    const id     = btn.dataset.id ?? null;
     if (action === 'tx-menu') {
-      const tx = state.transactions.find(t => t._row === row);
-      if (tx === undefined || tx === null) return;
-      if (_txMenuKey === row) { closeContextMenu(); _txMenuKey = null; return; }
-      _txMenuKey = row;
-      const rstat = tx.record_status;
-      const isSub = _isCatSubEligible(tx) && !_isAlreadySubscribed(tx);
-      const items = rstat === 'locked'
-        ? [{ key: 'tx-view', label: 'View', cls: '' }]
-        : rstat === 'deleted'
-          ? [{ key: 'tx-view',    label: 'View',    cls: '' },
-             { key: 'tx-restore', label: 'Restore', cls: '' }]
-          : [
-              { key: 'tx-view',   label: 'View',   cls: '' },
-              { key: 'tx-edit',   label: 'Edit',   cls: '' },
-              { key: 'tx-copy',   label: 'Copy',   cls: '' },
-              { key: 'tx-delete', label: 'Delete', cls: 'danger' },
-              ...(isSub ? [{ key: 'tx-mark-sub', label: 'Subscribe', cls: '' }] : []),
-            ];
-      openContextMenu(btn, items, key => { _txMenuKey = null; _dispatchTxAction(key, row); });
+      const row = _rowById(id);
+      if (row === null) return;
+      if (_txMenuKey === id) { closeContextMenu(); _txMenuKey = null; return; }
+      _txMenuKey = id;
+      const items = (row.allowed_actions ?? []).filter(key => _ACTION_KEYS[key] !== undefined)
+        .map(key => ({ key: _ACTION_KEYS[key], label: _ACTION_LABELS[key], cls: key === 'delete' ? 'danger' : '' }));
+      openContextMenu(btn, items, key => { _txMenuKey = null; _dispatchTxAction(key, id); });
       return;
     }
     if (action === 'sugg-add') {
       const key = btn.dataset.key;
       const s = state.suggestions.find(x => _suggestionKey(x) === key);
       if (s === undefined || s === null) return;
-      state.txCopyPrefill = {
+      _openAdd({
         tx_type:              'money-out',
         major_category:       s.major_category,
         minor_category:       s.minor_category,
-        source_account:       (s.account_id             !== undefined && s.account_id             !== null) ? s.account_id             : '',
+        source_account:       s.account_id ?? '',
         target_account:       '',
         source_amount:        s.typical_amount,
         target_amount:        '',
         counterparty_name:    s.counterparty_name,
-        user_location_area:   (s.user_location_area    !== undefined && s.user_location_area    !== null) ? s.user_location_area    : '',
-        user_location_city:   (s.user_location_city    !== undefined && s.user_location_city    !== null) ? s.user_location_city    : '',
-        user_location_country: (s.user_location_country !== undefined && s.user_location_country !== null) ? s.user_location_country : '',
-        tx_tags:              (s.tx_tags               !== undefined && s.tx_tags               !== null) ? s.tx_tags               : '',
-        beneficiaries:        (s.beneficiaries         !== undefined && s.beneficiaries         !== null) ? s.beneficiaries         : '',
+        user_location_area:   s.user_location_area ?? '',
+        user_location_city:   s.user_location_city ?? '',
+        user_location_country: s.user_location_country ?? '',
+        tx_tags:              s.tx_tags ?? '',
+        beneficiaries:        s.beneficiaries ?? '',
         description:          '',
-      };
-      state.txAddOpen    = true;
-      state.txImportOpen = false;
-      renderTransactions();
+      });
       return;
     }
-    _dispatchTxAction(action, row);
+    _dispatchTxAction(action, id);
   }, { signal });
-}
-
-function _sortTx(rows) {
-  const col = state.txSort.col;
-  const dir = state.txSort.dir === 'asc' ? 1 : -1;
-  return rows.sort((a, b) => {
-    if (col === 'tx_date_local') {
-      const ts = s => { const d = new Date(String(s).replace(' ', 'T')); return Number.isFinite(d.getTime()) ? d.getTime() : null; };
-      const va = ts(a[col]); const vb = ts(b[col]);
-      const aNil = va === null; const bNil = vb === null;
-      if (aNil && bNil) return 0;
-      if (aNil) return 1;
-      if (bNil) return -1;
-      return va < vb ? -dir : va > vb ? dir : 0;
-    }
-    if (col === 'tx_amount_local') {
-      const va = parseFloat(a.tx_amount_local);
-      const vb = parseFloat(b.tx_amount_local);
-      const aNil = !Number.isFinite(va); const bNil = !Number.isFinite(vb);
-      if (aNil && bNil) return 0;
-      if (aNil) return 1;
-      if (bNil) return -1;
-      return va < vb ? -dir : va > vb ? dir : 0;
-    }
-    // String columns: null/undefined sorts to end regardless of direction
-    const ra = a[col]; const rb = b[col];
-    const aNil = ra === undefined || ra === null;
-    const bNil = rb === undefined || rb === null;
-    if (aNil && bNil) return 0;
-    if (aNil) return 1;
-    if (bNil) return -1;
-    const va = String(ra).toLowerCase();
-    const vb = String(rb).toLowerCase();
-    return va < vb ? -dir : va > vb ? dir : 0;
-  });
 }
 
 // ── Add-transaction form ──────────────────────────────────────────────────────
 
-function _renderAddForm() {
+function _renderAddForm(options) {
+  const lists = options.datalists ?? {};
   return `
   <div class="card" style="margin-bottom:20px">
     <div class="form-grid form-grid-6">
@@ -759,7 +715,7 @@ function _renderAddForm() {
         <label for="afType">Type *</label>
         <select id="afType">
           <option value="">— select —</option>
-          ${_txTypes().map(t => `<option value="${esc(t.value)}">${esc(t.label)}</option>`).join('')}
+          ${(options.tx_types ?? []).map(t => `<option value="${esc(t.value)}">${esc(t.label)}</option>`).join('')}
         </select>
       </div>
       <div class="field form-grid-span-2" id="afMajorField">
@@ -843,61 +799,56 @@ function _renderAddForm() {
       <button class="btn btn-secondary" id="afReset">Clear</button>
     </div>
     <div class="pin-error" id="afError"></div>
-    ${_datalist('dlAfCounterparty', (state.metadata !== null && state.metadata !== undefined) ? state.metadata.counterparties : null)}
-    ${_datalist('dlAfArea',         (state.metadata !== null && state.metadata !== undefined) ? state.metadata.areas         : null)}
-    ${_datalist('dlAfCity',         (state.metadata !== null && state.metadata !== undefined) ? state.metadata.cities        : null)}
-    ${_datalist('dlAfCountry',      (state.metadata !== null && state.metadata !== undefined) ? state.metadata.countries     : null)}
-    ${_datalist('dlAfTags',         (state.metadata !== null && state.metadata !== undefined) ? state.metadata.tags          : null)}
+    ${_datalist('dlAfCounterparty', lists.counterparties)}
+    ${_datalist('dlAfArea',         lists.areas)}
+    ${_datalist('dlAfCity',         lists.cities)}
+    ${_datalist('dlAfCountry',      lists.countries)}
+    ${_datalist('dlAfTags',         lists.tags)}
   </div>`;
 }
 
-function _prefillAddForm(p) {
+function _setValue(id, value) {
+  const node = el(id);
+  if (node !== null && node !== undefined) node.value = value === undefined || value === null ? '' : value;
+}
+
+function _prefillAddForm(options, p) {
   const typeEl = el('afType');
   if (typeEl === null || typeEl === undefined) return;
-
-  // 1. Type → unlock and populate major
-  typeEl.value = p.tx_type !== undefined && p.tx_type !== null ? p.tx_type : '';
+  typeEl.value = p.tx_type ?? '';
   const majorEl = el('afMajor');
   const minorEl = el('afMinor');
-  if (p.tx_type !== undefined && p.tx_type !== null && String(p.tx_type).trim() !== '') {
-    majorEl.innerHTML = _catMajorOpts(p.tx_type);
+  if (typeEl.value !== '') {
+    majorEl.innerHTML = _majorOptionsHtml(options, typeEl.value);
     majorEl.disabled  = false;
     minorEl.disabled  = false;
   }
-
-  // 2. Major → populate minor (skip for transfers — legitimately no category)
-  if (p.major_category !== undefined && p.major_category !== null && String(p.major_category).trim() !== '') {
-    const { majorKey: _pfMaj, minorKey: _pfMin } = _normCatKeys(p.tx_type, p.major_category, p.minor_category);
-    majorEl.value     = _pfMaj;
-    minorEl.innerHTML = _catMinorOpts(p.tx_type, _pfMaj);
-    minorEl.value     = _pfMin !== undefined && _pfMin !== null && String(_pfMin).trim() !== '' ? _pfMin : '';
+  // The server already resolved legacy label values to category keys.
+  if (typeof p.major_category === 'string' && p.major_category !== '') {
+    majorEl.value     = p.major_category;
+    minorEl.innerHTML = _minorOptionsHtml(options, typeEl.value, p.major_category);
+    minorEl.value     = p.minor_category ?? '';
   }
-
-  // 3. Refresh source account opts (category-filtered), then set value
-  _afRefreshFromAccountOpts();
-  const fromEl = el('afFromAccount');
-  if (fromEl !== null && fromEl !== undefined) fromEl.value = p.source_account !== undefined && p.source_account !== null ? p.source_account : '';
-
-  // 4. Refresh target account opts, then set value
-  _afRefreshToAccountField();
-  const toEl = el('afToAccount');
-  if (toEl !== null && toEl !== undefined) toEl.value = (p.target_account !== undefined && p.target_account !== null) ? p.target_account : '';
-
-  // 5. Remaining text fields — date stays as nowLocalISO()
-  const afSourceAmount = el('afSourceAmount'); if (afSourceAmount !== null && afSourceAmount !== undefined) afSourceAmount.value = p.source_amount !== undefined && p.source_amount !== null ? p.source_amount : '';
-  const afTargetAmount = el('afTargetAmount'); if (afTargetAmount !== null && afTargetAmount !== undefined) afTargetAmount.value = (p.target_amount !== undefined && p.target_amount !== null) ? p.target_amount : '';
-  const afCp      = el('afCounterparty'); if (afCp      !== null && afCp      !== undefined) afCp.value      = (p.counterparty_name   !== undefined && p.counterparty_name   !== null) ? p.counterparty_name   : '';
-  const afArea    = el('afArea');        if (afArea    !== null && afArea    !== undefined) afArea.value    = (p.user_location_area    !== undefined && p.user_location_area    !== null) ? p.user_location_area    : '';
-  const afCity    = el('afCity');        if (afCity    !== null && afCity    !== undefined) afCity.value    = (p.user_location_city    !== undefined && p.user_location_city    !== null) ? p.user_location_city    : '';
-  const afCountry = el('afCountry');     if (afCountry !== null && afCountry !== undefined) afCountry.value = (p.user_location_country !== undefined && p.user_location_country !== null) ? p.user_location_country : '';
-  const afTags    = el('afTags');        if (afTags    !== null && afTags    !== undefined) afTags.value    = (p.tx_tags !== undefined && p.tx_tags !== null) ? String(p.tx_tags).replace(/;/g, ', ') : '';
-  const afDesc    = el('afDescription'); if (afDesc    !== null && afDesc    !== undefined) afDesc.value    = (p.description          !== undefined && p.description          !== null) ? p.description          : '';
-  const afLat = el('afLatitude');  if (afLat !== null && afLat !== undefined) afLat.value = (p.user_location_latitude  !== undefined && p.user_location_latitude  !== null) ? p.user_location_latitude  : '';
-  const afLon = el('afLongitude'); if (afLon !== null && afLon !== undefined) afLon.value = (p.user_location_longitude !== undefined && p.user_location_longitude !== null) ? p.user_location_longitude : '';
-  const afBen = el('afBeneficiaries'); if (afBen !== null && afBen !== undefined) afBen.value = (p.beneficiaries !== undefined && p.beneficiaries !== null) ? p.beneficiaries : '';
+  _afRefreshFromAccountOpts(options);
+  _setValue('afFromAccount', p.source_account);
+  _afRefreshToAccountField(options);
+  _setValue('afToAccount', p.target_account);
+  // Date stays as nowLocalISO().
+  _setValue('afSourceAmount', p.source_amount);
+  _setValue('afTargetAmount', p.target_amount);
+  _setValue('afCounterparty', p.counterparty_name);
+  _setValue('afArea', p.user_location_area);
+  _setValue('afCity', p.user_location_city);
+  _setValue('afCountry', p.user_location_country);
+  _setValue('afTags', p.tx_tags !== undefined && p.tx_tags !== null ? String(p.tx_tags).replace(/;/g, ', ') : '');
+  _setValue('afDescription', p.description);
+  _setValue('afLatitude', p.user_location_latitude);
+  _setValue('afLongitude', p.user_location_longitude);
+  _setValue('afBeneficiaries', p.beneficiaries);
 }
 
-function _attachAddFormEvents() {
+function _attachAddFormEvents(panel) {
+  const options = panel.options;
   el('afType').addEventListener('change', () => {
     const type       = el('afType').value;
     const majorEl    = el('afMajor');
@@ -905,8 +856,8 @@ function _attachAddFormEvents() {
 
     majorEl.innerHTML = '<option value="">— select type first —</option>';
     minorEl.innerHTML = '<option value="">— select major first —</option>';
-    const _afFromAcc = el('afFromAccount'); if (_afFromAcc !== null && _afFromAcc !== undefined) _afFromAcc.value = '';
-    const _afToAcc   = el('afToAccount');   if (_afToAcc   !== null && _afToAcc   !== undefined) _afToAcc.value   = '';
+    _setValue('afFromAccount', '');
+    _setValue('afToAccount', '');
 
     if (type === '') {
       majorEl.disabled = true;
@@ -918,29 +869,24 @@ function _attachAddFormEvents() {
       return;
     }
 
-    majorEl.innerHTML = _catMajorOpts(type);
+    majorEl.innerHTML = _majorOptionsHtml(options, type);
     majorEl.disabled  = false;
     minorEl.disabled  = false;
-
-    // _afRefreshFromAccountOpts cascades → _afRefreshToAccountField
-    _afRefreshFromAccountOpts();
+    _afRefreshFromAccountOpts(options);
   });
 
   el('afMajor').addEventListener('change', () => {
-    const type   = el('afType').value;
-    const major  = el('afMajor').value;
-    el('afMinor').innerHTML = _catMinorOpts(type, major);
-    _afRefreshFromAccountOpts();  // clear any previous category hint
+    el('afMinor').innerHTML = _minorOptionsHtml(options, el('afType').value, el('afMajor').value);
+    _afRefreshFromAccountOpts(options);
   });
 
-  el('afMinor').addEventListener('change', _afRefreshFromAccountOpts);
-
-  el('afFromAccount').addEventListener('change', _afRefreshToAccountField);
+  el('afMinor').addEventListener('change', () => _afRefreshFromAccountOpts(options));
+  el('afFromAccount').addEventListener('change', () => _afRefreshToAccountField(options));
 
   el('afSubmit').addEventListener('click', _saveTransaction);
   el('afReset').addEventListener('click', () => {
     ['afDate','afSourceAmount','afTargetAmount','afCounterparty','afArea','afCity','afCountry','afTags','afDescription','afLatitude','afLongitude','afBeneficiaries']
-      .forEach(id => { const _el = el(id); if (_el !== null && _el !== undefined) _el.value = id === 'afDate' ? nowLocalISO() : ''; });
+      .forEach(id => _setValue(id, id === 'afDate' ? nowLocalISO() : ''));
     el('afType').value = '';
     const fromEl = el('afFromAccount');
     if (fromEl !== null && fromEl !== undefined) { fromEl.disabled = true; fromEl.innerHTML = '<option value="">— select type first —</option>'; }
@@ -953,15 +899,13 @@ function _attachAddFormEvents() {
     el('afError').textContent = '';
   });
 
-  _attachTagAutocomplete('afTags', 'dlAfTags');
+  _attachTagAutocomplete('afTags', 'dlAfTags', options.datalists?.tags);
 
   el('afDetectLocation').addEventListener('click', () => {
     if (navigator.geolocation === undefined || navigator.geolocation === null) return;
     navigator.geolocation.getCurrentPosition(pos => {
-      const lat = el('afLatitude');
-      const lon = el('afLongitude');
-      if (lat !== null && lat !== undefined) lat.value = pos.coords.latitude.toFixed(6);
-      if (lon !== null && lon !== undefined) lon.value = pos.coords.longitude.toFixed(6);
+      _setValue('afLatitude', pos.coords.latitude.toFixed(6));
+      _setValue('afLongitude', pos.coords.longitude.toFixed(6));
       _reverseGeocode('afLatitude', 'afLongitude', 'afArea', 'afCity', 'afCountry');
     });
   });
@@ -972,56 +916,46 @@ function _attachAddFormEvents() {
   el('afLatitude').addEventListener('blur',  () => _reverseGeocode('afLatitude', 'afLongitude', 'afArea', 'afCity', 'afCountry'));
   el('afLongitude').addEventListener('blur', () => _reverseGeocode('afLatitude', 'afLongitude', 'afArea', 'afCity', 'afCountry'));
 
-  // If a copy was triggered, populate the form now that events are wired
-  if (state.txCopyPrefill) {
-    _prefillAddForm(state.txCopyPrefill);
-    state.txCopyPrefill = null;
+  // A copy / suggestion prefill is applied once, now that events are wired.
+  if (panel.prefill) {
+    _prefillAddForm(options, panel.prefill);
+    panel.prefill = null;
   }
 }
 
-function _afRefreshFromAccountOpts() {
-  const type   = el('afType').value;
-  const major  = el('afMajor').value;
-  const minor  = el('afMinor').value;
+// Source leg: "External" unless the category books a source account; the
+// choices are the server's eligible accounts for that leg.
+function _afRefreshFromAccountOpts(options) {
   const fromEl = el('afFromAccount');
   if (fromEl === null || fromEl === undefined) return;
-  const cat          = _getCat(type, major, minor);
-  const srcMandatory = (cat !== null && cat !== undefined) ? Boolean(cat.source_account_mandatory) : type !== 'money-in';
-
-  if (!srcMandatory) {
+  const rule = _legRule(options, el('afType').value, el('afMajor').value, el('afMinor').value);
+  if (rule === null || !rule.source.mandatory) {
     fromEl.disabled  = true;
     fromEl.innerHTML = `<option value="">External</option>`;
     fromEl.value     = '';
   } else {
     fromEl.disabled  = false;
     const prevVal    = fromEl.value;
-    const activeAccs = state.accounts.filter(a => a.record_status === 'active');
-    const srcTypes   = (cat !== null && cat !== undefined && cat.source_account_types !== undefined && cat.source_account_types !== null) ? cat.source_account_types : '';
-    fromEl.innerHTML = `<option value="">— select —</option>${_acctOptsWithHints(activeAccs, srcTypes, prevVal)}`;
+    fromEl.innerHTML = `<option value="">— select —</option>${_accountOptionsHtml(options, _legAccountIds(options, rule.source), prevVal)}`;
     if (prevVal !== '') fromEl.value = prevVal;
   }
-  _afRefreshToAccountField();
+  _afRefreshToAccountField(options);
 }
 
-function _afRefreshToAccountField() {
-  const type   = el('afType').value;
-  const major  = el('afMajor').value;
-  const minor  = el('afMinor').value;
-  const cat    = _getCat(type, major, minor);
-  const isTransfer      = cat !== null && cat !== undefined && cat.source_account_mandatory === true && cat.target_account_mandatory === true;
-  const targetMandatory = (cat !== null && cat !== undefined) ? Boolean(cat.target_account_mandatory) : false;
-
+// Target leg: enabled only when the category books one; the chosen source is
+// not offered again (the server re-checks same_transfer_account).
+function _afRefreshToAccountField(options) {
+  const rule = _legRule(options, el('afType').value, el('afMajor').value, el('afMinor').value);
+  const isTransfer = rule !== null && rule.is_transfer === true;
   const toAccEl = el('afToAccount');
   if (toAccEl === null || toAccEl === undefined) return;
 
-  if (targetMandatory) {
+  if (rule !== null && rule.target.mandatory) {
     toAccEl.disabled  = false;
-    const fromId      = el('afFromAccount').value;
+    const fromId      = el('afFromAccount')?.value ?? '';
     const prevVal     = toAccEl.value;
-    const activeAccs  = state.accounts.filter(a => a.record_status === 'active');
-    const dstTypes    = (cat !== null && cat !== undefined && cat.target_account_types !== undefined && cat.target_account_types !== null) ? cat.target_account_types : '';
-    const eligible    = activeAccs.filter(a => a.id !== fromId);
-    toAccEl.innerHTML = `<option value="">— select —</option>${_acctOptsWithHints(eligible, dstTypes, prevVal)}`;
+    const ids         = _legAccountIds(options, rule.target).filter(id => id !== fromId);
+    toAccEl.innerHTML = `<option value="">— select —</option>${_accountOptionsHtml(options, ids, prevVal)}`;
     if (prevVal !== '' && prevVal !== fromId) toAccEl.value = prevVal;
   } else {
     toAccEl.disabled  = true;
@@ -1040,54 +974,32 @@ function _afRefreshToAccountField() {
     } else {
       tgtAmtField.classList.add('hidden');
       if (srcAmtField !== null && srcAmtField !== undefined) { srcAmtField.classList.remove('form-grid-span-1'); srcAmtField.classList.add('form-grid-span-2'); }
-      const tgtEl = el('afTargetAmount');
-      if (tgtEl !== null && tgtEl !== undefined) tgtEl.value = '';
+      _setValue('afTargetAmount', '');
     }
   }
 }
 
-
-
-// ── Financial hard-block rules ───────────────────────────────────────────────
-// Returns null on pass, or a multi-line error string on block.
-// Rules 1 & 3 — insufficient balance (asset accounts).
-// Credit-limit checks require revolving-credit details, which list_accounts does not expose.
-// Rule 6     — FX transfer: source_amount_local and target_amount_local may differ for cross-currency transfers.
-
-function _checkBalanceRules(transaction_type, sourceAccount, isTransfer, amount, txDate, txTimezone = '') {
-  if (sourceAccount === undefined || sourceAccount === null) return null;
-  const trackingStart = String(sourceAccount.tracking_start_date_local ?? '').trim();
-  if (trackingStart !== '' && txDate !== undefined && !balanceMovementAffectsSnapshot(sourceAccount, {
-    tx_date_local: txDate, tx_timezone_local: txTimezone,
-  })) return null;
-  const isMoneyOut      = transaction_type === 'money-out';
-  if (!isMoneyOut && !isTransfer) return null;
-
-  const sym = getSymbol(sourceAccount.account_currency_local);
-  const fmt = n => Number(n).toFixed(2);
-
-  // Rules 1 & 3 — asset accounts
-  if (sourceAccount.type === 'asset' || sourceAccount.type === 'investment') {
-    const balance = Number(sourceAccount.current_value_local);
-    if (balance < amount) {
-      return (
-        `Insufficient balance.\n` +
-        `${sourceAccount.account_name} has ${sym}${fmt(balance)} — this transaction requires ${sym}${fmt(amount)}.\n` +
-        `Record an Adjustments / Balance correction first if your actual balance is higher.`
-      );
-    }
-    return null;
-  }
-
-
-  return null;
-}
+// ── Server validation → form ─────────────────────────────────────────────────
+// The server validates every field and business rule (required fields, amounts,
+// categories, insufficient balance). Forms submit what the user entered and show
+// the server's `message`, highlighting the input named by `field`.
+const _AF_FIELD_IDS = {
+  tx_date_local: 'afDate', tx_type: 'afType', source_account: 'afFromAccount', target_account: 'afToAccount',
+  source_amount_local: 'afSourceAmount', target_amount_local: 'afTargetAmount',
+  major_category: 'afMajor', minor_category: 'afMinor', beneficiaries: 'afBeneficiaries',
+  user_location_latitude: 'afLatitude', user_location_longitude: 'afLongitude',
+};
+const _TX_EDIT_FIELD_IDS = {
+  tx_date_local: 'txEditDate', tx_type: 'txEditType', account_id: 'txEditAccount', tx_amount_local: 'txEditAmount',
+  major_category: 'txEditMajor', minor_category: 'txEditMinor', beneficiaries: 'txEditBeneficiaries',
+  user_location_latitude: 'txEditLatitude', user_location_longitude: 'txEditLongitude',
+};
 
 async function _saveTransaction() {
   const btn   = el('afSubmit');
   if (btn.disabled) return;
   const errEl = el('afError');
-  errEl.textContent = '';
+  clearFormError(errEl);
 
   const dateRaw              = el('afDate').value;
   const tx_type              = el('afType').value;
@@ -1108,31 +1020,13 @@ async function _saveTransaction() {
   const user_location_longitude = el('afLongitude').value !== '' ? Number(el('afLongitude').value) : '';
   const beneficiaries           = el('afBeneficiaries').value.trim();
 
-  const _saveCat      = _getCat(tx_type, major_category, minor_category);
-  const isTransfer    = (_saveCat !== null && _saveCat !== undefined) && _saveCat.source_account_mandatory === true && _saveCat.target_account_mandatory === true;
-  const srcMandatory  = (_saveCat !== null && _saveCat !== undefined) ? Boolean(_saveCat.source_account_mandatory) : tx_type !== 'money-in';
-  const tgtMandatory  = (_saveCat !== null && _saveCat !== undefined) ? Boolean(_saveCat.target_account_mandatory) : false;
-  if (dateRaw === '')                                            { errEl.textContent = 'Date is required.';           return; }
-  if (tx_type === '')                                            { errEl.textContent = 'Type is required.';           return; }
-  if (srcMandatory && source_account === '')                     { errEl.textContent = 'Source account is required.'; return; }
-  if (tgtMandatory && target_account === '')                     { errEl.textContent = 'Target account is required.'; return; }
-  if (!_isPositiveAmount(source_amount_raw))                      { errEl.textContent = 'Enter a positive finite amount.'; return; }
-  if (major_category === '')                                     { errEl.textContent = 'Major category is required.'; return; }
-  if (minor_category === '')                                     { errEl.textContent = 'Minor category is required.'; return; }
-
+  // Form shape only: a transfer shows its own target-amount input (blank lets the
+  // server default a same-currency transfer); otherwise the single Amount input
+  // is the amount of whichever leg the category books.
+  const rule          = _legRule(_panel?.options ?? null, tx_type, major_category, minor_category);
+  const isTransfer    = rule !== null && rule.is_transfer === true;
   const source_amount = source_amount_raw.trim();
-  const sourceAcc     = state.accountMap[source_account];
-  const targetAcc     = state.accountMap[target_account];
-  const targetText = target_amount_raw.trim();
-  if (targetText !== '' && !_isPositiveAmount(targetText)) {
-    errEl.textContent = 'Enter a positive finite target amount.'; return;
-  }
-  if (isTransfer && targetText === '' && sourceAcc?.account_currency_local !== targetAcc?.account_currency_local) {
-    errEl.textContent = 'Target amount is required for a transfer between different currencies.'; return;
-  }
-  const target_amount = targetText === '' ? source_amount : targetText;
-  const balanceError  = _checkBalanceRules(tx_type, sourceAcc, isTransfer, Number(source_amount), dateRaw, tx_timezone);
-  if (balanceError) { errEl.textContent = balanceError; return; }
+  const target_amount = isTransfer ? target_amount_raw.trim() : source_amount;
 
   btn.disabled = true; btn.textContent = 'Saving…';
   showLoading();
@@ -1148,11 +1042,11 @@ async function _saveTransaction() {
     });
     if (res.ok) {
       showMsg(res.ids ? '2 transactions saved (transfer split).' : 'Transaction saved.');
-      state.txAddOpen = false;
+      _panel = null;
       document.dispatchEvent(new CustomEvent('et:reload'));
     } else {
       console.warn('[transactions] _saveTransaction failed:', res.error);
-      errEl.textContent = 'Error: ' + _transactionError(res.error);
+      showFormError(errEl, res, _AF_FIELD_IDS);
       btn.disabled = false; btn.textContent = 'Save';
     }
   } catch (err) {
@@ -1162,12 +1056,6 @@ async function _saveTransaction() {
   } finally {
     hideLoading();
   }
-}
-
-function _isPositiveAmount(value) {
-  const text = String(value).trim();
-  return /^[+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(text)
-    && Number.isFinite(Number(text)) && Number(text) > 0;
 }
 
 function _localInputTimestamp(value, original = '') {
@@ -1180,98 +1068,81 @@ function _localInputTimestamp(value, original = '') {
 
 // ── Transaction view / edit card ──────────────────────────────────────────────
 
-function _renderTxForm(tx, mode) {
-  const badgeCls  = tx.tx_type === 'money-in' ? 'badge-et-in' : tx.tx_type === 'money-out' ? 'badge-et-out' : 'badge-et-transfer';
-  const typeLabel = (_txTypeMap()[tx.tx_type] !== undefined && _txTypeMap()[tx.tx_type] !== null) ? _txTypeMap()[tx.tx_type] : tx.tx_type;
-  const _txAccForm   = (state.accountMap[tx.account_id] !== undefined && state.accountMap[tx.account_id] !== null) ? state.accountMap[tx.account_id] : {};
-  const _siblingForm = (_siblingMap[tx.id] !== undefined && _siblingMap[tx.id] !== null) ? _siblingMap[tx.id] : null;
-  const _sibAccForm  = _siblingForm !== null ? ((state.accountMap[_siblingForm.account_id] !== undefined && state.accountMap[_siblingForm.account_id] !== null) ? state.accountMap[_siblingForm.account_id] : {}) : null;
-  const acctFormName  = (_txAccForm.account_name !== undefined && _txAccForm.account_name !== null) ? _txAccForm.account_name : '—';
-
-  if (mode === 'view') {
-    const txCurView = (_txAccForm.account_currency_local !== undefined && _txAccForm.account_currency_local !== null) ? _txAccForm.account_currency_local : '';
-    const viewAmt   = Number(tx.tx_amount_local);
-    const _sibAccFormName = (_sibAccForm !== null && _sibAccForm !== undefined && _sibAccForm.account_name !== undefined && _sibAccForm.account_name !== null) ? _sibAccForm.account_name : '—';
-    const viewAcct  = _sibAccForm !== null
-      ? (tx.tx_type === 'money-out'
-          ? acctFormName + ' → ' + _sibAccFormName
-          : _sibAccFormName + ' → ' + acctFormName)
-      : acctFormName;
-
-    const vf = (label, value, span = 'form-grid-span-2') =>
-      `<div class="field ${span}"><label>${label}</label><div class="field-val">${value}</div></div>`;
-
-    const hasCoords = (tx.user_location_latitude !== undefined && tx.user_location_latitude !== null && String(tx.user_location_latitude).trim() !== '') ||
-                      (tx.user_location_longitude !== undefined && tx.user_location_longitude !== null && String(tx.user_location_longitude).trim() !== '');
-    const { majorKey: _vMajKey, minorKey: _vMinKey } = _normCatKeys(tx.tx_type, tx.major_category, tx.minor_category);
-    const _viewCat  = _getCat(tx.tx_type, _vMajKey, _vMinKey);
-    const _viewCatMajorLbl = _viewCat !== null && _viewCat !== undefined ? _viewCat.major_category_label : null;
-    const _viewCatMinorLbl = _viewCat !== null && _viewCat !== undefined ? _viewCat.minor_category_label : null;
-    const majorLbl  = (_viewCatMajorLbl !== null && _viewCatMajorLbl !== undefined) ? _viewCatMajorLbl
-      : ((tx.major_category !== undefined && tx.major_category !== null && String(tx.major_category).trim() !== '') ? tx.major_category : '—');
-    const minorLbl  = (_viewCatMinorLbl !== null && _viewCatMinorLbl !== undefined) ? _viewCatMinorLbl
-      : ((tx.minor_category !== undefined && tx.minor_category !== null && String(tx.minor_category).trim() !== '') ? tx.minor_category : '—');
-
-    return `
+function _renderTxView(tx) {
+  const vf = (label, value, span = 'form-grid-span-2') =>
+    `<div class="field ${span}"><label>${label}</label><div class="field-val">${value}</div></div>`;
+  const dash = value => (typeof value === 'string' && value.trim() !== '' ? value : '—');
+  const location = tx.location ?? {};
+  const hasCoords = (location.latitude ?? '') !== '' || (location.longitude ?? '') !== '';
+  const canEdit = (tx.allowed_actions ?? []).includes('edit');
+  const quote = tx.amount?.show_quote ? `<span style="color:var(--muted);font-size:var(--text-sm)">≈ ${esc(tx.amount.quote_display)}</span>` : '';
+  return `
     <div class="card" style="margin-bottom:16px">
       <div class="form-grid form-grid-6">
         <!-- Row 1: Type | Major category | Minor category -->
         <div class="field form-grid-span-2">
           <label>Type</label>
-          <div class="field-val"><span class="badge ${badgeCls}">${esc(typeLabel)}</span></div>
+          <div class="field-val"><span class="badge ${_badgeClass(tx)}">${esc(tx.tx_type_label)}</span></div>
         </div>
-        ${vf('Major category', esc(majorLbl))}
-        ${vf('Minor category', esc(minorLbl))}
+        ${vf('Major category', esc(tx.category?.major_label ?? '—'))}
+        ${vf('Minor category', esc(tx.category?.minor_label ?? '—'))}
         <!-- Row 2: Account (full width) -->
-        ${vf('Account', esc(viewAcct), 'form-grid-full')}
+        ${vf('Account', esc(tx.account_label), 'form-grid-full')}
         <!-- Row 3: Date & time | Timezone | Amount -->
         ${vf('Date &amp; time', esc(fmtDateTime(tx.tx_date_local)))}
-        ${vf('Timezone', esc((tx.tx_timezone_local !== undefined && tx.tx_timezone_local !== null && String(tx.tx_timezone_local).trim() !== '') ? tx.tx_timezone_local : '—'))}
+        ${vf('Timezone', esc(dash(tx.tx_timezone_local)))}
         <div class="field form-grid-span-2">
           <label>Amount</label>
           <div class="field-val">
-            ${esc(fmtNative(viewAmt, txCurView))}
-            <span style="color:var(--muted);font-size:var(--text-sm)">≈ ${esc(fmtBase(viewAmt, txCurView))}</span>
+            ${esc(tx.amount?.native_display ?? '—')}
+            ${quote}
           </div>
         </div>
         <!-- Row 4: Counterparty | Tags -->
-        ${vf('Counterparty', esc((tx.counterparty_name !== undefined && tx.counterparty_name !== null && String(tx.counterparty_name).trim() !== '') ? tx.counterparty_name : '—'), 'form-grid-span-3')}
-        ${vf('Tags', (() => { const _tagsStr = (tx.tx_tags !== undefined && tx.tx_tags !== null) ? String(tx.tx_tags).replace(/;/g, ', ') : ''; return esc(_tagsStr !== '' ? _tagsStr : '—'); })(), 'form-grid-span-3')}
+        ${vf('Counterparty', esc(dash(tx.counterparty_name)), 'form-grid-span-3')}
+        ${vf('Tags', esc(dash(tx.tags_display)), 'form-grid-span-3')}
         <!-- Row 5: Description -->
-        ${vf('Description', esc((tx.description !== undefined && tx.description !== null && String(tx.description).trim() !== '') ? tx.description : '—'), 'form-grid-full')}
+        ${vf('Description', esc(dash(tx.description)), 'form-grid-full')}
         <!-- Row 6: Beneficiaries -->
-        ${vf('Beneficiaries', _fmtBeneficiaries(tx.beneficiaries), 'form-grid-full')}
+        ${vf('Beneficiaries', _beneficiariesHtml(tx.beneficiaries_list), 'form-grid-full')}
         <!-- Row 7: Area | City | Country -->
-        ${vf('Area',    esc((tx.user_location_area    !== undefined && tx.user_location_area    !== null && String(tx.user_location_area).trim()    !== '') ? tx.user_location_area    : '—'))}
-        ${vf('City',    esc((tx.user_location_city    !== undefined && tx.user_location_city    !== null && String(tx.user_location_city).trim()    !== '') ? tx.user_location_city    : '—'))}
-        ${vf('Country', esc((tx.user_location_country !== undefined && tx.user_location_country !== null && String(tx.user_location_country).trim() !== '') ? tx.user_location_country : '—'))}
+        ${vf('Area',    esc(dash(location.area)))}
+        ${vf('City',    esc(dash(location.city)))}
+        ${vf('Country', esc(dash(location.country)))}
         <!-- Row 8: Coordinates (only if set) -->
-        ${hasCoords ? vf('Coordinates', esc(`${(tx.user_location_latitude !== undefined && tx.user_location_latitude !== null) ? tx.user_location_latitude : ''}, ${(tx.user_location_longitude !== undefined && tx.user_location_longitude !== null) ? tx.user_location_longitude : ''}`), 'form-grid-full') : ''}
+        ${hasCoords ? vf('Coordinates', esc(`${location.latitude ?? ''}, ${location.longitude ?? ''}`), 'form-grid-full') : ''}
       </div>
-      ${(tx.sync_status !== undefined && tx.sync_status !== null && String(tx.sync_status).trim() !== '') ? `<div style="margin-top:8px;display:flex;align-items:center;gap:6px">${syncStatusIcon(tx.sync_status)}<span style="font-size:var(--text-sm);color:var(--muted)">${esc(tx.sync_status)}</span>${(tx.sync_notes !== undefined && tx.sync_notes !== null && String(tx.sync_notes).trim() !== '') ? `<span style="font-size:var(--text-sm)">— ${esc(tx.sync_notes)}</span>` : ''}</div>` : ''}
+      ${dash(tx.sync_status) !== '—' ? `<div style="margin-top:8px;display:flex;align-items:center;gap:6px">${syncStatusIcon(tx.sync_status)}<span style="font-size:var(--text-sm);color:var(--muted)">${esc(tx.sync_status)}</span>${dash(tx.sync_notes) !== '—' ? `<span style="font-size:var(--text-sm)">— ${esc(tx.sync_notes)}</span>` : ''}</div>` : ''}
       <div class="form-actions" style="margin-top:12px">
         <button class="btn btn-secondary btn-sm" data-action="tx-cancel-view">Close</button>
-        <button class="btn btn-primary btn-sm" data-action="tx-edit" data-row="${tx._row}">Edit</button>
+        ${canEdit ? `<button class="btn btn-primary btn-sm" data-action="tx-edit" data-id="${esc(tx.id)}">Edit</button>` : ''}
       </div>
     </div>`;
-  }
+}
 
-  // Edit mode — single-row edit: one account_id, one tx_amount_local (no source/target split)
-  const _editCat       = _getCat(tx.tx_type, tx.major_category, tx.minor_category);
-  const _editAccTypes  = tx.tx_type === 'money-out'
-    ? ((_editCat !== null && _editCat !== undefined && _editCat.source_account_types !== undefined && _editCat.source_account_types !== null) ? _editCat.source_account_types : '')
-    : ((_editCat !== null && _editCat !== undefined && _editCat.target_account_types !== undefined && _editCat.target_account_types !== null) ? _editCat.target_account_types : '');
-  const accountOpts    = _editAccountOpts(_editAccTypes, tx.account_id, tx.account_id);
-  const typeOpts       = _txTypes().map(t =>
-    `<option value="${esc(t.value)}" ${tx.tx_type === t.value ? 'selected' : ''}>${esc(t.label)}</option>`
-  ).join('');
-  const { majorKey: _editMajorKey, minorKey: _editMinorKey } = _normCatKeys(tx.tx_type, tx.major_category, tx.minor_category);
-  const majorOpts = _catMajorOpts(tx.tx_type, _editMajorKey);
-  const minorOpts = _catMinorOpts(tx.tx_type, _editMajorKey, _editMinorKey);
-  const dateVal   = (tx.tx_date_local !== undefined && tx.tx_date_local !== null ? String(tx.tx_date_local) : '').replace(' ', 'T').substring(0, 16);
-  const _sibAccFormName = (_sibAccForm !== null && _sibAccForm !== undefined && _sibAccForm.account_name !== undefined && _sibAccForm.account_name !== null && String(_sibAccForm.account_name).trim() !== '') ? _sibAccForm.account_name : '—';
-  const transferNote = _siblingForm !== null
-    ? `<div style="font-size:var(--text-sm);color:var(--muted);margin-bottom:4px">Linked transfer — edit this leg only. The other leg (${esc(_sibAccFormName)}) is a separate row.</div>`
+// Edit account choices: the leg's eligible accounts for the chosen category,
+// plus the row's own (possibly closed) account, which the server keeps listed.
+function _editAccountIds(options, type, majorKey, minorKey) {
+  const rule = _legRule(options, type, majorKey, minorKey);
+  const field = type === 'money-out' ? 'source' : 'target';
+  const ids = rule === null ? [] : _legAccountIds(options, rule[field]).slice();
+  const keep = options.edit?.keep_account_id ?? null;
+  if (keep !== null && !ids.includes(keep)) ids.unshift(keep);
+  return ids;
+}
+
+function _renderTxEdit(options) {
+  const edit = options.edit;
+  const tx = edit.record;
+  const location = tx.location ?? {};
+  const lists = options.datalists ?? {};
+  const majorKey = edit.category?.major_key ?? '';
+  const minorKey = edit.category?.minor_key ?? '';
+  const typeOpts = (options.tx_types ?? []).map(t =>
+    `<option value="${esc(t.value)}" ${tx.tx_type === t.value ? 'selected' : ''}>${esc(t.label)}</option>`).join('');
+  const accountOpts = _accountOptionsHtml(options, _editAccountIds(options, tx.tx_type, majorKey, minorKey), tx.account?.id ?? '');
+  const transferNote = tx.counter_leg !== null && tx.counter_leg !== undefined
+    ? `<div style="font-size:var(--text-sm);color:var(--muted);margin-bottom:4px">Linked transfer — edit this leg only. The other leg (${esc(tx.counter_leg.account_name || '—')}) is a separate row.</div>`
     : '';
 
   return `
@@ -1285,17 +1156,11 @@ function _renderTxForm(tx, mode) {
       </div>
       <div class="field form-grid-span-2" id="txEditMajorField">
         <label>Major category</label>
-        <select id="txEditMajor">
-          <option value="">— select —</option>
-          ${majorOpts}
-        </select>
+        <select id="txEditMajor">${_majorOptionsHtml(options, tx.tx_type, majorKey)}</select>
       </div>
       <div class="field form-grid-span-2" id="txEditMinorField">
         <label>Minor category</label>
-        <select id="txEditMinor">
-          <option value="">— select —</option>
-          ${minorOpts}
-        </select>
+        <select id="txEditMinor">${_minorOptionsHtml(options, tx.tx_type, majorKey, minorKey)}</select>
       </div>
       <!-- Row 2: Account (full width) -->
       <div class="field form-grid-full">
@@ -1308,11 +1173,11 @@ function _renderTxForm(tx, mode) {
       <!-- Row 3: Date & time | Timezone | Amount -->
       <div class="field form-grid-span-2">
         <label>Date &amp; time</label>
-        <input type="datetime-local" id="txEditDate" value="${esc(dateVal)}">
+        <input type="datetime-local" id="txEditDate" value="${esc(tx.tx_date_input)}">
       </div>
       <div class="field form-grid-span-2">
         <label>Timezone</label>
-        <div class="field-val">${esc((tx.tx_timezone_local !== undefined && tx.tx_timezone_local !== null && String(tx.tx_timezone_local).trim() !== '') ? tx.tx_timezone_local : '—')}</div>
+        <div class="field-val">${esc(tx.tx_timezone_local || '—')}</div>
       </div>
       <div class="field form-grid-span-2">
         <label>Amount</label>
@@ -1321,41 +1186,41 @@ function _renderTxForm(tx, mode) {
       <!-- Row 4: Counterparty | Tags -->
       <div class="field form-grid-span-3">
         <label>Counterparty</label>
-        <input type="text" id="txEditCounterparty" value="${esc((tx.counterparty_name !== undefined && tx.counterparty_name !== null) ? tx.counterparty_name : '')}" list="dlEditCounterparty" autocomplete="off">
+        <input type="text" id="txEditCounterparty" value="${esc(tx.counterparty_name)}" list="dlEditCounterparty" autocomplete="off">
       </div>
       <div class="field form-grid-span-3">
         <label>Tags</label>
-        <input type="text" id="txEditTags" value="${esc(String((tx.tx_tags !== undefined && tx.tx_tags !== null) ? tx.tx_tags : '').replace(/;/g, ', '))}" list="dlEditTags" autocomplete="off">
+        <input type="text" id="txEditTags" value="${esc(tx.tags_display)}" list="dlEditTags" autocomplete="off">
       </div>
       <!-- Row 5: Description -->
       <div class="field form-grid-full">
         <label>Description</label>
-        <input type="text" id="txEditDescription" value="${esc((tx.description !== undefined && tx.description !== null) ? tx.description : '')}">
+        <input type="text" id="txEditDescription" value="${esc(tx.description)}">
       </div>
       <!-- Row 6: Beneficiaries -->
       <div class="field form-grid-full">
         <label for="txEditBeneficiaries">Beneficiaries <span class="optional">optional</span></label>
-        <input type="text" id="txEditBeneficiaries" placeholder="e.g. Alice:60;Bob:40 or Alice;Bob" autocomplete="off" value="${esc((tx.beneficiaries !== undefined && tx.beneficiaries !== null) ? tx.beneficiaries : '')}">
+        <input type="text" id="txEditBeneficiaries" placeholder="e.g. Alice:60;Bob:40 or Alice;Bob" autocomplete="off" value="${esc(tx.beneficiaries)}">
       </div>
       <!-- Row 7: Area | City | Country -->
       <div class="field form-grid-span-2">
         <label>Area</label>
-        <input type="text" id="txEditArea" value="${esc((tx.user_location_area !== undefined && tx.user_location_area !== null) ? tx.user_location_area : '')}" list="dlEditArea" autocomplete="off">
+        <input type="text" id="txEditArea" value="${esc(location.area)}" list="dlEditArea" autocomplete="off">
       </div>
       <div class="field form-grid-span-2">
         <label>City</label>
-        <input type="text" id="txEditCity" value="${esc((tx.user_location_city !== undefined && tx.user_location_city !== null) ? tx.user_location_city : '')}" list="dlEditCity" autocomplete="off">
+        <input type="text" id="txEditCity" value="${esc(location.city)}" list="dlEditCity" autocomplete="off">
       </div>
       <div class="field form-grid-span-2">
         <label>Country</label>
-        <input type="text" id="txEditCountry" value="${esc((tx.user_location_country !== undefined && tx.user_location_country !== null) ? tx.user_location_country : '')}" list="dlEditCountry" autocomplete="off">
+        <input type="text" id="txEditCountry" value="${esc(location.country)}" list="dlEditCountry" autocomplete="off">
       </div>
       <!-- Row 8: Coordinates -->
       <div class="field form-grid-full">
         <label>Coordinates <span class="optional">optional</span></label>
         <div style="display:flex;gap:8px;align-items:center">
-          <input type="number" id="txEditLatitude"  step="any" placeholder="Latitude"  style="flex:1" min="-90"  max="90"  value="${esc(tx.user_location_latitude ?? '')}">
-          <input type="number" id="txEditLongitude" step="any" placeholder="Longitude" style="flex:1" min="-180" max="180" value="${esc(tx.user_location_longitude ?? '')}">
+          <input type="number" id="txEditLatitude"  step="any" placeholder="Latitude"  style="flex:1" min="-90"  max="90"  value="${esc(location.latitude)}">
+          <input type="number" id="txEditLongitude" step="any" placeholder="Longitude" style="flex:1" min="-180" max="180" value="${esc(location.longitude)}">
           <button type="button" id="txEditDetectLocation" class="btn btn-secondary btn-sm">Detect</button>
         </div>
       </div>
@@ -1365,75 +1230,51 @@ function _renderTxForm(tx, mode) {
       <button class="btn btn-secondary btn-sm" data-action="tx-cancel-edit">Cancel</button>
     </div>
     <div class="pin-error" id="txEditError"></div>
-    ${_datalist('dlEditCounterparty', (state.metadata !== null && state.metadata !== undefined) ? state.metadata.counterparties : null)}
-    ${_datalist('dlEditArea',         (state.metadata !== null && state.metadata !== undefined) ? state.metadata.areas         : null)}
-    ${_datalist('dlEditCity',         (state.metadata !== null && state.metadata !== undefined) ? state.metadata.cities        : null)}
-    ${_datalist('dlEditCountry',      (state.metadata !== null && state.metadata !== undefined) ? state.metadata.countries     : null)}
-    ${_datalist('dlEditTags',         (state.metadata !== null && state.metadata !== undefined) ? state.metadata.tags          : null)}
+    ${_datalist('dlEditCounterparty', lists.counterparties)}
+    ${_datalist('dlEditArea',         lists.areas)}
+    ${_datalist('dlEditCity',         lists.cities)}
+    ${_datalist('dlEditCountry',      lists.countries)}
+    ${_datalist('dlEditTags',         lists.tags)}
   </div>`;
 }
 
-function _renderTxDelete(tx) {
-  const _txAccDel   = (state.accountMap[tx.account_id] !== undefined && state.accountMap[tx.account_id] !== null) ? state.accountMap[tx.account_id] : {};
-  const _delSibling = (_siblingMap[tx.id] !== undefined && _siblingMap[tx.id] !== null) ? _siblingMap[tx.id] : null;
-  const _delSibAcc  = _delSibling !== null ? ((state.accountMap[_delSibling.account_id] !== undefined && state.accountMap[_delSibling.account_id] !== null) ? state.accountMap[_delSibling.account_id] : {}) : null;
-  const acctName    = (_txAccDel.account_name !== undefined && _txAccDel.account_name !== null) ? _txAccDel.account_name : '—';
-  const _delSibAccName = (_delSibAcc !== null && _delSibAcc !== undefined && _delSibAcc.account_name !== undefined && _delSibAcc.account_name !== null) ? _delSibAcc.account_name : '—';
-  const accLabel    = _delSibAcc !== null
-    ? (tx.tx_type === 'money-out'
-        ? acctName + ' → ' + _delSibAccName
-        : _delSibAccName + ' → ' + acctName)
-    : acctName;
-  const delAmt = Number(tx.tx_amount_local);
-  const _delCur = (_txAccDel.account_currency_local !== undefined && _txAccDel.account_currency_local !== null) ? _txAccDel.account_currency_local : '';
+function _renderTxDelete(row) {
   return `
-      <span class="confirm-text">Delete <strong>${esc(fmtDateTime(tx.tx_date_local))}</strong> — ${esc(accLabel)} — ${esc(fmtNative(delAmt, _delCur))}?</span>
+      <span class="confirm-text">Delete <strong>${esc(fmtDateTime(row.tx_date_local))}</strong> — ${esc(row.account_label)} — ${esc(row.amount?.native_display ?? '—')}?</span>
       <div class="row-actions">
-        <button class="btn-link danger" data-action="tx-confirm-delete" data-row="${tx._row}">Yes, delete</button>
+        <button class="btn-link danger" data-action="tx-confirm-delete" data-id="${esc(row.id)}">Yes, delete</button>
         <button class="btn-link" data-action="tx-cancel-delete">Cancel</button>
       </div>`;
 }
 
-function _attachTxEditCascadeEvents() {
-  const originalAccountId = el('txEditAccount')?.value ?? '';
+function _attachTxEditCascadeEvents(options) {
   const _refreshAccountOpts = () => {
-    const type     = el('txEditType').value;
-    const major    = el('txEditMajor').value;
-    const minor    = el('txEditMinor').value;
-    const cat      = _getCat(type, major, minor);
-    const typeHint = type === 'money-out'
-      ? ((cat !== null && cat !== undefined && cat.source_account_types !== undefined && cat.source_account_types !== null) ? cat.source_account_types : '')
-      : ((cat !== null && cat !== undefined && cat.target_account_types !== undefined && cat.target_account_types !== null) ? cat.target_account_types : '');
-    const acctEl   = el('txEditAccount');
-    if (acctEl) {
-      const prev   = acctEl.value;
-      acctEl.innerHTML = `<option value="">— select —</option>${_editAccountOpts(typeHint, originalAccountId, prev)}`;
-      if (prev) acctEl.value = prev;
-    }
+    const acctEl = el('txEditAccount');
+    if (acctEl === null || acctEl === undefined) return;
+    const prev = acctEl.value;
+    const ids = _editAccountIds(options, el('txEditType').value, el('txEditMajor').value, el('txEditMinor').value);
+    acctEl.innerHTML = `<option value="">— select —</option>${_accountOptionsHtml(options, ids, prev)}`;
+    if (prev) acctEl.value = prev;
   };
 
   el('txEditType').addEventListener('change', () => {
-    el('txEditMajor').innerHTML = _catMajorOpts(el('txEditType').value);
+    el('txEditMajor').innerHTML = _majorOptionsHtml(options, el('txEditType').value);
     el('txEditMinor').innerHTML = `<option value="">— select major first —</option>`;
     _refreshAccountOpts();
   });
   el('txEditMajor').addEventListener('change', () => {
-    const type  = el('txEditType').value;
-    const major = el('txEditMajor').value;
-    el('txEditMinor').innerHTML = _catMinorOpts(type, major);
+    el('txEditMinor').innerHTML = _minorOptionsHtml(options, el('txEditType').value, el('txEditMajor').value);
     _refreshAccountOpts();
   });
   el('txEditMinor').addEventListener('change', _refreshAccountOpts);
 
-  _attachTagAutocomplete('txEditTags', 'dlEditTags');
+  _attachTagAutocomplete('txEditTags', 'dlEditTags', options.datalists?.tags);
 
   el('txEditDetectLocation').addEventListener('click', () => {
     if (navigator.geolocation === undefined || navigator.geolocation === null) return;
     navigator.geolocation.getCurrentPosition(pos => {
-      const lat = el('txEditLatitude');
-      const lon = el('txEditLongitude');
-      if (lat !== null && lat !== undefined) lat.value = pos.coords.latitude.toFixed(6);
-      if (lon !== null && lon !== undefined) lon.value = pos.coords.longitude.toFixed(6);
+      _setValue('txEditLatitude', pos.coords.latitude.toFixed(6));
+      _setValue('txEditLongitude', pos.coords.longitude.toFixed(6));
       _reverseGeocode('txEditLatitude', 'txEditLongitude', 'txEditArea', 'txEditCity', 'txEditCountry');
     });
   });
@@ -1447,68 +1288,34 @@ function _attachTxEditCascadeEvents() {
 
 async function _saveEdit() {
   const errEl = el('txEditError');
-  errEl.textContent = '';
+  clearFormError(errEl);
+  const record = _panel?.mode === 'edit' ? _panel.detail : null;
+  if (record === null || record === undefined) return;
 
-  const rowNum              = state.txEditRow;
-  const dateRaw             = el('txEditDate').value;
-  const tx_type             = el('txEditType').value;
-  const account_id          = el('txEditAccount').value;
-  const tx_amount_raw       = el('txEditAmount').value;
-  const major_category      = el('txEditMajor').value;
-  const minor_category      = el('txEditMinor').value;
-  const counterparty_name   = el('txEditCounterparty').value.trim();
-  const user_location_area    = el('txEditArea').value.trim();
-  const user_location_city    = el('txEditCity').value.trim();
-  const user_location_country = el('txEditCountry').value.trim();
-  const tx_tags             = el('txEditTags').value.trim();
-  const description         = el('txEditDescription').value.trim();
   const user_location_latitude  = el('txEditLatitude').value  !== '' ? Number(el('txEditLatitude').value)  : '';
   const user_location_longitude = el('txEditLongitude').value !== '' ? Number(el('txEditLongitude').value) : '';
-  const beneficiaries       = el('txEditBeneficiaries').value.trim();
-
-  if (dateRaw === '')                                            { errEl.textContent = 'Date is required.';           return; }
-  if (tx_type === '')                                            { errEl.textContent = 'Type is required.';           return; }
-  if (account_id === '')                                         { errEl.textContent = 'Account is required.';        return; }
-  if (!_isPositiveAmount(tx_amount_raw))                          { errEl.textContent = 'Enter a positive finite amount.'; return; }
-  if (major_category === '')                                     { errEl.textContent = 'Major category is required.'; return; }
-  if (minor_category === '')                                     { errEl.textContent = 'Minor category is required.'; return; }
-
-  const tx_amount_local = tx_amount_raw.trim();
-  const oldTx           = state.transactions.find(t => t._row === rowNum);
-  const acctEdit   = state.accountMap[account_id];
-
-  // Post-reversal balance: backend reverses the old row before writing the new values.
-  // Undo the old movement only when the account hasn't changed.
-  if (acctEdit === undefined || acctEdit === null || !Number.isFinite(Number(acctEdit.current_value_local))) { errEl.textContent = 'Account not found or has no valid balance.'; return; }
-  let postRevBal = Number(acctEdit.current_value_local);
-  if (oldTx && oldTx.record_status !== 'deleted' && String(oldTx.account_id) === String(account_id) &&
-      balanceMovementAffectsSnapshot(acctEdit, oldTx)) {
-    const oldAmt = Number(oldTx.tx_amount_local);
-    if (oldTx.tx_type === 'money-in')  postRevBal -= oldAmt;
-    if (oldTx.tx_type === 'money-out') postRevBal += oldAmt;
-  }
-  const acctPR = Object.assign({}, acctEdit, { current_value_local: postRevBal });
-
-  const balanceErrorEdit = _checkBalanceRules(tx_type, acctPR, false, Number(tx_amount_local), dateRaw, oldTx?.tx_timezone_local ?? '');
-  if (balanceErrorEdit) { errEl.textContent = balanceErrorEdit; return; }
 
   showLoading();
   try {
     const res = await ExpenseAPI.updateTransaction({
-      row_num: rowNum, tx_date_local: _localInputTimestamp(dateRaw, oldTx?.tx_date_local ?? ''), tx_type,
-      account_id, tx_amount_local,
-      major_category, minor_category, counterparty_name,
-      user_location_area, user_location_city, user_location_country,
-      tx_tags, description,
-      user_location_latitude, user_location_longitude, beneficiaries,
+      id: record.id, row_num: record.row_num, updated_at: record.updated_at,
+      tx_date_local: _localInputTimestamp(el('txEditDate').value, record.tx_date_local ?? ''),
+      tx_type: el('txEditType').value,
+      account_id: el('txEditAccount').value, tx_amount_local: el('txEditAmount').value.trim(),
+      major_category: el('txEditMajor').value, minor_category: el('txEditMinor').value,
+      counterparty_name: el('txEditCounterparty').value.trim(),
+      user_location_area: el('txEditArea').value.trim(), user_location_city: el('txEditCity').value.trim(),
+      user_location_country: el('txEditCountry').value.trim(),
+      tx_tags: el('txEditTags').value.trim(), description: el('txEditDescription').value.trim(),
+      user_location_latitude, user_location_longitude, beneficiaries: el('txEditBeneficiaries').value.trim(),
     });
     if (res.ok) {
       showMsg('Transaction updated.');
-      state.txEditRow = null;
+      _panel = null;
       document.dispatchEvent(new CustomEvent('et:reload'));
     } else {
       console.warn('[transactions] _saveEdit failed:', res.error);
-      errEl.textContent = 'Error: ' + _transactionError(res.error);
+      showFormError(errEl, res, _TX_EDIT_FIELD_IDS);
     }
   } catch (err) {
     console.error('[transactions] _saveEdit failed:', err);
@@ -1518,40 +1325,45 @@ async function _saveEdit() {
   }
 }
 
-async function _confirmDelete(rowNum) {
+function _identity(row) {
+  return { id: row.id, row_num: row.row_num, updated_at: row.updated_at };
+}
+
+async function _confirmDelete(row) {
+  if (row === null || row === undefined) return;
   showLoading();
   try {
-    const res = await ExpenseAPI.deleteTransaction({ row_num: rowNum });
+    const res = await ExpenseAPI.deleteTransaction(_identity(row));
+    _panel = null;
     if (res.ok) {
       showMsg('Transaction deleted.');
-      state.txDeleteRow = null;
       document.dispatchEvent(new CustomEvent('et:reload'));
     } else {
       console.warn('[transactions] _confirmDelete failed:', res.error);
-      showMsg('Delete failed: ' + _transactionError(res.error), 'warn');
-      state.txDeleteRow = null;
+      showMsg('Delete failed: ' + _responseMessage(res), 'warn');
       renderTransactions();
     }
   } catch (err) {
     console.error('[transactions] _confirmDelete failed:', err);
     showMsg('Connection lost. The change may have completed. Refresh and check before retrying.', 'warn');
-    state.txDeleteRow = null;
+    _panel = null;
     renderTransactions();
   } finally {
     hideLoading();
   }
 }
 
-async function _restoreTx(rowNum) {
+async function _restoreTx(row) {
+  if (row === null || row === undefined) return;
   showLoading();
   try {
-    const res = await ExpenseAPI.restoreTransaction({ row_num: rowNum });
+    const res = await ExpenseAPI.restoreTransaction(_identity(row));
     if (res.ok) {
       showMsg('Transaction restored.');
       document.dispatchEvent(new CustomEvent('et:reload'));
     } else {
       console.warn('[transactions] _restoreTx failed:', res.error);
-      showMsg('Restore failed: ' + _transactionError(res.error), 'warn');
+      showMsg('Restore failed: ' + _responseMessage(res), 'warn');
       renderTransactions();
     }
   } catch (err) {
@@ -1590,28 +1402,22 @@ function _renderSuggestionsPanel() {
   }
 
   const visible = state.suggestions;
-
-  // When empty: always show panel but collapsed
   const isEmpty  = visible.length === 0;
   const isOpen   = isEmpty ? false : state.suggestionsOpen;
   const arrow     = isOpen ? '▲' : '▼';
   const bodyClass = isOpen ? '' : 'hidden';
   const countLabel = visible.length > 0 ? ` (${visible.length})` : '';
 
+  // The server supplies every display string (account name, category, amount).
   const cards = visible.map(s => {
-    const key        = _suggestionKey(s);
-    const _suggAcc   = (state.accountMap[s.account_id] !== undefined && state.accountMap[s.account_id] !== null) ? state.accountMap[s.account_id] : {};
-    const acctName   = (_suggAcc.account_name !== undefined && _suggAcc.account_name !== null) ? _suggAcc.account_name : esc((s.account_id !== undefined && s.account_id !== null) ? s.account_id : '');
-    const sym        = getSymbol(s.currency);
-    const amount     = sym + Number(s.typical_amount).toFixed(2);
-    const _minorCat  = state.categories.find(c => c.minor_category_key === s.minor_category);
-    const minorLabel = (_minorCat !== undefined && _minorCat !== null && _minorCat.minor_category_label !== undefined && _minorCat.minor_category_label !== null) ? _minorCat.minor_category_label : ((s.minor_category !== undefined && s.minor_category !== null) ? s.minor_category : '');
-
+    const key     = _suggestionKey(s);
+    const display = s.display ?? {};
+    const meta    = `${display.category_label ?? s.minor_category ?? ''} · ${display.account_name ?? s.account_id ?? ''}`;
     return `
       <div class="suggestion-card" data-key="${esc(key)}">
         <div class="suggestion-name" title="${esc(s.counterparty_name)}">${esc(s.counterparty_name)}</div>
-        <div class="suggestion-meta" title="${esc(minorLabel)} · ${esc(acctName)}">${esc(minorLabel)} · ${esc(acctName)}</div>
-        <div class="suggestion-amount">${esc(amount)}</div>
+        <div class="suggestion-meta" title="${esc(meta)}">${esc(meta)}</div>
+        <div class="suggestion-amount">${esc(display.typical_amount ?? '—')}</div>
         <div class="suggestion-reason" title="${esc(s.reason)}">${esc(s.reason)}</div>
         <button class="btn btn-primary btn-sm suggestion-add" data-action="sugg-add" data-key="${esc(key)}">Add</button>
       </div>`;
@@ -1632,100 +1438,61 @@ function _renderSuggestionsPanel() {
   </div>`;
 }
 
-// ── Filter bar ────────────────────────────────────────────────────────────────
+// ── Filter bar (options come from get_transaction_facets; Apply sends the draft)
 
-function _fmtAccType(type) { return state.accountSchema?.type_labels?.[type] ?? type; }
-
-function _accountsForTypeSel() {
-  if (_accTypeSel.size === 0) return state.accounts;
-  return state.accounts.filter(a => _accTypeSel.has(a.type));
+function _currentDraft() {
+  if (_draft === null) {
+    const { sort_col, sort_dir, page, page_size, ...filters } = _query;
+    _draft = JSON.parse(JSON.stringify(filters));
+  }
+  return _draft;
 }
 
-function _accTypeDropdownLabel() {
-  if (_accTypeSel.size === 0) return 'All account types';
-  return Array.from(_accTypeSel).map(_fmtAccType).join(', ');
+function _facetLabel(entries, key, value) {
+  const found = (entries ?? []).find(entry => entry[key] === value);
+  return found === undefined ? value : (found.label ?? found.name ?? value);
 }
 
-function _refreshFilterAccountDropdown() {
-  const dropdown = el('filterAccountDropdown');
-  if (dropdown === null || dropdown === undefined) return;
-  const accts   = _accountsForTypeSel();
-  const validIds = new Set(accts.map(a => a.id));
-  if (_accTypeSel.size === 0) state.filters.accounts = [];
-  else state.filters.accounts = state.filters.accounts.filter(id => validIds.has(id));
-  dropdown.innerHTML = accts.length > 0
-    ? accts.map(a => `<label style="display:flex;align-items:center;gap:8px;font-size:var(--text-base);color:var(--ink);cursor:pointer">
-        <input type="checkbox" data-filter-account="${esc(a.id)}" ${state.filters.accounts.includes(a.id) ? 'checked' : ''}> ${esc(a.account_name)}
-      </label>`).join('')
-    : `<span style="font-size:var(--text-sm);color:var(--muted)">No accounts for selected type</span>`;
-  _attachFilterAccountCheckboxes(dropdown);
-  const lbl = el('filterAccountLabel');
-  if (lbl !== null && lbl !== undefined) lbl.textContent = state.filters.accounts.length > 0
-    ? state.filters.accounts.map(id => { const a = state.accountMap[id]; return (a !== undefined && a !== null && a.account_name !== undefined && a.account_name !== null) ? a.account_name : id; }).join(', ')
-    : 'All accounts';
+// Accounts offered in the filter for the selected account types (facet lookup).
+function _filterAccounts(facets, draft) {
+  const accounts = facets?.accounts ?? [];
+  if (draft.account_types.length === 0) return accounts;
+  const ids = new Set(draft.account_types.flatMap(type => facets?.accounts_by_type?.[type] ?? []));
+  return accounts.filter(account => ids.has(account.id));
 }
 
-function _attachFilterAccountCheckboxes(dropdown) {
-  dropdown.querySelectorAll('[data-filter-account]').forEach(cb => {
-    cb.addEventListener('change', () => {
-      const id = cb.dataset.filterAccount;
-      if (cb.checked) { if (!state.filters.accounts.includes(id)) state.filters.accounts.push(id); }
-      else { state.filters.accounts = state.filters.accounts.filter(x => x !== id); }
-      const lbl = el('filterAccountLabel');
-      if (lbl) lbl.textContent = state.filters.accounts.length
-        ? state.filters.accounts.map(id => { const a = state.accountMap[id]; return (a !== undefined && a !== null && a.account_name !== undefined && a.account_name !== null && a.account_name !== '') ? a.account_name : id; }).join(', ')
-        : 'All accounts';
-    });
-  });
+// Minors for the selected majors (facet lookup).
+function _filterMinors(facets, draft) {
+  if (draft.major.length === 0) return facets?.minors ?? [];
+  const seen = new Map();
+  draft.major.forEach(major => (facets?.minors_by_major?.[major] ?? []).forEach(minor => { if (!seen.has(minor.key)) seen.set(minor.key, minor); }));
+  return [...seen.values()];
 }
 
-function _refreshFilterMinorDropdown() {
-  const dropdown = el('filterMinorDropdown');
-  if (dropdown === null || dropdown === undefined) return;
-  const cats = state.filters.major.length > 0
-    ? state.categories.filter(c => state.filters.major.includes(c.major_category_key))
-    : state.categories;
-  const minorMap = new Map();
-  cats.forEach(c => minorMap.set(c.minor_category_key, c.minor_category_label));
-  const minors = [...minorMap.entries()].map(([key, label]) => ({ key, label })).sort((a, b) => a.label.localeCompare(b.label));
-  const validSet = new Set(minors.map(m => m.key));
-  state.filters.minor = state.filters.minor.filter(v => validSet.has(v));
-  dropdown.innerHTML = minors.length
-    ? minors.map(({ key, label }) => `<label style="display:flex;align-items:center;gap:8px;font-size:var(--text-base);color:var(--ink);cursor:pointer">
-        <input type="checkbox" data-filter-minor="${esc(key)}" ${state.filters.minor.includes(key) ? 'checked' : ''}> ${esc(label)}
-      </label>`).join('')
-    : `<span style="font-size:var(--text-sm);color:var(--muted)">No minor categories</span>`;
-  dropdown.querySelectorAll('[data-filter-minor]').forEach(cb => {
-    cb.addEventListener('change', () => {
-      const v = cb.dataset.filterMinor;
-      if (cb.checked) { if (!state.filters.minor.includes(v)) state.filters.minor.push(v); }
-      else { state.filters.minor = state.filters.minor.filter(x => x !== v); }
-      const lbl = el('filterMinorLabel');
-      if (lbl) lbl.textContent = state.filters.minor.length
-        ? state.filters.minor.map(k => { const c = state.categories.find(x => x.minor_category_key === k); return (c !== undefined && c !== null && c.minor_category_label !== undefined && c.minor_category_label !== null) ? c.minor_category_label : k; }).join(', ')
-        : 'All minor';
-    });
-  });
-  const lbl = el('filterMinorLabel');
-  if (lbl) lbl.textContent = state.filters.minor.length
-    ? state.filters.minor.map(k => { const c = state.categories.find(x => x.minor_category_key === k); return (c !== undefined && c !== null && c.minor_category_label !== undefined && c.minor_category_label !== null) ? c.minor_category_label : k; }).join(', ')
-    : 'All minor';
+function _checkboxList(items, attr, selected, emptyText) {
+  if (items.length === 0) return `<span style="font-size:var(--text-sm);color:var(--muted)">${esc(emptyText)}</span>`;
+  return items.map(item => `<label style="display:flex;align-items:center;gap:8px;font-size:var(--text-base);color:var(--ink);cursor:pointer">
+      <input type="checkbox" ${attr}="${esc(item.value)}" ${selected.includes(item.value) ? 'checked' : ''}> ${esc(item.label)}${item.count !== undefined ? ` <span style="color:var(--muted);font-size:var(--text-xs)">(${esc(item.count)})</span>` : ''}
+    </label>`).join('');
+}
+
+function _selectionLabel(values, lookup, allText) {
+  return values.length === 0 ? allText : values.map(lookup).join(', ');
 }
 
 function _datalist(id, items) {
-  // Always render the element so it exists in the DOM even before metadata loads.
-  if (items === undefined || items === null) return `<datalist id="${esc(id)}"></datalist>`;
+  // Always render the element so it exists in the DOM even before options load.
+  if (!Array.isArray(items)) return `<datalist id="${esc(id)}"></datalist>`;
   return `<datalist id="${esc(id)}">${items.map(v => `<option value="${esc(String(v))}">`).join('')}</datalist>`;
 }
 
-function _attachTagAutocomplete(inputId, datalistId) {
+// Tag prefix completion over the server's tag list (input UX only).
+function _attachTagAutocomplete(inputId, datalistId, tags) {
   const input = el(inputId);
   const dl    = el(datalistId);
   if (input === null || input === undefined || dl === null || dl === undefined) return;
   input.addEventListener('input', () => {
-    if (state.metadata === undefined || state.metadata === null) return;
-    const tags = state.metadata.tags;
-    if (tags === undefined || tags === null || tags.length === 0) return;
+    if (!Array.isArray(tags) || tags.length === 0) return;
     const val       = input.value;
     const lastComma = val.lastIndexOf(',');
     const prefix    = lastComma >= 0 ? val.slice(0, lastComma + 1) + ' ' : '';
@@ -1738,74 +1505,45 @@ function _attachTagAutocomplete(inputId, datalistId) {
   });
 }
 
+const _TRIGGER_STYLE = 'width:100%;display:flex;justify-content:space-between;align-items:center;text-align:left;background:var(--panel);border:1px solid var(--hair-strong);border-radius:8px;padding:6px 10px;font-size:var(--text-base);color:var(--ink);cursor:pointer;outline:none';
+const _DROPDOWN_STYLE = 'position:fixed;z-index:1000;background:var(--panel);border:1px solid var(--hair-strong);border-radius:8px;padding:8px 10px;display:flex;flex-direction:column;gap:8px;box-shadow:0 4px 16px rgba(0,0,0,.15)';
+
 function _renderFilterBar() {
-  const f        = state.filters;
-  const allTypes = _txTypes();
-  const allAccs  = state.accounts;
-  const _majorMap = new Map();
-  const _minorMap = new Map();
-  state.categories.forEach(c => {
-    _majorMap.set(c.major_category_key, c.major_category_label);
-    _minorMap.set(c.minor_category_key, c.minor_category_label);
-  });
-  const allMajor = [..._majorMap.entries()].map(([key, label]) => ({ key, label })).sort((a, b) => a.label.localeCompare(b.label));
-  const _minorSrc = f.major.length
-    ? state.categories.filter(c => f.major.includes(c.major_category_key))
-    : state.categories;
-  const _minorMapF = new Map();
-  _minorSrc.forEach(c => _minorMapF.set(c.minor_category_key, c.minor_category_label));
-  const allMinor = [..._minorMapF.entries()].map(([key, label]) => ({ key, label })).sort((a, b) => a.label.localeCompare(b.label));
-
-  const m = state.metadata;
-
-  const RANGE_OPTS = [
-    { value: 'last_30',    label: 'Last 30 days' },
-    { value: 'this_month', label: 'This month'   },
-    { value: 'last_month', label: 'Last month'   },
-    { value: 'last_3',     label: 'Last 3 mo'    },
-    { value: 'last_6',     label: 'Last 6 mo'    },
-    { value: 'last_12',    label: 'Last 12 mo'   },
-    { value: 'ytd',        label: 'Year to date' },
-    { value: 'all',        label: 'All'          },
-    { value: 'custom',     label: 'Custom'       },
-  ];
-  const isCustomRange = state.dateRange === 'custom';
-  const _rangeInputFmt = d => { const y = d.getFullYear(), mo = String(d.getMonth()+1).padStart(2,'0'), day = String(d.getDate()).padStart(2,'0'); return `${y}-${mo}-${day}`; };
-  const { from: _rFrom, to: _rTo } = getRangeBounds();
-  const rangeFromStr = isCustomRange ? ((state.customFrom !== undefined && state.customFrom !== null) ? state.customFrom : '') : _rangeInputFmt(_rFrom);
-  const rangeToStr   = isCustomRange ? ((state.customTo   !== undefined && state.customTo   !== null) ? state.customTo   : '') : _rangeInputFmt(_rTo);
+  const facets = _facets ?? {};
+  const d = _currentDraft();
+  const ranges = facets.ranges ?? [{ value: 'last_30', label: 'Last 30 days' }];
+  const isCustomRange = d.range === 'custom';
+  // Resolved bounds of the applied range come from the server.
+  const applied = _list?.range ?? null;
+  const showsApplied = applied !== null && applied.key === d.range;
+  const rangeFromStr = isCustomRange ? d.from : (showsApplied ? (applied.from ?? '') : '');
+  const rangeToStr   = isCustomRange ? d.to   : (showsApplied ? (applied.to ?? '') : '');
   const rangeDateStyle = (editable) => `background:var(--panel);border:1px solid var(--hair-strong);border-radius:8px;padding:6px 10px;font-size:var(--text-base);font-family:var(--grotesk);color:${editable ? 'var(--ink)' : 'var(--muted)'};cursor:${editable ? 'auto' : 'default'}`;
+  const activeCount = _list?.active_filter_count ?? 0;
 
-  const _findRangeOpt = RANGE_OPTS.find(o => o.value === state.dateRange);
-  const activeChips = [
-    ...(state.dateRange !== 'last_30' ? [{ label: (_findRangeOpt !== undefined && _findRangeOpt !== null) ? _findRangeOpt.label : state.dateRange, key: 'dateRange', val: '' }] : []),
-    ...f.types.map(t     => ({ label: (_txTypeMap()[t] !== undefined && _txTypeMap()[t] !== null) ? _txTypeMap()[t] : t, key: 'types', val: t })),
-    ...f.accounts.map(id => { const a = state.accountMap[id]; return { label: (a !== undefined && a !== null && a.account_name !== undefined && a.account_name !== null) ? a.account_name : id, key: 'accounts', val: id }; }),
-    ...f.major.map(v     => { const _ml = _majorMap.get(v); return { label: (_ml !== undefined && _ml !== null) ? _ml : v, key: 'major', val: v }; }),
-    ...f.minor.map(v     => { const _ml = _minorMap.get(v); return { label: (_ml !== undefined && _ml !== null) ? _ml : v, key: 'minor', val: v }; }),
-    ...(f.user_location_country !== '' ? [{ label: 'Country: ' + esc(f.user_location_country), key: 'user_location_country', val: '' }] : []),
-    ...(f.user_location_city    !== '' ? [{ label: 'City: '    + esc(f.user_location_city),    key: 'user_location_city',    val: '' }] : []),
-    ...(f.user_location_area    !== '' ? [{ label: 'Area: '    + esc(f.user_location_area),    key: 'user_location_area',    val: '' }] : []),
-    ...(f.tag    !== '' ? [{ label: 'Tag: '    + esc(f.tag),    key: 'tag',    val: '' }] : []),
-    ...(f.search !== '' ? [{ label: 'Search: ' + esc(f.search), key: 'search', val: '' }] : []),
-  ];
+  const typeItems = (facets.types ?? []).map(t => ({ value: t.value, label: t.label }));
+  const accTypeItems = (facets.account_types ?? []).map(t => ({ value: t.value, label: t.label, count: t.count }));
+  const accountItems = _filterAccounts(facets, d).map(a => ({ value: a.id, label: a.name }));
+  const majorItems = (facets.majors ?? []).map(m => ({ value: m.key, label: m.label }));
+  const minorItems = _filterMinors(facets, d).map(m => ({ value: m.key, label: m.label }));
+  const accountName = id => _facetLabel(facets.accounts, 'id', id);
 
   return `
   <div class="filter-bar">
     <button class="filter-toggle" id="filterToggle">
-      Filters${activeChips.length ? ` (${activeChips.length})` : ''} <span class="filter-arrow">${filterOpen ? '▲' : '▼'}</span>
+      Filters${activeCount ? ` (${esc(activeCount)})` : ''} <span class="filter-arrow">${filterOpen ? '▲' : '▼'}</span>
     </button>
     <div class="filter-body ${filterOpen ? '' : 'hidden'}" id="filterBody">
       <div class="filter-row">
         <label>Date range</label>
         <div style="flex:1;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
           <div id="filterDateRangeWrap" style="flex:1;min-width:140px;position:relative">
-            <button id="filterDateRangeTrigger" type="button" style="width:100%;display:flex;justify-content:space-between;align-items:center;text-align:left;background:var(--panel);border:1px solid var(--hair-strong);border-radius:8px;padding:6px 10px;font-size:var(--text-base);color:var(--ink);cursor:pointer;outline:none">
-              <span id="filterDateRangeLabel">${esc((_findRangeOpt !== undefined && _findRangeOpt !== null) ? _findRangeOpt.label : RANGE_OPTS[0].label)}</span>
+            <button id="filterDateRangeTrigger" type="button" style="${_TRIGGER_STYLE}">
+              <span id="filterDateRangeLabel">${esc(_facetLabel(ranges, 'value', d.range))}</span>
               <span style="color:var(--muted);font-size:var(--text-2xs);margin-left:8px">▼</span>
             </button>
             <div id="filterDateRangeDropdown" class="hidden" style="position:fixed;z-index:1000;background:var(--panel);border:1px solid var(--hair-strong);border-radius:8px;padding:4px;display:flex;flex-direction:column;gap:2px;box-shadow:0 4px 16px rgba(0,0,0,.15)">
-              ${RANGE_OPTS.map(o => `<div data-range-val="${esc(o.value)}" style="padding:6px 10px;font-size:var(--text-base);color:${state.dateRange === o.value ? 'var(--ember)' : 'var(--ink)'};background:${state.dateRange === o.value ? 'var(--hair)' : 'transparent'};border-radius:6px;cursor:pointer">${esc(o.label)}</div>`).join('')}
+              ${ranges.map(o => `<div data-range-val="${esc(o.value)}" style="padding:6px 10px;font-size:var(--text-base);color:${d.range === o.value ? 'var(--ember)' : 'var(--ink)'};background:${d.range === o.value ? 'var(--hair)' : 'transparent'};border-radius:6px;cursor:pointer">${esc(o.label)}</div>`).join('')}
             </div>
           </div>
           <input type="date" id="filterDateFrom" value="${esc(rangeFromStr)}" ${isCustomRange ? '' : 'readonly'} style="${rangeDateStyle(isCustomRange)}">
@@ -1816,14 +1554,12 @@ function _renderFilterBar() {
       <div class="filter-row">
         <label>Type</label>
         <div id="filterTypeWrap" style="flex:1;min-width:120px;position:relative">
-          <button id="filterTypeTrigger" type="button" style="width:100%;display:flex;justify-content:space-between;align-items:center;text-align:left;background:var(--panel);border:1px solid var(--hair-strong);border-radius:8px;padding:6px 10px;font-size:var(--text-base);color:var(--ink);cursor:pointer;outline:none">
-            <span id="filterTypeLabel">${f.types.length ? f.types.map(t => (_txTypeMap()[t] !== undefined && _txTypeMap()[t] !== null) ? _txTypeMap()[t] : t).join(', ') : 'All types'}</span>
+          <button id="filterTypeTrigger" type="button" style="${_TRIGGER_STYLE}">
+            <span id="filterTypeLabel">${esc(_selectionLabel(d.types, v => _facetLabel(facets.types, 'value', v), 'All types'))}</span>
             <span style="color:var(--muted);font-size:var(--text-2xs);margin-left:8px">▼</span>
           </button>
-          <div id="filterTypeDropdown" class="hidden" style="position:fixed;z-index:1000;background:var(--panel);border:1px solid var(--hair-strong);border-radius:8px;padding:8px 10px;display:flex;flex-direction:column;gap:8px;box-shadow:0 4px 16px rgba(0,0,0,.15)">
-            ${allTypes.map(t => `<label style="display:flex;align-items:center;gap:8px;font-size:var(--text-base);color:var(--ink);cursor:pointer">
-              <input type="checkbox" data-filter-type="${esc(t.value)}" ${f.types.includes(t.value) ? 'checked' : ''}> ${esc(t.label)}
-            </label>`).join('')}
+          <div id="filterTypeDropdown" class="hidden" style="${_DROPDOWN_STYLE}">
+            ${_checkboxList(typeItems, 'data-filter-type', d.types, 'No types')}
           </div>
         </div>
       </div>
@@ -1831,28 +1567,21 @@ function _renderFilterBar() {
         <label>Account</label>
         <div style="flex:1;display:flex;gap:8px;flex-wrap:wrap">
           <div id="filterAccTypeWrap" style="flex:1;min-width:130px;position:relative">
-            <button id="filterAccTypeTrigger" type="button" style="width:100%;display:flex;justify-content:space-between;align-items:center;text-align:left;background:var(--panel);border:1px solid var(--hair-strong);border-radius:8px;padding:6px 10px;font-size:var(--text-base);color:var(--ink);cursor:pointer;outline:none">
-              <span id="filterAccTypeLabel">${_accTypeDropdownLabel()}</span>
+            <button id="filterAccTypeTrigger" type="button" style="${_TRIGGER_STYLE}">
+              <span id="filterAccTypeLabel">${esc(_selectionLabel(d.account_types, v => _facetLabel(facets.account_types, 'value', v), 'All account types'))}</span>
               <span style="color:var(--muted);font-size:var(--text-2xs);margin-left:8px">▼</span>
             </button>
-            <div id="filterAccTypeDropdown" class="hidden" style="position:fixed;z-index:1000;background:var(--panel);border:1px solid var(--hair-strong);border-radius:8px;padding:8px 10px;display:flex;flex-direction:column;gap:8px;box-shadow:0 4px 16px rgba(0,0,0,.15)">
-              ${[...new Set(state.accounts.map(a => a.type))].map(type => {
-                const count = state.accounts.filter(a => a.type === type).length;
-                return `<label style="display:flex;align-items:center;gap:8px;font-size:var(--text-base);color:var(--ink);cursor:pointer">
-                  <input type="checkbox" data-acc-type="${esc(type)}" ${_accTypeSel.has(type) ? 'checked' : ''}> ${esc(_fmtAccType(type))} <span style="color:var(--muted);font-size:var(--text-xs)">(${count})</span>
-                </label>`;
-              }).join('')}
+            <div id="filterAccTypeDropdown" class="hidden" style="${_DROPDOWN_STYLE}">
+              ${_checkboxList(accTypeItems, 'data-acc-type', d.account_types, 'No account types')}
             </div>
           </div>
           <div id="filterAccountWrap" style="flex:1;min-width:130px;position:relative">
-            <button id="filterAccountTrigger" type="button" style="width:100%;display:flex;justify-content:space-between;align-items:center;text-align:left;background:var(--panel);border:1px solid var(--hair-strong);border-radius:8px;padding:6px 10px;font-size:var(--text-base);color:var(--ink);cursor:pointer;outline:none">
-              <span id="filterAccountLabel">${esc(f.accounts.length ? f.accounts.map(id => { const a = state.accountMap[id]; return (a !== undefined && a !== null && a.account_name !== undefined && a.account_name !== null && a.account_name !== '') ? a.account_name : id; }).join(', ') : 'All accounts')}</span>
+            <button id="filterAccountTrigger" type="button" style="${_TRIGGER_STYLE}">
+              <span id="filterAccountLabel">${esc(_selectionLabel(d.account_ids, accountName, 'All accounts'))}</span>
               <span style="color:var(--muted);font-size:var(--text-2xs);margin-left:8px">▼</span>
             </button>
-            <div id="filterAccountDropdown" class="hidden" style="position:fixed;z-index:1000;background:var(--panel);border:1px solid var(--hair-strong);border-radius:8px;padding:8px 10px;display:flex;flex-direction:column;gap:8px;box-shadow:0 4px 16px rgba(0,0,0,.15);max-height:200px;overflow-y:auto">
-              ${_accountsForTypeSel().map(a => `<label style="display:flex;align-items:center;gap:8px;font-size:var(--text-base);color:var(--ink);cursor:pointer">
-                <input type="checkbox" data-filter-account="${esc(a.id)}" ${f.accounts.includes(a.id) ? 'checked' : ''}> ${esc(a.account_name)}
-              </label>`).join('') || `<span style="font-size:var(--text-sm);color:var(--muted)">No accounts</span>`}
+            <div id="filterAccountDropdown" class="hidden" style="${_DROPDOWN_STYLE};max-height:200px;overflow-y:auto">
+              ${_checkboxList(accountItems, 'data-filter-account', d.account_ids, 'No accounts for selected type')}
             </div>
           </div>
         </div>
@@ -1861,27 +1590,21 @@ function _renderFilterBar() {
         <label>Category</label>
         <div style="flex:1;display:flex;gap:8px;flex-wrap:wrap">
           <div id="filterMajorWrap" style="flex:1;min-width:130px;position:relative">
-            <button id="filterMajorTrigger" type="button" style="width:100%;display:flex;justify-content:space-between;align-items:center;text-align:left;background:var(--panel);border:1px solid var(--hair-strong);border-radius:8px;padding:6px 10px;font-size:var(--text-base);color:var(--ink);cursor:pointer;outline:none">
-              <span id="filterMajorLabel">${f.major.length ? f.major.map(k => { const _ml = _majorMap.get(k); return (_ml !== undefined && _ml !== null) ? _ml : k; }).join(', ') : 'All major'}</span>
+            <button id="filterMajorTrigger" type="button" style="${_TRIGGER_STYLE}">
+              <span id="filterMajorLabel">${esc(_selectionLabel(d.major, v => _facetLabel(facets.majors, 'key', v), 'All major'))}</span>
               <span style="color:var(--muted);font-size:var(--text-2xs);margin-left:8px">▼</span>
             </button>
-            <div id="filterMajorDropdown" class="hidden" style="position:fixed;z-index:1000;background:var(--panel);border:1px solid var(--hair-strong);border-radius:8px;padding:8px 10px;display:flex;flex-direction:column;gap:8px;box-shadow:0 4px 16px rgba(0,0,0,.15);max-height:240px;overflow-y:auto">
-              ${allMajor.map(({ key, label }) => `<label style="display:flex;align-items:center;gap:8px;font-size:var(--text-base);color:var(--ink);cursor:pointer">
-                <input type="checkbox" data-filter-major="${esc(key)}" ${f.major.includes(key) ? 'checked' : ''}> ${esc(label)}
-              </label>`).join('')}
+            <div id="filterMajorDropdown" class="hidden" style="${_DROPDOWN_STYLE};max-height:240px;overflow-y:auto">
+              ${_checkboxList(majorItems, 'data-filter-major', d.major, 'No major categories')}
             </div>
           </div>
           <div id="filterMinorWrap" style="flex:1;min-width:130px;position:relative">
-            <button id="filterMinorTrigger" type="button" style="width:100%;display:flex;justify-content:space-between;align-items:center;text-align:left;background:var(--panel);border:1px solid var(--hair-strong);border-radius:8px;padding:6px 10px;font-size:var(--text-base);color:var(--ink);cursor:pointer;outline:none">
-              <span id="filterMinorLabel">${f.minor.length ? f.minor.map(k => { const _ml = _minorMap.get(k); return (_ml !== undefined && _ml !== null) ? _ml : k; }).join(', ') : 'All minor'}</span>
+            <button id="filterMinorTrigger" type="button" style="${_TRIGGER_STYLE}">
+              <span id="filterMinorLabel">${esc(_selectionLabel(d.minor, v => _facetLabel(facets.minors, 'key', v), 'All minor'))}</span>
               <span style="color:var(--muted);font-size:var(--text-2xs);margin-left:8px">▼</span>
             </button>
-            <div id="filterMinorDropdown" class="hidden" style="position:fixed;z-index:1000;background:var(--panel);border:1px solid var(--hair-strong);border-radius:8px;padding:8px 10px;display:flex;flex-direction:column;gap:8px;box-shadow:0 4px 16px rgba(0,0,0,.15);max-height:240px;overflow-y:auto">
-              ${allMinor.length
-                ? allMinor.map(({ key, label }) => `<label style="display:flex;align-items:center;gap:8px;font-size:var(--text-base);color:var(--ink);cursor:pointer">
-                    <input type="checkbox" data-filter-minor="${esc(key)}" ${f.minor.includes(key) ? 'checked' : ''}> ${esc(label)}
-                  </label>`).join('')
-                : `<span style="font-size:var(--text-sm);color:var(--muted)">No minor categories</span>`}
+            <div id="filterMinorDropdown" class="hidden" style="${_DROPDOWN_STYLE};max-height:240px;overflow-y:auto">
+              ${_checkboxList(minorItems, 'data-filter-minor', d.minor, 'No minor categories')}
             </div>
           </div>
         </div>
@@ -1889,26 +1612,26 @@ function _renderFilterBar() {
       <div class="filter-row">
         <label>Location</label>
         <div style="flex:1;display:flex;gap:8px;flex-wrap:wrap">
-          <input type="text" id="filterCountry" value="${esc(f.user_location_country)}" list="dlFCountry" placeholder="Country" autocomplete="off" style="flex:1;min-width:100px">
-          ${_datalist('dlFCountry', (m !== null && m !== undefined) ? m.countries : null)}
-          <input type="text" id="filterCity" value="${esc(f.user_location_city)}" list="dlFCity" placeholder="City" autocomplete="off" style="flex:1;min-width:100px">
-          ${_datalist('dlFCity', (m !== null && m !== undefined) ? m.cities : null)}
-          <input type="text" id="filterArea" value="${esc(f.user_location_area)}" list="dlFArea" placeholder="Area" autocomplete="off" style="flex:1;min-width:100px">
-          ${_datalist('dlFArea', (m !== null && m !== undefined) ? m.areas : null)}
+          <input type="text" id="filterCountry" value="${esc(d.user_location_country)}" list="dlFCountry" placeholder="Country" autocomplete="off" style="flex:1;min-width:100px">
+          ${_datalist('dlFCountry', facets.countries)}
+          <input type="text" id="filterCity" value="${esc(d.user_location_city)}" list="dlFCity" placeholder="City" autocomplete="off" style="flex:1;min-width:100px">
+          ${_datalist('dlFCity', facets.cities)}
+          <input type="text" id="filterArea" value="${esc(d.user_location_area)}" list="dlFArea" placeholder="Area" autocomplete="off" style="flex:1;min-width:100px">
+          ${_datalist('dlFArea', facets.areas)}
         </div>
       </div>
       <div class="filter-row">
         <label>Tag</label>
-        <input type="text" id="filterTag" value="${esc(f.tag)}" placeholder="any tag" list="dlFTag" autocomplete="off">
-        ${_datalist('dlFTag', (m !== null && m !== undefined) ? m.tags : null)}
+        <input type="text" id="filterTag" value="${esc(d.tag)}" placeholder="any tag" list="dlFTag" autocomplete="off">
+        ${_datalist('dlFTag', facets.tags)}
       </div>
       <div class="filter-row">
         <label>Search</label>
-        <input type="text" id="filterSearch" value="${esc(f.search)}" placeholder="counterparty or notes">
+        <input type="text" id="filterSearch" value="${esc(d.search)}" placeholder="counterparty, notes or account">
       </div>
       <div style="margin-top:4px;display:flex;gap:8px;justify-content:flex-end">
         <button class="btn btn-secondary btn-sm" id="clearFilters">Clear</button>
-        <button class="btn btn-primary btn-sm" id="applyFilters">Search</button>
+        <button class="btn btn-primary btn-sm" id="applyFilters">Apply</button>
       </div>
     </div>
   </div>`;
@@ -2059,149 +1782,117 @@ function _closeAllFilterDropdowns(exceptId) {
   _FILTER_DROPDOWN_IDS.forEach(id => { const d = el(id); if ((d !== null && d !== undefined) && id !== exceptId) d.classList.add('hidden'); });
 }
 
+function _bindDropdown(triggerId, dropdownId) {
+  const trigger  = el(triggerId);
+  const dropdown = el(dropdownId);
+  if (!trigger || !dropdown) return null;
+  trigger.addEventListener('click', e => {
+    e.stopPropagation();
+    const opening = dropdown.classList.contains('hidden');
+    if (opening) _closeAllFilterDropdowns(dropdownId);
+    dropdown.classList.toggle('hidden');
+    if (opening) _positionDropdown(triggerId, dropdownId);
+  });
+  return dropdown;
+}
+
+// Checkbox changes edit the draft only; Apply sends it to the server.
+function _bindDraftCheckboxes(dropdown, attr, key, onChange) {
+  if (!dropdown) return;
+  const dataKey = attr.replace(/^data-/, '').replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+  dropdown.querySelectorAll(`[${attr}]`).forEach(cb => {
+    cb.addEventListener('change', () => {
+      const d = _currentDraft();
+      const value = cb.dataset[dataKey];
+      if (cb.checked) { if (!d[key].includes(value)) d[key].push(value); }
+      else { d[key] = d[key].filter(x => x !== value); }
+      if (onChange) onChange();
+    });
+  });
+}
+
+function _refreshFilterBar() {
+  const body = el('filterBody');
+  const wasOpen = body !== null && body !== undefined && !body.classList.contains('hidden');
+  filterOpen = wasOpen || filterOpen;
+  _renderListRegion();
+}
+
+function _applyDraft() {
+  const d = _currentDraft();
+  Object.assign(_query, JSON.parse(JSON.stringify(d)), { page: 1 });
+  _draft = null;
+  renderTransactions();
+}
+
 function _attachFilterEvents() {
   if (_filterEventsAbort) _filterEventsAbort.abort();
   _filterEventsAbort = new AbortController();
   const { signal: filterSignal } = _filterEventsAbort;
+  const facets = _facets ?? {};
 
-  el('filterToggle').addEventListener('click', () => { filterOpen = !filterOpen; renderTransactions(); }, { signal: filterSignal });
+  el('filterToggle').addEventListener('click', () => { filterOpen = !filterOpen; _renderListRegion(); }, { signal: filterSignal });
 
   // ── Date range ────────────────────────────────────────────────────────────
-  const dateRangeTrigger  = el('filterDateRangeTrigger');
-  const dateRangeDropdown = el('filterDateRangeDropdown');
-  if (dateRangeTrigger && dateRangeDropdown) {
-    dateRangeTrigger.addEventListener('click', e => {
-      e.stopPropagation();
-      const opening = dateRangeDropdown.classList.contains('hidden');
-      if (opening) _closeAllFilterDropdowns('filterDateRangeDropdown');
-      dateRangeDropdown.classList.toggle('hidden');
-      if (opening) _positionDropdown('filterDateRangeTrigger', 'filterDateRangeDropdown');
-    });
+  const dateRangeDropdown = _bindDropdown('filterDateRangeTrigger', 'filterDateRangeDropdown');
+  if (dateRangeDropdown) {
     dateRangeDropdown.querySelectorAll('[data-range-val]').forEach(item => {
       item.addEventListener('click', () => {
-        state.dateRange  = item.dataset.rangeVal;
-        state.customFrom = '';
-        state.customTo   = '';
-        renderTransactions();
+        const d = _currentDraft();
+        d.range = item.dataset.rangeVal;
+        d.from = '';
+        d.to = '';
+        _refreshFilterBar();
       });
     });
   }
-  el('filterDateFrom').addEventListener('change', e => {
-    state.customFrom = e.target.value;
-    state.dateRange  = 'custom';
-    renderTransactions();
+  el('filterDateFrom').addEventListener('change', e => { const d = _currentDraft(); d.from = e.target.value; d.range = 'custom'; _refreshFilterBar(); });
+  el('filterDateTo').addEventListener('change', e => { const d = _currentDraft(); d.to = e.target.value; d.range = 'custom'; _refreshFilterBar(); });
+
+  const setLabel = (id, values, lookup, allText) => { const node = el(id); if (node) node.textContent = _selectionLabel(values, lookup, allText); };
+
+  _bindDraftCheckboxes(_bindDropdown('filterTypeTrigger', 'filterTypeDropdown'), 'data-filter-type', 'types',
+    () => setLabel('filterTypeLabel', _currentDraft().types, v => _facetLabel(facets.types, 'value', v), 'All types'));
+
+  const accountLabel = () => setLabel('filterAccountLabel', _currentDraft().account_ids, id => _facetLabel(facets.accounts, 'id', id), 'All accounts');
+  const minorLabel = () => setLabel('filterMinorLabel', _currentDraft().minor, v => _facetLabel(facets.minors, 'key', v), 'All minor');
+  // Dependent lists refresh in place so the open dropdown stays open.
+  const refreshAccounts = () => {
+    const d = _currentDraft();
+    const offered = _filterAccounts(facets, d);
+    const ids = new Set(offered.map(a => a.id));
+    d.account_ids = d.account_ids.filter(id => ids.has(id));
+    const dropdown = el('filterAccountDropdown');
+    if (dropdown) {
+      dropdown.innerHTML = _checkboxList(offered.map(a => ({ value: a.id, label: a.name })), 'data-filter-account', d.account_ids, 'No accounts for selected type');
+      _bindDraftCheckboxes(dropdown, 'data-filter-account', 'account_ids', accountLabel);
+    }
+    accountLabel();
+  };
+  const refreshMinors = () => {
+    const d = _currentDraft();
+    const offered = _filterMinors(facets, d);
+    const keys = new Set(offered.map(m => m.key));
+    d.minor = d.minor.filter(key => keys.has(key));
+    const dropdown = el('filterMinorDropdown');
+    if (dropdown) {
+      dropdown.innerHTML = _checkboxList(offered.map(m => ({ value: m.key, label: m.label })), 'data-filter-minor', d.minor, 'No minor categories');
+      _bindDraftCheckboxes(dropdown, 'data-filter-minor', 'minor', minorLabel);
+    }
+    minorLabel();
+  };
+
+  // Account types narrow the account choices (and filter rows once applied).
+  _bindDraftCheckboxes(_bindDropdown('filterAccTypeTrigger', 'filterAccTypeDropdown'), 'data-acc-type', 'account_types', () => {
+    setLabel('filterAccTypeLabel', _currentDraft().account_types, v => _facetLabel(facets.account_types, 'value', v), 'All account types');
+    refreshAccounts();
   });
-  el('filterDateTo').addEventListener('change', e => {
-    state.customTo  = e.target.value;
-    state.dateRange = 'custom';
-    renderTransactions();
+  _bindDraftCheckboxes(_bindDropdown('filterAccountTrigger', 'filterAccountDropdown'), 'data-filter-account', 'account_ids', accountLabel);
+  _bindDraftCheckboxes(_bindDropdown('filterMajorTrigger', 'filterMajorDropdown'), 'data-filter-major', 'major', () => {
+    setLabel('filterMajorLabel', _currentDraft().major, v => _facetLabel(facets.majors, 'key', v), 'All major');
+    refreshMinors();
   });
-
-  const typeTrigger  = el('filterTypeTrigger');
-  const typeDropdown = el('filterTypeDropdown');
-  if (typeTrigger && typeDropdown) {
-    typeTrigger.addEventListener('click', e => {
-      e.stopPropagation();
-      const opening = typeDropdown.classList.contains('hidden');
-      if (opening) _closeAllFilterDropdowns('filterTypeDropdown');
-      typeDropdown.classList.toggle('hidden');
-      if (opening) _positionDropdown('filterTypeTrigger', 'filterTypeDropdown');
-    });
-    typeDropdown.querySelectorAll('[data-filter-type]').forEach(cb => {
-      cb.addEventListener('change', () => {
-        const t = cb.dataset.filterType;
-        if (cb.checked) { if (!state.filters.types.includes(t)) state.filters.types.push(t); }
-        else { state.filters.types = state.filters.types.filter(x => x !== t); }
-        const lbl = el('filterTypeLabel');
-        if (lbl) lbl.textContent = state.filters.types.length ? state.filters.types.map(v => (_txTypeMap()[v] !== undefined && _txTypeMap()[v] !== null) ? _txTypeMap()[v] : v).join(', ') : 'All types';
-      });
-    });
-  }
-
-  // ── Account type dropdown ──
-  const accTypeTrigger  = el('filterAccTypeTrigger');
-  const accTypeDropdown = el('filterAccTypeDropdown');
-  if (accTypeTrigger && accTypeDropdown) {
-    accTypeTrigger.addEventListener('click', e => {
-      e.stopPropagation();
-      const opening = accTypeDropdown.classList.contains('hidden');
-      if (opening) _closeAllFilterDropdowns('filterAccTypeDropdown');
-      accTypeDropdown.classList.toggle('hidden');
-      if (opening) _positionDropdown('filterAccTypeTrigger', 'filterAccTypeDropdown');
-    });
-    accTypeDropdown.querySelectorAll('[data-acc-type]').forEach(cb => {
-      cb.addEventListener('change', () => {
-        if (cb.checked) _accTypeSel.add(cb.dataset.accType);
-        else            _accTypeSel.delete(cb.dataset.accType);
-        const lbl = el('filterAccTypeLabel');
-        if (lbl) lbl.textContent = _accTypeDropdownLabel();
-        _refreshFilterAccountDropdown();
-      });
-    });
-  }
-
-  // ── Account dropdown ──
-  const acctTrigger  = el('filterAccountTrigger');
-  const acctDropdown = el('filterAccountDropdown');
-  if (acctTrigger && acctDropdown) {
-    acctTrigger.addEventListener('click', e => {
-      e.stopPropagation();
-      const opening = acctDropdown.classList.contains('hidden');
-      if (opening) _closeAllFilterDropdowns('filterAccountDropdown');
-      acctDropdown.classList.toggle('hidden');
-      if (opening) _positionDropdown('filterAccountTrigger', 'filterAccountDropdown');
-    });
-    _attachFilterAccountCheckboxes(acctDropdown);
-  }
-
-  // ── Major category dropdown ──
-  const majorTrigger  = el('filterMajorTrigger');
-  const majorDropdown = el('filterMajorDropdown');
-  if (majorTrigger && majorDropdown) {
-    majorTrigger.addEventListener('click', e => {
-      e.stopPropagation();
-      const opening = majorDropdown.classList.contains('hidden');
-      if (opening) _closeAllFilterDropdowns('filterMajorDropdown');
-      majorDropdown.classList.toggle('hidden');
-      if (opening) _positionDropdown('filterMajorTrigger', 'filterMajorDropdown');
-    });
-    majorDropdown.querySelectorAll('[data-filter-major]').forEach(cb => {
-      cb.addEventListener('change', () => {
-        const v = cb.dataset.filterMajor;
-        if (cb.checked) { if (!state.filters.major.includes(v)) state.filters.major.push(v); }
-        else { state.filters.major = state.filters.major.filter(x => x !== v); }
-        const lbl = el('filterMajorLabel');
-        if (lbl) lbl.textContent = state.filters.major.length
-          ? state.filters.major.map(k => { const c = state.categories.find(x => x.major_category_key === k); return (c !== undefined && c !== null && c.major_category_label !== undefined && c.major_category_label !== null) ? c.major_category_label : k; }).join(', ')
-          : 'All major';
-        _refreshFilterMinorDropdown();
-      });
-    });
-  }
-
-  // ── Minor category dropdown ──
-  const minorTrigger  = el('filterMinorTrigger');
-  const minorDropdown = el('filterMinorDropdown');
-  if (minorTrigger && minorDropdown) {
-    minorTrigger.addEventListener('click', e => {
-      e.stopPropagation();
-      const opening = minorDropdown.classList.contains('hidden');
-      if (opening) _closeAllFilterDropdowns('filterMinorDropdown');
-      minorDropdown.classList.toggle('hidden');
-      if (opening) _positionDropdown('filterMinorTrigger', 'filterMinorDropdown');
-    });
-    minorDropdown.querySelectorAll('[data-filter-minor]').forEach(cb => {
-      cb.addEventListener('change', () => {
-        const v = cb.dataset.filterMinor;
-        if (cb.checked) { if (!state.filters.minor.includes(v)) state.filters.minor.push(v); }
-        else { state.filters.minor = state.filters.minor.filter(x => x !== v); }
-        const lbl = el('filterMinorLabel');
-        if (lbl) lbl.textContent = state.filters.minor.length
-          ? state.filters.minor.map(k => { const c = state.categories.find(x => x.minor_category_key === k); return (c !== undefined && c !== null && c.minor_category_label !== undefined && c.minor_category_label !== null) ? c.minor_category_label : k; }).join(', ')
-          : 'All minor';
-      });
-    });
-  }
+  _bindDraftCheckboxes(_bindDropdown('filterMinorTrigger', 'filterMinorDropdown'), 'data-filter-minor', 'minor', minorLabel);
 
   // ── Global outside-click: close all dropdowns when clicking outside every wrap ──
   document.addEventListener('click', e => {
@@ -2209,44 +1900,17 @@ function _attachFilterEvents() {
     if (!inAnyWrap) _closeAllFilterDropdowns();
   }, { signal: filterSignal });
 
-  const bindText = (id, key) => el(id).addEventListener('input', e => {
-    state.filters[key] = e.target.value.trim();
-  });
-
+  const bindText = (id, key) => el(id).addEventListener('input', e => { _currentDraft()[key] = e.target.value.trim(); });
   bindText('filterCountry', 'user_location_country');
   bindText('filterCity',    'user_location_city');
   bindText('filterArea',    'user_location_area');
   bindText('filterTag',     'tag');
   bindText('filterSearch',  'search');
-  _attachTagAutocomplete('filterTag', 'dlFTag');
+  _attachTagAutocomplete('filterTag', 'dlFTag', facets.tags);
 
-  el('applyFilters').addEventListener('click', () => {
-    state.txPage = 1; renderTransactions();
-  });
-
+  el('applyFilters').addEventListener('click', _applyDraft);
   el('clearFilters').addEventListener('click', () => {
-    _accTypeSel.clear();
-    state.filters = { types:[], accounts:[], major:[], minor:[], user_location_country:'', user_location_city:'', user_location_area:'', tag:'', search:'' };
-    state.dateRange  = 'last_30';
-    state.customFrom = '';
-    state.customTo   = '';
-    state.txPage = 1; renderTransactions();
-  });
-
-  el('transactionsContent').querySelectorAll('.chip-remove').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const key = btn.dataset.chipKey;
-      const val = btn.dataset.chipVal;
-      if (key === 'dateRange') {
-        state.dateRange  = 'last_30';
-        state.customFrom = '';
-        state.customTo   = '';
-      } else if (Array.isArray(state.filters[key])) {
-        state.filters[key] = state.filters[key].filter(x => x !== val);
-      } else {
-        state.filters[key] = '';
-      }
-      state.txPage = 1; renderTransactions();
-    });
+    _draft = _DEFAULT_FILTERS();
+    _applyDraft();
   });
 }

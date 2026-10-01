@@ -315,3 +315,130 @@ function _loadAccountMap(opts) {
   });
   return out;
 }
+
+// ── Form error envelope ───────────────────────────────────────────────────────
+// Interactive create/update failures carry the input `field` and a human
+// `message` (_VM_MESSAGES via vmError) so forms can render them verbatim.
+// createTransactionsBulk results keep their bare codes.
+const _TXV_ERROR_FIELDS = {
+  missing_date: 'tx_date_local', invalid_tx_date_local: 'tx_date_local',
+  nonexistent_local_time: 'tx_date_local', ambiguous_local_time: 'tx_date_local',
+  invalid_tx_timezone_local: 'tx_timezone_local', invalid_transaction_type: 'tx_type',
+  missing_source_amount: 'source_amount_local', missing_target_amount: 'target_amount_local',
+  invalid_amount: 'tx_amount_local', invalid_tx_amount: 'tx_amount_local',
+  unknown_category: 'minor_category', missing_reverse_transfer_category: 'minor_category',
+  missing_source_account: 'source_account', unknown_source_account: 'source_account',
+  missing_target_account: 'target_account', unknown_target_account: 'target_account',
+  same_transfer_account: 'target_account',
+  missing_account_id: 'account_id', unknown_account_id: 'account_id',
+  invalid_user_location_latitude: 'user_location_latitude', latitude_out_of_range: 'user_location_latitude',
+  invalid_user_location_longitude: 'user_location_longitude', longitude_out_of_range: 'user_location_longitude',
+  incomplete_location_coordinates: 'user_location_latitude',
+  beneficiary_empty_name: 'beneficiaries', beneficiary_inconsistent_percentage_format: 'beneficiaries',
+  beneficiary_invalid_percentage: 'beneficiaries', beneficiary_percentage_rounds_to_zero: 'beneficiaries',
+  beneficiary_percentages_do_not_sum_to_100: 'beneficiaries', too_many_beneficiaries: 'beneficiaries',
+  duplicate_beneficiary: 'beneficiaries',
+};
+
+function _txvText(value) {
+  return value === undefined || value === null ? '' : String(value).trim();
+}
+
+function txvFormError(result, body) {
+  if (result === undefined || result === null || result.ok !== false) return result;
+  let field = result.field;
+  if (_txvText(field) === '') {
+    field = result.error === 'missing_category'
+      ? (_txvText(body === undefined || body === null ? '' : body.major_category) === '' ? 'major_category' : 'minor_category')
+      : _TXV_ERROR_FIELDS[result.error];
+  }
+  return Object.assign({}, result, vmError(result.error, field, result.message, result.details));
+}
+
+// ── Interactive balance rule (R1/R2) ─────────────────────────────────────────
+// Called only by createTransaction / updateTransaction, never by
+// createTransactionsBulk: historical CSV imports may replay overdrawn periods.
+// A money-out leg on an asset/investment account is blocked when the account's
+// current balance (opening + every eligible movement, including future-dated
+// ones, after reversing the edited row) is below the amount. Movements before
+// the account's tracking start never affect the balance and are not checked.
+const TXV_BALANCE_CHECKED_TYPES = ['asset', 'investment'];
+const _TXV_BALANCE_EPSILON = 0.000001;   // absorbs float drift in summed balances
+
+// Same comparison as _buildAccountNetMap / ldgBuild.
+function _txvAffectsBalance(cutoff, dateLocal, timezone) {
+  if (cutoff.cutoff === null) return true;
+  const localKey = localDateTimeKey(sheetLocalDateTimeText(dateLocal));
+  if (localKey === null) return false;
+  if (cutoff.zone === '') return localKey >= cutoff.cutoff;
+  const zone = _txvText(timezone) === '' ? 'Europe/London' : _txvText(timezone);
+  const txKey = localDateTimeUtcKey(localKey, zone);
+  return txKey !== null && txKey >= cutoff.cutoff;
+}
+
+function _txvBalanceSymbol(currency) {
+  // Read the rates tab directly: listRates() seeds an empty tab, a write.
+  try { return fxSymbol(currency, fxSymbolMap(sheetToObjects(getOrCreateSheet(RATES_SHEET, getRateSheetColumns())))); }
+  catch (_) { return ''; }
+}
+
+function _txvCheckBalance(account, amountValue, dateLocal, timezone, field, oldRow) {
+  if (account === undefined || account === null) return { ok: true };
+  if (TXV_BALANCE_CHECKED_TYPES.indexOf(_txvText(account.type)) === -1) return { ok: true };
+  const cutoff = ldgAccountCutoff(account);
+  if (!cutoff.valid || !_txvAffectsBalance(cutoff, dateLocal, timezone)) return { ok: true };
+  if (_txvText(account.opening_value_local) === '' || !Number.isFinite(Number(account.opening_value_local))) return { ok: true };
+  let available;
+  try { available = Number(account.opening_value_local) + _buildAccountNetMap([account])[account.id]; }
+  catch (_) { return { ok: true }; }
+  if (oldRow !== undefined && oldRow !== null
+      && _txvText(oldRow[txColIndex('account_id')]) === _txvText(account.id)
+      && _txvText(oldRow[txColIndex('record_status')]) !== 'deleted') {
+    const oldAmount = Number(oldRow[txColIndex('tx_amount_local')]);
+    const oldType = _txvText(oldRow[txColIndex('tx_type')]);
+    if (Number.isFinite(oldAmount) && oldAmount > 0
+        && _txvAffectsBalance(cutoff, oldRow[txColIndex('tx_date_local')], oldRow[txColIndex('tx_timezone_local')])) {
+      if (oldType === 'money-in') available -= oldAmount;
+      else if (oldType === 'money-out') available += oldAmount;
+    }
+  }
+  const amount = Number(amountValue);
+  if (!Number.isFinite(amount) || available - amount >= -_TXV_BALANCE_EPSILON) return { ok: true };
+  const currency = _txvText(account.account_currency_local).toUpperCase();
+  const symbol = _txvBalanceSymbol(currency);
+  const has = available.toFixed(2), needs = amount.toFixed(2);
+  console.warn('txvBalanceRule: rejected reason=insufficient_balance account_type=' + _txvText(account.type));
+  return vmError('insufficient_balance', field,
+    'Insufficient balance. ' + _txvText(account.account_name) + ' has ' + symbol + has + ' — this transaction needs '
+      + symbol + needs + '. Record an Adjustments / Balance correction first if the actual balance is higher.',
+    { account_id: _txvText(account.id), currency: currency, available: has, required: needs });
+}
+
+// Create: the debited leg is the transfer source (either submitted direction),
+// or, for money-out, the account the single-leg writer uses.
+function validateTransactionBalanceCreate(body, catMap, accountMap) {
+  const cat = catMap[body.tx_type + '|' + body.major_category + '|' + body.minor_category];
+  if (cat === undefined) return { ok: true };
+  let accountId, amount, field;
+  if (cat.source_account_mandatory && cat.target_account_mandatory) {
+    accountId = body.source_account; amount = body.source_amount_local; field = 'source_amount_local';
+  } else if (body.tx_type === 'money-out') {
+    const fromSource = cat.source_account_mandatory === true;
+    accountId = fromSource ? body.source_account : body.target_account;
+    amount = fromSource ? body.source_amount_local : body.target_amount_local;
+    field = fromSource ? 'source_amount_local' : 'target_amount_local';
+  } else {
+    return { ok: true };
+  }
+  return _txvCheckBalance(accountMap[_txvText(accountId)], amount,
+    body.tx_date_local, canonicalTransactionTimezone(body.tx_timezone_local), field, null);
+}
+
+// Update: single-leg edit. The edited row's old movement is reversed first when
+// it stays on the same account; its recorded timezone is kept by updates.
+function validateTransactionBalanceUpdate(body, oldRow) {
+  if (body.tx_type !== 'money-out') return { ok: true };
+  const accountMap = _loadAccountMap({ include_closed: true });
+  return _txvCheckBalance(accountMap[_txvText(body.account_id)], body.tx_amount_local,
+    body.tx_date_local, oldRow[txColIndex('tx_timezone_local')], 'tx_amount_local', oldRow);
+}

@@ -58,30 +58,18 @@ test('exported subscription CSV matches every Sheet column and round-trips witho
 test('pause sends only lifecycle intent so it cannot overwrite business fields from an old browser snapshot', async () => {
   const payloads = [], events = [];
   const context = load('sections/subscriptions.js', {
-    state: { subscriptions: [{ _row: 2, record_status: 'active', description: 'Stale browser text', subscription_amount_local: '12.345' }] },
+    state: { views: { list_subscriptions_view: { ok: true, data: { rows: [{ _row: 2, row_num: 2, id: identity, updated_at: '2026-09-01T00:00:00Z', record_status: 'active',
+      allowed_actions: ['edit', 'pause', 'transactions', 'delete'], description: 'Stale browser text', subscription_amount_local: '12.345' }] } } } },
     ExpenseAPI: { async updateSubscription(body) { payloads.push(body); return { ok: true }; } },
     showLoading() {}, hideLoading() {}, showMsg() {},
     document: { dispatchEvent: event => events.push(event.type) },
     CustomEvent: class { constructor(type) { this.type = type; } },
   });
-  await context._toggle(2);
-  assert.deepEqual(JSON.parse(JSON.stringify(payloads)), [{ row_num: 2, record_status: 'inactive' }]);
+  await context._toggle(identity);   // rows are addressed by id
+  assert.deepEqual(JSON.parse(JSON.stringify(payloads)), [{ row_num: 2, record_status: 'inactive', id: identity, updated_at: '2026-09-01T00:00:00Z' }]);
   assert.deepEqual(events, ['et:reload']);
 });
 
-test('subscription suggestions use shared fields, ignore removed tags and exclude deleted definitions', () => {
-  const state = { subscriptions: [] };
-  const context = load('sections/transactions.js', { state });
-  const transaction = { account_id: account, tx_type: 'money-out', major_category: 'bills', minor_category: 'test', counterparty_name: 'Merchant', tx_tags: 'tagged-transaction' };
-  const subscription = { source_account: account.toUpperCase(), tx_type: 'money-out', major_category: 'bills', minor_category: 'test', counterparty_name: ' merchant ', record_status: 'active' };
-  state.subscriptions = [subscription];
-  assert.equal(context._isAlreadySubscribed(transaction), true);
-  state.subscriptions = [{ ...subscription, record_status: 'deleted' }];
-  assert.equal(context._isAlreadySubscribed(transaction), false);
-  state.subscriptions = [{ ...subscription, source_account: identity }];
-  assert.equal(context._isAlreadySubscribed(transaction), false);
-  state.subscriptions = [{ ...subscription, minor_category: 'different' }];
-  assert.equal(context._isAlreadySubscribed(transaction), false);
-  state.subscriptions = [{ ...subscription, tx_type: '', major_category: '', minor_category: '', record_status: 'inactive' }];
-  assert.equal(context._isAlreadySubscribed(transaction), true);
-});
+// The "already subscribed" heuristic (shared fields, removed tags ignored, deleted
+// definitions excluded) is server-side now: view-transactions-backend.cjs covers
+// get_transaction_prefill mode=subscribe and the 'subscribe' allowed action.

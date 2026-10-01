@@ -1,9 +1,20 @@
 # Insight 27 — Debt-to-Income Ratio
 
-**File:** `sections/insights/27-debt-to-income.js`
+**Original client module (deleted):** `app/sections/insights/27-debt-to-income.js`
 **Group:** Account & net worth
 **Chart type:** Gauge (half-donut) + trend line / Income bar chart
 **Tabs:** Both — Accounts tab (current DTI + trend) / Transactions tab (income context)
+
+---
+
+## Current implementation (server)
+
+- **Computed by:** `insightCompute_27_debt_to_income` in `api/insights-networth.gs`, returned by GET `get_insight` with `id=27-debt-to-income`; the browser only renders the payload (`app/sections/insights/render-kinds.js`).
+- **Render kind:** `gauge` · **Periods:** `this_week`, `last_week`, `last_7`, `last_30`, `last_60`, `last_90`, `this_month`, `last_month`, `last_3`, `last_6`, `last_12`, `this_quarter`, `last_quarter`, `ytd`, `last_year`, `custom` · **Default:** `last_12` · **Tabs:** `transactions`, `accounts`
+- **Extra params:** none · **Drill:** none
+- **Rules:** Balances come from the ledger replay over all non-deleted accounts (assets = asset + investment, liabilities = liability); transfer legs move balances. Any flow figures exclude deleted rows and own-account transfers. Periods are inclusive of today and bucket in the request `tz`; a missing rate excludes the value with a `missing_rate` warning. Definitions: [calculations](../calculations.md).
+
+The sections below describe the original browser module (deleted in the dumb-UI refactor). Where they differ from the rules above, the server is authoritative.
 
 ---
 

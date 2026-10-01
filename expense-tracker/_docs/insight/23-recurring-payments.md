@@ -1,9 +1,20 @@
 # Insight 23 — Recurring Payments
 
-**File:** `sections/insights/23-recurring-payments.js`
+**Original client module (deleted):** `app/sections/insights/23-recurring-payments.js`
 **Group:** Spending analysis
 **Chart type:** Sortable HTML table + horizontal bar chart
 **Tabs:** None (transactions view only — no tab strip)
+
+---
+
+## Current implementation (server)
+
+- **Computed by:** `insightCompute_23_recurring_payments` in `api/insights-counterparty-geo.gs`, returned by GET `get_insight` with `id=23-recurring-payments`; the browser only renders the payload (`app/sections/insights/render-kinds.js`).
+- **Render kind:** `table` · **Periods:** `this_week`, `last_week`, `last_7`, `last_30`, `last_60`, `last_90`, `this_month`, `last_month`, `last_3`, `last_6`, `last_12`, `this_quarter`, `last_quarter`, `ytd`, `last_year`, `custom` · **Default:** `last_6` · **Tabs:** none
+- **Extra params:** `sort`, `sort_dir` · **Drill:** `drill` keys: `counterparty`
+- **Rules:** Counts flow-eligible rows only: deleted rows and own-account transfers (including loan / card repayments) are excluded. Periods are inclusive of today and bucket in the request `tz`; a missing rate excludes the value with a `missing_rate` warning. Definitions: [calculations](../calculations.md).
+
+The sections below describe the original browser module (deleted in the dumb-UI refactor). Where they differ from the rules above, the server is authoritative.
 
 ---
 

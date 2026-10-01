@@ -1,9 +1,20 @@
 # Insight 01 — Month-on-Month Daily Cumulative
 
-**File:** `sections/insights/01-mom-cumulative.js`
+**Original client module (deleted):** `app/sections/insights/01-mom-cumulative.js`
 **Group:** Spending comparisons
 **Chart type:** Line — 2 series
 **Tabs:** Transactions | Accounts
+
+---
+
+## Current implementation (server)
+
+- **Computed by:** `insightCompute_01_mom_cumulative` in `api/insights-comparisons.gs`, returned by GET `get_insight` with `id=01-mom-cumulative`; the browser only renders the payload (`app/sections/insights/render-kinds.js`).
+- **Render kind:** `line` · **Periods:** `this_month`, `last_month`, `custom` · **Default:** `this_month` · **Tabs:** `transactions`, `accounts`
+- **Extra params:** none · **Drill:** none
+- **Rules:** The `transactions` tab counts flow-eligible rows only (deleted rows and own-account transfers excluded); the `accounts` tab uses ledger balances over all non-deleted accounts. Periods are inclusive of today and bucket in the request `tz`; a missing rate excludes the value with a `missing_rate` warning. Definitions: [calculations](../calculations.md).
+
+The sections below describe the original browser module (deleted in the dumb-UI refactor). Where they differ from the rules above, the server is authoritative.
 
 ---
 

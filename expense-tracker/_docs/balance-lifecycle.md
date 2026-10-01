@@ -62,7 +62,7 @@ If source and target accounts differ in currency, `Row B.tx_amount_local ≠ Row
 
 An edit is logically equivalent to removing the old row's contribution and adding the new row's contribution. Because the net map is computed fresh from the sheet on every read, this happens automatically — editing the row's `tx_amount_local` or `tx_type` or `account_id` changes the data that `_buildAccountNetMap` will aggregate on the next call.
 
-For financial rule validation at edit time, the frontend computes the **post-reversal balance** before checking insufficient-balance rules:
+For financial rule validation at edit time, the server (`validateTransactionBalanceUpdate`) computes the **post-reversal balance** before checking insufficient-balance rules:
 
 ```
 post_reversal_balance = current_value_local
@@ -119,4 +119,4 @@ Before edit, `transaction_master` sheet has: `tx_type = 'money-out'`, `account_i
 
 User edits `tx_amount_local` to 200. After the sheet write, next `listAccounts` returns: `gbp_current.current_value_local = opening − 200`. The old 150 contribution is no longer in the sheet; the new 200 is.
 
-For validation at edit time, the frontend uses the post-reversal formula above to confirm the account's net position after the old row is "removed" before checking whether the new amount fits.
+For validation at edit time, the server uses the post-reversal formula above to confirm the account's net position after the old row is "removed" before checking whether the new amount fits.

@@ -1,9 +1,20 @@
 # Insight 20 — Savings Rate Over Time
 
-**File:** `sections/insights/20-savings-rate.js`
+**Original client module (deleted):** `app/sections/insights/20-savings-rate.js`
 **Group:** Income & cash flow
 **Chart type:** Mixed — bar (income + expenses) + line (savings rate %)
 **Tabs:** None (transactions view only — no tab strip)
+
+---
+
+## Current implementation (server)
+
+- **Computed by:** `insightCompute_20_savings_rate` in `api/insights-cashflow.gs`, returned by GET `get_insight` with `id=20-savings-rate`; the browser only renders the payload (`app/sections/insights/render-kinds.js`).
+- **Render kind:** `mixed` · **Periods:** `this_week`, `last_week`, `last_7`, `last_30`, `last_60`, `last_90`, `this_month`, `last_month`, `last_3`, `last_6`, `last_12`, `this_quarter`, `last_quarter`, `ytd`, `last_year`, `custom` · **Default:** `last_12` · **Tabs:** none
+- **Extra params:** none · **Drill:** none
+- **Rules:** Counts flow-eligible rows only: deleted rows and own-account transfers (including loan / card repayments) are excluded. Periods are inclusive of today and bucket in the request `tz`; a missing rate excludes the value with a `missing_rate` warning. Definitions: [calculations](../calculations.md).
+
+The sections below describe the original browser module (deleted in the dumb-UI refactor). Where they differ from the rules above, the server is authoritative.
 
 ---
 

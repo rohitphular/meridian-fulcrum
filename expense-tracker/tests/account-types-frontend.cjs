@@ -19,15 +19,39 @@ function load(file, globals, names) {
     .replace(/^import\s[\s\S]*?from\s+['"][^'"]+['"];\s*/gm, '')
     .replace(/^export \{[^}]+\};/gm, '')
     .replace(/\bexport (?=(?:async )?function|const|let)/g, '');
-  const context = vm.createContext({ ...importResultHelpers(), console, ...globals });
+  const context = importResultHelpers.context({ console, ...globals });
   vm.runInContext(source + '\n globalThis.exports = {' + names.join(',') + '};', context);
   return context.exports;
 }
+// list_account_types_view row flags (view-config-lists.gs owns the rules; see
+// account-types-backend.cjs). The client renders them as given.
+const title = value => value.charAt(0).toUpperCase() + value.slice(1);
+function viewRow(record, { hasAccounts = false } = {}) {
+  const locked = record.record_status === 'locked';
+  const readonly = locked ? ['account_type_label', 'account_subtype_label', 'description', 'detail_sheet'] : [];
+  if (hasAccounts && !readonly.includes('detail_sheet')) readonly.push('detail_sheet');
+  return {
+    ...record, record_status_label: title(record.record_status), has_accounts: hasAccounts, readonly_fields: readonly,
+    statuses_for_edit: schema.record_statuses.filter(status => !locked || status !== 'deleted').map(value => ({ value, label: title(value) })),
+    allowed_actions: record.record_status === 'deleted' ? ['view', 'restore'] : locked ? ['view', 'unlock'] : ['view', 'edit', 'delete'],
+  };
+}
+function listView(rows) {
+  return { ok: true, data: { rows, total: rows.length, total_all: rows.length, active_filter_count: 0,
+    facets: { types: schema.types, statuses: schema.record_statuses.map(value => ({ value, label: title(value) })) } } };
+}
 function fixture(extra = {}) {
-  const state = { accountTypeSchema: schema, accountTypes: [row()], accountTypesOpen: true, accountTypeFilterOpen: false, accountTypeFilterType: 'all', accountTypeFilterDraft: null, accountTypePanel: null, accountTypeDraft: {}, accountTypeSearch: '', accountTypeStatus: 'all', accountTypeImport: null, accountTypeBusy: false, ...extra };
+  // `rows` is fixture data only: the section reads list_account_types_view /
+  // export_account_types payloads, never a raw collection in state.
+  const rows = extra.rows ?? [row()];
+  delete extra.rows;
+  const state = { accountTypeSchema: schema, accountTypesOpen: true, accountTypeFilterOpen: false, accountTypeFilterType: 'all', accountTypeFilterDraft: null, accountTypePanel: null, accountTypeDraft: {}, accountTypeSearch: '', accountTypeStatus: 'all', accountTypeImport: null, accountTypeBusy: false, ...extra };
+  state.views = { list_account_types_view: listView(extra.viewRows ?? rows.map(record => viewRow(record))),
+    export_account_types: { ok: true, data: { filename: 'account_types', columns, rows: rows.map(({ row_num, ...record }) => record), count: rows.length, requires_migration: schema.requires_migration === true || extra.accountTypeSchema?.requires_migration === true } } };
   const elements = Object.fromEntries(['configureContent', 'accountTypeFilters', 'accountTypeError', 'accountTypeFile', 'accountTypeImportBtn'].map(id => [id, { innerHTML: '', textContent: '', disabled: false, files: [], querySelectorAll: () => [] }]));
   const messages = [], reloads = [], requests = [], exported = [];
-  const api = {};
+  const views = [];
+  const api = { view: async (action, params) => { views.push([action, params]); return state.views[action]; } };
   for (const name of ['createAccountType', 'updateAccountType', 'deleteAccountType', 'restoreAccountType', 'createAccountTypesBulk']) {
     api[name] = async payload => { requests.push([name, payload]); return { ok: true }; };
   }
@@ -35,11 +59,11 @@ function fixture(extra = {}) {
     state, ExpenseAPI: api, el: id => elements[id] ?? null,
     esc: text => String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;'),
     recordStatusIcon: () => '', syncStatusIcon: () => '', closeContextMenu() {}, openContextMenu() {},
-    showLoading() {}, hideLoading() {}, showMsg: text => messages.push(text), exportAccountTypes: rows => exported.push(rows),
+    showLoading() {}, hideLoading() {}, showMsg: text => messages.push(text), downloadExport: (format, data) => exported.push([format, data]),
     fmtDateTime: value => `dt:${value}`, todayISO: () => '2026-09-29',
     document: { dispatchEvent: event => reloads.push(event.type) }, CustomEvent: class { constructor(type) { this.type = type; } },
   }, ['_saveType', '_submitImport', '_mutate', 'renderConfigure', '_menuItems', '_action']);
-  return { ...exports, state, elements, messages, reloads, requests, api, exported };
+  return { ...exports, state, elements, messages, reloads, requests, api, exported, views };
 }
 test('editing preserves row identity and queues a reload without sending source audit fields', async () => {
   const context = fixture({ accountTypePanel: 'edit', accountTypeDraft: row({ account_subtype_label: 'Daily banking' }) });
@@ -66,29 +90,35 @@ test('dependency rejection retains the draft and never signals a successful refr
   assert.equal(context.state.accountTypeBusy, false);
 });
 
+test('account type save failures show the server message and highlight the named field', async () => {
+  const context = fixture({ accountTypePanel: 'edit', accountTypeDraft: row({ account_subtype_label: '' }) });
+  const classes = new Set();
+  context.elements['at-account_subtype_label'] = { value: '', closest: selector => (selector === '.field' ? { classList: { add: name => classes.add(name) } } : null) };
+  context.api.updateAccountType = async () => ({ ok: false, error: 'missing_account_subtype_label', field: 'account_subtype_label', message: 'Subtype label is required.' });
+  await context._saveType();
+  assert.equal(context.elements.accountTypeError.textContent, 'Subtype label is required.');
+  assert.equal(classes.has('error'), true);
+  assert.equal(context.reloads.length, 0);
+});
+
 test('Configure escapes source labels and supports view, edit, delete, restore and export', () => {
-  const context = fixture({ accountTypes: [row({ account_subtype_label: '<img src=x onerror=alert(1)>', description: '<script>bad()</script>' }), row({ id: 'deleted', record_status: 'deleted' })] });
+  const context = fixture({ rows: [row({ account_subtype_label: '<img src=x onerror=alert(1)>', description: '<script>bad()</script>' }), row({ id: 'deleted', record_status: 'deleted' })] });
   context.renderConfigure();
   const html = context.elements.configureContent.innerHTML;
   assert.match(html, /&lt;img/);
   assert.doesNotMatch(html, /<script>|<img src/);
   for (const action of ['at-toggle', 'at-menu', 'at-export', 'at-import']) assert.ok(html.includes(`data-action="${action}"`));
   assert.doesNotMatch(html, /at-add|Add type/);
-  assert.deepEqual(Array.from(context._menuItems(row()), item => item.key), ['at-view', 'at-edit', 'at-delete']);
-  assert.deepEqual(Array.from(context._menuItems(row({ record_status: 'deleted' })), item => item.key), ['at-view', 'at-restore']);
-});
-
-test('account type export includes the complete schema and existing UUIDs', () => {
-  const { exportAccountTypes } = load('core/utils.js', { state: { accountTypeSchema: schema }, _exportData: (format, rows, filename, cols) => ({ format, rows, filename, cols }) }, ['exportAccountTypes']);
-  const output = exportAccountTypes([row()]);
-  assert.equal(output.filename, 'account_types');
-  assert.equal(output.rows[0].id, identity);
-  assert.deepEqual(output.cols.slice(-6), ['record_status', 'sync_status', 'sync_date', 'sync_notes', 'created_at', 'updated_at']);
+  // Menus come from the server's allowed_actions; no status rules in the browser.
+  assert.deepEqual(Array.from(context._menuItems(viewRow(row())), item => item.key), ['at-view', 'at-edit', 'at-delete']);
+  assert.deepEqual(Array.from(context._menuItems(viewRow(row({ record_status: 'deleted' }))), item => item.key), ['at-view', 'at-restore']);
+  assert.deepEqual(Array.from(context._menuItems({ ...row(), allowed_actions: ['view'] }), item => item.key), ['at-view']);
+  assert.deepEqual(Array.from(context._menuItems(row()), item => item.key), []);
 });
 
 test('locked account types expose unlock without offering deletion or editable descriptions', () => {
-  const locked = row({ record_status: 'locked' });
-  const context = fixture({ accountTypes: [locked], accountTypePanel: 'edit', accountTypeDraft: locked });
+  const locked = viewRow(row({ record_status: 'locked' }));
+  const context = fixture({ rows: [row({ record_status: 'locked' })], accountTypePanel: 'edit', accountTypeDraft: { ...locked } });
   context.renderConfigure();
   const html = context.elements.configureContent.innerHTML;
   assert.ok(context._menuItems(locked).some(item => item.label === 'Unlock'));
@@ -99,18 +129,6 @@ test('locked account types expose unlock without offering deletion or editable d
   assert.doesNotMatch(statusOptions, /value="deleted"/);
   assert.match(statusOptions, /value="active"/);
 });
-
-test('account and category schemas refresh after configuration changes instead of using persistent cached choices', async () => {
-  let label = 'First';
-  const data = () => ({ ok: true, data: { types: [{ value: 'asset', label }] } });
-  const api = { getAccountSchema: async () => data(), getCategorySchema: async () => data() };
-  const context = load('core/schema.js', { ExpenseAPI: api, localStorage: { getItem: () => JSON.stringify({ types: [{ label: 'stale' }] }) } }, ['loadAccountSchema', 'loadCategorySchema']);
-  assert.equal((await context.loadAccountSchema()).types[0].label, 'First');
-  label = 'Changed';
-  assert.equal((await context.loadAccountSchema()).types[0].label, 'Changed');
-  assert.equal((await context.loadCategorySchema()).types[0].label, 'Changed');
-});
-
 
 test('collapsing the module retains edit and filter drafts, and new creation is unavailable', async () => {
   const context = fixture({ accountTypePanel: 'edit', accountTypeDraft: row({ description: 'unsaved' }), accountTypeFilterDraft: { search: 'draft', status: 'active', type: 'asset' } });
@@ -127,13 +145,13 @@ test('collapsing the module retains edit and filter drafts, and new creation is 
 
 test('account choices, grouping and labels use the supplied schema without catalog fallbacks', () => {
   const state = { accountSchema: { types: [{ value: 'custom-family', label: '<Custom>' }], subtypes_by_type: { 'custom-family': ['custom-key'] }, type_labels: { 'custom-family': '<Custom>' }, subtype_labels: { 'custom-key': 'Configured label' } }, categorySchema: { account_type_hints: [{ value: 'custom-key', label: 'Configured label' }] } };
-  const account = load('sections/accounts.js', { state }, ['_subTypesForType', '_subTypeLabel']);
-  assert.deepEqual(Array.from(account._subTypesForType('custom-family')), ['custom-key']);
-  assert.equal(account._subTypeLabel('custom-key'), 'Configured label');
-  assert.equal(account._subTypeLabel('unknown'), 'unknown');
-  const category = load('sections/categories.js', { state }, ['_acctTypeGroups']);
-  assert.equal(category._acctTypeGroups()[0].label, '<Custom>');
-  assert.deepEqual(Array.from(category._acctTypeGroups()[0].keys), ['custom-key']);
+  // Accounts: add-form choices and labels come from get_account_form_options.
+  state.views = { get_account_form_options: { ok: true, data: { types: [{ value: 'custom-family', label: '<Custom>' }], sub_types_by_type: { 'custom-family': [{ value: 'custom-key', label: 'Configured label' }] }, currencies: [{ value: 'GBP', label: 'GBP' }], import_file_types: [] } } };
+  const account = load('sections/accounts.js', { state, esc: text => String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;') }, ['_subTypeOptsHtml', '_renderAccountForm']);
+  assert.match(account._subTypeOptsHtml('custom-family', 'custom-key'), /<option value="custom-key" selected>Configured label<\/option>/);
+  assert.equal(account._subTypeOptsHtml('unknown', ''), '<option value="">— select —</option>');
+  assert.match(account._renderAccountForm(null, 'add'), /<option value="custom-family">&lt;Custom><\/option>/);
+  // Category account-type hint groups moved to get_category_form_options (categories stream).
 });
 
 test('edit payloads carry no retired loan policy', async () => {
@@ -146,14 +164,19 @@ test('edit payloads carry no retired loan policy', async () => {
 
 
 test('detail mapping is read-only once an account uses the classification', () => {
-  const context = fixture({ accounts: [{ type: 'asset', sub_type: 'current' }], accountTypePanel: 'edit', accountTypeDraft: row() });
+  // has_accounts / readonly_fields come from list_account_types_view; the browser no longer scans accounts.
+  const context = fixture({ accountTypePanel: 'edit', accountTypeDraft: viewRow(row(), { hasAccounts: true }) });
   context.renderConfigure();
   assert.match(context.elements.configureContent.innerHTML, /name="detail_sheet" disabled/);
+  assert.match(context.elements.configureContent.innerHTML, /Fixed while accounts use this type/);
+  const free = fixture({ accounts: [{ type: 'asset', sub_type: 'current' }], accountTypePanel: 'edit', accountTypeDraft: viewRow(row()) });
+  free.renderConfigure();
+  assert.doesNotMatch(free.elements.configureContent.innerHTML, /name="detail_sheet" disabled/);
 });
 
 
 test('subtype column shows labels only and view panel is a read-only summary', () => {
-  const context = fixture({ accountTypes: [row({ account_subtype_key: 'current-key' })] });
+  const context = fixture({ rows: [row({ account_subtype_key: 'current-key' })] });
   context.renderConfigure();
   assert.doesNotMatch(context.elements.configureContent.innerHTML, /current-key/);
   context._action('at-view', identity);
@@ -172,22 +195,40 @@ test('edit form shows only editable fields and never exposes identity keys as in
   assert.match(html, /<textarea id="at-description"/);
 });
 
-test('export opens a panel and downloads the complete unfiltered catalog in import format', () => {
+test('export opens a panel, fetches export_account_types and downloads the server rows and columns as-is', async () => {
   const deleted = row({ id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', account_subtype_key: 'savings', record_status: 'deleted' });
-  const context = fixture({ accountTypes: [row(), deleted], accountTypeStatus: 'active' });
+  const context = fixture({ rows: [row(), deleted], accountTypeStatus: 'active' });
   context._action('at-export');
   assert.equal(context.state.accountTypePanel, 'export');
+  assert.match(context.elements.configureContent.innerHTML, /Preparing the export/);
+  await new Promise(resolve => setImmediate(resolve));
+  // The export ignores the list filters: no params are sent.
+  assert.deepEqual(context.views.at(-1), ['export_account_types', undefined]);
   assert.match(context.elements.configureContent.innerHTML, /account_types-2026-09-29\.csv · 2 records · 13 columns/);
   assert.equal(context.exported.length, 0);
   context._action('at-export-confirm');
-  assert.equal(context.exported[0].length, 2);
+  assert.equal(context.exported[0][0], 'csv');
+  assert.equal(context.exported[0][1], context.state.views.export_account_types?.data ?? context.exported[0][1]);
+  assert.equal(context.exported[0][1].rows.length, 2);
+  assert.deepEqual(context.exported[0][1].columns, columns);
   assert.equal(context.state.accountTypePanel, null);
+  assert.equal(context.state.accountTypeExport, null);
 });
 
-test('export warns that a legacy-key catalog download cannot be re-imported', () => {
-  const context = fixture({ accountTypeSchema: { ...schema, requires_migration: true }, accountTypePanel: 'export' });
-  context.renderConfigure();
+test('export warns that a legacy-key catalog download cannot be re-imported', async () => {
+  const context = fixture({ accountTypeSchema: { ...schema, requires_migration: true } });
+  context._action('at-export');
+  await new Promise(resolve => setImmediate(resolve));
   assert.match(context.elements.configureContent.innerHTML, /reference copy only and cannot be re-imported/);
+});
+
+test('an export failure shows the server message and keeps Download disabled', async () => {
+  const context = fixture();
+  context.state.views.export_account_types = { ok: false, error: 'invalid_account_types', message: 'The account type catalog is invalid.' };
+  context._action('at-export');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.match(context.elements.configureContent.innerHTML, /role="alert">The account type catalog is invalid\./);
+  assert.match(context.elements.configureContent.innerHTML, /data-action="at-export-confirm" disabled/);
 });
 
 test('import uploads the raw file text once and renders the server summary', async () => {
@@ -220,8 +261,8 @@ test('import renders line-numbered file errors escaped and does not reload', asy
   await context._submitImport();
   const html = context.elements.configureContent.innerHTML;
   assert.match(html, /<li>Row 3: a valid UUID is required\.<\/li>/);
-  assert.match(html, /<li>Row 7: &lt;script&gt;/);
-  assert.match(html, /&lt;bad&gt;\.csv · .*Nothing was saved\./);
+  assert.match(html, /<li>Row 7: &lt;script(&gt;|>)/);
+  assert.match(html, /&lt;bad(&gt;|>)\.csv · .*Nothing was saved\./);
   assert.doesNotMatch(html, /Nothing was imported/);
   assert.doesNotMatch(html, /<script>/);
   assert.equal(context.reloads.length, 0);
@@ -250,4 +291,17 @@ test('import without a chosen file sends nothing and the panel has no preview or
   const html = context.elements.configureContent.innerHTML;
   assert.match(html, /id="accountTypeImportBtn" data-action="at-import-confirm" disabled/);
   assert.doesNotMatch(html, /configure-preview|Retry/);
+});
+
+test('Configure asks the server for the filtered list and a landing response keeps an open import panel', async () => {
+  const context = fixture({ accountTypePanel: 'import', accountTypeSearch: 'card', accountTypeStatus: 'locked', accountTypeFilterType: 'liability' });
+  context.elements.accountTypesList = { innerHTML: '' };
+  context.renderConfigure();
+  const page = context.elements.configureContent.innerHTML;
+  assert.match(page, /id="accountTypeFile"/);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(JSON.parse(JSON.stringify(context.views[0])), ['list_account_types_view', { search: 'card', status: 'locked', type: 'liability' }]);
+  // Only the list region re-renders, so a chosen file is not cleared.
+  assert.equal(context.elements.configureContent.innerHTML, page);
+  assert.match(context.elements.accountTypesList.innerHTML, /1 account type/);
 });

@@ -55,7 +55,9 @@ No automatic seeding exists. Categories must be populated via the bulk CSV impor
 
 | Operation | Behaviour |
 |---|---|
-| `list_categories` | Return all rows |
+| `list_categories_view` | GET view model for the Categories tab: server filter (type, major, minor, search, statuses), sort, paging, display labels, `allowed_actions`, `transactions_filter` and facets. Export downloads it with `page_size=all`. |
+| `get_category_form_options` | GET tx types and account-type hint groups for the add / edit forms. |
+| `list_categories` | Raw rows (kept for `scripts/factory-reset.sh`); the app does not call it |
 | `create_category` | Validate required fields; duplicate check → `duplicate_category`; append; stamps `created_at`, `updated_at`, `sync_status = create-pending`, and a UUID `id`. If `body.id` is provided (e.g. from a seeded CSV import), that value is used; otherwise a UUID is generated. `record_status` is always written as `active` on create — passing any other value (including `'inactive'`) returns `invalid_record_status`. The add form therefore only offers `active` as a choice. Returns `{ ok: true, id: '<uuid>' }`. |
 | `create_categories_bulk` | Accept `{ csv, dry_run? }` — the raw `category_master.csv` text — via `importCategoriesCsv` (`api/category-import.gs`). Parse and format-validate the whole file (see [CSV import](#csv-import)); any format error returns `{ ok: false, error: 'invalid_csv_rows', errors: ['Row N: …'] }` and writes nothing. `dry_run: true` stops after format validation, reads no Sheet, and returns `{ ok: true, dry_run: true, rows }`. Otherwise the shaped rows go to the internal `createCategoriesBulk({ categories })`, which validates and matches UUIDs case-insensitively, generates a UUID when absent, preserves lifecycle and existing `created_at`, queues sync status, and accepts only an identical retry for locked rows. Returns `{ ok, created, updated, skipped, failed, results, rows }`; each result also carries its CSV `line` and `label` (`major → minor`). |
 | `update_category` | Validate required fields (including optional `record_status` if present); locked guard; FK check if composite key is changing (see below); overwrite the row; stamps `updated_at`. `record_status` is written only if present in the request body — if absent, the existing status is preserved. To restore a deleted category, pass `record_status: 'active'` via this action. Referenced key changes cannot be forced; update dependencies through an explicit migration. |
@@ -92,6 +94,8 @@ Imports preserve valid `record_status` values (`active`, `inactive`, `deleted`, 
 Changing an existing category's derived composite key is rejected when transactions or subscriptions reference it. Neither the interactive endpoint nor bulk import permits a `force` override. Each write failure is reported as `category_write_failed`; successfully imported rows remain saved. Retry the same UUID-bearing file to complete remaining rows without creating duplicate identities.
 
 ## Error codes
+
+`create_category` / `update_category` validation failures also carry `field` (`tx_type_key`, `major_category_label`, `minor_category_label`, `record_status`, or the hint field) and a human `message`. The add and edit forms show the message and highlight that input; they do no validation of their own. `duplicate_category` and `record_locked` come from the core without a message; the form falls back to its own text.
 
 | Error code | Returned by | Condition |
 |---|---|---|

@@ -1,9 +1,20 @@
 # Insight 04 — Quarter-to-Date Comparison
 
-**File:** `sections/insights/04-qtd-comparison.js`
+**Original client module (deleted):** `app/sections/insights/04-qtd-comparison.js`
 **Group:** Spending comparisons
 **Chart type:** Line — 2 series
 **Tabs:** Transactions | Accounts
+
+---
+
+## Current implementation (server)
+
+- **Computed by:** `insightCompute_04_qtd_comparison` in `api/insights-comparisons.gs`, returned by GET `get_insight` with `id=04-qtd-comparison`; the browser only renders the payload (`app/sections/insights/render-kinds.js`).
+- **Render kind:** `line` · **Periods:** `this_quarter`, `last_quarter`, `custom` · **Default:** `this_quarter` · **Tabs:** `transactions`, `accounts`
+- **Extra params:** none · **Drill:** none
+- **Rules:** The `transactions` tab counts flow-eligible rows only (deleted rows and own-account transfers excluded); the `accounts` tab uses ledger balances over all non-deleted accounts. Periods are inclusive of today and bucket in the request `tz`; a missing rate excludes the value with a `missing_rate` warning. Definitions: [calculations](../calculations.md).
+
+The sections below describe the original browser module (deleted in the dumb-UI refactor). Where they differ from the rules above, the server is authoritative.
 
 ---
 

@@ -54,8 +54,34 @@ function getSuggestedTransactions() {
     .sort(function(a, b) { return b.confidence - a.confidence; })
     .slice(0, 10);
 
+  _addSuggestionDisplay(results, accountMap);
   console.log(fnName + ': suggestions_returned=' + results.length);
   return results;
+}
+
+// Ready-to-render card text (the browser only renders it):
+// display: { account_name, currency_symbol, category_label, typical_amount }.
+function _addSuggestionDisplay(results, accountMap) {
+  if (results.length === 0) return;
+  const symbols = fxSymbolMap(listRates());
+  const minorLabels = Object.create(null);
+  listCategories().forEach(function(category) {
+    const key = String(category.minor_category_key);
+    if (minorLabels[key] === undefined && String(category.minor_category_label).trim() !== '') minorLabels[key] = String(category.minor_category_label);
+  });
+  results.forEach(function(suggestion) {
+    const account = accountMap[String(suggestion.account_id)];
+    const accountName = account !== undefined && account.account_name !== undefined && account.account_name !== null ? String(account.account_name).trim() : '';
+    const symbol = fxSymbol(suggestion.currency, symbols);
+    const amount = Number(suggestion.typical_amount);
+    suggestion.display = {
+      account_name: accountName !== '' ? accountName : String(suggestion.account_id === undefined || suggestion.account_id === null ? '' : suggestion.account_id),
+      currency_symbol: symbol,
+      category_label: minorLabels[String(suggestion.minor_category)] !== undefined ? minorLabels[String(suggestion.minor_category)]
+        : String(suggestion.minor_category === undefined || suggestion.minor_category === null ? '' : suggestion.minor_category),
+      typical_amount: Number.isFinite(amount) ? symbol + amount.toFixed(2) : '—',
+    };
+  });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

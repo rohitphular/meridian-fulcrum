@@ -1,5 +1,7 @@
 # Insight Audit
 
+> **Historical.** This audit covers the deleted browser modules. The server ports (dumb-UI phase 4) fixed or intentionally changed these behaviours; see [calculations](../calculations.md) and each insight doc's "Current implementation" section.
+
 **Scope:** All 28 insight JS files + coordinator (`insights.js`) + `insight-utils.js`
 **Date:** 2026-08-03
 

@@ -1,5 +1,7 @@
 # Insight — Section Reference
 
+> **Current architecture (dumb-UI refactor).** Insights are no longer computed in the browser. `get_app_context` returns the registry (`nav.insights_registry`: id, title, group, periods, default period, tabs, params, `server: true` for all 28 insights plus 29 / 30). `sections/insights.js` turns the selector, period, tab, control, sort and drill state into GET `get_insight` params and hands the payload to `sections/insights/render-kinds.js` (Chart.js config and HTML only; colours / formats from `insights/chart-theme.js`). Payload schema, drill modes (`panel` / `replace`, `series_param`, `null_text`) and the shared `ins*` helpers are documented in the header of `api/insights-registry.gs`; compute functions live in `api/insights-{cashflow,comparisons,categories,networth,counterparty-geo}.gs`. Definitions: [calculations](../calculations.md). Each per-insight doc starts with its server function and params. The rest of this page describes the original client design and is kept for history.
+
 ## Overview
 
 The insight section renders client-side charts from data already loaded in `state` — no extra API calls. The user picks from 28 insights via a selector, sets a time period, and (for dual-view insights) switches tabs.

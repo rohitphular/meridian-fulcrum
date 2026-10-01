@@ -60,8 +60,10 @@ Direct Sheet edits queue pending sync and update the source timestamp. They rema
 
 | Action | Behavior |
 |---|---|
-| `list_account_types` | Read existing rows with `_row` / `row_num`; return an empty list for an empty store. No seeding. |
-| `get_account_type_schema` | Return fields, Sheet-derived family options, detail Sheet options, lifecycle values, ordered headers and `requires_migration`. |
+| `list_account_types_view` | GET view model for Configure: search / status / type filters, sort, labels, `has_accounts`, `readonly_fields`, `statuses_for_edit`, `allowed_actions`, `requires_migration`. |
+| `export_account_types` | GET the whole catalog (every status, filters ignored) in the 13 import columns with existing UUIDs and `requires_migration`; Configure → Export previews and downloads it. It re-imports unchanged through `create_account_types_bulk`. |
+| `list_account_types` | Raw rows with `_row` / `row_num`; empty list for an empty store; no seeding. Kept for the previous frontend only. |
+| schema | Fields, family options, detail Sheet options, lifecycle values, ordered headers and `requires_migration` arrive in `get_app_context` (`schemas.account_type`); the separate `get_account_type_schema` route was removed. |
 | `create_account_type` | Reject with `account_type_creation_restricted`. |
 | `update_account_type` | Update an existing row; propagate a changed family label after validating all siblings. |
 | `delete_account_type` | Dependency-checked soft deletion. |

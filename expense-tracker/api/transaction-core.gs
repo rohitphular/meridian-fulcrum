@@ -22,12 +22,20 @@ function listTransactions() {
 // body: { tx_type, source_account, target_account, source_amount_local, target_amount_local,
 //         major_category, minor_category, + location/text fields }
 // ─────────────────────────────────────────────────────────────────────────────
+// Failures carry field + message for the form (txvFormError).
 function createTransaction(body) {
+  return txvFormError(_txcCreateTransaction(body), body);
+}
+
+function _txcCreateTransaction(body) {
   const catMap     = _buildCategoryMap();
   const accountMap = _loadAccountMap();
   _defaultSameCurrencyTransferAmount(body, catMap, accountMap);
   const validation = validateTransactionRecord(body, catMap, accountMap);
   if (!validation.ok) return validation;
+  // Interactive-only rule; createTransactionsBulk (CSV import) never runs it.
+  const balance = validateTransactionBalanceCreate(body, catMap, accountMap);
+  if (balance.ok === false) return balance;
 
   const catKey  = body.tx_type + '|' + body.major_category + '|' + body.minor_category;
   const cat     = catMap[catKey];
@@ -198,7 +206,12 @@ function _writeSingleTransaction(body, opts) {
 // Update (single row)
 // body: { row_num, tx_type, account_id, tx_amount_local, + categorisation/location fields }
 // ─────────────────────────────────────────────────────────────────────────────
+// Failures carry field + message for the form (txvFormError).
 function updateTransaction(body) {
+  return txvFormError(_txcUpdateTransaction(body), body);
+}
+
+function _txcUpdateTransaction(body) {
   if (body.row_num === undefined || body.row_num === null) return { ok: false, error: 'missing_row_num' };
   const cols    = getTransactionSheetColumns();
   const sheet   = getOrCreateSheet(TRANSACTIONS_SHEET, cols);
@@ -219,6 +232,8 @@ function updateTransaction(body) {
   const catMap     = _buildCategoryMap();
   const validation = validateTransactionUpdate(body, oldRow, catMap);
   if (!validation.ok) return validation;
+  const balance = validateTransactionBalanceUpdate(body, oldRow);
+  if (balance.ok === false) return balance;
 
   // TX-M-6: duplicate check — exclude the current row from the scan.
   const dupResult = _checkDuplicate(sheet, {

@@ -10,7 +10,7 @@ A personal-finance ledger. Tracks money in, money out, and movement between owne
 4. **Normalise** — convert all amounts to a single base currency for cross-account comparison.
 5. **Analyse** — summarise income/expense, savings rate, and break down spend by category and account.
 
-The store is the source of truth. The app is a capture-and-analysis layer on top.
+The store is the source of truth. The backend computes every figure (balances, conversion, totals, periods, insights) and returns ready-to-render views; the browser only renders them. Definitions: [calculations](calculations.md).
 
 ## Domain entities
 
@@ -48,11 +48,11 @@ Asset and investment balances retain their supplied sign. Liabilities are modell
 |---|---|
 | Authentication | PIN + optional TOTP, IP rate-limit, audit log |
 | Accounts | CRUD; archive without delete; opening snapshot and tracking date; separate account-detail CSV imports |
-| Transactions | CRUD; single-leg model (`account_id` + `tx_amount_local`); eight filter dimensions; client-side date range; sort; pagination; CSV/JSON export; cascading category dropdowns; FX rate when accounts differ in currency |
+| Transactions | CRUD; single-leg model (`account_id` + `tx_amount_local`); server-side date range, filters, sort and pagination; CSV/JSON export; cascading category dropdowns from server option trees; FX rate when accounts differ in currency |
 | Categories | CRUD; two-level taxonomy scoped per transaction type; archive without delete; CSV import or manual creation |
 | Rates | Upsert per currency; XAU base currency read-only (rate = 1); auto-seed on first run |
 | Subscriptions | Registry of recurring payment obligations; frequency, amount, account, and category linkage; 21-column schema |
-| Insight | Income/Expense/Net/Savings-rate cards; monthly bar chart; spend by category (drillable major → minor); spend by account |
+| Insight | 30 server-computed insights (cash flow, comparisons, categories and tags, net worth and loans, counterparties, geography, FX) with periods, tabs and drills |
 | Multi-currency | Per-account currency; XAU base currency conversion via rates table; effective exchange rate for cross-currency transfers is implicit in the two stored `tx_amount_local` values |
 | Theming | Light + dark, persisted per user |
 

@@ -43,7 +43,7 @@ function runtime() {
     console: { log() {}, warn() {}, error() {} }, TRANSACTIONS_SHEET: 'transaction_master', CATEGORIES_SHEET: 'category_master',
     MASTER_SHEET_RENAMES: [], Utilities: { getUuid: () => 'f0000000-0000-4000-8000-' + String(++generated).padStart(12, '0') },
   });
-  for (const file of ['app-utils.gs', 'sync-utils.gs', 'transaction-schema.gs', 'transaction-utils.gs', 'transaction-validation.gs', 'transaction-core.gs', 'category-core.gs']) {
+  for (const file of ['app-utils.gs', 'sync-utils.gs', 'transaction-schema.gs', 'transaction-utils.gs', 'transaction-validation.gs', 'transaction-core.gs', 'category-core.gs', 'view-context.gs', 'ledger-core.gs', 'fx-utils.gs']) {
     vm.runInContext(fs.readFileSync(path.join(api, file), 'utf8'), ctx);
   }
   const sheet = new Sheet('transaction_master', [ctx.getTransactionSheetColumns()]);

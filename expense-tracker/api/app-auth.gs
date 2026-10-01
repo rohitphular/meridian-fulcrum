@@ -48,10 +48,16 @@ function verifyTotp(token) {
 // Audit — one row per IP, running totals
 // -----------------------------------------------------------------------------
 
+// checkLocked runs first on every request; recordAccess reuses its audit read
+// for the same IP so each request reads the audit sheet once and writes one row.
+let _authAuditSnapshot = null;
+
 function checkLocked(ip) {
+  _authAuditSnapshot = null;
   if (!ip || ip === 'unknown') return false;
   const sheet  = getOrCreateSheet(AUDIT_SHEET, AUDIT_COLUMNS);
   const values = sheet.getDataRange().getValues();
+  _authAuditSnapshot = { ip: ip, sheet: sheet, values: values };
   for (let i = 1; i < values.length; i++) {
     if (values[i][0] === ip && values[i][10] === true) return true;
   }
@@ -60,10 +66,12 @@ function checkLocked(ip) {
 
 function recordAccess(meta, success) {
   const ip = meta.ip;
+  const snapshot = _authAuditSnapshot !== null && _authAuditSnapshot.ip === ip ? _authAuditSnapshot : null;
+  _authAuditSnapshot = null;
   if (!ip || ip === 'unknown') return;
 
-  const sheet  = getOrCreateSheet(AUDIT_SHEET, AUDIT_COLUMNS);
-  const values = sheet.getDataRange().getValues();
+  const sheet  = snapshot !== null ? snapshot.sheet : getOrCreateSheet(AUDIT_SHEET, AUDIT_COLUMNS);
+  const values = snapshot !== null ? snapshot.values : sheet.getDataRange().getValues();
   const now    = new Date().toISOString();
 
   for (let i = 1; i < values.length; i++) {
@@ -80,14 +88,10 @@ function recordAccess(meta, success) {
     if (shouldLock) console.log('recordAccess: locked ip=' + ip + ' failures=' + failureCount);
     if (success && Number(values[i][8]) > 0) console.log('recordAccess: success ip=' + ip);
 
-    sheet.getRange(rowNum, 4).setValue(meta.ua);
-    sheet.getRange(rowNum, 6).setValue(now);
-    sheet.getRange(rowNum, 7).setValue(totalAttempts);
-    sheet.getRange(rowNum, 8).setValue(successCount);
-    sheet.getRange(rowNum, 9).setValue(failureCount);
-    sheet.getRange(rowNum, 10).setValue(lastFailedAt);
-    sheet.getRange(rowNum, 11).setValue(isLocked);
-    sheet.getRange(rowNum, 12).setValue(lockedAt);
+    // One write for columns 4..12 (user_agent .. locked_at); first_seen is carried over.
+    sheet.getRange(rowNum, 4, 1, 9).setValues([[
+      meta.ua, values[i][4], now, totalAttempts, successCount, failureCount, lastFailedAt, isLocked, lockedAt,
+    ]]);
     return;
   }
 

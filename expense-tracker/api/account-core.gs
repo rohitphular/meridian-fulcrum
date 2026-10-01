@@ -2,7 +2,10 @@
 // FULCRUM FORGE — Account Core: CRUD operations
 // =============================================================================
 
-function listAccounts() {
+// transactions (optional): listTransactions() rows already read in this request
+// (e.g. vmLoad('transactions')), so transaction_master is not read again.
+// Omitted → the sheet is read here, as before.
+function listAccounts(transactions) {
   const cols     = getAccountSheetColumns();
   const sheet    = getOrCreateSheet(ACCOUNTS_SHEET, cols);
   const accounts = sheetToObjectsWithRow(sheet).map(function(account) {
@@ -11,7 +14,7 @@ function listAccounts() {
     });
     return account;
   });
-  const netMap   = _buildAccountNetMap(accounts);
+  const netMap   = _buildAccountNetMap(accounts, transactions);
   return accounts.map(function(a) {
     const opening = Number(a.opening_value_local);
     if (a.opening_value_local === undefined || a.opening_value_local === null
@@ -26,7 +29,9 @@ function listAccounts() {
 // Scans transaction_master and returns a map of { accountId → net change }.
 // tx_amount_local is always stored as a positive value; tx_type (money-in / money-out)
 // determines the sign applied to the running balance.
-function _buildAccountNetMap(accounts) {
+// transactions (optional): listTransactions()-shaped objects to use instead of
+// reading the sheet; the same rules apply to both sources.
+function _buildAccountNetMap(accounts, transactions) {
   // Seed the map to zero for every account first — accounts with no transactions must
   // resolve to opening_value + 0, not opening_value + undefined (which yields NaN).
   const net = Object.create(null);
@@ -42,37 +47,36 @@ function _buildAccountNetMap(accounts) {
   });
   accounts.forEach(function(a) { net[a.id] = 0; });
 
-  const txSheet  = getOrCreateSheet(TRANSACTIONS_SHEET, getTransactionSheetColumns());
-  const values   = txSheet.getDataRange().getValues();
-  if (values.length <= 1) return net;  // return zero-seeded map, not {}
-
-  const accIdx  = txColIndex('account_id');    // account_id column stores the account UUID
-  const amtIdx  = txColIndex('tx_amount_local');
-  const typeIdx = txColIndex('tx_type');
-  const statIdx = txColIndex('record_status');
-  const dateIdx = txColIndex('tx_date_local');
-  const zoneIdx = txColIndex('tx_timezone_local');
+  // Tuples: [record_status, account_id, tx_amount_local, tx_type, tx_date_local, tx_timezone_local, sheet row]
+  const records = Array.isArray(transactions)
+    ? transactions.map(function(tx, index) {
+        return [tx.record_status, tx.account_id, tx.tx_amount_local, tx.tx_type, tx.tx_date_local, tx.tx_timezone_local,
+          tx._row !== undefined ? tx._row : index + 2];
+      })
+    : _accountNetMapSheetRecords();
+  if (records.length === 0) return net;  // return zero-seeded map, not {}
 
   // Index by account ID — transaction_master stores that UUID in account_id.
   const validIds = {};
   accounts.forEach(function(a) { validIds[a.id] = true; });
 
-  for (var i = 1; i < values.length; i++) {
-    if (String(values[i][statIdx]) === 'deleted') continue;
-    const accId  = String(values[i][accIdx]).trim();
-    const amount = Number(values[i][amtIdx]);
-    const type   = String(values[i][typeIdx]).trim();
+  for (var i = 0; i < records.length; i++) {
+    const record = records[i];
+    if (String(record[0]) === 'deleted') continue;
+    const accId  = String(record[1] === undefined || record[1] === null ? '' : record[1]).trim();
+    const amount = Number(record[2]);
+    const type   = String(record[3] === undefined || record[3] === null ? '' : record[3]).trim();
     if (accId === '' || validIds[accId] !== true) continue;
     if (!Number.isFinite(amount) || amount <= 0) {
-      console.warn('_buildAccountNetMap: skipped_reason=invalid_amount row=' + (i + 1));
+      console.warn('_buildAccountNetMap: skipped_reason=invalid_amount row=' + record[6]);
       continue;
     }
     const trackingStart = trackingStartById[accId];
-    const localKey = localDateTimeKey(sheetLocalDateTimeText(values[i][dateIdx]));
+    const localKey = localDateTimeKey(sheetLocalDateTimeText(record[4]));
     if (localKey === null) continue;
     let transactionKey = localKey;
     if (trackingStart.key !== null && trackingStart.zone !== '') {
-      const rawZone = values[i][zoneIdx];
+      const rawZone = record[5];
       const zone = rawZone === undefined || rawZone === null || String(rawZone).trim() === '' ? 'Europe/London' : String(rawZone).trim();
       transactionKey = localDateTimeUtcKey(localKey, zone);
       if (transactionKey === null) continue;
@@ -82,6 +86,23 @@ function _buildAccountNetMap(accounts) {
     else if (type === 'money-out') net[accId] -= amount;
   }
   return net;
+}
+
+// transaction_master as _buildAccountNetMap tuples (one sheet read).
+function _accountNetMapSheetRecords() {
+  const txSheet  = getOrCreateSheet(TRANSACTIONS_SHEET, getTransactionSheetColumns());
+  const values   = txSheet.getDataRange().getValues();
+  const accIdx  = txColIndex('account_id');    // account_id column stores the account UUID
+  const amtIdx  = txColIndex('tx_amount_local');
+  const typeIdx = txColIndex('tx_type');
+  const statIdx = txColIndex('record_status');
+  const dateIdx = txColIndex('tx_date_local');
+  const zoneIdx = txColIndex('tx_timezone_local');
+  const records = [];
+  for (var i = 1; i < values.length; i++) {
+    records.push([values[i][statIdx], values[i][accIdx], values[i][amtIdx], values[i][typeIdx], values[i][dateIdx], values[i][zoneIdx], i + 1]);
+  }
+  return records;
 }
 
 function createAccount(body) {

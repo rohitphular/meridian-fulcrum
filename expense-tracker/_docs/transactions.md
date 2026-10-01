@@ -61,13 +61,13 @@ target_account_types       : comma-separated allowed types
 When a category with these hints is selected:
 
 1. Backend validates that the transfer legs are present (if `mandatory`).
-2. Frontend filters the account dropdowns to the allowed types and shows hints indicating the expected account type. Account type constraints are not enforced server-side.
+2. `get_transaction_form_options` returns, per category, the eligible accounts for each leg (the server applies the account-type hints); the form only looks them up. Account type constraints are not enforced on write.
 
 The category's stored hints determine eligible account choices. Hint values use the catalog's hyphenated subtype keys; `investment` is the shorthand for available investment rows. The `account_types` Sheet is authoritative; there is no default catalog seed in application code.
 
 ## Hard-block rules
 
-See [financial-rules.md](financial-rules.md). That document distinguishes implemented account/amount/category validation from UI-only balance checks and unimplemented credit-limit enforcement.
+See [financial-rules.md](financial-rules.md). Every rule, including the insufficient-balance check, is enforced by the backend on `create_transaction` / `update_transaction`. The add and edit forms do no validation of their own. They send what was entered and show the server's `message`, highlighting the input named by `field`. CSV import does not run the balance rule. Credit limits are not enforced.
 
 ## Cascading category dropdowns
 
@@ -109,7 +109,7 @@ No `[FX: …]` marker is appended to `description` — the effective exchange ra
 | Tag | Substring | Case-insensitive contains on any element of the `;`-split `tx_tags` |
 | Search | Substring | Case-insensitive contains across `counterparty_name`, `description`, and the linked account name |
 
-Date range is applied first (shared with the insight section), then the filter set. All filter dimensions are combined with AND.
+Filtering runs on the server (`list_transactions_view`): the date range (recorded wall date, inclusive of today, see [calculations](calculations.md#periods-and-dates)) and every filter dimension are combined with AND. The filter bar's options come from `get_transaction_facets`, loaded once per data refresh; the draft is sent when you press Apply.
 
 ### Active filters as chips
 
@@ -117,17 +117,17 @@ Active filters are shown as a count badge on the Filters button. Individual filt
 
 ### Sortable columns
 
-Date, Type, Account (by account name), Category (by major). Default sort: `tx_date_local` descending. Click a column header to sort ascending; click again to flip to descending. Clicking a different column resets to ascending.
+Date, Type, Account (by account name), Amount, Category (by major). Default sort: `tx_date_local` descending. Clicking a header sends `sort_col` / `sort_dir`; the server sorts the full filtered set.
 
 ## Pagination
 
-Client-side, default 50 rows per page (selectable: 10 / 25 / 50). Resets to page 1 whenever any filter, sort, or date range changes.
+Server-side (`page`, `page_size`), default 50 rows per page (selectable: 10 / 25 / 50). The view resets to page 1 whenever any filter, sort, or date range changes; the server clamps an out-of-range page.
 
 ## Malformed rows
 
 Rows missing `id`, `tx_date_local`, or with an invalid `tx_type` are diverted into a collapsed warning section. They:
 
-- Do NOT participate in insight totals
+- Do NOT participate in list totals or insights (they come back in `warn_rows`)
 - Balance aggregation independently excludes deleted rows, invalid dates, nonpositive/nonfinite amounts, unknown accounts and pre-tracking movements. A missing transaction ID alone is a UI warning and does not remove an otherwise valid movement from the balance.
 - ARE visible by clicking the `⚠ N rows have warnings` banner
 - ARE only fixable by editing the underlying store directly — the app surfaces them as a diagnostic only
@@ -139,7 +139,7 @@ Rows missing `id`, `tx_date_local`, or with an invalid `tx_type` are diverted in
 | CSV | `transaction_master` import columns, including UUID, exact decimal amounts and lifecycle status |
 | JSON | The same reconstructed import rows with additional source fields |
 
-The export begins with the currently filtered transactions. A transfer is reconstructed once as a source/target pair, including its sibling from the full loaded snapshot when a filter shows only one leg. Standalone money-in amounts are exported on the target account. Transfer amount text is preserved separately for each currency.
+The export (`export_transactions`, built on the server with the list filters) begins with the currently filtered transactions. A transfer is reconstructed once as a source/target pair, including its sibling from the full sheet when a filter shows only one leg. Standalone money-in amounts are exported on the target account. Transfer amount text is preserved separately for each currency.
 
 This compact import contract has one set of shared metadata and one `record_status` for both legs. When the legs have different statuses or independently edited shared fields, or the transfer has historical deleted children, the app blocks export with an explanation. Export `transaction_master` directly from Google Sheets when the original separate rows and their history must be preserved; the compact app format is not a complete ledger backup.
 
@@ -149,10 +149,14 @@ Transaction CSV import is parsed and validated on the backend (`api/transaction-
 
 | Operation | Behaviour |
 |---|---|
-| `list_transactions` | Return all rows (including soft-deleted) |
-| `create_transaction` | Validate (`tx_amount_local` validated unconditionally, regardless of category flags); duplicate check on `(tx_date_local, tx_type, account_id, tx_amount_local)` skipping deleted rows → `duplicate_transaction`; assign `id`; stamp `record_status = active`, `created_at`, `updated_at`; append. For transfers, both legs are duplicate-checked BEFORE any row is written — see Transfer atomicity below. |
+| `list_transactions_view` | GET filtered / sorted / paged rows shaped for the table, `warn_rows` and totals (income / spending exclude deleted rows and own-account transfers); see [api/README.md](../api/README.md#view-gets) for params |
+| `get_transaction_facets` | GET filter-bar options (types, account types, accounts, majors / minors, location and tag suggestions, ranges, sort columns, page sizes) |
+| `get_transaction` / `get_transaction_form_options` / `get_transaction_prefill` | GET the view panel record with its counter leg; add / edit option trees; copy and mark-as-subscription prefill |
+| `export_transactions` | GET compact import rows for the list filters (lossy transfers refused with `transfer_export_lossy`) |
+| `list_transactions` | Raw rows including soft-deleted (kept for `scripts/factory-reset.sh`); the app does not call it |
+| `create_transaction` | Validate (`tx_amount_local` validated unconditionally, regardless of category flags); interactive insufficient-balance rule (`insufficient_balance`, see [financial-rules.md](financial-rules.md#insufficient-balance)); duplicate check on `(tx_date_local, tx_type, account_id, tx_amount_local)` skipping deleted rows → `duplicate_transaction`; assign `id`; stamp `record_status = active`, `created_at`, `updated_at`; append. For transfers, both legs are duplicate-checked BEFORE any row is written — see Transfer atomicity below. |
 | `create_transactions_bulk` | Accept `{ csv, dry_run? }` (`importTransactionsCsv`): parse and validate the file, resolve account names, then pass every row to `createTransactionsBulk` in one call, which inserts or replaces by supplied ID, preserves child identities and deletion tombstones, and rewrites the resulting data region. Returns `{ ok, created, updated, failed, results, rows, without_id }` with each `results[i].line` set to its CSV line, or `{ ok: false, error, errors[] }` when the file is invalid. `dry_run: true` runs only the format checks (no Sheet reads or writes) and returns `{ ok: true, dry_run: true, rows, without_id }` |
-| `update_transaction` | Locked guard → `record_locked`; deleted guard → `transaction_deleted`; validate; duplicate check on `(tx_date_local, tx_type, account_id, tx_amount_local)` excluding the current row (via `excludeRowNum` parameter on `_checkDuplicate`) → `duplicate_transaction`; requires and validates the `major_category` / `minor_category` FK in the update body (returns `unknown_category` if the composite key `(tx_type, major_category, minor_category)` is not found); overwrite editable fields in a single batch write; stamp `updated_at`; advance `sync_status` |
+| `update_transaction` | Locked guard → `record_locked`; deleted guard → `transaction_deleted`; validate; duplicate check on `(tx_date_local, tx_type, account_id, tx_amount_local)` excluding the current row (via `excludeRowNum` parameter on `_checkDuplicate`) → `duplicate_transaction`; requires and validates the `major_category` / `minor_category` FK in the update body (returns `unknown_category` if the composite key `(tx_type, major_category, minor_category)` is not found); insufficient-balance rule on a money-out, after reversing the row's old movement on the same account; overwrite editable fields in a single batch write; stamp `updated_at`; advance `sync_status` |
 | `delete_transaction` | Already-deleted guard → `transaction_already_deleted`; locked guard → `record_locked`; soft-delete (`record_status → deleted`) in a single `setValues()` write; stamp `updated_at` |
 | `restore_transaction` | Check `record_status = deleted`; set `record_status → active` in a single `setValues()` write; stamp `updated_at` |
 
@@ -185,6 +189,9 @@ An omitted `record_status` retains each existing leg's status; new legs default 
 API mutations clear old sync date/notes and advance pending status. Direct Sheet business/lifecycle edits now do the same through `onEdit`, including multirow pastes, while preserving business values and `created_at`. Metadata-only edits do not queue a row. The single-cell category cascade remains; pasted blocks keep their supplied category values. An old edit made before deploying this hook still requires hard-sync or an explicit pending status.
 
 ### Amount validation
+
+Create and update failures keep their `error` code and add `field` (the request field, e.g. `source_amount_local`, `tx_amount_local`, `major_category`) and a human `message`. Forms render the message verbatim. `create_transactions_bulk` results keep bare codes.
+
 
 `tx_amount_local` (and the equivalent `source_amount_local` / `target_amount_local` fields on the create path) is validated unconditionally before any category-conditional checks run. A category where both `source_account_mandatory` and `target_account_mandatory` are `false` does NOT bypass amount validation — at least one of `source_amount_local` or `target_amount_local` must be a finite positive number for any create call to succeed.
 

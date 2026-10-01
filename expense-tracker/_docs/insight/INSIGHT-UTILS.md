@@ -1,5 +1,7 @@
 # insight-utils.js — Reference
 
+> **Deleted.** `sections/insights/insight-utils.js` was removed in the dumb-UI refactor. Its period, balance-replay, grouping and conversion helpers were ported to `api/ledger-core.gs` (`ldgPeriodBounds`, `ldgBalancesAt`, `ldgDailyTotals`, `ldgNetWorth`, `ldgFlowKind`), `api/fx-utils.gs` and the `ins*` helpers in `api/insights-registry.gs`; its chart helpers (`getCssColors`, `buildPalette`, `baseChartOptions`, `fmtMonthKey`, the drill table) live in `app/sections/insights/chart-theme.js`. This page is kept for history only.
+
 **Location:** `sections/insights/insight-utils.js`
 
 Shared computation helpers for all insight sub-modules. Import what you need:

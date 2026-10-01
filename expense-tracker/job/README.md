@@ -1,6 +1,6 @@
 # Legacy precomputed-insights job
 
-This Python processor is **not compatible with the current expense-tracker data model**. The app's live Insights screen remains available.
+This Python processor is **not compatible with the current expense-tracker data model**. The app's Insights screen computes every insight on the server (`get_insight`); the `get_computed_insights` route that read this job's `computed_insights` tab was removed, so nothing reads that tab. The folder is kept for reference.
 
 The job calculations expect the historical dual-leg contract: `tx_date_time`, `amount`, transaction currency, `source_account`/`target_account`, and account `is_active`/`opening_value`. Current Sheets use `transaction_master`, one account movement per row, account-local currency, lifecycle status and tracking-aware balance snapshots. Renaming tabs alone cannot make those calculations correct.
 

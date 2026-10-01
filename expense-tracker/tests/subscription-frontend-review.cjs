@@ -14,37 +14,65 @@ const subscription = index => ({
   id: uuid(index), subscription_name: 'Subscription ' + index, subscription_amount_local: '12.50',
   frequency: 'monthly', day_of_month: '1', source_account: uuid(100),
 });
+// Server view-model fixtures (shapes of list_subscriptions_view / get_subscription_form_options).
+const OPTIONS = {
+  tx_types: [{ value: 'money-in', label: 'Money In' }, { value: 'money-out', label: 'Money Out' }],
+  frequencies: [{ value: 'weekly', label: 'Weekly', short: 'wk' }, { value: 'monthly', label: 'Monthly', short: 'mo' }],
+  days_of_week: [{ value: '1', label: 'Monday' }, { value: '2', label: 'Tuesday' }],
+  day_of_month: { min: 1, max: 31 }, default_frequency: 'monthly', default_timezone: 'Europe/London',
+  record_statuses: statuses,
+  categories: [{ tx_type: 'money-out', label: 'Money Out', majors: [
+    { key: 'housing', label: 'Housing', active: true, stored: false, minors: [{ key: 'rent', label: 'Rent', active: true, stored: false }, { key: 'old', label: 'Old <rent>', active: false, stored: true }] },
+    { key: 'retired', label: 'Retired', active: false, stored: true, minors: [] },
+  ] }],
+  source_accounts: [{ id: uuid(100), account_name: 'Bank', currency: 'GBP', currency_symbol: '£', record_status: 'active', active: true, label: 'Bank (GBP)' }],
+  current: null,
+};
+const viewRow = (index, extra = {}) => ({
+  ...subscription(index), _row: index + 1, row_num: index + 1, record_status: 'active', sync_status: 'in-sync', updated_at: '2026-09-01T00:00:00.000Z',
+  account_name: 'Bank', account_currency: 'GBP', currency_symbol: '£', amount: { native: 12.5, currency: 'GBP', currency_symbol: '£', quote: 12.5 },
+  frequency_short: 'mo', monthly: { native: 12.5, currency: 'GBP', currency_symbol: '£', quote: 12.5 }, amount_monthly_quote: 12.5, is_foreign: false,
+  schedule_status: 'current', is_scheduled: true, next_payment_date: '2026-10-01', due_in_days: 1,
+  allowed_actions: ['edit', 'pause', 'transactions', 'delete'], readonly: false, transactions_search: 'Subscription ' + index, ...extra,
+});
+function listResponse(rows, summary = {}) {
+  return { ok: true, quote: { currency: 'GBP', symbol: '£', rate_available: true }, warnings: [], data: {
+    summary: { scheduled_count: rows.filter(row => row.is_scheduled).length, total_count: rows.length, est_monthly_quote: 0, missing_rate_count: 0, partial: false, ...summary },
+    rows, total: rows.length, page: 1, page_size: 'all', pages: 1, sort: { col: 'next_payment_date', dir: 'asc' },
+    filters: {}, active_filter_count: 0, facets: { majors: [{ key: 'housing', label: 'Housing' }], frequencies: OPTIONS.frequencies, statuses: statuses.map(value => ({ value, label: value })) } } };
+}
 const esc = value => String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 
 function fixture(overrides = {}) {
   const state = {
-    subscriptions: [], accounts: [], accountMap: {}, categories: [], quoteCurrency: 'GBP',
+    views: {}, quoteCurrency: 'GBP',
     subscriptionSchema: { frequencies: ['weekly', 'monthly', 'quarterly', 'annual'], tx_types: ['money-in', 'money-out'], record_statuses: statuses, default_timezone: 'Europe/London' },
     subImportOpen: true, subAddOpen: false, subEditRow: null, subDeleteRow: null, subPrefill: null,
     subFilters: { recordStatuses: statuses, majorCategory: 'all', frequency: 'all', search: '' },
     subSort: { col: 'next_payment_date', dir: 'asc' }, ...overrides,
   };
-  const ids = ['subscriptionsContent', 'subImportStatus', 'subImportError', 'subImportFile', 'subImportConfirm', 'subImportCancel', 'subImportBtn', 'subAddBtn', 'subTableResults', 'subFSearch', 'subFormError', 'subSaveBtn', 'subExportBtn'];
+  const ids = ['subscriptionsContent', 'subImportStatus', 'subImportError', 'subImportFile', 'subImportConfirm', 'subImportCancel', 'subImportBtn', 'subAddBtn', 'subTableResults', 'subFilterWrap', 'subFormWrap', 'subFSearch', 'subFilterApply', 'subFormError', 'subSaveBtn', 'subExportBtn'];
   const elements = Object.fromEntries(ids.map(id => [id, { innerHTML: '', textContent: '', disabled: false, handlers: {},
     addEventListener(event, callback) { this.handlers[event] = callback; }, querySelectorAll() { return []; } }]));
-  const requests = [], reloads = [], messages = [], exports = [];
-  const api = { createSubscriptionsBulk: async payload => {
+  const requests = [], reloads = [], messages = [], exports = [], views = [];
+  const api = { view: async (action, params) => { views.push({ action, params: JSON.parse(JSON.stringify(params)) }); return api.respond(action, params); },
+    respond: (action) => (action === 'get_subscription_form_options' ? { ok: true, data: OPTIONS } : listResponse([])),
+    createSubscriptionsBulk: async payload => {
     requests.push(payload);
     return { ok: true, created: 1, updated: 0, failed: 0, rows: 1, results: [{ index: 0, line: 2, ok: true, action: 'created', key: uuid(1) }] };
   } };
   let loading = 0;
-  const context = vm.createContext({ ...importResultHelpers(),
+  const context = importResultHelpers.context({
     state, ExpenseAPI: api, esc, el: id => elements[id] ?? null,
     openContextMenu: (button, items, select) => select('csv'), exportSubscriptions: (format, rows) => exports.push({ format, rows }),
-    getSymbol: () => '£', toBase: (value, currency) => currency === 'UNKNOWN' || currency === '' ? NaN : value,
     recordStatusIcon: status => status, syncStatusIcon: () => '',
     showLoading: () => loading++, hideLoading: () => loading--, showMsg: (message, kind) => messages.push({ message, kind }),
     console: { log() {}, warn() {}, error() {} },
     document: { dispatchEvent: event => reloads.push(event.type) },
     CustomEvent: class { constructor(type) { this.type = type; } }, AbortController,
   });
-  vm.runInContext(source + '\nthis.exposed = {_subscriptionErrors,_chooseSubscriptionImport,_submitImport,_renderImportPanel,_renderForm,_renderTable,_txTypeOpts,_majorOpts,_minorOpts,_dueDays,_toMonthly,_collectForm,_saveAdd,_attachEvents,renderSubscriptions,pending:()=>_subImportFile};', context);
-  return { ...context.exposed, state, elements, requests, reloads, messages, exports, api, loading: () => loading };
+  vm.runInContext(source + '\nthis.exposed = {_chooseSubscriptionImport,_submitImport,_renderImportPanel,_renderForm,_renderTable,_txTypeOpts,_majorSelectHtml,_minorSelectHtml,_collectForm,_saveAdd,_saveEdit,_toggle,_attachEvents,_listParams,_loadList,_loadFormOptions,renderSubscriptions,setOptions:data=>{_formOptions={key:_formKey(),data};},pending:()=>_subImportFile};', context);
+  return { ...context.exposed, state, elements, requests, reloads, messages, exports, views, api, loading: () => loading };
 }
 const file = (text, name = 'subscription_master.csv') => ({ name, text: async () => text });
 
@@ -139,15 +167,16 @@ test('duplicate clicks cannot post twice and uncertain network outcomes require 
   assert.equal(f.loading(), 0);
 });
 
-test('schema provides transaction choices; unavailable schema blocks the section', () => {
+test('schema gate blocks the section; transaction choices come from the form options', () => {
   const f = fixture();
-  f.state.transactionSchema = { types: ['transfer', 'money-in', 'money-out'] };
+  f.state.subAddOpen = true;
+  f.setOptions({ ...OPTIONS, tx_types: [{ value: 'custom', label: '<Custom>' }] });
+  assert.match(f._txTypeOpts('custom'), /value="custom" selected>&lt;Custom&gt;/);
   assert.doesNotMatch(f._txTypeOpts(), /transfer/);
-  f.state.subscriptionSchema.tx_types = ['custom'];
-  assert.match(f._txTypeOpts(), /custom/);
   f.state.subscriptionSchema = null;
   f.renderSubscriptions();
   assert.match(f.elements.subscriptionsContent.innerHTML, /configuration is unavailable/);
+  assert.equal(f.views.length, 0);
 });
 
 test('amount text reaches the form API payload without financial precision loss', async () => {
@@ -160,99 +189,186 @@ test('amount text reaches the form API payload without financial precision loss'
   assert.equal(f.requests[0].subscription_amount_local, amount);
 });
 
-test('due-day labels use each subscription timezone instead of the browser day', () => {
+test('the table renders the server summary, due-in days and quote amounts without computing them', () => {
   const f = fixture();
-  const now = new Date('2026-09-24T23:30:00Z');
-  assert.equal(f._dueDays('2026-09-25', 'Europe/London', now), 0);
-  assert.equal(f._dueDays('2026-09-25', 'America/New_York', now), 1);
-  assert.equal(f._dueDays('2026-03-30', 'Europe/London', new Date('2026-03-28T12:00:00Z')), 2);
-  assert.equal(f._dueDays('bad', 'Europe/London', now), null);
-});
-
-test('monthly estimate excludes expired/inactive rows and explicitly marks missing conversions', () => {
-  const f = fixture();
-  f.state.accountMap[uuid(100)] = { account_currency_local: 'GBP', account_name: 'Bank' };
-  f.state.accountMap[uuid(101)] = { account_currency_local: 'UNKNOWN', account_name: 'Unknown' };
-  f.state.subscriptions = [
-    { ...subscription(1), _row: 2, record_status: 'active', schedule_status: 'current' },
-    { ...subscription(2), _row: 3, subscription_amount_local: 1000, record_status: 'active', schedule_status: 'expired' },
-    { ...subscription(3), _row: 4, record_status: 'active', schedule_status: 'upcoming', source_account: uuid(101) },
-    { ...subscription(4), _row: 5, record_status: 'inactive', schedule_status: 'inactive' },
+  assert.doesNotMatch(source, /_toMonthly|_sortSubs|_applySubFilters|_isScheduled|_dueDays|_majorOpts|_minorOpts|toBase|getSymbol|accountMap|state\.subscriptions|state\.categories|state\.accounts/);
+  const rows = [
+    viewRow(1, { due_in_days: 0 }),
+    viewRow(2, { account_currency: 'INR', currency_symbol: '₹', amount: { native: 1000, currency: 'INR', currency_symbol: '₹', quote: 9.52 }, frequency_short: 'qtr',
+      monthly: { native: 333.33, currency: 'INR', currency_symbol: '₹', quote: 3.17 }, is_foreign: true, due_in_days: -2, next_payment_date: '2026-09-28' }),
+    viewRow(3, { is_foreign: true, monthly: { native: 5, currency: 'ZZZ', currency_symbol: 'ZZZ ', quote: null }, due_in_days: 12 }),
+    viewRow(4, { is_scheduled: false, schedule_status: 'expired', next_payment_date: '', due_in_days: null, record_status: 'active' }),
   ];
-  const html = f._renderTable(f.state.subscriptions);
-  assert.match(html, /2 \/ 4/);
-  assert.match(html, /£12\.50 \(partial\)/);
+  const html = f._renderTable(listResponse(rows, { scheduled_count: 3, total_count: 5, est_monthly_quote: 1234.5, missing_rate_count: 1, partial: true }));
+  assert.match(html, /3 \/ 5/);
+  assert.match(html, /£1,234\.50 \(partial\)/);
   assert.match(html, /1 subscription\(s\) could not be converted/);
+  assert.match(html, /\(today\)/);
+  assert.match(html, /\(2d overdue\)/);
+  assert.match(html, /\(in 12d\)/);
+  assert.match(html, /₹1,000\.00\/qtr<span class="td-base-amt">£3\.17\/mo/);
+  assert.match(html, /td-base-amt">—</);
   assert.match(html, /Expired/);
-  assert.equal(f._toMonthly(12, 'weekly'), 52);
+  assert.match(html, /data-sub-sort="amount_monthly_quote"/);
+  assert.match(f._renderTable(listResponse([])), /No subscriptions match/);
 });
 
-test('editing preserves exact timestamps and timezone; form amount collection rejects partial numbers', () => {
+test('filters, sort and paging travel as view params; an empty status selection is explicit', async () => {
   const f = fixture();
-  const sub = { ...subscription(1), subscription_start_date_local: '2026-09-01 12:13:14.123456', subscription_end_date_local: '', subscription_timezone_local: 'Asia/Kolkata' };
-  const html = f._renderForm(sub);
-  assert.match(html, /2026-09-01T12:13:14\.123/);
-  assert.doesNotMatch(html, /2026-09-01T12:13:14\.123456/);
-  f.state.subEditRow = 2;
-  f.state.subscriptions = [{ ...sub, _row: 2 }];
-  assert.match(html, /Asia\/Kolkata/);
-  const values = { subFrequency: 'monthly', subDayOfMonth: '1', subName: 'Test', subCounterparty: '', subAmount: '12bad', subSourceAccount: uuid(100), subTxType: '', subMajor: '', subMinor: '', subDescription: '', subTimezone: 'Asia/Kolkata', subStartDate: '2026-09-01T12:13:14.123', subEndDate: '' };
-  Object.entries(values).forEach(([id, value]) => { f.elements[id] = { value }; });
-  const body = f._collectForm();
-  assert.equal(body.subscription_amount_local, '12bad');
-  assert.match(f._subscriptionErrors(body).join(), /positive finite decimal/);
-  assert.equal(body.subscription_start_date_local, sub.subscription_start_date_local);
-  assert.equal(body.subscription_timezone_local, 'Asia/Kolkata');
-  f.state.subscriptions[0].subscription_start_date_local = '2026-09-01 12:13:14.000456';
-  f.elements.subStartDate.value = '2026-09-01T12:13:14';
-  assert.equal(f._collectForm().subscription_start_date_local, '2026-09-01 12:13:14.000456');
-  f.state.subscriptions[0].day_of_week = 2;
-  assert.equal(f._collectForm().day_of_week, 2);
+  assert.deepEqual(JSON.parse(JSON.stringify(f._listParams())), { search: '', sort_col: 'next_payment_date', sort_dir: 'asc', page: 1, page_size: 'all' });
+  f.state.subFilters = { recordStatuses: ['active', 'locked'], majorCategory: 'housing', frequency: 'weekly', search: 'rent' };
+  f.state.subSort = { col: 'amount_monthly_quote', dir: 'desc' };
+  const params = JSON.parse(JSON.stringify(f._listParams()));
+  assert.deepEqual(params, { statuses: ['active', 'locked'], major: 'housing', frequency: 'weekly', search: 'rent', sort_col: 'amount_monthly_quote', sort_dir: 'desc', page: 1, page_size: 'all' });
+  f.state.subFilters.recordStatuses = [];
+  assert.equal(f._listParams().statuses, 'none');
+  await f._loadList();
+  assert.equal(f.views.at(-1).action, 'list_subscriptions_view');
+  assert.equal(f.state.views.list_subscriptions_view.ok, true);
 });
 
-test('subscription search leaves the focused input in place while updating table results', () => {
+test('search waits for Apply / Enter, then re-requests the view without redrawing the page shell', async () => {
   const f = fixture();
   f._attachEvents();
   f.elements.subscriptionsContent.innerHTML = 'original shell';
   f.elements.subFSearch.handlers.input({ target: { value: 'rent' } });
+  assert.equal(f.views.length, 0);
+  assert.equal(f.state.subFilters.search, '');
+  f.elements.subFSearch.handlers.keydown({ key: 'Enter', target: { value: ' rent ' } });
+  await new Promise(done => setImmediate(done));
   assert.equal(f.state.subFilters.search, 'rent');
+  assert.equal(f.views.at(-1).params.search, 'rent');
   assert.equal(f.elements.subscriptionsContent.innerHTML, 'original shell');
   assert.match(f.elements.subTableResults.innerHTML, /No subscriptions match/);
 });
 
-test('archived or no-longer-eligible selected category keys remain visible during edits', () => {
-  const f = fixture({ categories: [{ tx_type_key: 'money-out', major_category_key: 'housing', major_category_label: 'Housing', minor_category_key: 'rent', minor_category_label: 'Rent', is_subscription_eligible: false, record_status: 'active' }] });
-  assert.match(f._majorOpts('money-out', 'housing'), /value="housing" selected disabled/);
-  assert.match(f._minorOpts('money-out', 'housing', 'rent'), /value="rent" selected disabled/);
-});
-
-test('CSV export follows current filters instead of including hidden subscriptions', () => {
+test('a failed list response shows the server message and keeps the last loaded rows', async () => {
   const f = fixture();
-  f.state.subscriptions = [subscription(1), subscription(2)].map(row => ({ ...row, record_status: 'active' }));
-  f.state.subFilters.search = 'Subscription 2';
-  f._attachEvents();
-  f.elements.subExportBtn.handlers.click();
-  assert.equal(f.exports[0].rows.length, 1);
-  assert.equal(f.exports[0].rows[0].id, uuid(2));
+  f.state.views.list_subscriptions_view = listResponse([viewRow(1)]);
+  f.api.respond = () => ({ ok: false, error: 'invalid_filter', field: 'statuses', message: 'Choose <statuses> from the list.' });
+  await f._loadList();
+  assert.match(f.elements.subTableResults.innerHTML, /Choose &lt;statuses&gt; from the list\. Showing the last loaded list\./);
+  assert.match(f.elements.subTableResults.innerHTML, /Subscription 1/);
 });
 
-test('partial and unknown stored classification survives unrelated form edits without becoming new catalog choices', () => {
-  const f = fixture({ categories: [{ tx_type_key: 'money-out', major_category_key: 'housing', major_category_label: 'Housing', minor_category_key: 'rent', minor_category_label: 'Rent', is_subscription_eligible: true, record_status: 'active' }] });
-  assert.match(f._majorOpts('', 'historic'), /value="historic" selected disabled/);
-  assert.match(f._minorOpts('', '', 'historic-minor'), /value="historic-minor" selected disabled/);
-  assert.match(f._minorOpts('money-out', '', 'historic-minor'), /value="historic-minor" selected disabled/);
-  assert.match(f._majorOpts('money-out', 'unknown'), /value="unknown" selected disabled/);
-  assert.match(f._minorOpts('money-out', 'housing', 'unknown'), /value="unknown" selected disabled/);
-  assert.doesNotMatch(f._majorOpts('money-out'), /historic|unknown/);
-  assert.match(f._majorOpts('money-out'), /value="housing"/);
-  assert.doesNotMatch(f._majorOpts('', '<bad>'), /<bad>/);
+test('editing preserves exact timestamps and timezone; form amount collection sends text as entered', () => {
+  const f = fixture();
+  const sub = viewRow(1, { subscription_start_date_local: '2026-09-01 12:13:14.123456', subscription_end_date_local: '', subscription_timezone_local: 'Asia/Kolkata' });
+  f.state.views.list_subscriptions_view = listResponse([sub]);
+  f.state.subEditRow = uuid(1);   // open panels hold the record id
+  f.setOptions(OPTIONS);
+  const html = f._renderForm(sub);
+  assert.match(html, /2026-09-01T12:13:14\.123/);
+  assert.doesNotMatch(html, /2026-09-01T12:13:14\.123456/);
+  assert.match(html, /Asia\/Kolkata/);
+  const values = { subFrequency: 'monthly', subDayOfMonth: '1', subName: 'Test', subCounterparty: '', subAmount: '12bad', subSourceAccount: uuid(100), subTxType: '', subMajor: '', subMinor: '', subDescription: '', subTimezone: 'Asia/Kolkata', subStartDate: '2026-09-01T12:13:14.123', subEndDate: '' };
+  Object.entries(values).forEach(([id, value]) => { f.elements[id] = { value }; });
+  const body = f._collectForm();
+  // Sent as entered; validateSubscriptionCreate rejects it (form-validation-backend.cjs).
+  assert.equal(body.subscription_amount_local, '12bad');
+  assert.equal(body.subscription_start_date_local, sub.subscription_start_date_local);
+  assert.equal(body.subscription_timezone_local, 'Asia/Kolkata');
+  sub.subscription_start_date_local = '2026-09-01 12:13:14.000456';
+  f.elements.subStartDate.value = '2026-09-01T12:13:14';
+  assert.equal(f._collectForm().subscription_start_date_local, '2026-09-01 12:13:14.000456');
+  sub.day_of_week = 2;
+  assert.equal(f._collectForm().day_of_week, 2);
+});
+
+test('the form waits for its options and renders server accounts, frequencies and day labels', async () => {
+  const f = fixture();
+  f.state.subAddOpen = true;
+  assert.match(f._renderForm(null), /Loading form…/);
+  await f._loadFormOptions();
+  assert.deepEqual(f.views.at(-1), { action: 'get_subscription_form_options', params: {} });
+  assert.match(f.elements.subFormWrap.innerHTML, /<option value="a0000000-0000-4000-8000-000000000100" >Bank \(GBP\)<\/option>/);
+  assert.match(f.elements.subFormWrap.innerHTML, /<option value="monthly" selected>Monthly<\/option>/);
+  f.state.subAddOpen = false;
+  f.state.views.list_subscriptions_view = listResponse([viewRow(1)]);
+  f.state.subEditRow = uuid(1);   // open panels hold the record id
+  await f._loadFormOptions();
+  assert.deepEqual(f.views.at(-1), { action: 'get_subscription_form_options', params: { id: uuid(1) } });
+});
+
+test('archived, stored and unknown category keys stay visible but unselectable', () => {
+  const f = fixture();
+  f.state.subAddOpen = true;
+  f.setOptions(OPTIONS);
+  assert.match(f._majorSelectHtml('money-out', 'retired'), /value="retired" selected disabled[^>]*>Retired \(archived\)/);
+  assert.match(f._minorSelectHtml('money-out', 'housing', 'old'), /value="old" selected disabled[^>]*>Old &lt;rent&gt; \(archived\)/);
+  assert.match(f._minorSelectHtml('money-out', 'housing'), /value="rent">Rent/);
+  assert.match(f._majorSelectHtml('', 'historic'), /value="historic" selected disabled>historic \(stored\)/);
+  assert.match(f._minorSelectHtml('', '', 'historic-minor'), /value="historic-minor" selected disabled/);
+  assert.match(f._majorSelectHtml('money-out', 'unknown'), /value="unknown" selected disabled>unknown \(stored\)/);
+  assert.doesNotMatch(f._majorSelectHtml('money-out'), /historic|unknown|\(stored\)/);
+  assert.doesNotMatch(f._majorSelectHtml('', '<bad>'), /<bad>/);
   const values = { subFrequency: 'monthly', subDayOfMonth: '1', subName: 'Test', subCounterparty: '', subAmount: '10', subSourceAccount: uuid(100), subTxType: '', subMajor: 'historic', subMinor: 'historic-minor', subDescription: 'changed', subTimezone: '', subStartDate: '', subEndDate: '' };
   Object.entries(values).forEach(([id, value]) => { f.elements[id] = { value }; });
   const body = f._collectForm();
   assert.equal(body.tx_type, '');
   assert.equal(body.major_category, 'historic');
   assert.equal(body.minor_category, 'historic-minor');
-  assert.equal(f._subscriptionErrors(body).length, 0);
+});
+
+test('export requests every filtered row from the server, not just the visible page', async () => {
+  const f = fixture();
+  f.state.subFilters.search = 'Subscription 2';
+  f.api.respond = () => listResponse([viewRow(2)]);
+  f._attachEvents();
+  f.elements.subExportBtn.handlers.click();
+  await new Promise(done => setImmediate(done));
+  assert.equal(f.views.at(-1).params.search, 'Subscription 2');
+  assert.equal(f.views.at(-1).params.page_size, 'all');
+  assert.equal(f.exports[0].rows.length, 1);
+  assert.equal(f.exports[0].rows[0].id, uuid(2));
+});
+
+test('mutations carry the displayed row identity; pause / resume follow allowed_actions', async () => {
+  const f = fixture();
+  f.state.views.list_subscriptions_view = listResponse([viewRow(1), viewRow(2, { record_status: 'inactive', allowed_actions: ['edit', 'resume', 'transactions', 'delete'] })]);
+  const payloads = [];
+  f.api.updateSubscription = async body => { payloads.push(JSON.parse(JSON.stringify(body))); return { ok: true }; };
+  await f._toggle(uuid(1));
+  await f._toggle(uuid(2));
+  assert.deepEqual(payloads, [
+    { row_num: 2, record_status: 'inactive', id: uuid(1), updated_at: '2026-09-01T00:00:00.000Z' },
+    { row_num: 3, record_status: 'active', id: uuid(2), updated_at: '2026-09-01T00:00:00.000Z' },
+  ]);
+});
+
+test('the form submits without browser validation and renders the server message on the named field', async () => {
+  const f = fixture();
+  assert.doesNotMatch(source, /_subscriptionErrors|_timestampValid|FE duplicate check/);
+  const wraps = {};
+  const values = { subFrequency: 'quarterly', subDayOfMonth: '1', subName: 'Rent', subCounterparty: '', subAmount: '', subSourceAccount: '', subTxType: '', subMajor: '', subMinor: '', subDescription: '', subTimezone: '', subStartDate: '', subEndDate: '' };
+  Object.entries(values).forEach(([id, value]) => {
+    const classes = new Set();
+    wraps[id] = classes;
+    f.elements[id] = { value, closest: selector => (selector === '.field' ? { classList: { add: name => classes.add(name), remove: name => classes.delete(name) } } : null) };
+  });
+  const responses = [
+    { ok: false, error: 'missing_subscription_amount_local', field: 'subscription_amount_local', message: 'Amount is required.' },
+    { ok: false, error: 'duplicate_subscription' },
+  ];
+  f.api.createSubscription = async payload => { f.requests.push(payload); return responses.shift(); };
+  await f._saveAdd();
+  assert.equal(f.requests.length, 1);
+  assert.equal(f.requests[0].subscription_amount_local, '');
+  assert.equal(f.elements.subFormError.textContent, 'Amount is required.');
+  assert.equal(wraps.subAmount.has('error'), true);
+  await f._saveAdd();
+  assert.equal(f.requests.length, 2);
+  assert.equal(f.elements.subFormError.textContent, 'Duplicate subscription.');
+  f.state.views.list_subscriptions_view = listResponse([viewRow(1)]);
+  f.state.subEditRow = uuid(1);   // open panels hold the record id
+  f.api.updateSubscription = async payload => { f.requests.push(payload); return { ok: false, error: 'end_before_start', field: 'subscription_end_date_local', message: 'End date must not be before the start date.' }; };
+  await f._saveEdit();
+  assert.equal(f.requests[2].row_num, 2);
+  assert.equal(f.requests[2].id, uuid(1));
+  assert.equal(f.elements.subFormError.textContent, 'End date must not be before the start date.');
+  assert.equal(wraps.subEndDate.has('error'), true);
+  assert.equal(f.reloads.length, 0);
+  assert.equal(f.loading(), 0);
 });
 
 test('a local file-read failure is reported without claiming a server write or reloading', async () => {
@@ -263,4 +379,17 @@ test('a local file-read failure is reported without claiming a server write or r
   assert.equal(f.reloads.length, 0);
   assert.match(f._renderImportPanel(), /Unable to read the CSV/);
   assert.equal(f.loading(), 0);
+});
+
+test('reopening a form with cached options renders at once and an unchanged refresh keeps typed input', async () => {
+  const f = fixture();
+  f.state.subAddOpen = true;
+  f.setOptions(OPTIONS);
+  f.elements.subFormWrap.innerHTML = 'form with typed input';
+  await f._loadFormOptions();
+  assert.equal(f.views.at(-1).action, 'get_subscription_form_options');
+  assert.equal(f.elements.subFormWrap.innerHTML, 'form with typed input');
+  f.api.respond = () => ({ ok: true, data: { ...OPTIONS, source_accounts: [] } });
+  await f._loadFormOptions();
+  assert.match(f.elements.subFormWrap.innerHTML, /New subscription/);
 });

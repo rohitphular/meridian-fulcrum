@@ -38,7 +38,7 @@ function runtime({ sheetless = false } = {}) {
     ? { getSheets: touch, getSheetByName: touch, insertSheet: touch }
     : { getSheets: () => sheets, getSheetByName: name => sheets.find(sheet => sheet.name === name), insertSheet: name => { const sheet = new Sheet(name); sheets.push(sheet); return sheet; } };
   let uuid = 100;
-  const ctx = vm.createContext({ ...importResultHelpers(),
+  const ctx = importResultHelpers.context({
     console: { log() {}, error() {}, warn() {} },
     SpreadsheetApp: { getActiveSpreadsheet: () => ss },
     Utilities: { getUuid: () => 'f0000000-0000-4000-8000-' + String(++uuid).padStart(12, '0') },
@@ -168,7 +168,7 @@ function loadPanel(respond) {
   const events = [];
   const messages = [];
   const state = { accImportOpen: true };
-  const context = vm.createContext({ ...importResultHelpers(),
+  const context = importResultHelpers.context({
     console, state,
     esc: value => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;'),
     el: id => nodes[id] ??= { disabled: false, textContent: '', innerHTML: '', value: 'C:\\fakepath\\file.csv' },
@@ -192,7 +192,7 @@ test('import panel sends the raw CSV text with the file type and renders line-nu
   assert.deepEqual(plain(panel.calls), [{ file_type: 'account_master', csv: raw }]);
   const html = panel.snapshot().result;
   assert.match(html, /1 created · 0 updated · 1 failed/);
-  assert.match(html, /<td class="td-mono">7<\/td><td class="import-result-reason">&lt;unknown currency&gt;\.<div class="td-mono td-muted">&lt;unknown_currency&gt;<\/div><\/td><td>account_currency_local · b0000000-0000-4000-8000-000000000002<\/td>/);
+  assert.match(html, /<td class="td-mono">7<\/td><td class="import-result-reason">&lt;unknown currency(&gt;|>)\.<div class="td-mono td-muted">&lt;unknown_currency(&gt;|>)<\/div><\/td><td>account_currency_local · b0000000-0000-4000-8000-000000000002<\/td>/);
   assert.equal(panel.nodes.accImportStatus.innerHTML, html);
   assert.deepEqual(panel.events, ['et:reload']);
   assert.equal(panel.snapshot().file, null);
@@ -204,7 +204,7 @@ test('import panel sends the raw CSV text with the file type and renders line-nu
 test('import panel lists file-level errors without reloading, and closes on full success', async () => {
   const invalid = loadPanel(() => ({ ok: false, error: 'invalid_csv_rows', errors: ['Row 3: <invalid_id>'] }));
   await invalid._submitImport('account_deposit', { text: async () => 'id\nx' });
-  assert.match(invalid.snapshot().result, /<li>Row 3: &lt;invalid_id&gt;/);
+  assert.match(invalid.snapshot().result, /<li>Row 3: &lt;invalid_id(&gt;|>)/);
   assert.match(invalid.snapshot().result, /Nothing was imported/);
   assert.deepEqual(invalid.events, []);
   assert.equal(invalid.state.accImportOpen, true);

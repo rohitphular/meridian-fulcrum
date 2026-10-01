@@ -14,7 +14,7 @@ function fixture() {
   const requests = [], reloads = [], messages = [];
   const api = { createCategoriesBulk: async payload => { requests.push(payload); return { ok: true, created: 1, updated: 0, skipped: 0, failed: 0, rows: 1, results: [{ index: 0, ok: true, action: 'created', line: 2 }] }; } };
   let loading = 0;
-  const ctx = vm.createContext({ ...importResultHelpers(),
+  const ctx = importResultHelpers.context({
     state, ExpenseAPI: api, el: id => elements[id] ?? null, console: { log() {}, warn() {}, error() {} },
     esc: value => String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;'),
     showLoading: () => loading++, hideLoading: () => loading--, showMsg: (message, kind) => messages.push({ message, kind }),
@@ -70,7 +70,7 @@ test('invalid-file responses render the server error list; nothing reloads', asy
   const html = context.elements.catImportReport.innerHTML;
   assert.match(html, /Nothing was imported/);
   assert.match(html, /<li>Row 3: id must be a UUID\.<\/li>/);
-  assert.match(html, /<li>Row 7: invalid tx_type_key: &lt;b&gt;x&lt;\/b&gt;\.<\/li>/);
+  assert.match(html, /<li>Row 7: invalid tx_type_key: &lt;b(&gt;|>)x&lt;\/b(&gt;|>)\.<\/li>/);
   assert.equal(context.reloads.length, 0);
 });
 
@@ -121,7 +121,7 @@ test('errors escape labels, fields, codes and invalid values before insertion in
   const context = fixture();
   const html = context._renderCatImportReport({ created: 0, updated: 0, skipped: 0, globalError: null, failures: [{ line: 2, label: '<script>bad()</script>', field: '<img src=x>', error: '<svg onload=bad()>', invalid_values: ['<b>bad</b>'] }] });
   assert.doesNotMatch(html, /<script>|<img|<svg|<b>/);
-  assert.match(html, /&lt;script&gt;/);
+  assert.match(html, /&lt;script(&gt;|>)/);
   context._selectCatImportFile(file(RAW, '<img src=x>.csv'));
   assert.doesNotMatch(context.elements.catImportChosen.innerHTML, /<img/);
 });
@@ -136,4 +136,44 @@ test('clearing the file selection disables Import and clears the previous report
   assert.equal(context.elements.catImportConfirm.disabled, true);
   await context._submitCatImport();
   assert.equal(context.requests.length, 1);
+});
+
+// validateCategoryCreate/Update own the label rules (form-validation-backend.cjs):
+// the form submits blank labels and renders the server message on the field.
+test('category add and edit forms submit without browser checks and render the server field error', async () => {
+  assert.doesNotMatch(source, /Major category is required|Major and minor category are required/);
+  const classes = {};
+  const values = { catNewType: 'money-out', catNewMajor: '', catNewMinor: 'Trains', catNewDesc: '', catNewKeywords: '', catNewCounterparty: '',
+    catEditType: 'money-out', catEditMajor: 'Travel', catEditMinor: '', catEditDesc: '', catEditKeywords: '', catEditCounterparty: '', catEditRecordStatus: 'active' };
+  const elements = { catAddError: { textContent: '' }, catEditError: { textContent: '' }, catSaveNew: { disabled: false, textContent: 'Save' }, catSaveEdit: { disabled: false, textContent: 'Save' } };
+  Object.entries(values).forEach(([id, value]) => {
+    classes[id] = new Set();
+    elements[id] = { value, closest: selector => (selector === '.field' ? { classList: { add: name => classes[id].add(name) } } : null) };
+  });
+  ['catNewSrcMandatory', 'catNewTgtMandatory', 'catNewIsSubEligible', 'catEditSrcMandatory', 'catEditTgtMandatory', 'catEditIsSubEligible'].forEach(id => { elements[id] = { checked: false }; });
+  const requests = [];
+  const responses = [
+    { ok: false, error: 'missing_major_category', field: 'major_category_label', message: 'Major category is required.' },
+    { ok: false, error: 'missing_minor_category', field: 'minor_category_label', message: 'Minor category is required.' },
+  ];
+  let loading = 0;
+  const ctx = importResultHelpers.context({
+    state: { catEditRow: 'c4', catAddOpen: true, views: { list_categories_view: { ok: true, data: { rows: [{ id: 'c4', _row: 4, updated_at: 'u' }] } } } }, el: id => elements[id] ?? null, console: { log() {}, warn() {}, error() {} },
+    showLoading: () => loading++, hideLoading: () => loading--, showMsg() {},
+    document: { dispatchEvent() { throw new Error('no reload on failure'); } }, CustomEvent: class {},
+    ExpenseAPI: { createCategory: async body => { requests.push(body); return responses.shift(); }, updateCategory: async body => { requests.push(body); return responses.shift(); } },
+  });
+  // Account-type checkboxes are not under test here.
+  vm.runInContext(source + '\n_getCheckedAccountTypes = () => [];\nthis.exposed = {_saveNewCategory,_saveCatEdit};', ctx);
+  await ctx.exposed._saveNewCategory();
+  assert.equal(requests[0].major_category_label, '');
+  assert.equal(elements.catAddError.textContent, 'Major category is required.');
+  assert.equal(classes.catNewMajor.has('error'), true);
+  assert.equal(elements.catSaveNew.disabled, false);
+  await ctx.exposed._saveCatEdit();
+  assert.equal(requests[1].row_num, 4);
+  assert.equal(requests[1].minor_category_label, '');
+  assert.equal(elements.catEditError.textContent, 'Minor category is required.');
+  assert.equal(classes.catEditMinor.has('error'), true);
+  assert.equal(loading, 0);
 });

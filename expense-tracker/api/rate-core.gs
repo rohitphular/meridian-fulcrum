@@ -56,7 +56,13 @@ function listRates() {
   return _normaliseRatesToXau(rateRows);
 }
 
+// body: { currency, rate, symbol?, mode? } — mode 'create' refuses an existing
+// currency (rate_already_exists). Failures carry field + message.
 function upsertRate(body) {
+  return rateFormError(_rateUpsert(body));
+}
+
+function _rateUpsert(body) {
   const validation = validateRateUpsert(body);
   if (validation.ok === false) { return validation; }
   const currency = String(body.currency).trim().toUpperCase();
@@ -70,6 +76,9 @@ function upsertRate(body) {
     return { ok: false, error: 'invalid_rate_table' };
   }
   const existing = rateRows.find(function(rateRow) { return rateRow.currency === currency; });
+  if (existing !== undefined && String(body.mode === undefined || body.mode === null ? '' : body.mode).trim() === 'create') {
+    return { ok: false, error: 'rate_already_exists' };
+  }
   const symbol = body.symbol === undefined || body.symbol === null
     ? (existing === undefined ? '' : existing.symbol)
     : String(body.symbol);

@@ -1,9 +1,20 @@
 # Insight 21 — Income Sources
 
-**File:** `sections/insights/21-income-sources.js`
+**Original client module (deleted):** `app/sections/insights/21-income-sources.js`
 **Group:** Income & cash flow
 **Chart type:** Doughnut (By Source / By Category) + Line (Trend) — three internal sub-views
 **Tabs:** None (transactions view only — no coordinator tab strip)
+
+---
+
+## Current implementation (server)
+
+- **Computed by:** `insightCompute_21_income_sources` in `api/insights-cashflow.gs`, returned by GET `get_insight` with `id=21-income-sources`; the browser only renders the payload (`app/sections/insights/render-kinds.js`).
+- **Render kind:** `donut` · **Periods:** `this_week`, `last_week`, `last_7`, `last_30`, `last_60`, `last_90`, `this_month`, `last_month`, `last_3`, `last_6`, `last_12`, `this_quarter`, `last_quarter`, `ytd`, `last_year`, `custom` · **Default:** `last_12` · **Tabs:** `source`, `category`, `trend`
+- **Extra params:** none · **Drill:** `drill` (see the compute function)
+- **Rules:** Counts flow-eligible rows only: deleted rows and own-account transfers (including loan / card repayments) are excluded. Periods are inclusive of today and bucket in the request `tz`; a missing rate excludes the value with a `missing_rate` warning. Definitions: [calculations](../calculations.md).
+
+The sections below describe the original browser module (deleted in the dumb-UI refactor). Where they differ from the rules above, the server is authoritative.
 
 ---
 

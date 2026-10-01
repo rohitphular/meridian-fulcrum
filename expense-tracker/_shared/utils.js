@@ -8,28 +8,7 @@ export function esc(s) {
   );
 }
 
-// ── Date ──────────────────────────────────────────────────────────────────────
-
-export function parseLocalDate(s) {
-  if (!s) return new Date(NaN);
-  const parts = String(s).slice(0, 10).split('-').map(Number);
-  return parts.length === 3 ? new Date(parts[0], parts[1] - 1, parts[2]) : new Date(NaN);
-}
-
-export function fmtDate(v) {
-  if (!v) return '—';
-  try {
-    const d = v instanceof Date ? v : parseLocalDate(String(v).slice(0, 10));
-    if (isNaN(d)) return String(v).slice(0, 10) || '—';
-    return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
-  } catch (_) { return '—'; }
-}
-
-export function toDateInputVal(v) {
-  if (!v) return '';
-  const s = String(v).trim();
-  return s.length >= 10 ? s.slice(0, 10) : '';
-}
+// ── Date (display and form defaults only) ─────────────────────────────────────
 
 export function todayISO() {
   const d = new Date();
@@ -38,25 +17,6 @@ export function todayISO() {
 
 export function nowLocalISO() {
   const d = new Date();
-  const pad = n => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-
-// Converts a local datetime string (datetime-local input or CSV tx_date_local) to UTC ISO.
-// Strings without a timezone suffix are treated as local time by the browser's Date parser.
-// Strings already ending in Z are normalised to full ISO format without re-converting.
-export function localToUtcISO(s) {
-  if (!s) return '';
-  const d = new Date(String(s).trim());
-  return isNaN(d) ? String(s) : d.toISOString();
-}
-
-// Converts a stored UTC ISO string to the value needed by <input type="datetime-local">.
-// Produces YYYY-MM-DDTHH:MM in the browser's local timezone.
-export function utcToLocalInput(s) {
-  if (!s) return '';
-  const d = new Date(String(s).trim());
-  if (isNaN(d)) return String(s).slice(0, 16);
   const pad = n => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
@@ -72,63 +32,11 @@ export function fmtDateTime(v) {
   } catch (_) { return '—'; }
 }
 
-// ── Currency — caller supplies required data ──────────────────────────────────
+// Currency conversion, money formatting and date-range math live on the server
+// (api/fx-utils.gs, api/ledger-core.gs); views return display-ready values.
 
-export function getSymbol(currency, rates) {
-  const r = rates.find(r => r.currency === currency);
-  return r ? String(r.symbol ?? '') : (currency ? currency + ' ' : '');
-}
-
-export function toBase(amount, fromCurrency, rowFxRate, rateMap, quoteCurrency) {
-  const raw = amount === undefined || amount === null || String(amount).trim() === '' ? NaN : Number(amount);
-  if (!Number.isFinite(raw)) return NaN;
-  const amt = raw;
-  const to  = rateMap[quoteCurrency];
-  if (!Number.isFinite(to) || to <= 0) return NaN;
-  if (rowFxRate !== undefined && rowFxRate !== null && String(rowFxRate).trim() !== '') {
-    const rowRate = Number(rowFxRate);
-    if (!Number.isFinite(rowRate) || rowRate <= 0) return NaN;
-    return (amt / rowRate) * to;
-  }
-  const from = rateMap[fromCurrency];
-  if (!Number.isFinite(from) || from <= 0) return NaN;
-  return (amt / from) * to;
-}
-
-export function toQuote(amount, fromCurrency, rateMap, quoteCurrency) {
-  const from = rateMap[fromCurrency];
-  const to   = rateMap[quoteCurrency];
-  const raw = amount === undefined || amount === null || String(amount).trim() === '' ? NaN : Number(amount);
-  if (!Number.isFinite(raw)) return NaN;
-  const amt = raw;
-  if (!Number.isFinite(from) || from <= 0 || !Number.isFinite(to) || to <= 0) return NaN;
-  return (amt / from) * to;
-}
-
-export function fmtBase(amount, fromCurrency, rowFxRate, rateMap, quoteCurrency, rates) {
-  const val = toBase(amount, fromCurrency, rowFxRate, rateMap, quoteCurrency);
-  if (!Number.isFinite(val)) return '—';
-  const sym = getSymbol(quoteCurrency, rates);
-  return sym + val.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
-
-export function fmtNative(amount, currency, rates) {
-  const sym = getSymbol(currency, rates);
-  const raw = amount === undefined || amount === null || String(amount).trim() === '' ? NaN : Number(amount);
-  if (!Number.isFinite(raw)) return '—';
-  const val = raw;
-  return sym + val.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
-
-export function fmtAmount(amount, currency, symbolMap) {
-  const raw = amount === undefined || amount === null || String(amount).trim() === '' ? NaN : Number(amount);
-  if (!Number.isFinite(raw)) return '—';
-  const num = raw;
-  const sym = symbolMap[currency] ?? (currency + ' ');
-  return sym + num.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
-
-// ── Export / download — caller supplies filename and columns ──────────────────
+// ── Export / download — caller supplies rows, filename and columns ────────────
+// Rows and columns come from the server export actions; this only serialises.
 
 export function exportData(format, rows, filename, cols) {
   if (format === 'json') {

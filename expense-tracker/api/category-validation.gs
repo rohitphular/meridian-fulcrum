@@ -43,7 +43,29 @@ function validateCategoryImport(body, context) {
   return validateCategoryAccountTypeHints(body, context);
 }
 
+// Form error envelope for the interactive create/update paths (import keeps
+// validateCategoryImport's bare results): field + human message (_VM_MESSAGES).
+const _CATV_ERROR_FIELDS = {
+  invalid_transaction_type: 'tx_type_key', missing_major_category: 'major_category_label',
+  missing_minor_category: 'minor_category_label', invalid_record_status: 'record_status',
+};
+
+function _catvFormError(result, body) {
+  if (result === undefined || result === null || result.ok !== false) return result;
+  let field = result.field;
+  if (field === undefined || field === null || field === '') {
+    field = result.error === 'invalid_category_label'
+      ? (slugify(strField(body.major_category_label)) === '' ? 'major_category_label' : 'minor_category_label')
+      : _CATV_ERROR_FIELDS[result.error];
+  }
+  return Object.assign({}, result, vmError(result.error, field, result.message, result.details));
+}
+
 function validateCategoryCreate(body) {
+  return _catvFormError(_catvCreate(body), body);
+}
+
+function _catvCreate(body) {
   // Interactive creation must meet the same UUID, label, boolean and hint
   // contract as import; otherwise one bad identity blocks the whole next sync.
   const validation = validateCategoryImport(body);
@@ -74,6 +96,10 @@ function validateCategoryCreate(body) {
 }
 
 function validateCategoryUpdate(body) {
+  return _catvFormError(_catvUpdate(body), body);
+}
+
+function _catvUpdate(body) {
   const validation = validateCategoryImport(body);
   if (validation.ok === false) return validation;
   if (body.row_num === undefined || body.row_num === null) return { ok: false, error: 'missing_row_num' };

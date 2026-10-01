@@ -130,7 +130,7 @@ function _resolveTransactionImportAccount(accounts, value, field, category, rowE
   if (matches.length === 0) {
     matches = accounts.filter(function(account) { return String(account.account_name).trim().toLowerCase() === key; });
     if (matches.length > 1 && category !== null) {
-      const eligible = _filterTransactionImportAccounts(matches, category[field + '_types']);
+      const eligible = txAccountsForCategoryHint(matches, category[field + '_types']);
       if (eligible.length === 1) return eligible[0].id;
     }
   }
@@ -142,13 +142,18 @@ function _resolveTransactionImportAccount(accounts, value, field, category, rowE
   return matches[0].id;
 }
 
-// A hint matches the account's type or sub_type. Blank hints keep every candidate,
-// so they can never pick one of several same-named accounts.
-function _filterTransactionImportAccounts(accounts, allowedTypes) {
+// Category account hint rule shared by the CSV importer (name resolution) and
+// the add / edit form options (view-transactions.gs get_transaction_form_options): a hint token matches the
+// account's type or sub_type, case-insensitively. Blank hints keep every
+// candidate, so they can never pick one of several same-named accounts.
+function txAccountsForCategoryHint(accounts, allowedTypes) {
   const allowed = splitToList(allowedTypes).map(function(token) { return token.toLowerCase(); });
   if (allowed.length === 0) return accounts;
   return accounts.filter(function(account) {
-    return [account.type, account.sub_type].some(function(key) { return allowed.indexOf(_txImportText(key).toLowerCase()) !== -1; });
+    return [account.type, account.sub_type].some(function(key) {
+      const text = key === undefined || key === null ? '' : String(key).trim().toLowerCase();
+      return allowed.indexOf(text) !== -1;
+    });
   });
 }
 

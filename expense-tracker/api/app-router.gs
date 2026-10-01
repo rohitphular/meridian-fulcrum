@@ -9,6 +9,7 @@
 
 function doGet(e) {
   try {
+    _routerResetRequest();
     return _dispatchGet(e);
   } catch (error) {
     return _sheetRequestFailure('doGet', error);
@@ -42,30 +43,65 @@ function _dispatchGet(e) {
   }
   recordAccess(meta, true);
 
-  // Migration helpers (migrateTransactionColumnHeaders, migrateCategoryMandatoryFlags) were
-  // removed — getOrCreateSheet() handles new columns via column-append on every call.
+  // Raw list GETs kept for scripts/factory-reset.sh (recreates tabs) and, until
+  // the phase-5 frontend is deployed, the previous frontend's refresh
+  // (list_account_types, list_rates). The app itself reads view actions only;
+  // schemas travel in get_app_context. getOrCreateSheet() appends new columns.
   if (action === 'list_transactions')  { return json({ ok: true, data: listTransactions() }); }
   if (action === 'list_categories')    { return json({ ok: true, data: listCategories() }); }
   if (action === 'list_accounts')      { return json({ ok: true, data: listAccounts() }); }
   if (action === 'list_account_types') return json({ ok: true, data: listAccountTypes() });
-  if (action === 'get_account_type_schema') return json({ ok: true, data: getAccountTypeSchemaForClient() });
   if (action === 'list_rates')         { return json({ ok: true, data: listRates() }); }
   if (action === 'get_account_schema')      return json({ ok: true, data: getAccountSchemaForClient() });
-  if (action === 'get_transaction_schema')  return json({ ok: true, data: getTransactionSchemaForClient() });
-  if (action === 'get_category_schema')     return json({ ok: true, data: getCategorySchemaForClient() });
-  if (action === 'get_rate_schema')         return json({ ok: true, data: getRateSchemaForClient() });
   if (action === 'get_advisor_history')          return json({ ok: true, data: getAdvisorHistory() });
   if (action === 'list_subscriptions')           return json({ ok: true, data: listSubscriptions() });
-  if (action === 'get_subscription_schema')      return json({ ok: true, data: getSubscriptionSchemaForClient() });
   if (action === 'get_suggested_transactions')   return json({ ok: true, data: getSuggestedTransactions() });
-  if (action === 'get_transaction_metadata')     return json(getTransactionMetadata());
-  if (action === 'get_computed_insights')        return json(getComputedInsights(e.parameter));
+
+  // View actions live in get-registry.gs; add new GET actions there, not here.
+  const viewResult = typeof grDispatchGet === 'function' ? grDispatchGet(action, e) : null;
+  if (viewResult !== null) return json(viewResult);
 
   return json({ ok: false, error: 'unknown_action' });
 }
 
+// Per-request memos (view-context.gs dataset) must never leak across requests.
+function _routerResetRequest() {
+  if (typeof vmResetRequest === 'function') vmResetRequest();
+}
+
+// POST actions that never change ledger / catalog data (cached views stay valid).
+const _ROUTER_NON_DATA_POST_ACTIONS = ['advisor_chat', 'clear_advisor_history'];
+
+// True when a POST may have changed data: success, or a partial bulk result
+// that still created / updated rows. Dry runs never write.
+function _routerPostChangedData(body, result) {
+  if (body.dry_run === true || _ROUTER_NON_DATA_POST_ACTIONS.indexOf(body.action) !== -1) return false;
+  if (result === null || typeof result !== 'object') return false;
+  if (result.ok === true) return true;
+  return ['created', 'updated', 'deleted'].some(function(key) { return Number(result[key]) > 0; });
+}
+
+// json() returns a TextOutput in GAS (tests stub it as identity); read ok back.
+function _routerResultObject(output) {
+  if (output !== null && typeof output === 'object' && typeof output.getContent === 'function') {
+    try { return JSON.parse(output.getContent()); }
+    catch (_) { return null; }
+  }
+  return output;
+}
+
+// Invalidate cached views after a write. Never fails the committed request.
+function _routerBumpDataVersion(action) {
+  try {
+    if (typeof vcBumpDataVersion === 'function') vcBumpDataVersion();
+  } catch (_) {
+    console.error('doPost: error=data_version_bump_failed action=' + action);
+  }
+}
+
 function doPost(e) {
   try {
+    _routerResetRequest();
     return _dispatchPostRequest(e);
   } catch (error) {
     return _sheetRequestFailure('doPost', error);
@@ -94,8 +130,18 @@ function _dispatchPostRequest(e) {
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(10000)) return json({ ok: false, error: 'busy_retry' });
   try {
-    return _dispatchPost(body);
+    const output = _dispatchPost(body);
+    const result = _routerResultObject(output);
+    if (_routerPostChangedData(body, result)) _routerBumpDataVersion(body.action);
+    // Every failure carries a human message so forms can render it verbatim.
+    if (result !== null && result.ok === false && (typeof result.message !== 'string' || result.message === '')) {
+      result.message = typeof vmMessage === 'function' ? vmMessage(result.error, _routerDefaultMessage(result.error)) : _routerDefaultMessage(result.error);
+      return json(result);
+    }
+    return output;
   } catch (error) {
+    // A handler may have written rows before throwing; invalidate to be safe.
+    if (body.dry_run !== true) _routerBumpDataVersion(body.action);
     return _sheetRequestFailure('doPost', error);
   } finally {
     lock.releaseLock();
@@ -123,6 +169,11 @@ function _sheetRequestFailure(handler, error) {
   }
   console.error(handler + ': error=request_failed');
   return json({ ok: false, error: 'request_failed' });
+}
+
+function _routerDefaultMessage(code) {
+  const text = (code === undefined || code === null || String(code) === '' ? 'request_failed' : String(code)).replace(/_/g, ' ');
+  return text.charAt(0).toUpperCase() + text.slice(1) + '.';
 }
 
 function _dispatchPost(body) {

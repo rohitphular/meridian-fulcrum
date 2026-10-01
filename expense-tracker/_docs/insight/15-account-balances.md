@@ -1,9 +1,20 @@
 # Insight 15 — Account Balances Snapshot
 
-**File:** `sections/insights/15-account-balances.js`
+**Original client module (deleted):** `app/sections/insights/15-account-balances.js`
 **Group:** Net worth
 **Chart type:** Horizontal bar — three separate sections (Assets / Liabilities / Investments)
 **Tabs:** None (accounts view only — no tab strip)
+
+---
+
+## Current implementation (server)
+
+- **Computed by:** `insightCompute_15_account_balances` in `api/insights-networth.gs`, returned by GET `get_insight` with `id=15-account-balances`; the browser only renders the payload (`app/sections/insights/render-kinds.js`).
+- **Render kind:** `hbar` · **Periods:** none (point in time) · **Default:** — · **Tabs:** none
+- **Extra params:** none · **Drill:** none
+- **Rules:** Balances come from the ledger replay over all non-deleted accounts (assets = asset + investment, liabilities = liability); transfer legs move balances. Any flow figures exclude deleted rows and own-account transfers. Periods are inclusive of today and bucket in the request `tz`; a missing rate excludes the value with a `missing_rate` warning. Definitions: [calculations](../calculations.md).
+
+The sections below describe the original browser module (deleted in the dumb-UI refactor). Where they differ from the rules above, the server is authoritative.
 
 ---
 

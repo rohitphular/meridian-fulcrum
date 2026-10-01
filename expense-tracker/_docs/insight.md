@@ -1,5 +1,7 @@
 # Insight
 
+> **Superseded.** This page describes an early single-page insight design. The current section is a selector of 30 server-computed insights (GET `get_insight`); see [insight/INSIGHT.md](insight/INSIGHT.md) and [calculations](calculations.md). Totals now exclude deleted rows and own-account transfers, and periods end today.
+
 The default landing view. Summarises income, expenses, net flow, and savings rate for the active date range; visualises monthly trend, top categories, and per-account spend.
 
 ## Inputs

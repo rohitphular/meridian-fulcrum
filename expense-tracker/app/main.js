@@ -6,18 +6,16 @@ import { showLoading, hideLoading, showMsg } from './core/ui.js';
 import { showSection } from './core/nav.js';
 import { renderTransactions } from './sections/transactions.js';
 import { showPinGate, hidePinGate, fetchGeo, submitPin, readSession, clearSession } from './core/auth.js';
-import { loadAccountSchema, loadTransactionSchema, loadCategorySchema, loadAccountTypeSchema, loadSubscriptionSchema } from './core/schema.js';
 
 // ── Quote currency ────────────────────────────────────────────────────────────
 
 function populateQuoteCurrencySelect() {
   const sel   = el('quoteCurrencySelect');
   const saved = localStorage.getItem('et_quote_currency') || 'GBP';
-  sel.innerHTML = state.rates.map(r => {
-    const rate = parseFloat(r.rate);
-    const rateLabel = Number.isInteger(rate) ? rate.toFixed(2) : rate.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 4 });
-    return `<option value="${esc(r.currency)}" ${r.currency === saved ? 'selected' : ''}>${esc(r.symbol ?? '')} ${esc(r.currency)} · ${rateLabel}</option>`;
-  }).join('');
+  const currencies = state.context?.quote_currencies ?? [];
+  sel.innerHTML = currencies.map(q =>
+    `<option value="${esc(q.currency)}" ${q.currency === saved ? 'selected' : ''}>${esc(q.symbol)} ${esc(q.currency)} · ${esc(q.rate_label)}</option>`
+  ).join('');
   state.quoteCurrency = sel.value || 'GBP';
 }
 
@@ -28,7 +26,7 @@ function setTheme(theme) {
   localStorage.setItem('et_theme', theme);
   const btn = el('themeToggle');
   if (btn) btn.textContent = theme === 'dark' ? '☀' : '☽';
-  if (!state.transactions.length) return;
+  if (state.context === null || state.context === undefined) return;
   showSection(sessionStorage.getItem('et_section') || 'home');
 }
 
@@ -36,69 +34,54 @@ function setTheme(theme) {
 
 let _refreshVersion = 0;
 
-function _remapRowSelections(snapshot) {
-  const selections = {
-    transactions: ['txViewRow', 'txEditRow', 'txDeleteRow'],
-    accounts: ['accViewRow', 'accEditRow', 'accDeleteRow'],
-    categories: ['catViewRow', 'catEditRow', 'catDeleteRow'],
-    subscriptions: ['subEditRow', 'subDeleteRow'],
-  };
-  for (const [collection, keys] of Object.entries(selections)) {
-    for (const key of keys) {
-      if (!Number.isInteger(state[key])) continue;
-      const original = state[collection]?.find(row => row._row === state[key]);
-      const identity = typeof original?.id === 'string' ? original.id.toLowerCase() : null;
-      const matches = identity === null ? [] : snapshot[collection].filter(row => String(row.id).toLowerCase() === identity);
-      snapshot[key] = matches.length === 1 ? matches[0]._row : null;
-    }
+// get_app_context carries every schema. Each schema is still checked
+// separately so a refresh failure names the schema that is wrong.
+function _contextFailures(entity, response) {
+  if (response?.ok !== true || response.data === null || typeof response.data !== 'object') {
+    return [{ entity, code: response?.error ?? 'invalid_response' }];
   }
-  snapshot.accDeleteBlocked = null;
+  const schemas = response.data.schemas ?? {};
+  const arrays = (value, keys) => keys.every(key => Array.isArray(value?.[key]));
+  const failures = [];
+  if (!Array.isArray(response.data.quote_currencies)) failures.push({ entity, code: 'invalid_response' });
+  for (const [name, key] of [['account schema', 'account'], ['transaction schema', 'transaction'], ['category schema', 'category']]) {
+    if (!arrays(schemas[key], ['types'])) failures.push({ entity: name, code: 'invalid_schema' });
+  }
+  if (!arrays(schemas.account_type, ['fields', 'types', 'record_statuses', 'columns'])) failures.push({ entity: 'account type schema', code: 'invalid_schema' });
+  const subscription = schemas.subscription;
+  if (!['frequencies', 'tx_types', 'record_statuses'].every(key => Array.isArray(subscription?.[key]) && subscription[key].length > 0)
+    || typeof subscription?.default_timezone !== 'string' || subscription.default_timezone === '') {
+    failures.push({ entity: 'subscription schema', code: 'invalid_schema' });
+  }
+  return failures;
 }
 
+function _reopenPinGate() {
+  clearSession();
+  showPinGate();
+}
+
+// A refresh loads get_app_context only; the active section then requests its
+// own view (showSection → render<Section> → ExpenseAPI.view). No raw lists are
+// held in the browser. A new state.context object also tells sections that
+// the data changed (transactions.js drops its cached facets / form options).
 async function loadAll() {
   const refreshVersion = ++_refreshVersion;
   showLoading();
   try {
-    const requests = [
-      ['transactions', () => ExpenseAPI.listTransactions()],
-      ['categories', () => ExpenseAPI.listCategories()],
-      ['accounts', () => ExpenseAPI.listAccounts()],
-      ['rates', () => ExpenseAPI.listRates()],
-      ['account schema', loadAccountSchema],
-      ['transaction schema', loadTransactionSchema],
-      ['category schema', loadCategorySchema],
-      ['subscriptions', () => ExpenseAPI.listSubscriptions()],
-      ['account types', () => ExpenseAPI.listAccountTypes()],
-      ['account type schema', loadAccountTypeSchema],
-      ['subscription schema', loadSubscriptionSchema],
-    ];
-    const responses = await Promise.allSettled(requests.map(([, request]) => Promise.resolve().then(request)));
+    let response = null;
+    let failures;
+    try {
+      response = await ExpenseAPI.getAppContext();
+      failures = _contextFailures('app context', response);
+    } catch (error) {
+      failures = [{ entity: 'app context', code: error?.code ?? 'connection_error' }];
+    }
     // An earlier read may finish after a post-save refresh. Only the newest
     // requested snapshot may replace state or reopen the authentication gate.
     if (refreshVersion !== _refreshVersion) return;
-    const failures = [];
-    responses.forEach((response, index) => {
-      const entity = requests[index][0];
-      if (response.status === 'rejected') {
-        failures.push({ entity, code: response.reason?.code ?? 'connection_error' });
-      } else if (index >= 4 && index <= 6) {
-        if (response.value === null || !Array.isArray(response.value?.types)) failures.push({ entity, code: 'invalid_schema' });
-      } else if (entity === 'account type schema') {
-        if (!['fields', 'types', 'record_statuses', 'columns'].every(key => Array.isArray(response.value?.[key]))) failures.push({ entity, code: 'invalid_schema' });
-      } else if (entity === 'subscription schema') {
-        if (!['frequencies', 'tx_types', 'record_statuses'].every(key => Array.isArray(response.value?.[key]) && response.value[key].length > 0)
-          || typeof response.value?.default_timezone !== 'string' || response.value.default_timezone === '') {
-          failures.push({ entity, code: 'invalid_schema' });
-        }
-      } else if (response.value?.ok !== true || !Array.isArray(response.value.data)) {
-        failures.push({ entity, code: response.value?.error ?? 'invalid_response' });
-      }
-    });
     if (failures.length > 0) {
-      if (failures.some(failure => failure.code === 'auth' || failure.code === 'locked')) {
-        clearSession();
-        showPinGate();
-      }
+      if (failures.some(failure => failure.code === 'auth' || failure.code === 'locked')) _reopenPinGate();
       const details = failures.map(failure => `${failure.entity}: ${failure.code}`).join('; ');
       const hint = failures.some(failure => failure.code === 'sheet_header_mismatch')
         ? ' Check the affected sheet headers against the current schema before retrying.'
@@ -107,32 +90,15 @@ async function loadAll() {
       return;
     }
 
-    const [txRes, catRes, accRes, ratesRes, schemaRes, txSchemaRes, catSchemaRes, subRes, accountTypesRes, accountTypeSchemaRes, subSchemaRes] = responses.map(response => response.value);
-    const toBool = value => value === true || String(value).toLowerCase() === 'true';
-    const snapshot = {
-      transactions: txRes.data,
-      categories: catRes.data.map(category => ({
-        ...category,
-        source_account_mandatory: toBool(category.source_account_mandatory),
-        target_account_mandatory: toBool(category.target_account_mandatory),
-        is_subscription_eligible: toBool(category.is_subscription_eligible),
-      })),
-      accounts: accRes.data,
-      accountMap: Object.fromEntries(accRes.data.map(account => [account.id, account])),
-      rates: ratesRes.data,
-      rateMap: Object.fromEntries(ratesRes.data.map(rate => [rate.currency, Number(rate.rate)])),
-      accountSchema: schemaRes,
-      transactionSchema: txSchemaRes,
-      categorySchema: catSchemaRes,
-      subscriptions: subRes.data,
-      subscriptionSchema: subSchemaRes,
-      accountTypes: accountTypesRes.data,
-      accountTypeSchema: accountTypeSchemaRes,
-    };
-    // Commit only after every dependency and derived collection is ready.
-    // Keep open selections attached to their UUID if an import moved Sheet rows.
-    _remapRowSelections(snapshot);
-    Object.assign(state, snapshot);
+    const context = response.data;
+    const schemas = context.schemas;
+    // Sections read these schemas (import panels, record statuses, Configure fields).
+    Object.assign(state, {
+      context,
+      categorySchema: schemas.category,
+      subscriptionSchema: schemas.subscription,
+      accountTypeSchema: schemas.account_type,
+    });
 
     populateQuoteCurrencySelect();
     showSection(sessionStorage.getItem('et_section') || 'home');
@@ -148,7 +114,13 @@ async function loadAll() {
 
 // ── Initialisation ────────────────────────────────────────────────────────────
 
+// Browser caches retired by the dumb-UI refactor: schemas, metadata and the
+// old suggestion format now come from the server on every refresh.
+const _RETIRED_STORAGE_KEYS = ['et_transaction_schema_v1', 'et_metadata_v1', 'et_suggestions_v2'];
+
 async function init() {
+  _RETIRED_STORAGE_KEYS.forEach(key => { try { localStorage.removeItem(key); } catch (_) {} });
+
   // Theme
   const savedTheme  = localStorage.getItem('et_theme');
   const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
@@ -173,6 +145,8 @@ async function init() {
 
   // Reload events — fired by mutations instead of calling loadAll directly
   document.addEventListener('et:reload', loadAll);
+  // Any view GET answered auth / locked reopens the PIN gate.
+  ExpenseAPI.onAuthError(_reopenPinGate);
   el('refreshBtn')?.addEventListener('click', loadAll);
 
   // Config check
@@ -181,6 +155,9 @@ async function init() {
     el('setupBanner').classList.remove('hidden');
     return;
   }
+
+  // Views use the saved quote currency from the first request.
+  state.quoteCurrency = localStorage.getItem('et_quote_currency') || 'GBP';
 
   // PIN gate
   const session = readSession();

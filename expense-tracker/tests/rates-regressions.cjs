@@ -2,8 +2,12 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const importResultHelpers = require('./support/import-result.cjs');
 const { test } = require('node:test');
 const root = path.resolve(__dirname, '..');
+// isFiniteDecimal only: the rest of app-utils.gs would replace the Sheet stubs below.
+const appUtils = vm.createContext({});
+vm.runInContext(fs.readFileSync(path.join(root, 'api', 'app-utils.gs'), 'utf8'), appUtils);
 function runtime(initial) {
   const rows = initial.map(row => row.slice());
   let writes = 0;
@@ -19,9 +23,9 @@ function runtime(initial) {
   };
   const ctx = vm.createContext({console, RATES_SHEET: 'rates', ACCOUNTS_SHEET: 'account_master', getRateSheetColumns: () => columns,
     getOrCreateSheet: () => sheet, sheetToObjects: () => rows.map(row => Object.fromEntries(columns.map((column, index) => [column, row[index]]))),
-    rateColIndex: field => columns.indexOf(field),
+    rateColIndex: field => columns.indexOf(field), isFiniteDecimal: appUtils.isFiniteDecimal,
   });
-  for (const file of ['rate-validation.gs','rate-core.gs']) vm.runInContext(fs.readFileSync(path.join(root, 'api', file), 'utf8'), ctx);
+  for (const file of ['view-context.gs','rate-validation.gs','rate-core.gs']) vm.runInContext(fs.readFileSync(path.join(root, 'api', file), 'utf8'), ctx);
   return {ctx, rows, writes: () => writes};
 }
 test('legacy GBP rates normalise to XAU without changing pair ratios or writing on read', () => {
@@ -58,15 +62,38 @@ test('rate deletion looks up current account currency field and blocks used curr
   ctx.getOrCreateSheet = () => ({getDataRange: () => ({getValues: () => [['id','account_currency_local'],['a','USD']]})});
   assert.equal(ctx.deleteRate({currency:'usd'}).error,'currency_in_use_by_accounts'); assert.equal(writes(),0);
 });
-test('shared currency conversion preserves zero but never substitutes zero for invalid values', () => {
-  const ctx = vm.createContext({});
-  vm.runInContext(fs.readFileSync(path.join(root,'_shared/utils.js'),'utf8').replace(/\bexport /g,''),ctx);
-  const rates={GBP:80,XAU:1};
-  assert.equal(ctx.toBase(0,'GBP',null,rates,'XAU'),0);
-  assert.equal(ctx.toBase(160,'GBP',null,rates,'XAU'),2);
-  assert.ok(Number.isNaN(ctx.toBase('bad','GBP',null,rates,'XAU')));
-  assert.ok(Number.isNaN(ctx.toQuote(12,'GBP',{GBP:Infinity,XAU:1},'XAU')));
-  assert.equal(ctx.fmtNative('bad','GBP',[]),'—');
-  for (const amount of ['', null, undefined, '12oops']) assert.ok(Number.isNaN(ctx.toBase(amount,'GBP',null,rates,'XAU')));
-  assert.ok(Number.isNaN(ctx.toBase(12,'GBP',Infinity,rates,'XAU')));
+// Conversion rules (zero kept, NaN for invalid input) are server-side: fx-utils-backend.cjs.
+
+// R31: the add form sends mode 'create' and raw text; upsertRate owns "already
+// exists" and rate > 0 (form-validation-backend.cjs). Errors render verbatim.
+test('rate forms submit as entered and render the server message on the named field', async () => {
+  const source = fs.readFileSync(path.join(root, 'app/sections/rates.js'), 'utf8')
+    .replace(/^import\s[\s\S]*?from\s+['"][^'"]+['"];\s*/gm, '')
+    .replace(/\bexport (?=(?:async )?function|const|let)/g, '');
+  assert.doesNotMatch(source, /already exists — use Edit|Rate must be a positive number|parseFloat\(el\('rate(New|Edit)Rate/);
+  const classes = {};
+  const elements = { rateAddError: { textContent: '' }, rateEditError: { textContent: '' }, rateSaveNew: { disabled: false, textContent: 'Save' }, rateSaveEdit: { disabled: false, textContent: 'Save' } };
+  for (const [id, value] of Object.entries({ rateNewCurrency: ' gbp ', rateNewSymbol: '', rateNewRate: ' 0x10 ', rateEditSymbol: '£', rateEditRate: '' })) {
+    classes[id] = new Set();
+    elements[id] = { value, closest: selector => (selector === '.field' ? { classList: { add: name => classes[id].add(name) } } : null) };
+  }
+  const requests = [];
+  const responses = [
+    { ok: false, error: 'rate_already_exists', field: 'currency', message: 'This currency already exists. Use Edit to update it.' },
+    { ok: false, error: 'missing_rate', field: 'rate', message: 'Rate is required.' },
+  ];
+  const ctx = importResultHelpers.context({ console: { log() {}, warn() {}, error() {} }, state: { rates: [{ currency: 'GBP', rate: 80 }] },
+    el: id => elements[id] ?? null, showLoading() {}, hideLoading() {}, showMsg() {},
+    document: { dispatchEvent() { throw new Error('no reload on failure'); } }, CustomEvent: class {},
+    ExpenseAPI: { upsertRate: async body => { requests.push(body); return responses.shift(); } } });
+  vm.runInContext(source + '\nthis.exposed = {_saveNewRate,_saveEdit};', ctx);
+  await ctx.exposed._saveNewRate();
+  assert.deepEqual(JSON.parse(JSON.stringify(requests[0])), { currency: 'GBP', symbol: '', rate: '0x10', mode: 'create' });
+  assert.equal(elements.rateAddError.textContent, 'This currency already exists. Use Edit to update it.');
+  assert.equal(classes.rateNewCurrency.has('error'), true);
+  assert.equal(elements.rateSaveNew.disabled, false);
+  await ctx.exposed._saveEdit('GBP');
+  assert.deepEqual(JSON.parse(JSON.stringify(requests[1])), { currency: 'GBP', rate: '', symbol: '£' });
+  assert.equal(elements.rateEditError.textContent, 'Rate is required.');
+  assert.equal(classes.rateEditRate.has('error'), true);
 });

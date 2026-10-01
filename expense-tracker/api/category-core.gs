@@ -376,6 +376,13 @@ function createCategoriesBulk(body) {
 // onEdit cascade — rebuilds category dropdowns in transaction_master when
 // the user edits transaction_type or major_category directly in the sheet.
 function onEdit(e) {
+  // Any direct Sheet edit invalidates cached views (view-cache.gs). Isolated so a
+  // Properties failure never blocks the edit cascade below.
+  try {
+    if (typeof vcOnSheetEdit === 'function') vcOnSheetEdit();
+  } catch (_) {
+    console.error('onEdit: error=data_version_bump_failed');
+  }
   if (markCategoryEditPending(e)) return;
   if (markAccountTypeEditPending(e)) return;
   if (markAccountDetailEditPending(e)) return;

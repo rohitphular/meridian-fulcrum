@@ -24,7 +24,10 @@ function runtime(files, globals = {}) {
     ['liability', 'personal-loan', 'account_liability_personal_loan'], ['investment', 'property', 'account_investment_property'],
     ['investment', 'stocks-shares', 'account_investment_stocks'],
   ].map(([account_type_key, account_subtype_key, detail_sheet]) => ({ account_type_key, account_subtype_key, detail_sheet, record_status: 'active' })), ...globals });
-  for (const file of files) vm.runInContext(fs.readFileSync(path.join(api, file), 'utf8'), ctx);
+  // Validators build field/message envelopes (view-context.gs) and the interactive
+  // balance rule uses ledger-core.gs / fx-utils.gs: always available, as in GAS.
+  const shared = ['view-context.gs', 'ledger-core.gs', 'fx-utils.gs'].filter(file => !files.includes(file));
+  for (const file of [...files, ...shared]) vm.runInContext(fs.readFileSync(path.join(api, file), 'utf8'), ctx);
   return ctx;
 }
 class Sheet {
@@ -1210,15 +1213,6 @@ test('local Sheet dates retain displayed wall time in transaction list responses
     return '2026-09-24 12:00:00.000';
   };
   assert.equal(ctx.listTransactions()[0].tx_date_local, '2026-09-24 12:00:00.000');
-});
-
-test('legacy computed insights cannot surface metrics from retired source fields', () => {
-  const ctx = runtime(['insights-core.gs'], { COMPUTED_INSIGHTS_SHEET: 'computed_insights', getOrCreateSheet: () => ({}) });
-  const row = { insight_id: 'networth', period_key: '2026', computed_at: '2026-09-24', insight_payload: '{}' };
-  ctx.sheetToObjects = () => [row];
-  assert.equal(ctx.getComputedInsights({ insight_id: 'networth', period_key: '2026' }).error, 'legacy_insights_contract_requires_upgrade');
-  row.insight_payload = JSON.stringify({ source_contract: 'single-leg-master-v1', stat_cards: [] });
-  assert.equal(ctx.getComputedInsights({ insight_id: 'networth', period_key: '2026' }).ok, true);
 });
 
 test('locked account master and extension rows cannot be overwritten through CSV import', () => {

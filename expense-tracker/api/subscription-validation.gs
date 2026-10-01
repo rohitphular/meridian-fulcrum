@@ -2,7 +2,34 @@
 // FULCRUM FORGE — Subscription Validation: validate before every source write
 // =============================================================================
 
+// Form error envelope: every failure carries the input `field` and a human
+// `message` (_VM_MESSAGES) so the subscription form renders it verbatim.
+const _SUBV_ERROR_FIELDS = {
+  missing_name: 'subscription_name',
+  missing_subscription_amount_local: 'subscription_amount_local', invalid_subscription_amount_local: 'subscription_amount_local',
+  missing_source_account: 'source_account', invalid_source_account: 'source_account',
+  unknown_source_account: 'source_account', source_account_not_active: 'source_account',
+  invalid_id: 'id', missing_frequency: 'frequency', invalid_frequency: 'frequency',
+  missing_day_of_week: 'day_of_week', invalid_day_of_week: 'day_of_week',
+  missing_day_of_month: 'day_of_month', invalid_day_of_month: 'day_of_month',
+  invalid_subscription_timezone_local: 'subscription_timezone_local', missing_subscription_timezone_local: 'subscription_timezone_local',
+  invalid_subscription_start_date_local: 'subscription_start_date_local', missing_subscription_start_date_local: 'subscription_start_date_local',
+  invalid_subscription_end_date_local: 'subscription_end_date_local', end_before_start: 'subscription_end_date_local',
+  invalid_tx_type: 'tx_type', invalid_record_status: 'record_status',
+  unknown_category: 'major_category', category_not_active: 'major_category', category_not_subscription_eligible: 'major_category',
+};
+
+function _subvFormError(result) {
+  if (result === undefined || result === null || result.ok !== false) return result;
+  const field = result.field === undefined || result.field === null || result.field === '' ? _SUBV_ERROR_FIELDS[result.error] : result.field;
+  return Object.assign({}, result, vmError(result.error, field, result.message, result.details));
+}
+
 function validateSubscriptionCreate(body) {
+  return _subvFormError(_subvCreate(body));
+}
+
+function _subvCreate(body) {
   if (body === null || typeof body !== 'object' || Array.isArray(body)) return { ok: false, error: 'invalid_row' };
   if (body.subscription_name === undefined || body.subscription_name === null || String(body.subscription_name).trim() === '') {
     return { ok: false, error: 'missing_name' };
@@ -27,6 +54,10 @@ function validateSubscriptionCreate(body) {
 }
 
 function validateSubscriptionUpdate(body) {
+  return _subvFormError(_subvUpdate(body));
+}
+
+function _subvUpdate(body) {
   if (body === null || typeof body !== 'object' || Array.isArray(body)) return { ok: false, error: 'invalid_row' };
   if (body.row_num === undefined || body.row_num === null) return { ok: false, error: 'missing_row_num' };
   if (!Number.isInteger(Number(body.row_num)) || Number(body.row_num) < 2) return { ok: false, error: 'invalid_row' };
@@ -82,6 +113,10 @@ function _validateSchedule(body) {
 }
 
 function _validateSubscriptionReferences(body, references, historical) {
+  return _subvFormError(_subvReferences(body, references, historical));
+}
+
+function _subvReferences(body, references, historical) {
   const account = references.accounts[subscriptionUuid(body.source_account)];
   if (account === undefined) return { ok: false, error: 'unknown_source_account' };
   if (historical !== true && subscriptionText(account.record_status) !== 'active') return { ok: false, error: 'source_account_not_active' };

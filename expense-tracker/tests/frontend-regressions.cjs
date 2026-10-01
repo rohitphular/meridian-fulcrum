@@ -12,48 +12,26 @@ function load(file, globals, expose) {
   vm.runInContext(source + '\n globalThis.testExports = {' + expose.join(',') + '};', context);
   return context.testExports;
 }
-const dateUtils = load('core/date-utils.js', {}, ['accountSnapshotInstant', 'accountMovementInstant', 'balanceMovementAffectsSnapshot']);
-const insights = load('sections/insights/insight-utils.js', {
-  ...dateUtils,
-  state: {}, toBase: (amount, currency) => currency === 'GBP' ? amount / 2 : amount,
-}, ['accountBalanceByMonth', 'computeBalancesAt', 'computeDailyTotalAssets']);
-const account = { id: 'a', account_currency_local: 'GBP', opening_value_local: 100, tracking_start_date_local: '2026-09-02 12:00' };
-const tx = (date, amount, extra = {}) => ({ account_id: 'a', tx_date_local: date, tx_amount_local: amount, tx_type: 'money-in', ...extra });
-const txs = [tx('2026-09-01 10:00', 200), tx('2026-09-02 11:59', 300), tx('2026-09-02 12:00', 20), tx('2026-09-03 10:00', 10, { tx_type: 'money-out' }), tx('bad', 900), tx('2026-09-03', 900, { record_status: 'deleted' }), tx('2026-09-03', 'bad')];
-assert.deepEqual(Array.from(insights.computeDailyTotalAssets([account], txs, new Date(2026, 8, 1), new Date(2026, 8, 3))), [0, 60, 55]);
-assert.equal(insights.computeBalancesAt([account], txs, new Date(2026, 8, 3)).get('a'), 55);
-assert.equal(insights.accountBalanceByMonth([account], txs, ['2026-08', '2026-09']).get('2026-09').a, 55);
-assert.equal(insights.accountBalanceByMonth([account], txs, ['2026-08', '2026-09']).get('2026-08').a, 0);
-assert.equal(insights.computeBalancesAt([{ ...account, tracking_start_date_local: '' }], [tx('2026-09-01', 20)], new Date(2026, 8, 3)).get('a'), 60);
+// Balance replay, period and conversion checks that used to live here run on
+// the server now: ledger-core-backend.cjs, ledger-goldens-backend.cjs, fx-utils-backend.cjs.
 const exportState = {};
-const utils = load('core/utils.js', { state: exportState, _exportData: (format, rows, filename, cols) => ({ rows, filename, cols }), utcToLocalInput: value => value }, ['exportSubscriptions', 'exportAccounts', 'exportCategories', 'exportData']);
+const utils = load('core/utils.js', { state: exportState, _exportData: (format, rows, filename, cols) => ({ rows, filename, cols }) }, ['exportSubscriptions', 'exportCategories', 'downloadExport']);
 const sub = { subscription_name: 'Rent', subscription_start_date_local: '2026-09-01', subscription_end_date_local: '2026-12-31' };
 const exported = utils.exportSubscriptions('csv', [sub]);
 assert.equal(exported.rows[0].subscription_name, 'Rent');
 assert.ok(exported.cols.includes('subscription_start_date_local'));
 assert.ok(!exported.cols.includes('tags'));
-assert.ok(utils.exportAccounts('csv', [account]).cols.includes('tracking_start_date_local'));
-assert.equal(utils.exportAccounts('csv', [account]).filename, 'account_master');
+// Accounts / account types / transactions download the server export as-is
+// (export_accounts etc.; accounts-view-backend.cjs covers the columns).
+const serverExport = { filename: 'account_master', columns: ['id', 'tracking_start_date_local'], rows: [{ id: 'a' }] };
+assert.deepEqual(utils.downloadExport('csv', serverExport), { rows: serverExport.rows, filename: 'account_master', cols: serverExport.columns });
 assert.equal(utils.exportCategories('csv', []).filename, 'category_master');
 assert.equal(exported.filename, 'subscription_master');
-const parent = { id: 'parent', account_id: 'a', tx_type: 'money-out', tx_amount_local: 10, tx_date_local: '2026-09-03 12:00:45' };
-const child = { id: 'child', parent_tx_id: 'parent', account_id: 'b', tx_type: 'money-in', tx_amount_local: 20, tx_date_local: parent.tx_date_local };
-exportState.transactions = [parent, child];
-exportState.accountMap = { a: { account_name: 'Bank' }, b: { account_name: 'Wallet' } };
-const transferExport = utils.exportData('csv', [child, parent]);
-assert.equal(transferExport.rows.length, 1);
-assert.equal(transferExport.rows[0].id, 'parent');
-assert.equal(transferExport.rows[0].tx_date_local, '2026-09-03 12:00:45');
-assert.equal(transferExport.rows[0].target_amount_local, 20);
+// Transfer export (one compact row per transfer, parent id and exact date kept)
+// is built by the server: view-transactions-backend.cjs covers export_transactions.
 const subscriptionSchema = { frequencies: ['monthly'], tx_types: ['money-in', 'money-out'], record_statuses: ['active', 'inactive', 'deleted', 'locked'], default_timezone: 'Europe/London' };
-const frontend = load('sections/transactions.js', {
-  ...dateUtils,
-  state: { accounts: [{ id: 'a', account_name: 'Bank' }] }, getSymbol: () => '£',
-  el: () => null, showLoading() {}, hideLoading() {}, showMsg() {},
-  document: { dispatchEvent() {} }, CustomEvent: class {},
-}, ['_checkBalanceRules']);
-assert.match(frontend._checkBalanceRules('money-out', { ...account, type: 'asset', current_value_local: 10 }, false, 20, '2026-09-03'), /Insufficient balance/);
-assert.equal(frontend._checkBalanceRules('money-out', { ...account, type: 'asset', current_value_local: 10 }, false, 20, '2026-09-01'), null);
+// The insufficient-balance rule (incl. the tracking-start skip) is server-side:
+// form-validation-backend.cjs covers createTransaction / updateTransaction.
 console.log('Frontend regression checks passed');
 
 
@@ -65,16 +43,17 @@ console.log('Frontend regression checks passed');
   }).map(([id, value]) => [id, { value }]));
   fields.accAddError = { textContent: '' };
   fields.accSaveNew = { disabled: false, textContent: 'Save' };
-  const accountState = { accountSchema: { types: [{ value: 'asset' }] }, rateMap: { GBP: 1 }, accAddOpen: true };
+  const accountState = { accAddOpen: true };
   const payloads = [];
   const reloads = [];
   let loading = 0;
+  let response = { ok: true };
   const accounts = load('sections/accounts.js', {
     state: accountState, el: id => fields[id] ?? null,
     showLoading() { loading++; }, hideLoading() { loading--; }, showMsg() {},
     document: { dispatchEvent(event) { reloads.push(event.type); } },
     CustomEvent: class { constructor(type) { this.type = type; } },
-    ExpenseAPI: { async createAccount(payload) { payloads.push(payload); return { ok: true }; } },
+    ExpenseAPI: { async createAccount(payload) { payloads.push(payload); return response; } },
   }, ['_saveNew']);
 
   for (const value of [' 90071992547409.91 ', '+12.300e-2', '-.125', '12.', '0']) {
@@ -91,82 +70,89 @@ console.log('Frontend regression checks passed');
   assert.equal(payloads.length, 5);
   assert.equal(reloads.length, 5);
 
+  // validateAccountCreate owns the rule (form-validation-backend.cjs): the form
+  // submits the text as entered and shows the server outcome without reloading.
   for (const value of ['', '12junk', '0x10', 'NaN', 'Infinity', '1e309', '1e', '1_000', '１２']) {
     fields.accNewOpeningValue.value = value;
     fields.accSaveNew.disabled = false;
     accountState.accAddOpen = true;
+    response = { ok: false, error: value === '' ? 'missing_opening_value_local' : 'invalid_opening_value_local' };
     await accounts._saveNew();
-    assert.equal(payloads.length, 5, 'Invalid opening value must not reach createAccount: ' + value);
+    assert.equal(payloads.at(-1).opening_value_local, value.trim());
     assert.equal(reloads.length, 5);
     assert.equal(accountState.accAddOpen, true);
     assert.equal(fields.accSaveNew.disabled, false);
     assert.match(fields.accAddError.textContent, /Opening value (?:is required|must be a finite number)/);
     assert.equal(loading, 0);
   }
+  response = { ok: false, error: 'missing_account_name', message: 'Account name is required (server).' };
+  fields.accNewName.value = '';
+  await accounts._saveNew();
+  assert.equal(fields.accAddError.textContent, 'Account name is required (server).');
+  assert.equal(payloads.length, 15);
   console.log('Account opening decimal precision checks passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });
 
 (async () => {
-  const previousTransactions = [{ id: 'previous' }];
-  const previousAccounts = [{ id: 'previous-account' }];
-  const snapshotState = { transactions: previousTransactions, accounts: previousAccounts, subscriptions: [{ id: 'previous-sub' }] };
+  // loadAll loads get_app_context only (no raw lists); a failed or invalid
+  // context keeps the previous complete snapshot and names the failing schema.
+  const previousContext = { quote_currencies: [], schemas: {} };
+  const snapshotState = { context: previousContext };
   const messages = [];
   let renders = 0;
   let authPrompts = 0;
-  let accountResponse = { ok: false, error: 'sheet_header_mismatch' };
-  let accountTypesResponse = { ok: true, data: [] };
-  let schemaFailure = null;
+  let contextFailure = null;
   let subscriptionSchemaResponse = subscriptionSchema;
-  const response = data => Promise.resolve({ ok: true, data });
+  let accountTypeSchema = { fields: [], types: [], record_statuses: [], columns: [] };
+  const calls = [];
   const main = load('main.js', {
     state: snapshotState,
     ExpenseAPI: {
-      listTransactions: () => response([{ id: 'fresh' }]),
-      listCategories: () => response([]),
-      listAccounts: () => Promise.resolve(accountResponse),
-      listRates: () => response([{ currency: 'XAU', rate: 1 }]),
-      listSubscriptions: () => response([]),
-      listAccountTypes: () => Promise.resolve(accountTypesResponse),
+      getAppContext: async () => {
+        calls.push('get_app_context');
+        if (contextFailure) return { ok: false, error: contextFailure };
+        return { ok: true, data: { quote_currencies: [{ currency: 'XAU', symbol: '', rate: 1, rate_label: '1.00' }], schemas: {
+          account: { types: [] }, transaction: { types: [] }, category: { types: [], record_statuses: ['active'] },
+          account_type: accountTypeSchema, subscription: subscriptionSchemaResponse,
+        } } };
+      },
     },
-    loadAccountSchema: async () => { if (schemaFailure) throw Object.assign(new Error('schema'), { code: schemaFailure }); return { types: [] }; },
-    loadTransactionSchema: async () => ({ types: [] }),
-    loadCategorySchema: async () => ({ types: [] }),
-    loadSubscriptionSchema: async () => subscriptionSchemaResponse,
-    loadAccountTypeSchema: async () => ({ fields: [], types: [], record_statuses: [], columns: [] }),
     showLoading() {}, hideLoading() {}, showMsg: message => messages.push(message),
     showSection() { renders++; }, clearSession() {}, showPinGate() { authPrompts++; },
     localStorage: { getItem: () => null }, sessionStorage: { getItem: () => null },
     document: { addEventListener() {} }, el: () => ({ value: 'XAU', innerHTML: '' }), esc: String,
   }, ['loadAll']);
+  contextFailure = 'sheet_header_mismatch';
   await main.loadAll();
-  assert.equal(snapshotState.transactions, previousTransactions);
-  assert.equal(snapshotState.accounts, previousAccounts);
+  assert.equal(snapshotState.context, previousContext);
   assert.equal(renders, 0);
-  assert.match(messages[0], /accounts: sheet_header_mismatch/);
-  accountResponse = { ok: true, data: [{ id: 'fresh-account' }] };
-  schemaFailure = 'auth';
+  assert.match(messages[0], /app context: sheet_header_mismatch/);
+  assert.match(messages[0], /Check the affected sheet headers/);
+  contextFailure = 'auth';
   await main.loadAll();
   assert.equal(authPrompts, 1);
-  assert.equal(snapshotState.transactions, previousTransactions);
-  assert.equal(renders, 0);
-  schemaFailure = null;
-  accountTypesResponse = { ok: false, error: 'invalid_account_types' };
+  assert.equal(snapshotState.context, previousContext);
+  contextFailure = null;
+  accountTypeSchema = { fields: [] };
   await main.loadAll();
-  assert.equal(snapshotState.transactions, previousTransactions);
-  assert.equal(renders, 0);
-  assert.match(messages.at(-1), /account types: invalid_account_types/);
-  accountTypesResponse = { ok: true, data: [{ id: 'configured-type' }] };
+  assert.equal(snapshotState.context, previousContext);
+  assert.match(messages.at(-1), /account type schema: invalid_schema/);
+  accountTypeSchema = { fields: [], types: [], record_statuses: [], columns: [] };
   subscriptionSchemaResponse = { frequencies: ['monthly'] };
   await main.loadAll();
-  assert.equal(snapshotState.transactions, previousTransactions);
+  assert.equal(snapshotState.context, previousContext);
   assert.equal(renders, 0);
   assert.match(messages.at(-1), /subscription schema: invalid_schema/);
   subscriptionSchemaResponse = subscriptionSchema;
   await main.loadAll();
+  assert.notEqual(snapshotState.context, previousContext);
   assert.equal(snapshotState.subscriptionSchema, subscriptionSchema);
-  assert.equal(snapshotState.transactions[0].id, 'fresh');
-  assert.equal(snapshotState.accounts[0].id, 'fresh-account');
-  assert.equal(snapshotState.accountTypes[0].id, 'configured-type');
+  assert.equal(snapshotState.accountTypeSchema, accountTypeSchema);
+  assert.deepEqual(Array.from(snapshotState.categorySchema.record_statuses), ['active']);
+  for (const key of ['transactions', 'accounts', 'categories', 'subscriptions', 'rates', 'rateMap', 'accountMap', 'accountTypes']) {
+    assert.equal(Object.prototype.hasOwnProperty.call(snapshotState, key), false, key);
+  }
+  assert.deepEqual(calls, Array(5).fill('get_app_context'));
   assert.equal(renders, 1);
   console.log('Atomic frontend refresh checks passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });

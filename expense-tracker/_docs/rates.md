@@ -24,18 +24,19 @@ The app uses a single current rate per currency. Historical FX rates remain outs
 
 | Action | Behavior |
 |---|---|
-| `list_rates` | Return XAU-relative rates; seed illustrative defaults only if empty. |
-| `upsert_rate` | Validate and insert/update a non-XAU currency; normalise legacy rows together on write. |
+| `list_rates_view` | GET view model for the Currencies tab: search, sort, rate labels, base flag, `allowed_actions` and the accounts using each currency. |
+| `list_rates` | Return XAU-relative rates; seed illustrative defaults only if empty. Read by the server for every conversion; the current app does not call it (kept for the previous frontend). |
+| `upsert_rate` | Validate and insert/update a non-XAU currency; normalise legacy rows together on write. `mode: 'create'` (sent by the Add form) refuses a currency that already exists (`rate_already_exists`); blank or `'upsert'` overwrites (the Edit form). |
 | `delete_rate` | Physically remove a non-XAU rate only if no account references its currency. |
 
 The Rates section supports Add, Edit and Delete. Symbols are editable. Saves dispatch `et:reload` to refresh all dependent data. GBP is editable; XAU is read-only.
 
-Currency codes are trimmed and uppercased; the API accepts 1–8 alphanumeric characters. This display-rate flexibility is separate from account/extraction currency eligibility: account creation requires exactly three ASCII letters and an available Sheet rate; PostgreSQL extraction additionally requires the currency catalog and dated rates managed by `currency-rates`. Rates must be finite and greater than zero. Symbols are optional, at most eight characters, and may not contain HTML-meaningful characters or a backslash. Omitting a symbol on update preserves it.
+Currency codes are trimmed and uppercased; the API accepts 1–8 alphanumeric characters. This display-rate flexibility is separate from account/extraction currency eligibility: account creation requires exactly three ASCII letters and an available Sheet rate; PostgreSQL extraction additionally requires the currency catalog and dated rates managed by `currency-rates`. Rates must be decimal text or numbers, finite and greater than zero; hexadecimal, `1e` and `Infinity` are rejected. The forms send the rate as typed and show the server's error. Symbols are optional, at most eight characters, and may not contain HTML-meaningful characters or a backslash. Omitting a symbol on update preserves it.
 
 Deletion checks `account_master.account_currency_local`, including inactive/deleted account rows, since historical transactions derive currency from their account. There is no transaction currency column to scan separately.
 
 ## Errors and schema
 
-Errors include `missing_currency`, `invalid_currency_code`, `base_currency_readonly`, `missing_rate`, `rate_must_be_positive`, `invalid_rate_table`, `symbol_too_long`, `invalid_symbol_characters`, `currency_in_use_by_accounts`, and `not_found`.
+Errors include `missing_currency`, `invalid_currency_code`, `base_currency_readonly`, `missing_rate`, `rate_must_be_positive`, `rate_already_exists`, `invalid_rate_mode`, `invalid_rate_table`, `symbol_too_long`, `invalid_symbol_characters`, `currency_in_use_by_accounts`, and `not_found`. `upsert_rate` failures also carry `field` (`currency`, `rate`, `symbol` or `mode`) and a human `message`.
 
 The four stored columns are `currency`, `rate`, `symbol`, and `updated_at`. Rates have no soft-delete state or sync audit columns.

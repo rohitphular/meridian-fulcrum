@@ -1,10 +1,21 @@
 # Insight 00 — Income, Expense & Savings
 
-**File:** `sections/insights/00-earn-burn-rate.js`
+**Original client module (deleted):** `app/sections/insights/00-earn-burn-rate.js`
 **Group:** Cash flow
 **Chart type:** Multi-line (3 lines) with fill
 **Tabs:** None
 **Default insight:** Yes (`state.insightId` defaults to `'00-earn-burn-rate'`)
+
+---
+
+## Current implementation (server)
+
+- **Computed by:** `insightCompute_00_earn_burn_rate` in `api/insights-cashflow.gs`, returned by GET `get_insight` with `id=00-earn-burn-rate`; the browser only renders the payload (`app/sections/insights/render-kinds.js`).
+- **Render kind:** `line` · **Periods:** `last_3`, `last_6`, `last_12`, `ytd`, `last_year`, `custom` · **Default:** `last_3` · **Tabs:** none
+- **Extra params:** `window` · **Drill:** none
+- **Rules:** Counts flow-eligible rows only: deleted rows and own-account transfers (including loan / card repayments) are excluded. Periods are inclusive of today and bucket in the request `tz`; a missing rate excludes the value with a `missing_rate` warning. Definitions: [calculations](../calculations.md).
+
+The sections below describe the original browser module (deleted in the dumb-UI refactor). Where they differ from the rules above, the server is authoritative.
 
 ---
 

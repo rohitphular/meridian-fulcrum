@@ -1,6 +1,10 @@
+// UI state only. Data comes from the server: state.context (get_app_context)
+// and state.views (the last view payload per screen). No entity collections,
+// rate maps or derived figures are kept in the browser.
 export const state = {
-  accountTypes: [],
-  accountTypeSchema: null,
+  context: null,   // get_app_context data: schemas, quote_currencies, options, periods, nav
+  views:   {},     // latest view payloads by action (e.g. views.get_home_view)
+  accountTypeSchema: null,   // get_app_context schemas.account_type (set by loadAll)
   accountTypesOpen: false,
   accountTypeFilterOpen: false,
   accountTypeFilterType: 'all',
@@ -12,19 +16,12 @@ export const state = {
   accountTypeSearch: '',
   accountTypeStatus: 'all',
   accountTypeImport: null,
+  accountTypeExport: null,   // { data: export_account_types data | null, error } while the export panel is open
   accountTypeBusy: false,
-  transactions:  [],
-  categories:    [],
-  accounts:      [],
-  accountMap:    {},   // { 'acc-001': account }  — keyed by account id
-  rates:         [],
-  rateMap:       {},   // { XAU: 1, GBP: 85, … }  units per 1g XAU
   quoteCurrency: 'GBP',
 
-  dateRange:  'last_30',
-  customFrom: '',
-  customTo:   '',
-
+  // Deep link into Transactions (other sections assign a new object; see
+  // transactions.js _consumeDeepLink).
   filters: {
     types:               [],
     accounts:            [],
@@ -36,10 +33,6 @@ export const state = {
     tag:                 '',
     search:              '',
   },
-
-  txSort:    { col: 'tx_date_local', dir: 'desc' },
-  txPage:    1,
-  txPerPage: 50,
 
   catFilterOpen: false,
   catFilters: {
@@ -62,13 +55,13 @@ export const state = {
   rateDeleteCurrency: null,
   rateDeleteBlocked:  null,   // { error, referenced_count } when delete is refused — paired with rateDeleteCurrency
 
-  accountSchema:      null,  // Sheet-derived types, subtypes_by_type, and labels
-  transactionSchema:  null,  // { types, categorisation_fields, transfer_fields }
-  categorySchema:     null,  // { types, account_types }
+  // Schemas from get_app_context (set by main.js loadAll) that sections read.
+  categorySchema:     null,  // { types, account_types, record_statuses }
   subscriptionSchema: null, // { frequencies, tx_types, record_statuses, default_timezone }
 
   accAddOpen:       false,
   accImportOpen:    false,
+  // Open panels hold record ids (never Sheet row numbers, which can move).
   accViewRow:       null,
   accEditRow:       null,
   accDeleteRow:     null,
@@ -87,34 +80,23 @@ export const state = {
   catImportReport: null,
   catImportBusy: false,
 
-  txAddOpen:      false,
   txImportOpen:   false,
-  txEditRow:      null,
-  txDeleteRow:    null,
-  txViewRow:      null,
-  txCopyPrefill:  null,
 
   suggestionsOpen:    true,   // panel open by default
   suggestions:        [],     // cached suggestion list for the session
   suggestionsLoaded:  false,  // true after first fetch
   suggestionsFetching: false, // true while fetch is in-flight
 
-  metadata:       null,   // { countries, cities, areas, counterparties, tags }
-  metadataLoaded: false,
-
   insightId:            '00-earn-burn-rate',
   insightPeriod:        'last_3',
   insightCustomFrom:    '',
   insightCustomTo:      '',
   insightTab:           'transactions',
-  insightChartInstance: null,
-  insightDrillMajor:    null,   // active major category for 11-category-drilldown (null = top level)
-  insightDrillMinor:    null,
-  insightMode:          'precomputed',  // 'precomputed' | 'live'
+  insightDrill:         null,   // get_insight drill param, e.g. { date: '2026-09-12' } (null = none)
+  insightParams:        {},     // extra get_insight params from payload controls (window, top_n, sort, sort_dir)
 
   advisorMessages: [],
 
-  subscriptions:  [],
   subAddOpen:     false,
   subImportOpen:  false,
   subEditRow:     null,

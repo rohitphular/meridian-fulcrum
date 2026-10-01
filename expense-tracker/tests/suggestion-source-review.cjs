@@ -5,6 +5,7 @@ const test = require('node:test');
 const vm = require('node:vm');
 
 const source = fs.readFileSync(path.join(__dirname, '../api/transaction-suggestions.gs'), 'utf8');
+const fxSource = fs.readFileSync(path.join(__dirname, '../api/fx-utils.gs'), 'utf8');
 const today = new Date(2026, 8, 25, 12, 0, 0);
 class ReviewDate extends Date {
   constructor(...args) { super(...(args.length ? args : [today.getTime()])); }
@@ -14,12 +15,15 @@ function runtime(rows, accounts = {}) {
   const context = vm.createContext({
     Date: ReviewDate, console: { log: message => logs.push(message) },
     listTransactions: () => rows,
+    listRates: () => [{ currency: 'GBP', rate: 80, symbol: '£' }, { currency: 'INR', rate: 8400, symbol: '₹' }],
+    listCategories: () => [{ minor_category_key: 'food', minor_category_label: 'Food & drink' }],
     _loadAccountMap: () => ({
       gbp: { account_currency_local: 'GBP', record_status: 'active' },
       inr: { account_currency_local: 'INR', record_status: 'active' },
       ...accounts,
     }),
   });
+  vm.runInContext(fxSource, context);
   vm.runInContext(source, context);
   return { context, logs };
 }
@@ -41,6 +45,9 @@ test('suggestions keep native amounts and identities separate across account cur
   ]);
   assert.equal(new Set(suggestions.map(s => s.suggestion_key)).size, 2);
   assert.ok(logs.every(message => !message.includes('Synthetic private payee')));
+  // Card text is server-built: the browser renders display as-is.
+  const inr = suggestions.find(s => s.account_id === 'inr');
+  assert.deepEqual(JSON.parse(JSON.stringify(inr.display)), { account_name: 'inr', currency_symbol: '₹', category_label: 'Food & drink', typical_amount: '₹1000.00' });
 });
 
 test('deleted, invalid, future and unavailable-account history cannot create suggestions', () => {

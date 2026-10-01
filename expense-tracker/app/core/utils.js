@@ -1,15 +1,9 @@
 import {
-  el, esc, fmtDate, fmtDateTime, parseLocalDate, toDateInputVal, todayISO, nowLocalISO,
-  localToUtcISO, utcToLocalInput,
-  getSymbol as _getSymbol,
-  toBase    as _toBase,
-  fmtBase   as _fmtBase,
-  fmtNative as _fmtNative,
+  el, esc, fmtDateTime, todayISO, nowLocalISO,
   exportData as _exportData,
 } from '../../_shared/utils.js';
-import { state } from './state.js';
 
-export { el, esc, fmtDate, fmtDateTime, parseLocalDate, toDateInputVal, todayISO, nowLocalISO, localToUtcISO, utcToLocalInput };
+export { el, esc, fmtDateTime, todayISO, nowLocalISO };
 
 export function fmtDateTimeCompact(v) {
   if (!v) return '—';
@@ -22,19 +16,8 @@ export function fmtDateTimeCompact(v) {
   } catch (_) { return '—'; }
 }
 
-export const getSymbol  = currency                  => _getSymbol(currency, state.rates);
-export const toBase     = (amount, from, rowFxRate) => _toBase(amount, from, rowFxRate, state.rateMap, state.quoteCurrency);
-export const fmtBase    = (amount, from, rowFxRate) => _fmtBase(amount, from, rowFxRate, state.rateMap, state.quoteCurrency, state.rates);
-export const fmtNative  = (amount, currency)        => _fmtNative(amount, currency, state.rates);
-
-const ET_COLS  = [
-  'id', 'tx_date_local', 'tx_timezone_local', 'tx_type', 'source_account', 'target_account',
-  'user_location_area', 'user_location_city', 'user_location_country',
-  'user_location_latitude', 'user_location_longitude',
-  'source_amount_local', 'target_amount_local', 'major_category', 'minor_category',
-  'description', 'counterparty_name', 'tx_tags', 'beneficiaries', 'record_status',
-];
-const ACC_COLS = ['id', 'account_name', 'legal_entity_name', 'type', 'sub_type', 'account_currency_local', 'local_timezone', 'account_opening_date_local', 'account_closing_date_local', 'tracking_start_date_local', 'opening_value_local', 'description', 'record_status'];
+// Subscription / category exports download the rows of their list view
+// (page_size=all); these column lists are the import contracts.
 // Preserve the complete Sheet contract and original audit timestamps on export.
 // Import accepts metadata columns but the server owns their values.
 const SUB_COLS = ['id', 'subscription_name', 'counterparty_name', 'subscription_amount_local', 'frequency', 'day_of_month', 'day_of_week',
@@ -52,97 +35,13 @@ const CAT_COLS = [
   'is_subscription_eligible', 'record_status',
 ];
 
-export const exportData = (format, rows) => {
-  // Build sibling map from all loaded transactions (not just the filtered rows)
-  // so transfers export correctly even when only one leg is in the date range.
-  const allTx = state.transactions;
-  const byId  = {};
-  allTx.forEach(tx => { if (tx.id) byId[tx.id] = tx; });
-  const siblingMap = {};
-  const children = {};
-  allTx.forEach(tx => {
-    if (!tx.parent_tx_id) return;
-    const parent = byId[tx.parent_tx_id];
-    if (!parent) return;
-    siblingMap[tx.id] = parent;
-    (children[parent.id] ??= []).push(tx);
-    if (siblingMap[parent.id] === undefined || siblingMap[parent.id].record_status === 'deleted') siblingMap[parent.id] = tx;
-  });
-
-  // Reconstruct source/target from account_id + sibling relationship.
-  // Export a transfer once even when filtering leaves only its child leg.
-  const exported = [];
-  const seen = {};
-  rows.forEach(row => {
-    const tx = row.parent_tx_id && byId[row.parent_tx_id] ? byId[row.parent_tx_id] : row;
-    const linked = children[tx.id] ?? [];
-    const sibling = siblingMap[tx.id];
-    const exportError = () => new Error('This transfer has separately edited or deleted legs that cannot fit one import row. Export transaction_master directly from Google Sheets to preserve both rows.');
-    // The import contract has one set of shared fields/status for both legs.
-    // Refuse a lossy export, including historical children hidden by a live leg.
-    if (row.parent_tx_id && (!byId[row.parent_tx_id] || row !== sibling)) throw exportError();
-    if (linked.length > 1) throw exportError();
-    if (sibling) {
-      const shared = ['tx_date_local', 'tx_timezone_local', 'major_category', 'minor_category',
-        'user_location_area', 'user_location_city', 'user_location_country', 'user_location_latitude',
-        'user_location_longitude', 'description', 'counterparty_name', 'tx_tags', 'beneficiaries'];
-      if ((tx.record_status || 'active') !== (sibling.record_status || 'active')
-          || shared.some(key => String(tx[key] ?? '') !== String(sibling[key] ?? ''))) throw exportError();
-    }
-    if (seen[tx.id] === true) return;
-    seen[tx.id] = true;
-    const acct   = (state.accountMap[tx.account_id] !== undefined && state.accountMap[tx.account_id] !== null) ? state.accountMap[tx.account_id] : null;
-    const sib    = (siblingMap[tx.id] !== undefined && siblingMap[tx.id] !== null) ? siblingMap[tx.id] : null;
-    const sibAcc = (sib !== null && state.accountMap[sib.account_id] !== undefined && state.accountMap[sib.account_id] !== null) ? state.accountMap[sib.account_id] : null;
-
-    const acctName    = (acct !== null && acct.account_name !== undefined && acct.account_name !== null) ? acct.account_name : (tx.account_id !== undefined && tx.account_id !== null ? tx.account_id : '');
-    const sibAccName  = (sibAcc !== null && sibAcc.account_name !== undefined && sibAcc.account_name !== null) ? sibAcc.account_name : (sib !== null && sib.account_id !== undefined && sib.account_id !== null ? sib.account_id : '');
-
-    let source_account, target_account, source_amount, target_amount;
-    if (sib !== null) {
-      // Transfer: parent leg determines direction
-      if (tx.tx_type === 'money-out') {
-        source_account = acctName;
-        target_account = sibAccName;
-        source_amount  = tx.tx_amount_local;
-        target_amount  = sib.tx_amount_local;
-      } else {
-        source_account = sibAccName;
-        target_account = acctName;
-        source_amount  = sib.tx_amount_local;
-        target_amount  = tx.tx_amount_local;
-      }
-    } else {
-      // Non-transfer
-      if (tx.tx_type === 'money-out') {
-        source_account = acctName;
-        target_account = '';
-        source_amount  = tx.tx_amount_local;
-        target_amount  = '';
-      } else {
-        source_account = '';
-        target_account = acctName;
-        source_amount  = '';
-        target_amount  = tx.tx_amount_local;
-      }
-    }
-
-    exported.push(Object.assign({}, tx, {
-      tx_date_local:        tx.tx_date_local,
-      source_account,
-      target_account,
-      source_amount_local:  source_amount,
-      target_amount_local:  target_amount,
-    }));
-    if (sib) seen[sib.id] = true;
-  });
-
-  return _exportData(format, exported, 'transaction_master', ET_COLS);
-};
-export const exportAccounts      = (format, rows) => _exportData(format, rows, 'account_master', ACC_COLS);
+// Server export actions (export_transactions, export_accounts,
+// export_account_types) return { filename, columns, rows }: the browser only
+// downloads them (transfer reconstruction and the lossy-transfer guard live in
+// api/view-transactions.gs; account / account type columns in the view files).
+export const downloadExport      = (format, data) => _exportData(format, data.rows, data.filename, data.columns);
 export const exportSubscriptions = (format, rows) => _exportData(format, rows, 'subscription_master', SUB_COLS);
 export const exportCategories    = (format, rows) => _exportData(format, rows, 'category_master', CAT_COLS);
-export const exportAccountTypes = rows => _exportData('csv', rows, 'account_types', state.accountTypeSchema.columns);
 
 // ── Status icons (shared across all entity tables) ───────────────────────────
 
@@ -205,6 +104,21 @@ export function openContextMenu(triggerBtn, items, onSelect) {
     if (!(_ctxMenuEl && _ctxMenuEl.contains(e.target))) closeContextMenu();
   };
   document.addEventListener('click', _ctxHandler, true);
+}
+
+// ── Form errors (shared by every add/edit form) ─────────────────────────────
+// The server validates; forms show its message and mark the field it names.
+export function clearFormError(errEl) {
+  if (errEl === null || errEl === undefined) return;
+  errEl.textContent = '';
+  (errEl.closest?.('.card') ?? errEl.parentElement)?.querySelectorAll('.field.error').forEach(field => field.classList.remove('error'));
+}
+
+export function showFormError(errEl, res, fieldIds = {}) {
+  if (errEl === null || errEl === undefined) return;
+  errEl.textContent = typeof res?.message === 'string' && res.message !== '' ? res.message : importErrorText(res?.error);
+  const input = typeof res?.field === 'string' && fieldIds[res.field] !== undefined ? el(fieldIds[res.field]) : null;
+  input?.closest?.('.field')?.classList.add('error');
 }
 
 // ── Import results (shared by every CSV import panel) ───────────────────────

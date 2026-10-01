@@ -142,13 +142,17 @@ test('an unresolved name anywhere blocks the whole file before the bulk write', 
   assert.equal(f.submitted.length, 0);
 });
 
-test('the add-form account dropdown applies the same hint rule as CSV resolution', () => {
-  const source = fs.readFileSync(path.join(__dirname, '../app/sections/transactions.js'), 'utf8')
-    .replace(/^import\s[\s\S]*?from\s+['"][^'"]+['"];\s*/gm, '')
-    .replace(/\bexport (?=(?:async )?function|const|let)/g, '');
-  const context = vm.createContext({ esc: value => String(value) });
-  vm.runInContext(source + '\nglobalThis.testExports = { _acctOptsWithHints };', context);
-  const options = context.testExports._acctOptsWithHints([property, mortgage], ' MORTGAGE ');
-  assert.match(options, new RegExp(mortgage.id));
-  assert.ok(!options.includes(property.id));
+test('the add-form options use the same hint helper as CSV resolution', () => {
+  // One helper (transaction-import.gs) serves both: CSV name resolution and
+  // get_transaction_form_options account_sets (view-transactions.gs).
+  const { gasRuntime } = require('./support/gas-runtime.cjs');
+  const { ctx } = gasRuntime();
+  assert.deepEqual(Array.from(ctx.txAccountsForCategoryHint([property, mortgage], ' MORTGAGE '), a => a.id), [mortgage.id]);
+  assert.deepEqual(Array.from(ctx.txAccountsForCategoryHint([property, mortgage], ''), a => a.id), [property.id, mortgage.id]);
+  const index = { accounts_raw: [bank, property, mortgage] };
+  assert.deepEqual(Array.from(ctx._vwTxEligibleIds(index.accounts_raw, 'mortgage')), [mortgage.id]);
+  assert.deepEqual(Array.from(ctx._vwTxEligibleIds(index.accounts_raw, category.source_account_types)), [bank.id]);
+  const source = fs.readFileSync(path.join(API, 'view-transactions.gs'), 'utf8');
+  assert.match(source, /txAccountsForCategoryHint\(activeAccounts, hint\)/);
+  assert.doesNotMatch(fs.readFileSync(path.join(__dirname, '../app/sections/transactions.js'), 'utf8'), /_acctOptsWithHints|_filterAccountsByTypes|source_account_types|target_account_types/);
 });

@@ -38,7 +38,7 @@ function runtime() {
   });
   for (const file of ['app-config.gs', 'app-utils.gs', 'sync-utils.gs', 'account-schema.gs', 'category-schema.gs',
     'subscription-schema.gs', 'subscription-utils.gs', 'subscription-validation.gs', 'subscription-core.gs', 'category-core.gs',
-    'csv-import.gs', 'subscription-import.gs']) {
+    'csv-import.gs', 'subscription-import.gs', 'view-context.gs']) {
     vm.runInContext(fs.readFileSync(path.join(api, file), 'utf8'), ctx);
   }
   const sheet = new Sheet('subscription_master', [ctx.getSubscriptionSheetColumns()]);
@@ -384,8 +384,8 @@ test('CSV import canonicalizes UUIDs and reports case-insensitive duplicate iden
   assert.equal(rows[0].id, uuid(1));
   assert.equal(rows[0].source_account, ACCOUNT);
   assert.match(importErrors(toCsv([first, csvRow(1)])), /Row 3: duplicate id in CSV \(duplicate_id_in_file\)/);
-  assert.match(importErrors(toCsv([csvRow(1, { id: 'old-id' })])), /id must be a UUID \(invalid_id\)/);
-  assert.match(importErrors(toCsv([csvRow(1, { source_account: 'Bank' })])), /source_account must be a UUID \(invalid_source_account\)/);
+  assert.match(importErrors(toCsv([csvRow(1, { id: 'old-id' })])), /id must be a UUID \[id\] \(invalid_id\)/);
+  assert.match(importErrors(toCsv([csvRow(1, { source_account: 'Bank' })])), /source_account must be a UUID \[source_account\] \(invalid_source_account\)/);
 });
 
 test('CSV import preserves supplied lifecycle but omits blank id/lifecycle and server-owned metadata', () => {

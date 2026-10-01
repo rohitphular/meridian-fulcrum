@@ -1,9 +1,20 @@
 # Insight 06 — Last 12 Months
 
-**File:** `sections/insights/06-last-12-months.js`
+**Original client module (deleted):** `app/sections/insights/06-last-12-months.js`
 **Group:** Spending comparisons
 **Chart type:** Mixed — grouped bar (income + expense) with net line overlay
 **Tabs:** Transactions | Accounts
+
+---
+
+## Current implementation (server)
+
+- **Computed by:** `insightCompute_06_last_12_months` in `api/insights-comparisons.gs`, returned by GET `get_insight` with `id=06-last-12-months`; the browser only renders the payload (`app/sections/insights/render-kinds.js`).
+- **Render kind:** `mixed` · **Periods:** none (point in time) · **Default:** `last_12` · **Tabs:** `transactions`, `accounts`
+- **Extra params:** none · **Drill:** none
+- **Rules:** The `transactions` tab counts flow-eligible rows only (deleted rows and own-account transfers excluded); the `accounts` tab uses ledger balances over all non-deleted accounts. Periods are inclusive of today and bucket in the request `tz`; a missing rate excludes the value with a `missing_rate` warning. Definitions: [calculations](../calculations.md).
+
+The sections below describe the original browser module (deleted in the dumb-UI refactor). Where they differ from the rules above, the server is authoritative.
 
 ---
 

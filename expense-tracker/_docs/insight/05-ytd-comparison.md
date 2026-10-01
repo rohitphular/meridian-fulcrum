@@ -1,9 +1,20 @@
 # Insight 05 — Year-to-Date Comparison
 
-**File:** `sections/insights/05-ytd-comparison.js`
+**Original client module (deleted):** `app/sections/insights/05-ytd-comparison.js`
 **Group:** Spending comparisons
 **Chart type:** Line — 2 series
 **Tabs:** Transactions | Accounts
+
+---
+
+## Current implementation (server)
+
+- **Computed by:** `insightCompute_05_ytd_comparison` in `api/insights-comparisons.gs`, returned by GET `get_insight` with `id=05-ytd-comparison`; the browser only renders the payload (`app/sections/insights/render-kinds.js`).
+- **Render kind:** `line` · **Periods:** `ytd`, `last_year`, `custom` · **Default:** `ytd` · **Tabs:** `transactions`, `accounts`
+- **Extra params:** none · **Drill:** none
+- **Rules:** The `transactions` tab counts flow-eligible rows only (deleted rows and own-account transfers excluded); the `accounts` tab uses ledger balances over all non-deleted accounts. Periods are inclusive of today and bucket in the request `tz`; a missing rate excludes the value with a `missing_rate` warning. Definitions: [calculations](../calculations.md).
+
+The sections below describe the original browser module (deleted in the dumb-UI refactor). Where they differ from the rules above, the server is authoritative.
 
 ---
 

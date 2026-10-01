@@ -28,7 +28,7 @@ function runtime(types = typeSheet()) {
   let uuid = 10;
   const ss = { getSheets: () => sheets, getSheetByName: name => sheets.find(sheet => sheet.name === name), insertSheet: name => { const sheet = new Sheet(name); sheets.push(sheet); return sheet; } };
   const ctx = vm.createContext({ console: { log() {}, error() {} }, SpreadsheetApp: { getActiveSpreadsheet: () => ss }, Utilities: { getUuid: () => 'f0000000-0000-4000-8000-' + String(++uuid).padStart(12, '0') } });
-  for (const file of ['app-config.gs', 'sync-utils.gs', 'app-utils.gs', 'import-registry.gs', 'account-type-schema.gs', 'account-type-validation.gs', 'account-type-utils.gs', 'category-schema.gs', 'category-utils.gs', 'category-validation.gs', 'category-core.gs', 'csv-import.gs', 'category-import.gs']) vm.runInContext(fs.readFileSync(path.join(API, file), 'utf8'), ctx);
+  for (const file of ['app-config.gs', 'sync-utils.gs', 'app-utils.gs', 'import-registry.gs', 'account-type-schema.gs', 'account-type-validation.gs', 'account-type-utils.gs', 'category-schema.gs', 'category-utils.gs', 'category-validation.gs', 'category-core.gs', 'csv-import.gs', 'category-import.gs', 'view-context.gs']) vm.runInContext(fs.readFileSync(path.join(API, file), 'utf8'), ctx);
   return { ctx, sheets, table: () => sheets.find(sheet => sheet.name === 'category_master') };
 }
 function category(overrides = {}) {
