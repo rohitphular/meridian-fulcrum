@@ -10,8 +10,8 @@ help:
 ##@ Run
 
 .PHONY: run
-run: ## Run every stage in pipeline.json — CONFIG=path optional  (e.g. make run CONFIG=nightly.json)
-	bash cicd/start-up.sh $(if $(CONFIG),--config "$(CONFIG)")
+run: ## Run every stage of a config/pipeline.<env>.json — asks for the env; ENV=name or CONFIG=path optional
+	bash cicd/start-up.sh $(if $(ENV),--env "$(ENV)") $(if $(CONFIG),--config "$(CONFIG)")
 
 ##@ Dev
 

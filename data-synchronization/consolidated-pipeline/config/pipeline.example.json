@@ -1,0 +1,9 @@
+{
+  "_comment": "Template. Copy to pipeline.<env>.json in this folder (e.g. pipeline.dev.json; gitignored) and set \"env\" to the same name. Each file adds that env to the make consolidated-pipeline menu. Stages run in order; the run stops at the first failure. Each stage's mode is that module's mode (currency-database-load: daily|historical; ledger-sheet-load: sheet-sync|sheet-rebuild; ledger-sheet-extract: normal-sync|hard-sync). A sheet-rebuild stage also needs \"confirm\" set to the env name.",
+  "env": "dev",
+  "stages": [
+    { "module": "ledger-sheet-load", "mode": "sheet-sync" },
+    { "module": "currency-database-load", "mode": "daily" },
+    { "module": "ledger-sheet-extract", "mode": "normal-sync" }
+  ]
+}

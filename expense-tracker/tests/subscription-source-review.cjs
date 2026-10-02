@@ -128,7 +128,8 @@ test('bulk matching preserves UUID spelling, omitted lifecycle and server audit 
   for (const status of ['inactive', 'deleted', 'active']) {
     const { ctx, sheet, body, row, value } = runtime();
     sheet.rows.push(row({ id: ID.toUpperCase(), record_status: status }));
-    const result = ctx.createSubscriptionsBulk({ subscriptions: [{ ...body, record_status: '', created_at: 'forged', updated_at: 'forged', sync_status: 'in-sync', sync_notes: 'forged' }] });
+    // A real change (amount) takes the update path; forged audit values are ignored.
+    const result = ctx.createSubscriptionsBulk({ subscriptions: [{ ...body, subscription_amount_local: '13.50', record_status: '', created_at: 'forged', updated_at: 'forged', sync_status: 'in-sync', sync_notes: 'forged' }] });
     assert.equal(result.updated, 1);
     assert.equal(result.results[0].index, 0);
     assert.equal(sheet.rows.length, 2);
@@ -289,7 +290,8 @@ test('new and reassigned active subscriptions require an active account while ex
   assert.equal(ctx.createSubscriptionsBulk({ subscriptions: [body] }).results[0].error, 'source_account_not_active');
   assert.equal(sheet.writes, 0);
   sheet.rows.push(row({}));
-  assert.equal(ctx.createSubscriptionsBulk({ subscriptions: [body] }).updated, 1);
+  // The existing reference is accepted (here unchanged, so nothing is rewritten).
+  assert.equal(ctx.createSubscriptionsBulk({ subscriptions: [body] }).results[0].ok, true);
   assert.equal(ctx.updateSubscription({ row_num: 2, subscription_name: 'Edited' }).ok, true);
   const second = accounts.rows[1].slice();
   second[ctx.acctColIndex('id')] = OTHER_ID;

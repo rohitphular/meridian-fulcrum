@@ -11,6 +11,7 @@ from py_logging import get_logger
 
 import sheets.subscriptions as sheets_subscriptions
 import transforms.subscriptions as subscriptions_transform
+from database.progress import Progress
 from database.transactions import (
     load_account_map,  # noqa: F401 — same account identity contract
     load_decimal_places,
@@ -151,14 +152,16 @@ def upsert_subscriptions(
         raise ValueError("subscriptions: duplicate_source_id")
     write_backs = []
     succeeded = failed = 0
-    logger.info(f"upsert_subscriptions: start total={len(rows)}")
+    progress = Progress(logger, "upsert_subscriptions", len(rows))
     try:
         for index, row in enumerate(rows):
             if not any(value is not None and str(value).strip() for key, value in row.items() if not key.startswith("_")):
+                progress.skip()
                 continue
             number = int(row.get("_sheet_row_num", index + 2))
             sync_status = str(row.get("sync_status") or "").strip()
             if sync_status == "in-sync":
+                progress.skip()
                 continue
             checking_source = False
             try:
@@ -180,6 +183,7 @@ def upsert_subscriptions(
                 if checking_source:
                     raise
                 failed += 1
+                progress.record(failed=1)
                 sync_date = datetime.now(timezone.utc).isoformat()
                 failed_status = "update-failed" if sync_status.startswith("update-") else "create-failed"
                 write_backs.append(sheets_subscriptions.write_back_failure(number, failed_status, sync_date, _to_sync_notes(error)))
@@ -191,7 +195,8 @@ def upsert_subscriptions(
             sync_date = datetime.now(timezone.utc).isoformat()
             write_backs.append(sheets_subscriptions.write_back_success(number, created_at.isoformat(), "in-sync", sync_date, "", sync_date))
             succeeded += 1
+            progress.record(succeeded=1)
     finally:
-        logger.info(f"upsert_subscriptions: done succeeded={succeeded} failed={failed}")
+        progress.done()
         sheets_subscriptions.flush(sheets_client, _SHEET_NAME, write_backs)
     return failed

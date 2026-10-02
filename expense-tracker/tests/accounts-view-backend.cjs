@@ -9,7 +9,7 @@ const { ID, ACCOUNT_TYPES, seedViewFixture } = require('./support/view-fixture.c
 const plain = value => JSON.parse(JSON.stringify(value));
 
 function appRuntime(overrides) {
-  const runtime = gasRuntime({ properties: { PIN_SECRET: '1234' } });
+  const runtime = gasRuntime({ properties: { MERIDIAN_FULCRUM_PIN: '1234' } });
   runtime.tabs = seedViewFixture(runtime, overrides);
   runtime.get = params => JSON.parse(runtime.ctx.doGet({ parameter: { pin: '1234', ...params } }).getContent());
   return runtime;
@@ -322,7 +322,9 @@ test('export_accounts returns every account (all statuses, filters ignored) in t
   // the import's currency rule, exactly as the file the old client wrote was.
   assert.equal(result.created, 0);
   assert.deepEqual(plain(result.results).filter(entry => entry.ok !== true).map(entry => [entry.key, entry.error]), [[ID(14), 'unknown_currency']]);
-  assert.equal(result.updated, 4);
+  // Re-importing the unchanged export rewrites nothing.
+  assert.equal(result.updated, 0);
+  assert.equal(result.skipped, 4);
   const after = plain(runtime.ctx.listAccounts());
   const stored = rows => rows.map(row => Object.fromEntries(data.columns.map(c => [c, row[c]])));
   assert.deepEqual(stored(after), stored(before));

@@ -16,8 +16,13 @@ with open(os.environ['LAUNCHER_CALLS_FILE'], 'a') as calls:
 _RUN = ["run", "--locked", "python", "-m", "core.runner"]
 
 
-def _write_pipeline(repository: Path, settings: dict) -> Path:
-    path = repository / "data-synchronization" / "consolidated-pipeline" / "pipeline.json"
+def _config_path(repository: Path, env: str = "prod") -> Path:
+    return repository / "data-synchronization" / "consolidated-pipeline" / "config" / f"pipeline.{env}.json"
+
+
+def _write_pipeline(repository: Path, settings: dict, env: str = "prod") -> Path:
+    path = _config_path(repository, env)
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(settings))
     return path
 
@@ -140,7 +145,7 @@ def test_launcher_requires_a_log_root_before_running_commands(launcher: tuple[Pa
 
 def test_default_reads_env_and_mode_from_the_pipeline_config(launcher: tuple[Path, Path, dict[str, str]]) -> None:
     script, calls_file, environment = launcher
-    completed = _run(script, environment)
+    completed = _run(script, environment, "--config", str(_config_path(script.parents[3])))
     assert completed.returncode == 0, completed.stderr
     calls = _calls(calls_file)
     assert calls[-1]["argv"] == [*_RUN, "--env", "prod", "--mode", "sheet-sync", "--confirm", ""]
@@ -149,7 +154,7 @@ def test_default_reads_env_and_mode_from_the_pipeline_config(launcher: tuple[Pat
 
 def test_unattended_rebuild_passes_the_config_confirmation_and_sign_in_flag(launcher: tuple[Path, Path, dict[str, str]], tmp_path: Path) -> None:
     script, calls_file, environment = launcher
-    config = tmp_path / "other.json"
+    config = tmp_path / "pipeline.dev.json"
     config.write_text(json.dumps({"env": "dev", "stages": [{"module": "currency-database-load", "mode": "daily"}, {"module": "ledger-sheet-load", "mode": "sheet-rebuild", "confirm": "dev"}]}))
     completed = _run(script, environment, "--config", str(config), "--stage", "2", "--skip-sign-in")
     assert completed.returncode == 0, completed.stderr
@@ -158,7 +163,7 @@ def test_unattended_rebuild_passes_the_config_confirmation_and_sign_in_flag(laun
 
 def test_check_sh_validates_and_declares_credentials_without_running_anything(launcher: tuple[Path, Path, dict[str, str]]) -> None:
     script, calls_file, environment = launcher
-    completed = _run(script.parent / "check.sh", environment)
+    completed = _run(script.parent / "check.sh", environment, "--config", str(_config_path(script.parents[3])))
     assert completed.returncode == 0, completed.stderr
     assert "Check passed: ledger-sheet-load sheet-sync" in completed.stdout
     assert "credentials=gas-pin-totp" in completed.stdout.splitlines()
@@ -170,17 +175,20 @@ def test_check_sh_validates_and_declares_credentials_without_running_anything(la
     "arguments,settings,message",
     [
         (["dev", "sheet-sync"], None, "pass --interactive"),
-        (["--stage", "1"], {"env": "dev", "stages": [{"module": "ledger-sheet-extract", "mode": "normal-sync"}]}, "stage_module_mismatch"),
-        ([], {"env": "dev", "stages": [{"module": "ledger-sheet-extract", "mode": "normal-sync"}]}, "module_not_in_pipeline"),
+        ([], None, "unattended runs need --config"),
+        (["--stage", "1"], {"env": "prod", "stages": [{"module": "ledger-sheet-extract", "mode": "normal-sync"}]}, "stage_module_mismatch"),
+        ([], {"env": "prod", "stages": [{"module": "ledger-sheet-extract", "mode": "normal-sync"}]}, "module_not_in_pipeline"),
         ([], {"env": "Dev!", "stages": [{"module": "ledger-sheet-load", "mode": "sheet-sync"}]}, "invalid_env"),
-        ([], {"env": "dev", "stages": [{"module": "ledger-sheet-load", "mode": "rebuild"}]}, "mode must be"),
-        (["--config", "/nonexistent/pipeline.json"], None, "config_not_found"),
+        ([], {"env": "dev", "stages": [{"module": "ledger-sheet-load", "mode": "sheet-sync"}]}, "env_does_not_match_file_name"),
+        ([], {"env": "prod", "stages": [{"module": "ledger-sheet-load", "mode": "rebuild"}]}, "mode must be"),
+        (["--config", "/nonexistent/pipeline.dev.json"], None, "config_not_found"),
+        (["--config", "/tmp/settings.json"], None, "config_file_name_must_be_pipeline.<env>.json"),
     ],
 )
 def test_unattended_rejects_bad_config_before_running_commands(launcher: tuple[Path, Path, dict[str, str]], arguments: list[str], settings: dict | None, message: str) -> None:
     script, calls_file, environment = launcher
     if settings is not None:
-        _write_pipeline(script.parents[3], settings)
+        arguments = [*arguments, "--config", str(_write_pipeline(script.parents[3], settings))]
     completed = _run(script, environment, *arguments)
     assert completed.returncode != 0
     assert message in completed.stdout + completed.stderr
@@ -191,6 +199,9 @@ def test_data_sync_menu_lists_module_and_hands_it_the_mode_choice(launcher: tupl
     script, calls_file, environment = launcher
     repository = script.parents[3]
     shutil.copyfile(MODULE_ROOT.parents[1] / "Makefile", repository / "Makefile")
+    # The root Makefile's shared env picker and the env list it reads.
+    shutil.copyfile(MODULE_ROOT.parents[1] / "infrastructure" / "select-env.sh", repository / "infrastructure" / "select-env.sh")
+    (repository / "infrastructure" / "envs.json").write_text(json.dumps({"dev": {}, "prod": {}}))
     (repository / "data-synchronization" / "consolidated-pipeline" / "cicd" / "start-up.sh").write_text("exit 99\n")
     completed = subprocess.run(["make", "data-sync"], cwd=repository, env=environment, input="1\n1\n2\n", capture_output=True, text=True, timeout=15)
     assert completed.returncode == 0, completed.stderr
@@ -209,8 +220,20 @@ def test_repository_has_no_factory_reset_target_or_bash_scripts() -> None:
 
 def test_start_up_always_runs_the_check_first_without_declaring_credentials(launcher: tuple[Path, Path, dict[str, str]]) -> None:
     script, calls_file, environment = launcher
-    completed = _run(script, environment)
+    completed = _run(script, environment, "--config", str(_config_path(script.parents[3])))
     assert completed.returncode == 0, completed.stderr
     lines = completed.stdout.splitlines()
     assert lines.index("[prod] Check passed: ledger-sheet-load sheet-sync") < lines.index("[prod] Loading env vars...")
     assert "credentials=gas-pin-totp" not in lines
+
+
+def test_data_sync_env_variable_skips_the_env_question(launcher: tuple[Path, Path, dict[str, str]]) -> None:
+    script, calls_file, environment = launcher
+    repository = script.parents[3]
+    shutil.copyfile(MODULE_ROOT.parents[1] / "Makefile", repository / "Makefile")
+    shutil.copyfile(MODULE_ROOT.parents[1] / "infrastructure" / "select-env.sh", repository / "infrastructure" / "select-env.sh")
+    (repository / "infrastructure" / "envs.json").write_text(json.dumps({"dev": {}, "prod": {}}))
+    completed = subprocess.run(["make", "data-sync", "ENV=prod"], cwd=repository, env=environment, input="1\n2\n", capture_output=True, text=True, timeout=15)
+    assert completed.returncode == 0, completed.stderr
+    assert "Select environment" not in completed.stdout + completed.stderr
+    assert _calls(calls_file)[-1]["argv"][-5:] == ["--env", "prod", "--mode", "sheet-sync", "--interactive"]

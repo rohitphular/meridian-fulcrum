@@ -75,9 +75,11 @@ Do this once for `dev`, then again for `prod`.
    }
    ```
 3. **Script Properties** — add three:
-   - `PIN_SECRET` — numeric PIN (different per env)
-   - `TOTP_SECRET` — Base32 secret. Generate: `python3 -c "import base64, os; print(base64.b32encode(os.urandom(20)).decode())"`. Add to an authenticator app.
+   - `MERIDIAN_FULCRUM_PIN` — numeric PIN (different per env)
+   - `MERIDIAN_FULCRUM_SECRET` — Base32 TOTP secret. Generate: `python3 -c "import base64, os; print(base64.b32encode(os.urandom(20)).decode())"`. Add to an authenticator app.
    - `TOTP_ENABLED` — `false` for dev (faster iteration), `true` for prod.
+
+   `infrastructure/.env.<env>` holds the same two names and values for the data-synchronization jobs (see [Credentials](#credentials-meridian_fulcrum_pin-and-meridian_fulcrum_secret)). Apps Script can only read Script Properties, so the values live in both places; keep them identical.
 4. **Record the Script ID** in `cicd/envs.json` under the matching env. Leave `deployment_id` and `script_url` as `TODO`.
 5. **Bootstrap push** — `deploy.sh` refuses while `envs.json` has TODOs, so for the first push hand-edit `api/.clasp.json` to set `scriptId` to this env's value, then:
    ```bash
@@ -123,6 +125,19 @@ clasp deploy --deploymentId "<paste from envs.json>" --description "your descrip
 
 Loading `local/files` into an environment's Sheet (sheet-rebuild or sheet-sync) is the [ledger-sheet-load](../../data-synchronization/ledger-sheet-load/README.md) data-synchronization job: `make data-sync` → `ledger-sheet-load`. It only calls the deployed GAS web app, so deploy the current backend first.
 
+## Credentials (`MERIDIAN_FULCRUM_PIN` and `MERIDIAN_FULCRUM_SECRET`)
+
+One pair of names everywhere:
+
+| Where | Holds | Read by |
+|---|---|---|
+| Script Properties of each env's Apps Script project | `MERIDIAN_FULCRUM_PIN`, `MERIDIAN_FULCRUM_SECRET` | `checkPin`, `verifyTotp` |
+| `infrastructure/.env.<env>` (gitignored) | the same names and values | ledger-sheet-load and the consolidated pipeline: when both are set they sign in without asking, generating the current authenticator code from the secret |
+
+Leave them empty in an env file to be asked for the PIN and code instead. Anyone who can read a file holding both can sign in to that environment.
+
+**Renaming from `PIN_SECRET` / `TOTP_SECRET`:** in each Apps Script project, add `MERIDIAN_FULCRUM_PIN` and `MERIDIAN_FULCRUM_SECRET` with the old values **before** deploying this backend, then deploy, then delete the old two. Deployed first, every sign-in fails (`auth`) until the new properties exist.
+
 ## Safety notes
 
 - `clasp push --force` overwrites the GAS draft with local files. If you edited code in the GAS browser editor since the last push, run `clasp pull` first.
@@ -141,4 +156,4 @@ For an existing spreadsheet with plural master tab names, deploy this version an
 
 Deploy the updated `account-type-*.gs` implementation and frontend; there is no catalog seed file. Then use Configure → Account Types → Import with the complete `local/files/account_types.csv`. The 13-column file preserves the existing 16 UUIDs and adds `detail_sheet` before metadata. If the live `account_types` tab still has the retired `is_loan` column, delete it first. Classification keys use hyphens. An absent/empty catalog stays empty until this explicit import; an established catalog cannot accept additional identities.
 
-For an existing 12-column Sheet, the same full CSV import validates identities, key equivalence, policy values and dependent account/category references before writing. It upgrades the catalog and dependent keys/hints, marking changed rows pending. The explicit Apps Script alternative is `migrateAccountTypeKeys(catalogRows)` with the parsed full CSV objects. Multi-tab updates are not atomic; retry the same full CSV after an interrupted migration. Apply the current ledger migrations, through `0022`, before extraction. See the [Account Types guide](../_docs/account-types.md) for the full rollout and dependency rules.
+For an existing 12-column Sheet, the same full CSV import validates identities, key equivalence, policy values and dependent account/category references before writing. It upgrades the catalog and dependent keys/hints, marking changed rows pending. The explicit Apps Script alternative is `migrateAccountTypeKeys(catalogRows)` with the parsed full CSV objects. Multi-tab updates are not atomic; retry the same full CSV after an interrupted migration. Apply the current ledger migrations, through `0023`, before extraction. See the [Account Types guide](../_docs/account-types.md) for the full rollout and dependency rules.

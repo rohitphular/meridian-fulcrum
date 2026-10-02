@@ -13,7 +13,7 @@ const NEW_FILES = ['view-cache.gs', 'fx-utils.gs', 'ledger-core.gs', 'view-conte
 const plain = value => JSON.parse(JSON.stringify(value));
 
 function appRuntime() {
-  const runtime = gasRuntime({ properties: { PIN_SECRET: '1234' } });
+  const runtime = gasRuntime({ properties: { MERIDIAN_FULCRUM_PIN: '1234' } });
   runtime.tabs = seedViewFixture(runtime);
   runtime.get = params => JSON.parse(runtime.ctx.doGet({ parameter: { pin: '1234', ...params } }).getContent());
   runtime.post = body => JSON.parse(runtime.ctx.doPost({ postData: { contents: JSON.stringify({ pin: '1234', ...body }) } }).getContent());

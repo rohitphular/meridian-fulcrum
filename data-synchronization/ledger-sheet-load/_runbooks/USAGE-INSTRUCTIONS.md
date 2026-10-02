@@ -18,6 +18,7 @@ The [README](../README.md) is the current behaviour contract: modes, steps and w
 | `MERIDIAN_LOG_ROOT` | Shared log root; the launcher logs under `$MERIDIAN_LOG_ROOT/<module>/` |
 | `LSL_SCRIPT_URL` | Set by the launcher from `cicd/envs.json`; required when invoking Python directly |
 | `LSL_SPREADSHEET_ID` | Set by the launcher from `cicd/envs.json`; required when invoking Python directly |
+| `MERIDIAN_FULCRUM_PIN` / `MERIDIAN_FULCRUM_SECRET` | Optional, in the env file: the PIN and Base32 TOTP secret (same names and values as the GAS Script Properties). Both set: no prompts. Both empty: asked for |
 | `LSL_DATA_DIR` | Optional absolute path to load a different CSV folder (default: `local/files`) |
 
 ## Running
@@ -42,6 +43,8 @@ Typical order after editing the CSVs: `ledger-sheet-load` (sheet-sync) → `ledg
 
 | Failure reason | Meaning / action |
 |---|---|
+| `stored_secret_not_base32` | `MERIDIAN_FULCRUM_SECRET` holds an authenticator code or the PIN; put the Base32 TOTP secret from the Script Properties there |
+| `incomplete_stored_credentials` | Only one of `MERIDIAN_FULCRUM_PIN` / `MERIDIAN_FULCRUM_SECRET` is set; set both, or clear both to be asked |
 | `rebuild_not_confirmed` | Unattended sheet-rebuild without `"confirm": "<env>"` in its pipeline stage; nothing changed |
 | `pin_required` / `invalid_authenticator_code` | Unattended run with no PIN, or a code that is not 6 digits, on stdin |
 | `missing_file:<file>` / `missing_transaction_files` | A file listed in `config.yaml` is missing, or there is no `transaction_master_*.csv` in the data folder |

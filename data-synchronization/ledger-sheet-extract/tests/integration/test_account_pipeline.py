@@ -1,7 +1,6 @@
 """Run account/detail orchestration and snapshot acknowledgements against PostgreSQL."""
 
 from copy import deepcopy
-from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
@@ -88,9 +87,6 @@ def account_pipeline(database_client: Any, monkeypatch: pytest.MonkeyPatch, requ
             self._read_requests = SimpleNamespace(call=lambda call: call())
             self._write_requests = SimpleNamespace(call=lambda call: call())
 
-        def get_modified_time(self) -> datetime:
-            return datetime(2026, 9, 18, 13, tzinfo=timezone.utc)
-
     writes = []
 
     def apply_acknowledgements(*, body: dict) -> None:
@@ -176,9 +172,6 @@ def test_failed_sheet_acknowledgement_replays_all_account_families_safely(databa
             cursor.execute(f"SELECT id, created_at FROM {spec.target_table} WHERE source_sheet=%s", (name,))
             before[name] = cursor.fetchone()
             assert before[name][0] == source[name][0]["id"]
-        cursor.execute("SELECT last_sheet_modified_at FROM job_execution_details WHERE job_name='ledger-extract'")
-        checkpoint = cursor.fetchone()
-        assert checkpoint is None or checkpoint[0] is None
     spreadsheet.values_batch_update.side_effect = apply_acknowledgements
     job.run(config)
     assert set(writes) == {"account_master", *SYNC_DETAIL_SHEETS}

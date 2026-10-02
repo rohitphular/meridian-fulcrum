@@ -41,7 +41,7 @@ def repository(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict:
     behaviour = tmp_path / "behaviour.json"
     behaviour.write_text(json.dumps({"ledger-sheet-load": {"credentials": "gas-pin-totp"}}))
     calls = tmp_path / "calls.jsonl"
-    config = tmp_path / "pipeline.json"
+    config = tmp_path / "pipeline.dev.json"
     config.write_text(
         json.dumps(
             {
@@ -175,3 +175,21 @@ def test_a_module_without_check_sh_is_rejected(repository: dict) -> None:
     assert _main() == 1
     assert _calls(repository) == []
     repository["logger"].error.assert_called_once_with("pipeline: failed reason=unknown_module:stage=2:currency-database-load")
+
+
+def test_stored_credentials_mean_no_prompt_and_nothing_on_stdin(repository: dict, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MERIDIAN_FULCRUM_PIN", _PIN)
+    monkeypatch.setenv("MERIDIAN_FULCRUM_SECRET", "GEZDGNBVGY3TQOJQ")
+    monkeypatch.setattr(runner.getpass, "getpass", MagicMock(side_effect=AssertionError("no prompt expected")))
+    assert _main() is None
+    calls = _calls(repository)
+    assert [call["args"][-1] for call in calls if call["script"] == "start-up" and call["module"] == "ledger-sheet-load"] == ["--sign-in-only", "--skip-sign-in"]
+    assert all(call["stdin"] == "" for call in calls)
+
+
+@pytest.mark.parametrize("variable", ["MERIDIAN_FULCRUM_PIN", "MERIDIAN_FULCRUM_SECRET"])
+def test_one_stored_variable_without_the_other_is_an_error(repository: dict, monkeypatch: pytest.MonkeyPatch, variable: str) -> None:
+    monkeypatch.setenv(variable, "set")
+    assert _main() == 1
+    assert all(call["script"] == "check" for call in _calls(repository))
+    repository["logger"].error.assert_called_once_with("pipeline: failed reason=incomplete_stored_credentials")

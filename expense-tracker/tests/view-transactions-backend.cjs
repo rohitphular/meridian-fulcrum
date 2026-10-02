@@ -19,7 +19,7 @@ const EXTRA_CATEGORIES = [
 ];
 
 function runtime({ transactions = TRANSACTIONS, accounts = ACCOUNTS, categories = CATEGORIES.concat(EXTRA_CATEGORIES), subscriptions = [] } = {}) {
-  const rt = gasRuntime({ properties: { PIN_SECRET: '1234' } });
+  const rt = gasRuntime({ properties: { MERIDIAN_FULCRUM_PIN: '1234' } });
   rt.tabs = seedViewFixture(rt, { transactions, accounts, categories });
   const columns = rt.ctx.getSubscriptionSheetColumns();
   subscriptions.forEach(record => rt.tabs.subscriptions.rows.push(columns.map(column => (record[column] === undefined ? '' : record[column]))));

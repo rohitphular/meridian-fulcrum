@@ -34,7 +34,7 @@ function generateTotp(keyBytes, counter) {
 
 function verifyTotp(token) {
   if (PropertiesService.getScriptProperties().getProperty("TOTP_ENABLED") !== "true") return true;
-  const secret = PropertiesService.getScriptProperties().getProperty('TOTP_SECRET');
+  const secret = PropertiesService.getScriptProperties().getProperty('MERIDIAN_FULCRUM_SECRET');
   if (!secret || !token || String(token).length !== 6) return false;
   const key = base32Decode(secret);
   const T   = Math.floor(Date.now() / 1000 / 30);

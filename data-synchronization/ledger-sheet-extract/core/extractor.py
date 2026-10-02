@@ -14,7 +14,6 @@ import database.categories as categories_db
 import database.subscriptions as subscriptions_db
 import database.transactions as transactions_db
 from core.account_detail_contracts import CONTRACTS, SYNC_DETAIL_SHEETS
-from database.job_execution_details import bootstrap_job_execution_details, upsert_job_execution_details
 from sheets.client import SnapshotSheetsClient
 
 logger = get_logger(__name__)
@@ -76,8 +75,6 @@ class LedgerExtractJob:
                     raise RuntimeError("ledger_sheet_extract_already_running")
             sheets_client = SnapshotSheetsClient(self._service_account_file, self._spreadsheet_id)
             sheets_client.capture(enabled)
-            source_modified_at = sheets_client.get_modified_time()
-            bootstrap_job_execution_details(conn)
             failures = 0
             account_map = None
             try:
@@ -110,9 +107,6 @@ class LedgerExtractJob:
                     transactions_db.retire_unused_references(conn)
             finally:
                 sheets_client.flush_pending()
-            # Drive modification time is informational, never a skip gate: rates,
-            # DB restores and config changes can require retry without a Sheet edit.
-            upsert_job_execution_details(conn, source_modified_at)
             logger.info(f"run: complete=true entities={len(enabled)}")
         except Exception:
             conn.rollback()

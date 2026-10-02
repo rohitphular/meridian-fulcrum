@@ -14,6 +14,7 @@ from py_logging import get_logger
 
 import sheets.transactions as sheets_transactions
 import transforms.transactions as transactions_transform
+from database.progress import Progress
 from transforms.financial import to_minor_units
 
 logger = get_logger(__name__)
@@ -484,10 +485,11 @@ def upsert_transactions(
     groups = _group_rows(rows, stored_parent_links)
     write_backs = []
     succeeded = failed = 0
-    logger.info(f"upsert_transactions: start total={len(rows)}")
+    progress = Progress(logger, "upsert_transactions", len(rows))
     try:
         for group in groups:
             actionable = [(number, row) for number, row in group if str(row.get("sync_status") or "").strip() != "in-sync"]
+            progress.skip(len(group) - len(actionable))
             if not actionable:
                 continue
             checking_source = False
@@ -517,6 +519,7 @@ def upsert_transactions(
                 if checking_source:
                     raise
                 failed += len(actionable)
+                progress.record(failed=len(actionable))
                 sync_date = datetime.now(timezone.utc).isoformat()
                 for number, row in actionable:
                     status = "update-failed" if str(row.get("sync_status") or "").startswith("update-") else "create-failed"
@@ -530,7 +533,8 @@ def upsert_transactions(
             for number, (_identity, created_at) in stored:
                 write_backs.append(sheets_transactions.write_back_success(number, "in-sync", sync_date, "", created_at.isoformat(), sync_date))
             succeeded += len(stored)
+            progress.record(succeeded=len(stored))
     finally:
-        logger.info(f"upsert_transactions: done succeeded={succeeded} failed={failed}")
+        progress.done()
         sheets_transactions.flush(sheets_client, _SHEET_NAME, write_backs)
     return failed

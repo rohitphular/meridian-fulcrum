@@ -505,7 +505,7 @@ to find the highest NNN for that date and increments.
 2. **Create the Google Sheet:** create a new Sheet; all tabs are created
    automatically by the script on first request.
 3. **Set up Apps Script:** paste `Code.gs`; save; open Project Settings; add
-   Script Properties `PIN_SECRET` and `TOTP_SECRET`.
+   Script Properties `MERIDIAN_FULCRUM_PIN` and `MERIDIAN_FULCRUM_SECRET`.
 4. **Deploy as Web App:** Deploy → New deployment → Web app → Execute as Me →
    Anyone → Deploy → copy the `/exec` URL.
 5. **Configure the app:** copy `config.example.js` → `config.js`; paste the URL.

@@ -341,6 +341,12 @@ function createCategoriesBulk(body) {
         if (count > 0) { fail({ ok: false, error: 'category_key_change_has_dependents', field: 'category_key', count: count }); return; }
       } catch (_) { fail({ ok: false, error: 'fk_scan_error', field: 'category_key' }); return; }
     }
+    // Same values as stored: leave the row (and its sync status) untouched.
+    if (previous !== null && importRowUnchanged(cols, previous, row)) {
+      results[index] = _categoryImportResult(cat, index, { ok: true, key: id, action: 'unchanged' });
+      keyOwner.set(key, id);
+      skipped++; return;
+    }
     const now = new Date().toISOString();
     setCol('created_at', previous === null ? now : previous[catColIndex('created_at')]);
     setCol('updated_at', now);

@@ -208,6 +208,7 @@ function createAccountsBulk(body) {
   const results = [];
   let created = 0;
   let updated = 0;
+  let skipped = 0;
   let failed  = 0;
 
   prepared.forEach(function(entry) {
@@ -288,6 +289,12 @@ function createAccountsBulk(body) {
         row[acctColIndex('record_status')] = previousStatus;
       }
       row[createdAtIdx]  = existingRow[createdAtIdx];
+      // Same values as stored: leave the row (and its sync status) untouched.
+      if (importRowUnchanged(cols, existingRow, row)) {
+        results.push({ key: id, ok: true, action: 'unchanged' });
+        skipped += 1;
+        return;
+      }
       row[syncStatusIdx] = computeSyncStatus(String(existingRow[syncStatusIdx]));
       sheet.getRange(existingRowNum, 1, 1, numCols).setValues([row]);
       existingData[existingRowNum - 1] = row;
@@ -306,12 +313,13 @@ function createAccountsBulk(body) {
   });
 
   console.log('createAccountsBulk: input=' + body.accounts.length
-    + ' created=' + created + ' updated=' + updated + ' failed=' + failed);
+    + ' created=' + created + ' updated=' + updated + ' unchanged=' + skipped + ' failed=' + failed);
 
   return {
     ok:      failed === 0,
     created: created,
     updated: updated,
+    skipped: skipped,
     failed:  failed,
     results: results,
   };

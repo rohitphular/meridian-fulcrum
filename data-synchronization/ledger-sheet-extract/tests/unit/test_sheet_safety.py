@@ -1,6 +1,5 @@
 import re
 from copy import deepcopy
-from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -85,7 +84,6 @@ def test_retired_is_loan_column_requires_sheet_cleanup() -> None:
 
 def test_separate_loan_tables_allow_same_uuid_in_different_tabs(monkeypatch: pytest.MonkeyPatch) -> None:
     client = _client()
-    monkeypatch.setattr(client, "get_modified_time", lambda: "unchanged")
     monkeypatch.setattr(client, "_ensure_sheets_exist", lambda _: None)
     monkeypatch.setattr(client, "_read_snapshots", lambda names: {name: (list(HEADERS[name]), [{"id": IDENTITY, "sync_status": "create-pending", "_sheet_row_num": 2}]) for name in names})
     client.capture(["account_liability_mortgage", "account_liability_personal_loan"])
@@ -175,7 +173,6 @@ def test_empty_valid_sheet_allowed_but_bad_headers_rejected() -> None:
 def test_missing_enabled_detail_tab_reports_configuration_recovery(monkeypatch: pytest.MonkeyPatch) -> None:
     client = _client()
     client._ss = MagicMock()
-    monkeypatch.setattr(client, "get_modified_time", lambda: "unchanged")
     client._ss.fetch_sheet_metadata.return_value = {"sheets": [{"properties": {"title": "account_master"}}]}
     logger = MagicMock()
     monkeypatch.setattr("sheets.client.logger", logger)
@@ -184,15 +181,6 @@ def test_missing_enabled_detail_tab_reports_configuration_recovery(monkeypatch: 
         client.capture([name])
     logger.error.assert_called_once_with(f"_ensure_sheets_exist: missing_enabled_sheet={name} action=create_or_import_tab_or_set_entities.{name}.enabled_false_in_config.yaml")
     assert client._pending == {}
-
-
-def test_source_change_during_capture_aborts(monkeypatch: pytest.MonkeyPatch) -> None:
-    client = _client()
-    monkeypatch.setattr(client, "get_modified_time", MagicMock(side_effect=[datetime(2026, 1, 1, tzinfo=timezone.utc), datetime(2026, 1, 2, tzinfo=timezone.utc)]))
-    monkeypatch.setattr(client, "_ensure_sheets_exist", lambda _: None)
-    monkeypatch.setattr(client, "_read_snapshots", lambda _: {"account_master": (list(HEADERS["account_master"]), [_row("account_master")])})
-    with pytest.raises(RuntimeError, match="sheet_changed_during_snapshot"):
-        client.capture(["account_master"])
 
 
 def test_sparse_page_does_not_hide_later_rows() -> None:
@@ -299,7 +287,6 @@ def test_detail_acknowledgement_rejects_source_audit_and_status_mutation(field: 
 def test_capture_and_guards_read_all_enabled_tabs_in_one_request(monkeypatch: pytest.MonkeyPatch) -> None:
     client = _client()
     names = ["category_master", "account_master", *sorted(SYNC_DETAIL_SHEETS)]
-    monkeypatch.setattr(client, "get_modified_time", lambda: "unchanged")
     client._ss.fetch_sheet_metadata.return_value = {"sheets": [{"properties": {"title": name}} for name in names]}
     client._ss.values_batch_get.return_value = {"valueRanges": [{"values": [list(HEADERS[name])]} for name in names]}
     client.capture(names)
@@ -321,7 +308,6 @@ def test_batched_guard_detects_fresh_source_changes(change: str, monkeypatch: py
     headers = list(HEADERS[name])
     row = _row(name, opening_value_local=0)
     values = [headers, [row[field] for field in headers]]
-    monkeypatch.setattr(client, "get_modified_time", lambda: "unchanged")
     client._ss.fetch_sheet_metadata.return_value = {"sheets": [{"properties": {"title": name}}]}
     client._ss.values_batch_get.return_value = {"valueRanges": [{"values": deepcopy(values)}]}
     client.capture([name])
@@ -368,7 +354,6 @@ def test_removed_tab_during_guard_reports_missing_source(monkeypatch: pytest.Mon
 @pytest.mark.parametrize("canonical,legacy", [("account_master", "accounts"), ("category_master", "categories"), ("subscription_master", "subscriptions"), ("transaction_master", "transactions")])
 def test_missing_canonical_master_requires_explicit_rename_without_legacy_fallback(canonical: str, legacy: str, monkeypatch: pytest.MonkeyPatch) -> None:
     client = _client()
-    monkeypatch.setattr(client, "get_modified_time", lambda: "unchanged")
     client._ss.fetch_sheet_metadata.return_value = {"sheets": [{"properties": {"title": legacy}}]}
     logger = MagicMock()
     monkeypatch.setattr("sheets.client.logger", logger)
@@ -383,7 +368,6 @@ def test_missing_canonical_master_requires_explicit_rename_without_legacy_fallba
 @pytest.mark.parametrize("canonical,legacy", [("account_master", "accounts"), ("category_master", "categories"), ("subscription_master", "subscriptions"), ("transaction_master", "transactions")])
 def test_enabled_master_name_collision_aborts_before_values_reads(canonical: str, legacy: str, monkeypatch: pytest.MonkeyPatch) -> None:
     client = _client()
-    monkeypatch.setattr(client, "get_modified_time", lambda: "unchanged")
     client._ss.fetch_sheet_metadata.return_value = {"sheets": [{"properties": {"title": title}} for title in (canonical, legacy)]}
     logger = MagicMock()
     monkeypatch.setattr("sheets.client.logger", logger)
@@ -399,7 +383,6 @@ def test_enabled_master_name_collision_aborts_before_values_reads(canonical: str
 @pytest.mark.parametrize("canonical,legacy", [("account_master", "accounts"), ("category_master", "categories"), ("subscription_master", "subscriptions"), ("transaction_master", "transactions")])
 def test_disabled_master_name_collision_does_not_block_other_enabled_tabs(canonical: str, legacy: str, monkeypatch: pytest.MonkeyPatch) -> None:
     client = _client()
-    monkeypatch.setattr(client, "get_modified_time", lambda: "unchanged")
     client._ss.fetch_sheet_metadata.return_value = {"sheets": [{"properties": {"title": title}} for title in (canonical, legacy, "account_deposit")]}
     client._ss.values_batch_get.return_value = {"valueRanges": [{"values": [list(HEADERS["account_deposit"])]}]}
     client.capture(["account_deposit"])
@@ -412,3 +395,12 @@ def test_account_type_headers_match_dynamic_gas_schema_registry() -> None:
     schema = Path(__file__).resolve().parents[4] / "expense-tracker" / "api" / "account-type-schema.gs"
     fields = re.findall(r"^\s+\['([^']+)',", schema.read_text(), re.MULTILINE)
     assert tuple(fields) == HEADERS["account_types"]
+
+
+def test_capture_never_reads_the_drive_modified_time(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = _client()
+    monkeypatch.setattr(client, "get_modified_time", MagicMock(side_effect=AssertionError("capture must not check the modified time")))
+    monkeypatch.setattr(client, "_ensure_sheets_exist", lambda _: None)
+    monkeypatch.setattr(client, "_read_snapshots", lambda _: {"account_master": (list(HEADERS["account_master"]), [_row("account_master")])})
+    client.capture(["account_master"])
+    assert client._snapshots["account_master"][0]["id"] == _row("account_master")["id"]

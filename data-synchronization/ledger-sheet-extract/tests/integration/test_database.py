@@ -546,7 +546,6 @@ def test_full_job_recovers_missing_in_sync_rows_and_reruns_idempotently(database
         "transaction_master": [_transaction(sync_status="in-sync", _sheet_row_num=2)],
         "subscription_master": [_subscription(sync_status="in-sync", _sheet_row_num=2)],
     }
-    source_modified_at = datetime(2026, 9, 18, 13, tzinfo=timezone.utc)
 
     class SnapshotFake(RecordingSheets):
         def __init__(self) -> None:
@@ -558,9 +557,6 @@ def test_full_job_recovers_missing_in_sync_rows_and_reruns_idempotently(database
 
         def snapshot_rows(self, entity: str) -> list[dict[str, Any]]:
             return [row.copy() for row in source[entity]]
-
-        def get_modified_time(self) -> datetime:
-            return source_modified_at
 
         def assert_unchanged(self) -> None:
             pass
@@ -578,7 +574,7 @@ def test_full_job_recovers_missing_in_sync_rows_and_reruns_idempotently(database
     identity_before = _one(database_client, "SELECT id, created_at, updated_at FROM transaction_master")
     for table in ("category_master", "account_master", "transaction_master", "subscription_master"):
         assert _one(database_client, f"SELECT COUNT(*) FROM {table}") == (1,)
-    assert _one(database_client, "SELECT last_sheet_modified_at FROM job_execution_details WHERE job_name='ledger-extract'") == (source_modified_at,)
+    assert _one(database_client, "SELECT to_regclass('job_execution_details'), to_regclass('ledger_data_checksums')") == (None, None)
     job.run(config)
     assert _one(database_client, "SELECT id, created_at, updated_at FROM transaction_master") == identity_before
     assert sheets.flush_count == 2

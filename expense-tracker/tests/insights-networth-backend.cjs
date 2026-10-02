@@ -48,7 +48,7 @@ const FIXTURE = {
 };
 
 function appRuntime(overrides = {}) {
-  const runtime = gasRuntime({ properties: { PIN_SECRET: '1234' } });
+  const runtime = gasRuntime({ properties: { MERIDIAN_FULCRUM_PIN: '1234' } });
   runtime.tabs = seedViewFixture(runtime, { ...FIXTURE, ...overrides });
   runtime.get = params => JSON.parse(runtime.ctx.doGet({ parameter: { pin: '1234', today: '2026-09-30', ...params } }).getContent());
   runtime.insight = params => runtime.get({ action: 'get_insight', ...params });

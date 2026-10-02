@@ -144,7 +144,7 @@ function createSubscriptionsBulk(body) {
   }
   const references = _loadSubscriptionReferences();
   const results = [], seenIds = new Set();
-  let created = 0, updated = 0;
+  let created = 0, updated = 0, skipped = 0;
   const now = new Date().toISOString();
   body.subscriptions.forEach(function(subscription, index) {
     function fail(error, field) {
@@ -173,6 +173,12 @@ function createSubscriptionsBulk(body) {
     prepared.source_account = referenceValidation.account_id;
     const storedId = current === null ? identity : String(current[subColIndex('id')]).trim();
     const row = _subscriptionBuildRow(prepared, storedId, current, now);
+    // Same values as stored: leave the row (and its sync status) untouched.
+    if (current !== null && importRowUnchanged(columns, current, row)) {
+      results.push({ index: index, key: storedId, id: storedId, ok: true, action: 'unchanged' });
+      skipped += 1;
+      return;
+    }
     if (current === null) {
       sheet.appendRow(row);
       rowById[identity] = sheet.getLastRow();
@@ -187,8 +193,8 @@ function createSubscriptionsBulk(body) {
     results.push({ index: index, key: storedId, id: storedId, ok: true, action: current === null ? 'created' : 'updated' });
   });
   const failed = results.filter(function(result) { return result.ok === false; }).length;
-  console.log('createSubscriptionsBulk: input=' + body.subscriptions.length + ' created=' + created + ' updated=' + updated + ' failed=' + failed);
-  return { ok: failed === 0, created: created, updated: updated, failed: failed, results: results };
+  console.log('createSubscriptionsBulk: input=' + body.subscriptions.length + ' created=' + created + ' updated=' + updated + ' unchanged=' + skipped + ' failed=' + failed);
+  return { ok: failed === 0, created: created, updated: updated, skipped: skipped, failed: failed, results: results };
 }
 
 function updateSubscription(body) {

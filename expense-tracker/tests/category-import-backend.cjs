@@ -45,8 +45,9 @@ test('legacy CSV hints resolve only to configured canonical keys and preserve ev
   const created = stored(ctx, table());
   assert.equal(created.target_account_types, 'fund-position, investment');
   assert.equal(created.id, ID);
+  // An identical retry matches the stored row and rewrites nothing.
   const retry = ctx.createCategoriesBulk({ categories: [input] });
-  assert.equal(retry.updated, 1); assert.equal(table().getLastRow(), 2);
+  assert.equal(retry.updated, 0); assert.equal(retry.skipped, 1); assert.equal(table().getLastRow(), 2);
   assert.equal(stored(ctx, table()).created_at, created.created_at);
 });
 
@@ -137,7 +138,8 @@ test('failed writes retain per-row diagnostics and a retry matches successfully 
   table().appendRow = () => { throw new Error('transient'); };
   const rows = [category(), category({ id: OTHER_ID, minor_category_label: 'Other return' })];
   const result = ctx.createCategoriesBulk({ categories: rows });
-  assert.equal(result.updated, 1); assert.equal(result.failed, 1); assert.equal(result.results[1].error, 'category_write_failed');
+  // The first row matches what is stored (unchanged); the new one fails to append.
+  assert.equal(result.skipped, 1); assert.equal(result.failed, 1); assert.equal(result.results[1].error, 'category_write_failed');
   table().appendRow = original;
   assert.equal(ctx.createCategoriesBulk({ categories: rows }).created, 1); assert.equal(table().getLastRow(), 3);
 });

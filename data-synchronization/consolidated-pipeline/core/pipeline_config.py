@@ -13,6 +13,9 @@ from pathlib import Path
 from typing import Any
 
 _NAME = re.compile(r"[a-z][a-z0-9-]*")
+# One config per environment: config/pipeline.<env>.json (pipeline.example.json is the template).
+_FILE_NAME = re.compile(r"pipeline\.([a-z][a-z0-9-]*)\.json")
+TEMPLATE_NAME = "pipeline.example.json"
 _TOP_KEYS = {"_comment", "env", "stages"}
 _STAGE_KEYS = {"_comment", "module", "mode", "confirm"}
 
@@ -61,14 +64,36 @@ def parse(settings: Any) -> PipelineConfig:
     return PipelineConfig(env, stages)
 
 
+def env_from_file_name(path: Path) -> str:
+    match = _FILE_NAME.fullmatch(path.name)
+    if not match or path.name == TEMPLATE_NAME:
+        raise PipelineConfigError("config_file_name_must_be_pipeline.<env>.json")
+    return match.group(1)
+
+
+def available_envs(config_dir: Path) -> list[str]:
+    """Environments with a config file in the folder, sorted; the template is not one."""
+    envs = []
+    for path in sorted(config_dir.glob("pipeline.*.json")):
+        match = _FILE_NAME.fullmatch(path.name)
+        if match and path.name != TEMPLATE_NAME and path.is_file():
+            envs.append(match.group(1))
+    return envs
+
+
 def load(path: Path) -> PipelineConfig:
+    """Loads config/pipeline.<env>.json; its "env" must match the env in the file name."""
+    file_env = env_from_file_name(path)
     if not path.is_file():
         raise PipelineConfigError("config_not_found")
     try:
         settings = json.loads(path.read_text())
     except (json.JSONDecodeError, UnicodeDecodeError):
         raise PipelineConfigError("config_not_valid_json") from None
-    return parse(settings)
+    pipeline = parse(settings)
+    if pipeline.env != file_env:
+        raise PipelineConfigError("env_does_not_match_file_name")
+    return pipeline
 
 
 def stage_for(config: PipelineConfig, module: str, stage_number: str = "") -> Stage:

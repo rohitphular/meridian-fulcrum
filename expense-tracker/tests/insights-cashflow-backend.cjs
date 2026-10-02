@@ -26,7 +26,7 @@ const EXTRA = [...TRANSACTIONS,
 
 // Fresh runtime per call: get_insight responses are cached per params.
 function insight(params, overrides) {
-  const runtime = gasRuntime({ properties: { PIN_SECRET: '1234' } });
+  const runtime = gasRuntime({ properties: { MERIDIAN_FULCRUM_PIN: '1234' } });
   seedViewFixture(runtime, { transactions: EXTRA, ...(overrides || {}) });
   return JSON.parse(runtime.ctx.doGet({ parameter: { pin: '1234', today: '2026-09-30', action: 'get_insight', ...params } }).getContent());
 }

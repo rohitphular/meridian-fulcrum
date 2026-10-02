@@ -41,7 +41,7 @@ const SUBS = [
 ];
 
 function appRuntime() {
-  const runtime = gasRuntime({ properties: { PIN_SECRET: '1234' }, globals: { Date: FixedDate } });
+  const runtime = gasRuntime({ properties: { MERIDIAN_FULCRUM_PIN: '1234' }, globals: { Date: FixedDate } });
   runtime.tabs = seedViewFixture(runtime, { categories: CATS });
   const columns = runtime.ctx.getSubscriptionSheetColumns();
   SUBS.forEach(record => runtime.tabs.subscriptions.rows.push(columns.map(column => (record[column] === undefined ? '' : record[column]))));

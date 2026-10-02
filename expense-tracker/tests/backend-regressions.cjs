@@ -63,9 +63,9 @@ class Sheet {
 }
 function transactions() {
   let id = 0;
-  const ctx = runtime(['app-utils.gs', 'transaction-schema.gs', 'transaction-utils.gs', 'transaction-validation.gs', 'transaction-core.gs'], {
-    TRANSACTIONS_SHEET: 'transaction_master', SYNC_STATUS_CREATE_PENDING: 'create-pending',
-    Utilities: { getUuid: () => 'e0000000-0000-4000-8000-' + String(++id).padStart(12, '0') }, computeSyncStatus: status => status === 'create-pending' ? status : 'update-pending',
+  const ctx = runtime(['sync-utils.gs', 'app-utils.gs', 'transaction-schema.gs', 'transaction-utils.gs', 'transaction-validation.gs', 'transaction-core.gs'], {
+    TRANSACTIONS_SHEET: 'transaction_master',
+    Utilities: { getUuid: () => 'e0000000-0000-4000-8000-' + String(++id).padStart(12, '0') },
   });
   const sheet = new Sheet([ctx.getTransactionSheetColumns()]);
   ctx.getOrCreateSheet = () => sheet;
@@ -546,6 +546,15 @@ test('six detail imports own audit values and preserve omitted record status on 
     sheet.rows[1][spec.columns.indexOf('sync_date')] = 'old-sync-date';
     sheet.rows[1][spec.columns.indexOf('sync_notes')] = 'old-sync-notes';
     sheet.rows[1][spec.columns.indexOf('updated_at')] = 'old-update';
+    // An identical re-import changes nothing: the row stays in-sync with its old metadata.
+    const same = ctx.importAccountData({ file_type: fileType, rows: [{ ...row, record_status: '' }] });
+    assert.equal(same.ok, true); assert.equal(same.skipped, 1); assert.equal(same.updated, 0);
+    assert.equal(cell('sync_status'), 'in-sync');
+    assert.equal(cell('sync_notes'), 'old-sync-notes');
+    assert.equal(cell('updated_at'), 'old-update');
+    // A real change takes the update path.
+    const [field] = Object.keys(fields);
+    sheet.rows[1][spec.columns.indexOf(field)] = 'stale-value';
     assert.equal(ctx.importAccountData({ file_type: fileType, rows: [{ ...row, record_status: '' }] }).ok, true);
     assert.equal(cell('id'), DETAIL_ID);
     assert.equal(cell('record_status'), 'inactive');
@@ -566,6 +575,7 @@ test('detail retry states and explicit lifecycle transitions remain syncable', (
   ctx.importAccountData({ file_type: fileType, rows: [row] });
   for (const [oldStatus, nextStatus] of [['create-pending', 'create-pending'], ['create-failed', 'create-pending'], ['update-failed', 'update-pending']]) {
     sheet.rows[1][spec.columns.indexOf('sync_status')] = oldStatus;
+    sheet.rows[1][spec.columns.indexOf('record_status')] = 'active';
     assert.equal(ctx.importAccountData({ file_type: fileType, rows: [{ ...row, record_status: 'deleted' }] }).ok, true);
     assert.equal(sheet.rows[1][spec.columns.indexOf('sync_status')], nextStatus);
     assert.equal(sheet.rows[1][spec.columns.indexOf('record_status')], 'deleted');
@@ -824,7 +834,9 @@ test('bulk master retries canonicalize identity and preserve latest lifecycle an
   assert.equal(first.created, 1);
   const createdAt = sheet.rows[1][ctx.acctColIndex('created_at')];
   const repeat = ctx.createAccountsBulk({ accounts: [account, { ...account, record_status: 'inactive' }, account] });
-  assert.equal(repeat.updated, 3);
+  // Rows identical to the stored row (omitted lifecycle keeps it) are left as they are.
+  assert.equal(repeat.updated, 1);
+  assert.equal(repeat.skipped, 2);
   assert.equal(sheet.rows.length, 2);
   assert.equal(sheet.rows[1][ctx.acctColIndex('id')], account.id);
   assert.equal(sheet.rows[1][ctx.acctColIndex('record_status')], 'inactive');
@@ -845,7 +857,9 @@ test('bulk master matches legacy uppercase UUID without breaking existing source
   const { ctx, sheet, account } = accountImporter();
   ctx.createAccount(account);
   sheet.rows[1][ctx.acctColIndex('id')] = account.id.toUpperCase();
-  assert.equal(ctx.createAccountsBulk({ accounts: [account] }).updated, 1);
+  // The UUID matches canonically; nothing else differs, so the row is left unchanged.
+  assert.equal(ctx.createAccountsBulk({ accounts: [account] }).skipped, 1);
+  assert.equal(ctx.createAccountsBulk({ accounts: [{ ...account, description: 'Changed' }] }).updated, 1);
   assert.equal(sheet.rows[1][ctx.acctColIndex('id')], account.id.toUpperCase());
   assert.equal(sheet.rows.length, 2);
 });
@@ -1397,4 +1411,73 @@ test('editing a historical row keeps its closed account valid, but moving a row 
   assert.equal(ctx.validateTransactionUpdate(body, oldRow).ok, true);
   oldRow[ctx.txColIndex('account_id')] = active;
   assert.equal(ctx.validateTransactionUpdate(body, oldRow).error, 'unknown_account_id');
+});
+
+// ── Unchanged re-imports leave rows (and their sync status) untouched ────────
+
+test('import comparison treats typed Sheet cells by type and everything else as exact text', () => {
+  const ctx = runtime(['sync-utils.gs', 'app-utils.gs'], {
+    SpreadsheetApp: { getActiveSpreadsheet: () => ({ getSpreadsheetTimeZone: () => 'Europe/London' }) },
+    Utilities: { formatDate: () => '2026-07-31 00:00:00.000' },
+  });
+  const equal = (stored, incoming) => ctx.importCellsEqual(stored, incoming);
+  assert.equal(equal(new Date('2026-07-30T23:00:00Z'), '2026-07-31 00:00:00'), true);
+  assert.equal(equal(new Date('2026-07-30T23:00:00Z'), '2026-07-31'), true);
+  assert.equal(equal(new Date('2026-07-30T23:00:00Z'), '2026-07-24 00:00:00'), false);
+  assert.equal(equal(1475, '1475.00'), true);
+  assert.equal(equal(1475, '1475.01'), false);
+  assert.equal(equal(1475, ''), false);
+  assert.equal(equal(true, 'TRUE'), true);
+  assert.equal(equal(false, 'true'), false);
+  assert.equal(equal('007', '7'), false, 'text that only looks numeric must match exactly');
+  assert.equal(equal('Rent ', 'Rent'), true);
+  assert.equal(equal('Rent', 'rent'), false);
+  assert.equal(equal('', undefined), true);
+  const columns = ['id', 'name', 'sync_status', 'sync_date', 'sync_notes', 'created_at', 'updated_at'];
+  assert.equal(ctx.importRowUnchanged(columns, ['x', 'A', 'in-sync', 'd', 'n', 'c', 'u'], ['x', 'A', 'create-pending', '', '', 'now', 'now']), true);
+  assert.equal(ctx.importRowUnchanged(columns, ['x', 'A', 'in-sync', 'd', 'n', 'c', 'u'], ['x', 'B', 'in-sync', 'd', 'n', 'c', 'u']), false);
+  assert.equal(ctx.importRowUnchanged(columns, undefined, ['x']), false);
+});
+
+test('re-importing identical transactions writes nothing and keeps in-sync legs in-sync', () => {
+  const { ctx, sheet, transfer } = transactions();
+  const food = { id: 'f0000000-0000-4000-8000-000000000002', tx_type: 'money-out', tx_date_local: '2026-09-23 10:00:00', major_category: 'expense', minor_category: 'food', source_account: 'a', source_amount_local: 4 };
+  assert.equal(ctx.createTransactionsBulk({ transactions: [transfer, food] }).created, 2);
+  const status = ctx.txColIndex('sync_status');
+  for (const row of sheet.rows.slice(1)) row[status] = 'in-sync';
+  const before = JSON.stringify(sheet.rows), writes = sheet.writes;
+  const again = ctx.createTransactionsBulk({ transactions: [transfer, food] });
+  assert.equal(again.ok, true);
+  assert.deepEqual([again.created, again.updated, again.skipped], [0, 0, 2]);
+  assert.deepEqual(Array.from(again.results, result => result.action), ['unchanged', 'unchanged']);
+  assert.equal(JSON.stringify(sheet.rows), before);
+  assert.equal(sheet.writes, writes);
+  // One changed row re-queues only its own legs.
+  const mixed = ctx.createTransactionsBulk({ transactions: [transfer, { ...food, source_amount_local: 5 }] });
+  assert.deepEqual([mixed.updated, mixed.skipped], [1, 1]);
+  const byId = Object.fromEntries(sheet.rows.slice(1).map(row => [row[ctx.txColIndex('id')], row[status]]));
+  assert.equal(byId[food.id], 'update-pending');
+  assert.equal(Object.values(byId).filter(value => value === 'in-sync').length, 2, 'both transfer legs stay in-sync');
+});
+
+test('a former transfer re-imported as a single row is a change, not unchanged', () => {
+  const { ctx, sheet, transfer } = transactions();
+  ctx.createTransactionsBulk({ transactions: [transfer] });
+  const single = { ...transfer, major_category: 'expense', minor_category: 'food', target_account: '', target_amount_local: '' };
+  const result = ctx.createTransactionsBulk({ transactions: [single] });
+  assert.equal(result.updated, 1);
+  assert.equal(result.skipped, 0);
+  assert.equal(sheet.rows.filter(row => row[ctx.txColIndex('record_status')] === 'deleted').length, 1, 'the old child is tombstoned');
+});
+
+test('re-importing identical account master rows keeps their sync status and writes nothing', () => {
+  const { ctx, sheet, account } = accountImporter();
+  assert.equal(ctx.createAccountsBulk({ accounts: [account] }).created, 1);
+  sheet.rows[1][ctx.acctColIndex('sync_status')] = 'in-sync';
+  sheet.rows[1][ctx.acctColIndex('sync_notes')] = 'kept';
+  const before = JSON.stringify(sheet.rows), writes = sheet.writes;
+  const again = ctx.createAccountsBulk({ accounts: [account] });
+  assert.deepEqual([again.ok, again.updated, again.skipped], [true, 0, 1]);
+  assert.equal(JSON.stringify(sheet.rows), before);
+  assert.equal(sheet.writes, writes);
 });

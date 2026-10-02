@@ -19,6 +19,10 @@ logger = get_logger(__name__)
 
 # Credential kinds a module can declare from `cicd/check.sh` (credentials=<kind>).
 _GAS_PIN_TOTP = "gas-pin-totp"
+# Stored credentials for gas-pin-totp, from infrastructure/.env.<env> (same names as the
+# GAS Script Properties). When both are set the stages read them themselves.
+_PIN_VARIABLE = "MERIDIAN_FULCRUM_PIN"
+_SECRET_VARIABLE = "MERIDIAN_FULCRUM_SECRET"
 
 
 class PipelineError(RuntimeError):
@@ -71,6 +75,13 @@ def preflight(pipeline: PipelineConfig, config_path: Path) -> dict[str, list[Sta
     return needs
 
 
+def credentials_are_stored() -> bool:
+    pin, secret = os.environ.get(_PIN_VARIABLE, ""), os.environ.get(_SECRET_VARIABLE, "")
+    if bool(pin) != bool(secret):
+        raise PipelineError("incomplete_stored_credentials")
+    return bool(pin)
+
+
 def ask_credentials() -> tuple[str, str]:
     """The only prompt in a pipeline run. The values stay in memory and reach stages on stdin."""
     pin = getpass.getpass("PIN: ")
@@ -83,9 +94,17 @@ def ask_credentials() -> tuple[str, str]:
 
 
 def sign_in(stage: Stage, config_path: Path, pin: str, code: str) -> None:
-    """Signs in straight away, while the code is fresh; later stages use the PIN only."""
-    logger.info(f"pipeline: sign_in stage={stage.number} module={stage.module}")
-    if subprocess.run(_command(stage, config_path, "--sign-in-only"), input=f"{pin}\n{code}\n", text=True, env=_stage_environment()).returncode != 0:
+    """Signs in straight away, while the code is fresh; later stages use the PIN only.
+
+    With stored credentials (pin and code empty) the stage reads them itself; nothing goes on stdin.
+    """
+    logger.info(f"pipeline: sign_in stage={stage.number} module={stage.module} stored_credentials={not pin}")
+    command = _command(stage, config_path, "--sign-in-only")
+    if pin:
+        completed = subprocess.run(command, input=f"{pin}\n{code}\n", text=True, env=_stage_environment())
+    else:
+        completed = subprocess.run(command, stdin=subprocess.DEVNULL, env=_stage_environment())
+    if completed.returncode != 0:
         raise PipelineError(f"sign_in_failed:stage={stage.number}:{stage.module}")
 
 
@@ -95,8 +114,10 @@ def run_stages(pipeline: PipelineConfig, config_path: Path, credential_stages: s
         stage = result.stage
         print(f"\n=== Stage {stage.number}/{len(pipeline.stages)}: {stage.module} ({stage.mode}) ===", flush=True)
         started = time.monotonic()
-        if stage.number in credential_stages:
+        if stage.number in credential_stages and pin:
             completed = subprocess.run(_command(stage, config_path, "--skip-sign-in"), input=f"{pin}\n", text=True, env=_stage_environment())
+        elif stage.number in credential_stages:
+            completed = subprocess.run(_command(stage, config_path, "--skip-sign-in"), stdin=subprocess.DEVNULL, env=_stage_environment())
         else:
             completed = subprocess.run(_command(stage, config_path), stdin=subprocess.DEVNULL, env=_stage_environment())
         result.seconds = time.monotonic() - started
@@ -115,7 +136,7 @@ def print_summary(env: str, results: list[StageResult]) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run data-synchronization modules in order from one config file")
-    parser.add_argument("--config", type=Path, default=config.DEFAULT_CONFIG, help="Pipeline config (default: consolidated-pipeline/pipeline.json)")
+    parser.add_argument("--config", type=Path, required=True, help="Pipeline config: config/pipeline.<env>.json")
     args = parser.parse_args()
     config_path = args.config.resolve()
     try:
@@ -125,7 +146,7 @@ def main() -> None:
         pin = ""
         credential_stages: set[int] = set()
         if needs:
-            pin, code = ask_credentials()
+            pin, code = ("", "") if credentials_are_stored() else ask_credentials()
             stages = needs[_GAS_PIN_TOTP]
             sign_in(stages[0], config_path, pin, code)
             credential_stages = {stage.number for stage in stages}

@@ -14,7 +14,7 @@ const plain = value => JSON.parse(JSON.stringify(value));
 const IDS = ['08-category-pie', '09-category-trend', '11-category-drilldown', '12-tag-pie', '13-tag-trend'];
 
 function appRuntime(overrides) {
-  const runtime = gasRuntime({ properties: { PIN_SECRET: '1234' } });
+  const runtime = gasRuntime({ properties: { MERIDIAN_FULCRUM_PIN: '1234' } });
   runtime.tabs = seedViewFixture(runtime, overrides);
   runtime.insight = params => JSON.parse(runtime.ctx.doGet({ parameter: { pin: '1234', today: '2026-09-30', action: 'get_insight', ...params } }).getContent());
   return runtime;

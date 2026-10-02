@@ -94,6 +94,7 @@ function importAccountData(body) {
   const results = [];
   let created = 0;
   let updated = 0;
+  let skipped = 0;
   let failed  = 0;
 
   preparedRows.forEach(function(prepared) {
@@ -103,13 +104,14 @@ function importAccountData(body) {
     results.push(outcome);
     if (outcome.ok === false) { failed += 1; return; }
     if (outcome.action === 'updated') updated += 1;
+    else if (outcome.action === 'unchanged') skipped += 1;
     else created += 1;
   });
 
   console.log('importAccountData: file_type=' + fileType + ' rows=' + rows.length
-    + ' created=' + created + ' updated=' + updated + ' failed=' + failed);
+    + ' created=' + created + ' updated=' + updated + ' unchanged=' + skipped + ' failed=' + failed);
 
-  return { ok: failed === 0, file_type: fileType, created: created, updated: updated, failed: failed, results: results };
+  return { ok: failed === 0, file_type: fileType, created: created, updated: updated, skipped: skipped, failed: failed, results: results };
 }
 
 // Validate values independent of Sheets, keeping caller objects unchanged.
@@ -299,11 +301,13 @@ function _importRow(sheet, spec, row, accountSubTypeById, rowNumById, values) {
       return { key: key, ok: false, error: 'detail_account_move_rejected' };
     }
     rowArray[createdAtIdx] = existingRow[createdAtIdx] === undefined || existingRow[createdAtIdx] === null ? '' : existingRow[createdAtIdx];
-    rowArray[syncStatusIdx] = computeSyncStatus(_detailCellText(existingRow[syncStatusIdx]));
     if (rowArray[recordStatusIdx] === '') {
       const previousStatus = _detailCellText(existingRow[recordStatusIdx]);
       rowArray[recordStatusIdx] = previousStatus === '' ? 'active' : previousStatus;
     }
+    // Same values as stored: leave the row (and its sync status) untouched.
+    if (importRowUnchanged(spec.columns, existingRow, rowArray)) return { key: key, ok: true, action: 'unchanged' };
+    rowArray[syncStatusIdx] = computeSyncStatus(_detailCellText(existingRow[syncStatusIdx]));
     sheet.getRange(existingRowNum, 1, 1, spec.columns.length).setValues([rowArray]);
     values[existingRowNum - 1] = rowArray;
     return { key: key, ok: true, action: 'updated' };

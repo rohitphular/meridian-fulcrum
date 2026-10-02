@@ -3,8 +3,9 @@
 // Deploy as: Execute as Me · Anyone can access
 //
 // Script Properties required (Extensions → Apps Script → Project Settings):
-//   PIN_SECRET   — your chosen PIN
-//   TOTP_SECRET  — Base32 secret key, same as entered in Google Authenticator
+//   MERIDIAN_FULCRUM_PIN    — your chosen PIN
+//   MERIDIAN_FULCRUM_SECRET — Base32 TOTP secret, same as entered in Google Authenticator
+//   (Same names and values as infrastructure/.env.<env>, which the Python jobs read.)
 // =============================================================================
 
 function doGet(e) {

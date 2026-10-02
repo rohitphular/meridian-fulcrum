@@ -14,7 +14,7 @@ Currency-rate synchronization belongs exclusively to the [currency-database-load
 | [Transactions](transaction-master.md) | `transaction_master` | 24 | `transaction_master` — 28 | Every source field, generated IDs, currency/time conversions, counterparty and beneficiary tables |
 | [Subscriptions](subscription-master.md) | `subscription_master` | 21 | `subscription_master` — 20 | Every source field, account/category/counterparty resolution and timestamp semantics |
 | [Account details](account-details.md) | Six detail tabs | 106 | Six tables named after their Sheet tabs | One document per detail type maps all source, derived and retained legacy fields |
-| [Structure and operational mapping](SETUP.md) | Spreadsheet metadata, no entity tab | — | `job_execution_details`, unused `ledger_data_checksums` | Every operational column and its actual origin/use |
+| [Structure and operational mapping](SETUP.md) | Spreadsheet metadata, no entity tab | — | None (migration `0023` dropped the former job tables) | Data flow and the absence of operational tables |
 | [Mapping notes and open decisions](implementation-learning.md) | Shared conventions | — | Cross-entity | Identity, money, dates, omissions and unresolved source/DB differences |
 
 The four master tabs contain **85 source columns**, account-type configuration adds **13**, and six detail tabs add **106**, for **204** total source columns when all are enabled. Database rows may contain additional generated or derived columns, but not every source column is persisted: sync metadata stays in the Sheet except for the account-types ingestion state, source audit timestamps are currently omitted, lists can expand into junction rows, and category/account/counterparty values can become foreign keys. Consequently, a main DB table need not have more columns than its source tab even when the overall relational model contains more fields.
@@ -23,7 +23,7 @@ The four master tabs contain **85 source columns**, account-type configuration a
 
 Each entity document lists source columns in Sheet order with their destination and transformation. Database-only or related-table sections account for columns not directly copied from the source. “Not persisted” means exactly that; it does not imply the job stores the field elsewhere. For detail rows, retained legacy columns without a source remain NULL; the family documents identify each one.
 
-Database inventories reflect the complete migration chain through 0022, including `tracking_start_date_local`, `applied_rate_value`, nullable subscription start dates and account type/subtype keys and labels. They do not treat stale generated models as the schema. The ledger migration chain defines **18 tables**, including reserved tables; currency tables are separate dependencies owned by currency-database-load.
+Database inventories reflect the complete migration chain through 0023 (which drops the unused job tracking tables), including `tracking_start_date_local`, `applied_rate_value`, nullable subscription start dates and account type/subtype keys and labels. They do not treat stale generated models as the schema. The ledger migration chain defines **18 tables**, including reserved tables; currency tables are separate dependencies owned by currency-database-load.
 
 ## Primary source references
 

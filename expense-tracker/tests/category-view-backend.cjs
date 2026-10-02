@@ -15,7 +15,7 @@ const CATS = CATEGORIES.map(cat => (cat.minor_category_key === 'groceries'
   .concat([{ id: ID(27), tx_type_key: 'money-out', major_category_key: 'bills', major_category_label: 'Bills', minor_category_key: 'tv', minor_category_label: 'TV', record_status: 'locked', source_account_mandatory: true, target_account_mandatory: false, is_subscription_eligible: true }]);
 
 function appRuntime() {
-  const runtime = gasRuntime({ properties: { PIN_SECRET: '1234' } });
+  const runtime = gasRuntime({ properties: { MERIDIAN_FULCRUM_PIN: '1234' } });
   runtime.tabs = seedViewFixture(runtime, { categories: CATS });
   runtime.get = params => JSON.parse(runtime.ctx.doGet({ parameter: { pin: '1234', ...params } }).getContent());
   runtime.list = params => runtime.get({ action: 'list_categories_view', ...params });

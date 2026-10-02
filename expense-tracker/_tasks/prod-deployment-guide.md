@@ -18,7 +18,7 @@
 ### 1. Deploy backend
 
 ```bash
-make api-deploy   # pick prod
+make api-deploy ENV=prod   # or: make api-deploy and pick prod
 ```
 
 Files: `category-schema.gs`, `category-core.gs`, `sync-utils.gs`, `app-router.gs`
@@ -99,7 +99,7 @@ Files: `app/sections/categories.js`, `app/core/utils.js`
 ### 1. Deploy backend
 
 ```bash
-make api-deploy   # pick prod
+make api-deploy ENV=prod   # or: make api-deploy and pick prod
 ```
 
 Files: `account-schema.gs`, `account-core.gs`, `account-validation.gs`, `sync-utils.gs`, `app-router.gs`

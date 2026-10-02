@@ -17,7 +17,7 @@ cd "$JOB_DIR"
 # consolidated-pipeline and schedulers can run the job unattended. --interactive takes them
 # as arguments instead and asks for a missing mode.
 
-USAGE="Usage: ./cicd/start-up.sh [--config FILE] [--stage N]
+USAGE="Usage: ./cicd/start-up.sh --config FILE [--stage N]
        ./cicd/start-up.sh --interactive dev|prod [daily|historical]"
 usage() { echo "ERROR: $USAGE"; exit 1; }
 
@@ -56,7 +56,11 @@ else
     echo "ERROR: env and mode come from the pipeline config; pass --interactive to give them as arguments."
     exit 1
   fi
-  STAGE_SETTINGS="$(python3 "$ROOT/data-synchronization/consolidated-pipeline/cicd/read-stage.py" "${CONFIG_FILE:-$ROOT/data-synchronization/consolidated-pipeline/pipeline.json}" "$(basename "$JOB_DIR")" "$STAGE")" || exit 1
+  if [[ -z "$CONFIG_FILE" ]]; then
+    echo "ERROR: unattended runs need --config FILE (data-synchronization/consolidated-pipeline/config/pipeline.<env>.json); pass --interactive to give env and mode as arguments."
+    exit 1
+  fi
+  STAGE_SETTINGS="$(python3 "$ROOT/data-synchronization/consolidated-pipeline/cicd/read-stage.py" "$CONFIG_FILE" "$(basename "$JOB_DIR")" "$STAGE")" || exit 1
   ENV_ARG="$(sed -n 's/^env=//p' <<< "$STAGE_SETTINGS")"
   MODE_ARG="$(sed -n 's/^mode=//p' <<< "$STAGE_SETTINGS")"
   CONFIRM_ARG="$(sed -n 's/^confirm=//p' <<< "$STAGE_SETTINGS")"

@@ -10,6 +10,7 @@ import psycopg2
 from py_logging import get_logger
 
 from database.account_details import validate_type_detail_policy
+from database.progress import Progress
 from sheets.account_types import flush
 from transforms.account_types import transform
 
@@ -82,12 +83,13 @@ def upsert_account_types(conn: Any, sheets_client: Any, rows: list[dict[str, Any
     _validate_source_catalog(rows)
     updates: list[tuple[int, str, str, str]] = []
     succeeded = failed = 0
-    logger.info(f"upsert_account_types: start rows={len(rows)}")
+    progress = Progress(logger, "upsert_account_types", len(rows))
     try:
         for index, row in enumerate(rows):
             number = int(row.get("_sheet_row_num", index + 2))
             status = str(row.get("sync_status") or "").strip()
             if status == "in-sync":
+                progress.skip()
                 continue
             if status not in _ACTIONABLE:
                 raise ValueError("invalid_account_type_sync_status")
@@ -106,6 +108,7 @@ def upsert_account_types(conn: Any, sheets_client: Any, rows: list[dict[str, Any
                     raise
                 code = str(error).removeprefix("account_types: ") if isinstance(error, ValueError) else "invalid_source_value_or_constraint"
                 failed += 1
+                progress.record(failed=1)
                 logger.warning(f"upsert_account_types: row_failed row={number} error_type={type(error).__name__}")
                 updates.append((number, "create-failed" if status.startswith("create-") else "update-failed", synced_at.isoformat(), code))
             except Exception:
@@ -113,8 +116,9 @@ def upsert_account_types(conn: Any, sheets_client: Any, rows: list[dict[str, Any
                 raise
             else:
                 succeeded += 1
+                progress.record(succeeded=1)
                 updates.append((number, "in-sync", synced_at.isoformat(), ""))
     finally:
         flush(sheets_client, updates)
-        logger.info(f"upsert_account_types: done succeeded={succeeded} failed={failed}")
+        progress.done()
     return failed

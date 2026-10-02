@@ -6,7 +6,7 @@ Never run against a live environment just to check code. Review with the unit te
 
 ## Highest-risk checks
 
-- The PIN and authenticator code never appear in arguments, environment variables, log lines or exception messages. GET URLs carry the PIN, so transport errors must be re-raised as codes without the original exception chained or printed.
+- The PIN, secret and code never appear in arguments, log lines or exception messages; stored ones are read only from `MERIDIAN_FULCRUM_PIN` / `MERIDIAN_FULCRUM_SECRET`, and generated codes match `generateTotp` in `app-auth.gs`. GET URLs carry the PIN, so transport errors must be re-raised as codes without the original exception chained or printed.
 - Logged reasons are codes, file names and counts only. Row-level server errors go to the terminal, never the log file.
 - Nothing in the Sheet changes until every file has passed its dry-run check. Only sheet-rebuild deletes tabs, and the delete sends the environment's `spreadsheet_id` with `confirm: "factory-reset"`.
 - Fill ids keeps file bytes exact (BOM, CRLF, quoting) apart from the filled id cells, backs up every changed file before overwriting it, and writes through a temporary file.

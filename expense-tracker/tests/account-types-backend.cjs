@@ -206,7 +206,8 @@ test('bootstrap normalizes existing dependent references without writing unrelat
 test('import controls audit state and preserves creation timestamps and row identity', () => {
   const { ctx, table } = boot(); const row = first(ctx);
   table().rows[row._row - 1][COLUMNS.indexOf('sync_status')] = 'in-sync';
-  const imported = { ...catalog()[0], id: ID.toUpperCase(), sync_status: 'in-sync', created_at: 'forged', updated_at: 'forged', sync_notes: 'forged' };
+  // A real change (description) takes the update path; forged audit values are ignored.
+  const imported = { ...catalog()[0], id: ID.toUpperCase(), description: 'Changed description', sync_status: 'in-sync', created_at: 'forged', updated_at: 'forged', sync_notes: 'forged' };
   assert.equal(ctx.createAccountTypesBulk({ account_types: [imported] }).updated, 1);
   const latest = first(ctx);
   assert.equal(latest.id, ID); assert.equal(latest._row, row._row); assert.equal(latest.created_at, row.created_at);
@@ -300,7 +301,8 @@ test('an exported catalog with every status re-imports through the backend and r
   assert.equal(ctx.updateAccountType({ row_num: byId('a0000000-0000-4000-8000-000000000004')._row, record_status: 'inactive' }).ok, true);
   const backup = exportedCsv(rows());
   const first = ctx.importAccountTypesCsv({ csv: backup });
-  assert.equal(first.ok, true); assert.equal(first.updated, 4); assert.equal(first.rows, 4);
+  // The export matches what is stored, so nothing is rewritten or re-queued.
+  assert.equal(first.ok, true); assert.equal(first.updated, 0); assert.equal(first.skipped, 4); assert.equal(first.rows, 4);
   assert.deepEqual(Array.from(first.results, result => result.line), [2, 4, 5, 6]);
   assert.equal(ctx.updateAccountType({ row_num: byId(ID)._row, id: ID, description: 'Changed later' }).ok, true);
   assert.equal(ctx.importAccountTypesCsv({ csv: backup }).ok, true);

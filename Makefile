@@ -1,4 +1,8 @@
 .DEFAULT_GOAL := help
+
+# ENV=<name> answers the environment question for any target (dev, prod, or any
+# env in infrastructure/envs.json); without it, each target asks once.
+ENV ?=
 MAKEFLAGS    += --no-print-directory
 
 # ── Help (self-documenting) ───────────────────────────────────────────────────
@@ -12,29 +16,13 @@ help:
 ##@ Infrastructure
 
 .PHONY: infra-up
-infra-up: ## Start PostgreSQL for an environment (interactive: pick env)
-	@echo ""; \
-	echo "  1) dev"; \
-	echo "  2) prod"; \
-	echo ""; \
-	printf "Select environment: "; read -r CHOICE; \
-	if [ "$$CHOICE" = "1" ]; then ENV="dev"; \
-	elif [ "$$CHOICE" = "2" ]; then ENV="prod"; \
-	else echo "Invalid choice '$$CHOICE'. Enter 1 or 2."; exit 1; \
-	fi; \
+infra-up: ## Start PostgreSQL for an environment (asks for the env; ENV=name skips the question)
+	@ENV="$$(bash infrastructure/select-env.sh "$(ENV)")" || exit 1; \
 	bash infrastructure/start-services.sh "$$ENV"
 
 .PHONY: infra-down
-infra-down: ## Stop PostgreSQL for an environment (interactive: pick env)
-	@echo ""; \
-	echo "  1) dev"; \
-	echo "  2) prod"; \
-	echo ""; \
-	printf "Select environment: "; read -r CHOICE; \
-	if [ "$$CHOICE" = "1" ]; then ENV="dev"; \
-	elif [ "$$CHOICE" = "2" ]; then ENV="prod"; \
-	else echo "Invalid choice '$$CHOICE'. Enter 1 or 2."; exit 1; \
-	fi; \
+infra-down: ## Stop PostgreSQL for an environment (asks for the env; ENV=name skips the question)
+	@ENV="$$(bash infrastructure/select-env.sh "$(ENV)")" || exit 1; \
 	bash infrastructure/stop-services.sh "$$ENV"
 
 ##@ App
@@ -73,17 +61,19 @@ app-stop: ## Stop the local HTTP server
 	fi
 
 .PHONY: api-deploy
-api-deploy: ## Deploy GAS backend (interactive: pick env)
-	bash expense-tracker/cicd/deploy.sh
+api-deploy: ## Deploy GAS backend (asks for the env and a description; ENV=name and DESC="..." skip them)
+	@ENV="$$(bash infrastructure/select-env.sh "$(ENV)")" || exit 1; \
+	bash expense-tracker/cicd/deploy.sh "$$ENV" $(if $(DESC),"$(DESC)")
 
 .PHONY: api-logs
-api-logs: ## Open GAS executions page in browser (interactive: pick env)
-	bash expense-tracker/cicd/logs.sh
+api-logs: ## Open GAS executions page in browser (asks for the env; ENV=name skips the question)
+	@ENV="$$(bash infrastructure/select-env.sh "$(ENV)")" || exit 1; \
+	bash expense-tracker/cicd/logs.sh "$$ENV"
 
 ##@ Data Synchronization
 
 .PHONY: data-sync
-data-sync: ## Run one data-synchronization module interactively (pick module + env; the module asks for its own mode)
+data-sync: ## Run one data-synchronization module interactively (pick module + env, ENV=name skips the env question; the module asks for its own mode)
 	@echo ""; \
 	i=1; \
 	for dir in data-synchronization/*/; do \
@@ -102,17 +92,19 @@ data-sync: ## Run one data-synchronization module interactively (pick module + e
 	if [ -z "$$selected" ]; then \
 		echo "Invalid choice '$$CHOICE'."; exit 1; \
 	fi; \
-	echo ""; \
-	echo "  1) dev"; \
-	echo "  2) prod"; \
-	echo ""; \
-	printf "Select environment: "; read -r ENV_CHOICE; \
-	if [ "$$ENV_CHOICE" = "1" ]; then ENV="dev"; \
-	elif [ "$$ENV_CHOICE" = "2" ]; then ENV="prod"; \
-	else echo "Invalid choice '$$ENV_CHOICE'. Enter 1 or 2."; exit 1; \
-	fi; \
+	ENV="$$(bash infrastructure/select-env.sh "$(ENV)")" || exit 1; \
 	bash "$${selected}cicd/start-up.sh" --interactive "$$ENV"
 
 .PHONY: consolidated-pipeline
-consolidated-pipeline: ## Run the data-synchronization pipeline from data-synchronization/consolidated-pipeline/pipeline.json (CONFIG=path optional)
-	bash data-synchronization/consolidated-pipeline/cicd/start-up.sh $(if $(CONFIG),--config "$(CONFIG)")
+consolidated-pipeline: ## Start PostgreSQL (infra-up), then run the pipeline — one env question for both; ENV=name or CONFIG=path skips it
+	@if [ -n "$(CONFIG)" ]; then \
+		ENV="$$(python3 data-synchronization/consolidated-pipeline/cicd/read-stage.py "$(CONFIG)" --env | sed -n 's/^env=//p')"; \
+		[ -n "$$ENV" ] || exit 1; \
+	fi; \
+	ENV="$$(bash infrastructure/select-env.sh "$${ENV:-$(ENV)}")" || exit 1; \
+	$(MAKE) infra-up ENV="$$ENV" || exit 1; \
+	if [ -n "$(CONFIG)" ]; then \
+		bash data-synchronization/consolidated-pipeline/cicd/start-up.sh --config "$(CONFIG)"; \
+	else \
+		bash data-synchronization/consolidated-pipeline/cicd/start-up.sh --env "$$ENV"; \
+	fi

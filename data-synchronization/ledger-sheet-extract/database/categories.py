@@ -10,6 +10,7 @@ from py_logging import get_logger
 
 import sheets.categories as sheets_categories
 import transforms.categories as categories_transform
+from database.progress import Progress
 
 logger = get_logger(__name__)
 
@@ -154,9 +155,9 @@ def _investment_mapping_changed(conn: Any, row: dict[str, Any]) -> bool:
 
 def upsert_categories(conn: Any, sheets_client: SheetsClient, rows: list[dict[str, Any]], row_start: int, *, before_dependency_commit: Callable[[], None] | None = None) -> int:
     """Commit master and both hint mappings together; report all failed rows."""
-    logger.info(f"upsert_categories: batch_start row_start={row_start} total={len(rows)}")
     write_backs: list[sheets_categories.WriteBack] = []
     succeeded = failed = 0
+    progress = Progress(logger, "upsert_categories", len(rows))
     try:
         for row_index, row in enumerate(rows):
             sheet_row_num = row.get("_sheet_row_num", row_start + row_index + 1)
@@ -164,6 +165,7 @@ def upsert_categories(conn: Any, sheets_client: SheetsClient, rows: list[dict[st
             dependency_refresh = sync_status == "in-sync"
             if not dependency_refresh and sync_status not in _ACTIONABLE:
                 failed += 1
+                progress.record(failed=1)
                 logger.warning(f"upsert_categories: invalid_sync_status row={sheet_row_num}")
                 continue
             failed_status = "create-failed" if sync_status.startswith("create-") else "update-failed"
@@ -171,6 +173,7 @@ def upsert_categories(conn: Any, sheets_client: SheetsClient, rows: list[dict[st
             try:
                 if dependency_refresh and not _investment_mapping_changed(conn, row):
                     conn.rollback()  # Release read locks from an unchanged dependency check.
+                    progress.skip()
                     continue
                 typed = categories_transform.transform(row)
                 source_ids = _resolve_account_types(conn, row.get("source_account_types"))
@@ -188,6 +191,7 @@ def upsert_categories(conn: Any, sheets_client: SheetsClient, rows: list[dict[st
                 if checking_source:
                     raise
                 failed += 1
+                progress.record(failed=1)
                 logger.warning(f"upsert_categories: row_failed row={sheet_row_num} error_type={type(exc).__name__}")
                 write_backs.append(sheets_categories.write_back(sheet_row_num, failed_status, datetime.now(timezone.utc).isoformat(), _to_sync_notes(exc)))
             except Exception:
@@ -195,8 +199,9 @@ def upsert_categories(conn: Any, sheets_client: SheetsClient, rows: list[dict[st
                 raise
             else:
                 succeeded += 1
+                progress.record(succeeded=1)
                 write_backs.append(sheets_categories.write_back(sheet_row_num, "in-sync", datetime.now(timezone.utc).isoformat(), ""))
     finally:
         sheets_categories.flush(sheets_client, _SHEET_NAME, write_backs)
-        logger.info(f"upsert_categories: batch_done succeeded={succeeded} failed={failed}")
+        progress.done()
     return failed

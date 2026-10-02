@@ -33,21 +33,9 @@ Enabled tabs are read and validated as snapshots, then processed in dependency o
 
 Entity documents distinguish direct fields, renamed fields, resolved foreign keys, computed values, database-generated metadata and fields not persisted. More database columns can arise from one source value; for example, transaction local timestamp plus timezone produces UTC/local timestamps and two day-of-week fields. Other source fields expand into related tables or have no database destination.
 
-## Complete operational-table column mapping
+## Operational tables
 
-These tables do not correspond to source tab rows.
-
-| Sheet/source input | Database column | Type | Transformation / current use |
-|---|---|---|---|
-| No Sheet column — job constant | `job_execution_details.job_name` | TEXT NOT NULL, PK | Literal `ledger-extract` (kept from before the module rename so existing databases keep their row). One job row per database. |
-| No cell — Drive spreadsheet `modifiedTime` | `job_execution_details.last_sheet_modified_at` | TIMESTAMPTZ NULL | Timestamp read after snapshot capture and saved on full successful completion; informational, not an early-exit gate. NULL after first bootstrap until successful completion. |
-| No Sheet column — database clock | `job_execution_details.ran_at` | TIMESTAMPTZ NOT NULL | Bootstrap sentinel `1970-01-01T00:00:00Z`; subsequently `now()` on successful completion, not on each failed attempt. It is not a per-row source edit timestamp. |
-| None — unused legacy design | `ledger_data_checksums.entity` | TEXT NOT NULL | No current writer; part of the legacy composite PK. |
-| None — unused legacy design | `ledger_data_checksums.natural_key` | TEXT NOT NULL | No current writer; other part of composite PK. |
-| None — unused legacy design | `ledger_data_checksums.row_hash` | TEXT NOT NULL | No hash comparison is implemented. |
-| None — unused legacy design | `ledger_data_checksums.last_seen_at` | TIMESTAMPTZ NOT NULL | Not populated by the current job. Does not drive deletion detection. |
-
-Sources: [migration 0001](../migrations/0001_create_shared_infrastructure.py), [job metadata writer](../database/job_execution_details.py), [orchestrator](../core/extractor.py). Migration CLI tracking tables belong to the shared migration tool; they are not business-sheet mappings.
+There are none: every ledger table maps a source tab. Migration `0023` dropped the former `job_execution_details` (it only recorded the Drive modified time after a successful run, never a skip gate) and the never-used `ledger_data_checksums`, both created by `0001`. Migration CLI tracking tables belong to the shared migration tool; they are not business-sheet mappings.
 
 ## Source metadata which is not copied
 

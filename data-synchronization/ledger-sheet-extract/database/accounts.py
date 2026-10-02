@@ -12,6 +12,7 @@ from py_logging import get_logger
 import sheets.accounts as sheets_accounts
 import transforms.accounts as accounts_transform
 from database.account_details import validate_account_change
+from database.progress import Progress
 from transforms.financial import to_minor_units
 
 logger = get_logger(__name__)
@@ -196,17 +197,19 @@ def _store_account(conn: Any, typed: dict[str, Any], decimal_places: dict[str, i
 
 def upsert_accounts(conn: Any, sheets_client: SheetsClient, rows: list[dict[str, Any]], row_start: int, *, before_commit: Callable[[], None] | None = None) -> int:
     """Persist each row atomically; return failure count so the job cannot claim success."""
-    logger.info(f"upsert_accounts: batch_start row_start={row_start} total={len(rows)}")
     write_backs: list[sheets_accounts.WriteBack] = []
     succeeded = failed = 0
+    progress = Progress(logger, "upsert_accounts", len(rows))
     try:
         for row_index, row in enumerate(rows):
             sheet_row_num = row.get("_sheet_row_num", row_start + row_index + 1)
             sync_status = str(row.get("sync_status") or "").strip()
             if sync_status == "in-sync":
+                progress.skip()
                 continue
             if sync_status not in _ACTIONABLE:
                 failed += 1
+                progress.record(failed=1)
                 logger.warning(f"upsert_accounts: invalid_sync_status row={sheet_row_num}")
                 continue
             failed_status = "create-failed" if sync_status.startswith("create-") else "update-failed"
@@ -229,6 +232,7 @@ def upsert_accounts(conn: Any, sheets_client: SheetsClient, rows: list[dict[str,
                 if checking_source:
                     raise
                 failed += 1
+                progress.record(failed=1)
                 logger.warning(f"upsert_accounts: row_failed row={sheet_row_num} error_type={type(exc).__name__}")
                 write_backs.append(sheets_accounts.write_back(sheet_row_num, failed_status, datetime.now(timezone.utc).isoformat(), _to_sync_notes(exc)))
             except Exception:
@@ -236,8 +240,9 @@ def upsert_accounts(conn: Any, sheets_client: SheetsClient, rows: list[dict[str,
                 raise
             else:
                 succeeded += 1
+                progress.record(succeeded=1)
                 write_backs.append(sheets_accounts.write_back(sheet_row_num, "in-sync", datetime.now(timezone.utc).isoformat(), ""))
     finally:
         sheets_accounts.flush(sheets_client, _SHEET_NAME, write_backs)
-        logger.info(f"upsert_accounts: batch_done succeeded={succeeded} failed={failed}")
+        progress.done()
     return failed

@@ -134,7 +134,8 @@ test('uppercase stored UUIDs match retries without changing existing identities,
   const { ctx, sheet, transfer, row, value } = runtime();
   sheet.rows.push(row({ id: PARENT_ID.toUpperCase() }));
   sheet.rows.push(row({ id: CHILD_ID.toUpperCase(), parent_tx_id: PARENT_ID.toUpperCase(), tx_type: 'money-in', account_id: TARGET_ACCOUNT }));
-  assert.equal(ctx.createTransactionsBulk({ transactions: [transfer] }).updated, 1);
+  // A real change takes the update path for both legs.
+  assert.equal(ctx.createTransactionsBulk({ transactions: [{ ...transfer, description: 'Changed' }] }).updated, 1);
   assert.equal(value(sheet.rows[1], 'id'), PARENT_ID.toUpperCase());
   assert.equal(value(sheet.rows[2], 'id'), CHILD_ID.toUpperCase());
   assert.equal(value(sheet.rows[2], 'parent_tx_id'), PARENT_ID.toUpperCase());

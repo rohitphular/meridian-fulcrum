@@ -23,7 +23,8 @@ def launcher(tmp_path: Path) -> tuple[Path, Path, dict[str, str]]:
     for part in ("cicd/read-stage.py", "core/pipeline_config.py"):
         (pipeline / part).parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(PIPELINE_ROOT / part, pipeline / part)
-    (pipeline / "pipeline.json").write_text(json.dumps({"env": "prod", "stages": [{"module": "ledger-sheet-extract", "mode": "hard-sync"}]}))
+    (pipeline / "config").mkdir()
+    (pipeline / "config" / "pipeline.prod.json").write_text(json.dumps({"env": "prod", "stages": [{"module": "ledger-sheet-extract", "mode": "hard-sync"}]}))
     infrastructure = repository / "infrastructure"
     infrastructure.mkdir()
     for name in ("dev", "prod"):
@@ -36,6 +37,10 @@ def launcher(tmp_path: Path) -> tuple[Path, Path, dict[str, str]]:
     fake_uv.chmod(0o755)
     environment = {**os.environ, "PATH": f"{binary_directory}:{os.environ['PATH']}", "LAUNCHER_CALLS_FILE": str(calls_file)}
     return script, calls_file, environment
+
+
+def _config(script: Path) -> Path:
+    return script.parents[2] / "consolidated-pipeline" / "config" / "pipeline.prod.json"
 
 
 _MIGRATE_CALLS = [["sync", "--locked", "--quiet"], ["run", "--locked", "py-db-migrate", "run", "--db", "postgres"]]
@@ -107,7 +112,7 @@ def test_launcher_logs_under_the_module_folder_and_requires_a_log_root(launcher:
 
 def test_default_reads_env_and_mode_from_the_pipeline_config(launcher: tuple[Path, Path, dict[str, str]]) -> None:
     script, calls_file, environment = launcher
-    completed = subprocess.run(["/bin/bash", str(script)], env=environment, capture_output=True, text=True, timeout=15, stdin=subprocess.DEVNULL)
+    completed = subprocess.run(["/bin/bash", str(script), "--config", str(_config(script))], env=environment, capture_output=True, text=True, timeout=15, stdin=subprocess.DEVNULL)
     assert completed.returncode == 0, completed.stderr
     assert "[prod] Running ledger-sheet-extract job (hard-sync)..." in completed.stdout
     assert json.loads(calls_file.read_text().splitlines()[-1]) == ["run", "--locked", "python", "-m", "core.runner", "--reprocess"]
@@ -115,7 +120,7 @@ def test_default_reads_env_and_mode_from_the_pipeline_config(launcher: tuple[Pat
 
 def test_check_validates_the_stage_without_running_anything(launcher: tuple[Path, Path, dict[str, str]]) -> None:
     script, calls_file, environment = launcher
-    completed = subprocess.run(["/bin/bash", str(script.parent / "check.sh"), "--stage", "1"], env=environment, capture_output=True, text=True, timeout=15)
+    completed = subprocess.run(["/bin/bash", str(script.parent / "check.sh"), "--config", str(_config(script)), "--stage", "1"], env=environment, capture_output=True, text=True, timeout=15)
     assert completed.returncode == 0, completed.stderr
     assert "Check passed: ledger-sheet-extract hard-sync" in completed.stdout
     assert "credentials=" not in completed.stdout
@@ -124,8 +129,8 @@ def test_check_validates_the_stage_without_running_anything(launcher: tuple[Path
 
 def test_unattended_rejects_a_config_mode_the_module_does_not_have(launcher: tuple[Path, Path, dict[str, str]]) -> None:
     script, calls_file, environment = launcher
-    (script.parents[2] / "consolidated-pipeline" / "pipeline.json").write_text(json.dumps({"env": "dev", "stages": [{"module": "ledger-sheet-extract", "mode": "daily"}]}))
-    completed = subprocess.run(["/bin/bash", str(script.parent / "check.sh")], env=environment, capture_output=True, text=True, timeout=15)
+    _config(script).write_text(json.dumps({"env": "prod", "stages": [{"module": "ledger-sheet-extract", "mode": "daily"}]}))
+    completed = subprocess.run(["/bin/bash", str(script.parent / "check.sh"), "--config", str(_config(script))], env=environment, capture_output=True, text=True, timeout=15)
     assert completed.returncode != 0
     assert "mode must be normal-sync or hard-sync" in completed.stdout
     assert not calls_file.exists()
@@ -136,6 +141,9 @@ def sync_menu(launcher: tuple[Path, Path, dict[str, str]]) -> tuple[Path, Path, 
     script, calls_file, environment = launcher
     repository = script.parents[3]
     shutil.copyfile(MODULE_ROOT.parents[1] / "Makefile", repository / "Makefile")
+    # The root Makefile's shared env picker and the env list it reads.
+    shutil.copyfile(MODULE_ROOT.parents[1] / "infrastructure" / "select-env.sh", repository / "infrastructure" / "select-env.sh")
+    (repository / "infrastructure" / "envs.json").write_text(json.dumps({"dev": {}, "prod": {}}))
     currency_cicd = repository / "data-synchronization" / "currency-database-load" / "cicd"
     currency_cicd.mkdir(parents=True)
     (currency_cicd / "start-up.sh").write_text('#!/usr/bin/env bash\nprintf "%s\\n" "currency-database-load:$*" >> "$LAUNCHER_CALLS_FILE"\n')

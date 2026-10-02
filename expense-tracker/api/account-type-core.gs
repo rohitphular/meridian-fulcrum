@@ -43,6 +43,12 @@ function _importAccountTypeCatalog(incoming, fullCatalog) {
       const count = _countAccountTypeReferences(replacement);
       if (count > 0) return { ok: false, error: 'account_type_in_use', referenced_count: count };
     }
+    // Same values as stored: keep the stored row (and its sync status) as it is.
+    const columns = getAccountTypeSheetColumns();
+    if (previous !== null && importRowUnchanged(columns, columns.map(function(column) { return previous[column]; }), columns.map(function(column) { return replacement[column]; }))) {
+      results.push({ key: previous.id, id: previous.id, ok: true, action: 'unchanged' });
+      continue;
+    }
     if (rowIndex === -1) rows.push(replacement);
     else rows[rowIndex] = replacement;
     results.push({ key: replacement.id, id: replacement.id, ok: true, action: previous === null ? 'created' : 'updated' });
@@ -64,8 +70,10 @@ function _importAccountTypeCatalog(incoming, fullCatalog) {
     return { ok: false, error: 'account_type_import_failed' };
   }
   const created = results.filter(function(row) { return row.action === 'created'; }).length;
-  console.log('_importAccountTypeCatalog: created=' + created + ' updated=' + (results.length - created) + ' references_migrated=' + plan.changed_rows);
-  return { ok: true, created: created, updated: results.length - created, failed: 0, results: results, references_migrated: plan.changed_rows };
+  const skipped = results.filter(function(row) { return row.action === 'unchanged'; }).length;
+  const updated = results.length - created - skipped;
+  console.log('_importAccountTypeCatalog: created=' + created + ' updated=' + updated + ' unchanged=' + skipped + ' references_migrated=' + plan.changed_rows);
+  return { ok: true, created: created, updated: updated, skipped: skipped, failed: 0, results: results, references_migrated: plan.changed_rows };
 }
 function updateAccountType(body) { return _changeAccountType(body, null); }
 function deleteAccountType(body) { return _changeAccountType(body, 'deleted'); }

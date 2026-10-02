@@ -8,4 +8,4 @@ from pathlib import Path
 _MERIDIAN_LOG_ROOT: str = os.environ["MERIDIAN_LOG_ROOT"]
 
 DATA_SYNC_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_CONFIG = Path(__file__).resolve().parents[1] / "pipeline.json"
+CONFIG_DIR = Path(__file__).resolve().parents[1] / "config"

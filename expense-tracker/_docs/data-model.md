@@ -181,6 +181,10 @@ The API includes XAU as a fixed `rate = 1` row. Legacy rate-table normalization 
 | `total_attempts`, `success_count`, `failure_count` | number | Running totals |
 | `is_locked` | boolean | True after `MAX_FAILURES` recorded failures for the supplied IP; successful requests do not reset the count |
 
+## Unchanged re-imports
+
+Every CSV import (account types, categories, accounts, the six detail tabs, subscriptions, transactions) compares each existing row with the incoming one before writing, ignoring `sync_status`, `sync_date`, `sync_notes`, `created_at` and `updated_at`. Identical rows are not written: their sync status and metadata stay as they are, and the response counts them in `skipped` (shown as "N unchanged"). Typed Sheet cells compare by type — a date cell as its displayed local time, a number by value (`1475` equals `1475.00`), a boolean ignoring case; everything else compares as trimmed text, so anything uncertain counts as a change and is re-queued as before (`sync-utils.gs`: `importCellsEqual`, `importRowUnchanged`). The ledger extractor then only processes rows that really changed.
+
 ## Cross-entity invariants
 
 1. Every `account.account_currency_local` MUST exist in `rates`.

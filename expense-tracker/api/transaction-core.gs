@@ -500,7 +500,16 @@ function createTransactionsBulk(body) {
   const results   = [];
   let created = 0;
   let updated = 0;
+  let skipped = 0;
   let failed  = 0;
+
+  // Same values as every stored leg of this group (and no leg added or removed):
+  // keep the stored rows exactly, so their sync status is untouched.
+  function keepIfUnchanged(legRows) {
+    const stored = legRows.map(function(leg) { return existingRowById[_transactionUuid(leg[idColIdx])]; });
+    if (!legRows.every(function(leg, index) { return importRowUnchanged(cols, stored[index], leg); })) return null;
+    return stored.map(function(row) { return row.slice(); });
+  }
 
   body.transactions.forEach(function(tx) {
     if (tx === null || typeof tx !== 'object' || Array.isArray(tx)) {
@@ -596,12 +605,16 @@ function createTransactionsBulk(body) {
       }
 
       const shared = _txSharedFields(txBody);
-      newRows.push(buildRow(Object.assign({}, shared, { tx_type: parentType, account_id: parentAcct, tx_amount_local: parentAmt, parent_tx_id: '', record_status: recordStatus }), parentId));
-      newRows.push(buildRow(Object.assign({}, shared, { tx_type: childType,  account_id: childAcct,  tx_amount_local: childAmt,  parent_tx_id: parentId, record_status: childStatus }), childId));
+      const legs = [
+        buildRow(Object.assign({}, shared, { tx_type: parentType, account_id: parentAcct, tx_amount_local: parentAmt, parent_tx_id: '', record_status: recordStatus }), parentId),
+        buildRow(Object.assign({}, shared, { tx_type: childType,  account_id: childAcct,  tx_amount_local: childAmt,  parent_tx_id: parentId, record_status: childStatus }), childId),
+      ];
+      const kept = isReplace && previousChild !== undefined ? keepIfUnchanged(legs) : null;
+      Array.prototype.push.apply(newRows, kept === null ? legs : kept);
       batchIds[csvId] = true;
       batchIds[_transactionUuid(childId)] = true;
-      results.push({ key: csvId, ok: true, action: action });
-      if (isReplace) updated += 1; else created += 1;
+      results.push({ key: csvId, ok: true, action: kept === null ? action : 'unchanged' });
+      if (kept !== null) skipped += 1; else if (isReplace) updated += 1; else created += 1;
       return;
     }
 
@@ -609,12 +622,15 @@ function createTransactionsBulk(body) {
     const acct = cat.source_account_mandatory ? txBody.source_account : txBody.target_account;
     const amt  = cat.source_account_mandatory ? transactionDecimal(txBody.source_amount_local) : transactionDecimal(txBody.target_amount_local);
 
-    newRows.push(buildRow(Object.assign(_txSharedFields(txBody), {
+    const leg = buildRow(Object.assign(_txSharedFields(txBody), {
       tx_type: txBody.tx_type, account_id: acct, tx_amount_local: amt, parent_tx_id: '', record_status: recordStatus,
-    }), previous === undefined ? csvId : String(previous[idColIdx]).trim()));
+    }), previous === undefined ? csvId : String(previous[idColIdx]).trim());
+    // A former transfer re-imported as a single row changes shape (its child is tombstoned).
+    const kept = isReplace && previous !== undefined && previousChild === undefined ? keepIfUnchanged([leg]) : null;
+    Array.prototype.push.apply(newRows, kept === null ? [leg] : kept);
     batchIds[csvId] = true;
-    results.push({ key: csvId, ok: true, action: action });
-    if (isReplace) updated += 1; else created += 1;
+    results.push({ key: csvId, ok: true, action: kept === null ? action : 'unchanged' });
+    if (kept !== null) skipped += 1; else if (isReplace) updated += 1; else created += 1;
   });
 
   // ── Filter out existing rows being replaced by this batch ──────────────────
@@ -644,7 +660,7 @@ function createTransactionsBulk(body) {
   });
 
   if (created + updated === 0)
-    return { ok: false, created: created, updated: updated, failed: failed, results: results };
+    return { ok: skipped > 0 && failed === 0, created: created, updated: updated, skipped: skipped, failed: failed, results: results };
 
   // ── Single rewrite of the whole data region ────────────────────────────────
   const finalRows      = keptRows.concat(newRows);
@@ -660,13 +676,14 @@ function createTransactionsBulk(body) {
   }
 
   console.log('createTransactionsBulk: input=' + body.transactions.length
-    + ' created=' + created + ' updated=' + updated + ' failed=' + failed
+    + ' created=' + created + ' updated=' + updated + ' unchanged=' + skipped + ' failed=' + failed
     + ' kept=' + keptRows.length + ' new_legs=' + newRows.length);
 
   return {
     ok:      failed === 0,
     created: created,
     updated: updated,
+    skipped: skipped,
     failed:  failed,
     results: results,
   };

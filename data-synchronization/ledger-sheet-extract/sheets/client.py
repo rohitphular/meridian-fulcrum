@@ -96,14 +96,11 @@ class SnapshotSheetsClient(SheetsClient):
         return headers, rows
 
     def capture(self, names: list[str]) -> None:
-        before = self.get_modified_time()
         self._ensure_sheets_exist(names)
         for name, (headers, rows) in self._read_snapshots(names).items():
             self._validate_rows(name, rows)
             self._headers[name] = headers
             self._snapshots[name] = rows
-        if self.get_modified_time() != before:
-            raise RuntimeError("sheet_changed_during_snapshot")
 
     @staticmethod
     def _validate_rows(name: str, rows: list[dict[str, Any]]) -> None:

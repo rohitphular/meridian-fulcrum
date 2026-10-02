@@ -102,7 +102,9 @@ def test_default_reads_env_and_mode_from_the_pipeline_config_and_check_runs_noth
     for part in ("cicd/read-stage.py", "core/pipeline_config.py"):
         (pipeline / part).parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(MODULE_ROOT.parent / "consolidated-pipeline" / part, pipeline / part)
-    (pipeline / "pipeline.json").write_text('{"env": "prod", "stages": [{"module": "currency-database-load", "mode": "historical"}]}')
+    config = pipeline / "config" / "pipeline.prod.json"
+    config.parent.mkdir()
+    config.write_text('{"env": "prod", "stages": [{"module": "currency-database-load", "mode": "historical"}]}')
     infrastructure = repository / "infrastructure"
     infrastructure.mkdir()
     (infrastructure / ".env.prod").write_text(f"MERIDIAN_LOG_ROOT={tmp_path / 'logs'}\n")
@@ -113,11 +115,11 @@ def test_default_reads_env_and_mode_from_the_pipeline_config_and_check_runs_noth
     fake_uv.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$CURRENCY_TEST_COMMANDS"\n')
     fake_uv.chmod(0o700)
     environment = {**os.environ, "PATH": f"{binary_dir}:/usr/bin:/bin", "CURRENCY_TEST_COMMANDS": str(capture)}
-    check = subprocess.run(["/bin/bash", str(scripts / "check.sh")], capture_output=True, text=True, env=environment, check=False)
+    check = subprocess.run(["/bin/bash", str(scripts / "check.sh"), "--config", str(config)], capture_output=True, text=True, env=environment, check=False)
     assert check.returncode == 0, check.stderr
     assert "Check passed: currency-database-load historical" in check.stdout
     assert not capture.exists()
-    result = subprocess.run(["/bin/bash", str(scripts / "start-up.sh")], capture_output=True, text=True, env=environment, stdin=subprocess.DEVNULL, check=False)
+    result = subprocess.run(["/bin/bash", str(scripts / "start-up.sh"), "--config", str(config)], capture_output=True, text=True, env=environment, stdin=subprocess.DEVNULL, check=False)
     assert result.returncode == 0, result.stderr
     assert capture.read_text().splitlines()[-1] == "run --locked python -m core.historical"
     positional = subprocess.run(["/bin/bash", str(scripts / "start-up.sh"), "prod", "daily"], capture_output=True, text=True, env=environment, check=False)

@@ -75,7 +75,7 @@ function extractMeta(source) {
 // inference — for a 6-digit PIN with IP lockout after MAX_FAILURES this is
 // already non-exploitable in practice, but the cost is one tight loop.
 function checkPin(pin) {
-  const stored = PropertiesService.getScriptProperties().getProperty('PIN_SECRET');
+  const stored = PropertiesService.getScriptProperties().getProperty('MERIDIAN_FULCRUM_PIN');
   if (stored === null || stored === undefined || String(stored).trim() === '') return false;
   return _constantTimeEqual(pin, stored);
 }

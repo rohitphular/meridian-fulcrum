@@ -3,17 +3,21 @@
 from __future__ import annotations
 
 import re
+import time
 from collections.abc import Callable
 from datetime import datetime, timezone
 from decimal import Decimal, localcontext
 from typing import Any
 
 import psycopg2
+from py_logging import get_logger
 
 import sheets.account_details as sheets_details
 from core.account_detail_contracts import CONTRACTS
 from transforms.account_details import transform
 from transforms.financial import to_minor_units
+
+logger = get_logger(__name__)
 
 
 class _RowError(ValueError):
@@ -263,9 +267,12 @@ def upsert_details(
             raise ValueError("invalid_account_detail_sync_status")
         selected.append({**row, "_sheet_row_num": int(row.get("_sheet_row_num", index + 2))})
     if not selected:
+        logger.info(f"upsert_details: tab={sheet_name} total={len(rows)} actionable=0")
         return 0
+    started = time.monotonic()
+    logger.info(f"upsert_details: start tab={sheet_name} total={len(rows)} actionable={len(selected)}")
     try:
-        sync_details(conn, sheet_name, selected, reprocess=reprocess, before_commit=before_commit)
+        counts = sync_details(conn, sheet_name, selected, reprocess=reprocess, before_commit=before_commit)
     except ValueError as error:
         # sync_details exposes only validated codes and physical row numbers.
         failure = re.fullmatch(rf"account_detail_error:{re.escape(sheet_name)}:row=(\d+):([a-z_]+)", str(error))
@@ -279,7 +286,9 @@ def upsert_details(
             notes = code if row["_sheet_row_num"] == culprit_row else "detail_tab_rolled_back"
             acknowledgements.append((row["_sheet_row_num"], status, sync_date, notes))
         sheets_details.flush(sheets_client, sheet_name, acknowledgements)
+        logger.warning(f"upsert_details: done tab={sheet_name} failed={len(selected)} rolled_back=true elapsed_s={time.monotonic() - started:.0f}")
         return len(selected)
+    logger.info(f"upsert_details: done tab={sheet_name} created={counts['created']} updated={counts['updated']} unchanged={counts['unchanged']} elapsed_s={time.monotonic() - started:.0f}")
     sync_date = datetime.now(timezone.utc).isoformat()
     sheets_details.flush(sheets_client, sheet_name, [(row["_sheet_row_num"], "in-sync", sync_date, "") for row in selected])
     return 0

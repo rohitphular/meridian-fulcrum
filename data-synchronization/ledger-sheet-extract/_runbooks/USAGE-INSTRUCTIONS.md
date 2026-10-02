@@ -53,6 +53,17 @@ Migration `0018` is required by the renamed-table extractor and applies on the n
 
 Avoid editing the Sheet while extraction runs. The job detects source changes before acknowledgements, but Sheets does not offer a cross-system transaction or atomic conditional cell write.
 
+
+## Reading the log
+
+Each entity logs `start total=N`, then a `progress` line every 25 handled rows or 30 seconds, then `done`:
+
+```
+upsert_transactions: progress processed=150/597 succeeded=150 failed=0 skipped=0 elapsed_s=157
+upsert_transactions: done processed=597/597 succeeded=597 failed=0 skipped=0 elapsed_s=625
+```
+
+`skipped` counts rows already `in-sync` (and unchanged category dependencies). Rows are committed one at a time, each after re-reading the captured tabs to confirm the Sheet has not changed, so expect about a second per handled row; a long gap between lines is that work, not a hang. Detail tabs commit in one go and log `upsert_details: start` / `done` with created, updated and unchanged counts.
 ## Toggles
 
 The supplied config enables both `transaction_master` and `subscription_master`. Deploy the updated expense-tracker backend for transaction UUID/lifecycle import guards and direct Sheet edit tracking. Existing in-sync rows edited before that deployment need one hard-sync to revalidate their current contents. Both transfer directions must have matching category keys, and currency-database-load must provide each transaction's exact UTC-date valuation rate. Subscription sync needs no exchange rate: it stores local-currency obligations. Deploy its matching schema/CRUD/schedule fixes too, fill the local subscription CSV's timezone per dated row, and import it before dev hard-sync. Quarterly/annual subscriptions need a start timestamp as their month anchor. Source reads no longer auto-expire lifecycle state; expiry is a computed calendar status.

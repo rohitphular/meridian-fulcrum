@@ -24,7 +24,7 @@ export LSL_SPREADSHEET_ID="$SPREADSHEET_ID"
 
 # ── Step 3: Install dependencies, run job ─────────────────────────────────────
 # No database: this job only calls the GAS web app, so there are no migrations.
-# Credentials are never passed as arguments or environment variables.
+# Credentials are never passed as arguments: MERIDIAN_FULCRUM_PIN / _SECRET from the env file, else stdin or prompts.
 
 echo "[$ENV_ARG] Installing dependencies..."
 uv sync --locked --quiet

@@ -62,7 +62,7 @@ fi
 # ── Step 2: Resolve description ───────────────────────────────────────────────
 
 MSG="${2:-}"
-if [[ -z "$MSG" && -z "${1:-}" ]]; then
+if [[ $# -lt 2 ]]; then
   read -rp "Deploy description (leave blank for default): " MSG
   echo ""
 fi

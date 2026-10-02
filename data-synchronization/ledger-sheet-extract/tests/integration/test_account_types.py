@@ -1,7 +1,6 @@
 """Sheet ownership, seed adoption and dependency guards against disposable PostgreSQL."""
 
 from copy import deepcopy
-from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
@@ -196,9 +195,6 @@ def test_normal_hard_sync_recovery_and_acknowledgement_retry_keep_one_identity(d
 
         def snapshot_rows(self, name: str) -> list[dict[str, Any]]:
             return [deepcopy(source)]
-
-        def get_modified_time(self) -> datetime:
-            return datetime(2026, 9, 24, tzinfo=timezone.utc)
 
         def assert_unchanged(self) -> None:
             pass

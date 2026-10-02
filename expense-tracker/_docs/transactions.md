@@ -310,7 +310,7 @@ The backend checks, before anything is written:
 
 A `T` separator in `tx_date_local` is stored as a space. The remaining business rules (categories, account lifecycle, transfer pairing, timezone, beneficiaries, coordinates range) are applied per row by the bulk writer and reported as failed rows.
 
-Bulk imports match by supplied `id`, not by the interactive duplicate tuple. Results distinguish created, updated, and failed rows. Rows without an `id` are always inserted as new transactions; the panel says how many there were after import. Retain IDs (export after importing) when re-importing to avoid creating duplicates.
+Bulk imports match by supplied `id`, not by the interactive duplicate tuple. Results distinguish created, updated, unchanged (`skipped`) and failed rows. A row whose legs all equal the stored legs (ignoring sync and audit columns) is left untouched, so its sync status is kept; a transfer re-imported as a single row, or the reverse, counts as a change. Rows without an `id` are always inserted as new transactions; the panel says how many there were after import. Retain IDs (export after importing) when re-importing to avoid creating duplicates.
 
 ## Add / edit form layout
 
