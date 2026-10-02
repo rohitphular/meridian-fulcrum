@@ -78,10 +78,21 @@ const _ROUTER_NON_DATA_POST_ACTIONS = ['advisor_chat', 'clear_advisor_history', 
 function _routerPostChangedData(body, result) {
   if (body.dry_run === true || _ROUTER_NON_DATA_POST_ACTIONS.indexOf(body.action) !== -1) return false;
   if (result === null || typeof result !== 'object') return false;
-  if (result.ok === true) return true;
+  // A failure after part of the change reached the Sheet.
+  if (result.sheet_written === true) return true;
   // A partial tab delete reports the tabs it did delete as a list.
   if (Array.isArray(result.deleted) && result.deleted.length > 0) return true;
+  if (result.ok === true) return !_routerWroteNothing(result);
   return ['created', 'updated', 'deleted'].some(function(key) { return Number(result[key]) > 0; });
+}
+
+// An import that reports counts and wrote no row: every row was identical to the stored
+// one. Results without counts (single-record actions) always count as a change.
+function _routerWroteNothing(result) {
+  if (typeof result.created !== 'number' || typeof result.updated !== 'number') return false;
+  if (result.created !== 0 || result.updated !== 0) return false;
+  if (Number(result.references_migrated) > 0 || result.catalog_written === true || Number(result.deleted) > 0) return false;
+  return true;
 }
 
 // json() returns a TextOutput in GAS (tests stub it as identity); read ok back.

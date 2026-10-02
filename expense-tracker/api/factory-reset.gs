@@ -28,7 +28,8 @@ function factoryResetDeleteSheets(body) {
   if (targets.length === sheets.length) return { ok: false, error: 'no_retained_sheet' };
   const deleted = [];
   try {
-    targets.forEach(function(sheet) { deleted.push(sheet.getName()); spreadsheet.deleteSheet(sheet); });
+    // Listed only once deleted: a failed delete must not be reported as done.
+    targets.forEach(function(sheet) { const name = sheet.getName(); spreadsheet.deleteSheet(sheet); deleted.push(name); });
   } catch (_) {
     console.error('factoryResetDeleteSheets: error=delete_failed deleted=' + deleted.length);
     return { ok: false, error: 'delete_failed', deleted: deleted };

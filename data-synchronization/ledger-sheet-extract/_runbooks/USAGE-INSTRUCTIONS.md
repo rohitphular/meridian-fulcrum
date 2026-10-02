@@ -30,5 +30,6 @@ Normally both run as stages of `make consolidated-pipeline`.
 | `ledger_sheet_extract_already_running` | Another extract/acknowledge holds the lock; wait for it |
 | `ledger_database_load_running` | Acknowledge found ledger-database-load running; run acknowledge again once the load finishes |
 | `sheets_api_rate_limit_exhausted` | Google quota exhausted after retries; rerun later |
+| log `runner: job_failed reason=interrupted` | Ctrl-C, SIGTERM or SIGHUP stopped the run (the first signal wins; later ones are ignored while it unwinds); run the same mode again |
 | acknowledge logs `edited_since_snapshot=N` | Those rows were edited during the run; they stay pending and the next run picks them up |
 | acknowledge logs `not_found=N` | Those rows were removed (or duplicated) since the snapshot; nothing was written for them |

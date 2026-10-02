@@ -93,9 +93,10 @@ function fillCsvIds(body) {
   let filled = 0;
   decoded.records.slice(1).forEach(function(record) {
     // A short row (its cells stop before the id column) has a blank id too: pad it
-    // with empty cells up to the id, or it would get a new id on every import.
+    // with empty cells to the header width (the importer needs every column), or it
+    // would get a new id on every import.
     if (record.values.length > idColumn && record.values[idColumn].trim() !== '') return;
-    while (record.values.length <= idColumn) record.values.push('');
+    while (record.values.length < headers.length) record.values.push('');
     record.values[idColumn] = Utilities.getUuid().toLowerCase();
     filled++;
   });

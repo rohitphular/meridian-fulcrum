@@ -437,6 +437,7 @@ const IMPORT_ERRORS = {
   account_type_in_use: 'This import would retire or remap a type used by accounts or categories. Keep it available until those references are reconciled.',
   account_types_is_loan_column_present: 'Delete the retired is_loan column from the account_types Sheet, then retry.',
   account_type_import_failed: 'The import was interrupted. Import the complete CSV again.',
+  request_failed: 'Import stopped part-way. Some rows may have been saved. Refresh and check before importing the file again.',
   busy_retry: 'Another change is in progress. Try again in a moment.',
   invalid_response: 'The server did not return a complete import result. Refresh and check before retrying.',
 };
@@ -463,13 +464,22 @@ async function _submitImport() {
     catch (_) { state.accountTypeImport = { filename: file.name, result: { ok: false, error: 'invalid_csv' } }; return; }
     let result;
     try { result = await ExpenseAPI.createAccountTypesBulk({ csv }); }
-    catch (_) { showMsg('Connection lost. The import may have completed. Refresh and check before retrying.', 'warn'); return; }
+    catch (_) {
+      showMsg('Connection lost. The import may have completed. Refresh and check before retrying.', 'warn');
+      document.dispatchEvent(new CustomEvent('et:reload'));
+      return;
+    }
     if (result === null || typeof result !== 'object') result = { ok: false, error: 'invalid_response' };
     state.accountTypeImport = { filename: file.name, result };
     if (result.ok === true) {
-      showMsg(`${result.created ?? 0} created · ${result.updated ?? 0} updated · ${result.skipped ?? 0} unchanged · ${result.failed ?? 0} failed`, result.failed > 0 ? 'warn' : 'success');
-      if ((result.created ?? 0) + (result.updated ?? 0) > 0) document.dispatchEvent(new CustomEvent('et:reload'));
-    } else showMsg(IMPORT_ERRORS[result.error] ?? result.error ?? 'Import failed.', 'warn');
+      const migrated = result.references_migrated ?? 0;
+      showMsg(`${result.created ?? 0} created · ${result.updated ?? 0} updated · ${result.skipped ?? 0} unchanged · ${result.failed ?? 0} failed${migrated > 0 ? ` · ${migrated} references migrated` : ''}`, result.failed > 0 ? 'warn' : 'success');
+      // References or a layout upgrade can change the Sheet even when every catalog row is unchanged.
+      if ((result.created ?? 0) + (result.updated ?? 0) + migrated > 0 || result.catalog_written === true) document.dispatchEvent(new CustomEvent('et:reload'));
+    } else {
+      showMsg(IMPORT_ERRORS[result.error] ?? result.error ?? 'Import failed.', 'warn');
+      if (result.sheet_written === true || result.error === 'request_failed') document.dispatchEvent(new CustomEvent('et:reload'));
+    }
   } finally {
     state.accountTypeBusy = false;
     controls.forEach((control, index) => { control.disabled = disabled[index]; });

@@ -23,6 +23,12 @@ with open(sys.argv[1]) as f:
 PYTHON
 )
 
+# Checked first: under bash 3.2 (macOS) with set -u an empty array is "unbound".
+if [[ ${#ENVS[@]} -eq 0 ]]; then
+  echo "ERROR: infrastructure/envs.json declares no environments." >&2
+  exit 1
+fi
+
 if [[ -n "$NAME" ]]; then
   for env in "${ENVS[@]}"; do
     if [[ "$env" == "$NAME" ]]; then echo "$NAME"; exit 0; fi

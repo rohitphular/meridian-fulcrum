@@ -41,7 +41,8 @@ uv run --locked py-db-migrate run --db postgres
 
 echo "[$ENV_ARG] Running $MODE_ARG job..."
 if [[ "$MODE_ARG" == "daily" ]]; then
-  uv run --locked python -m core.runner
+  # exec: a signal sent to this launcher (kill, a scheduler) reaches the job itself.
+  exec uv run --locked python -m core.runner
 else
-  uv run --locked python -m core.historical
+  exec uv run --locked python -m core.historical
 fi

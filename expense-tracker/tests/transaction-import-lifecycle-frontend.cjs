@@ -101,7 +101,8 @@ test('rows without an id are called out after import and keep the panel open', a
 });
 
 test('an interrupted or incomplete response reloads and warns that rows may have been saved', async () => {
-  for (const respond of [() => { throw new Error('connection_error'); }, () => ({ ok: true })]) {
+  // request_failed: the server handler threw part-way, so rows may be saved too.
+  for (const respond of [() => { throw new Error('connection_error'); }, () => ({ ok: true }), () => ({ ok: false, error: 'request_failed' })]) {
     const f = fixture(respond);
     await f._submitTxImport(file(RAW));
     assert.match(f.snapshot().result, /Some rows may have been saved/);

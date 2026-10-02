@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import signal
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any
 from uuid import UUID
 
@@ -17,6 +20,23 @@ from core.account_detail_contracts import CONTRACTS, SYNC_DETAIL_SHEETS
 from core.staging_source import StagingSource, latest_run
 
 logger = get_logger(__name__)
+
+
+@contextmanager
+def _uninterruptible() -> Iterator[None]:
+    """Storing the outcomes must finish once started: Ctrl-C often arrives twice
+    (from the terminal and forwarded by `uv run`), and a second one would drop them."""
+    try:
+        previous = {signum: signal.signal(signum, signal.SIG_IGN) for signum in (signal.SIGINT, signal.SIGTERM)}
+    except ValueError:  # not the main thread: signals cannot arrive here anyway
+        previous = {}
+    try:
+        yield
+    finally:
+        for signum, handler in previous.items():
+            signal.signal(signum, handler)
+
+
 _ENTITIES = ("account_types", "category_master", "account_master", *CONTRACTS, "transaction_master", "subscription_master")
 _ID_COLUMNS = {
     "account_types": ("account_types", "id"),
@@ -93,13 +113,15 @@ class LedgerDatabaseLoadJob:
                 # so the acknowledge step can still mark them and report failures.
                 # A failure to store them must not hide the error that stopped the load.
                 try:
-                    source.flush_pending(mode=mode)
+                    with _uninterruptible():
+                        source.flush_pending(mode=mode)
                 except Exception as flush_error:
                     logger.error(f"run: flush_pending_failed=true error={type(flush_error).__name__}")
                 raise
-            source.flush_pending(mode=mode)
+            with _uninterruptible():
+                source.flush_pending(mode=mode)
             logger.info(f"run: complete=true entities={len(enabled)}")
-        except Exception:
+        except BaseException:
             conn.rollback()
             raise
         finally:

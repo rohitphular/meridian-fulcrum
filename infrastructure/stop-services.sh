@@ -26,6 +26,12 @@ for k in d.keys():
         print(k)
 ")
 
+# Checked first: under bash 3.2 (macOS) with set -u an empty array is "unbound".
+if [[ ${#VALID_ENVS[@]} -eq 0 ]]; then
+  echo "ERROR: infrastructure/envs.json declares no environments."
+  exit 1
+fi
+
 env_is_valid=0
 for e in "${VALID_ENVS[@]}"; do
   if [[ "$ENV_ARG" == "$e" ]]; then env_is_valid=1; break; fi

@@ -33,7 +33,7 @@ make run ENV=dev MODE=sheet-sync
 bash cicd/start-up.sh --interactive prod sheet-rebuild
 ```
 
-Unattended runs (the default, used by the [consolidated-pipeline](../../consolidated-pipeline/README.md)) take env and mode from the pipeline config and read the PIN and code from stdin; a `sheet-rebuild` stage needs `"confirm": "<env>"`. See the README for `--sign-in-only`, `--skip-sign-in` and `cicd/check.sh`.
+Unattended runs (the default, used by the [consolidated-pipeline](../../consolidated-pipeline/README.md)) take env and mode from the pipeline config and read the PIN and code from stdin, unless both stored credentials (`MERIDIAN_FULCRUM_PIN`, `MERIDIAN_FULCRUM_SECRET`) are set; a `sheet-rebuild` stage needs `"confirm": "<env>"`. See the README for `--sign-in-only`, `--skip-sign-in` and `cicd/check.sh`.
 
 The launcher validates the environment and mode before anything runs, loads the env file, exports the selected `script_url` and `spreadsheet_id` (so a stale value in the env file cannot override them), syncs the committed lockfile and runs the job. The job lists the files, shows what it is about to do and asks for confirmation (type the environment name for sheet-rebuild; `y` for sheet-sync) before it asks for the PIN.
 
@@ -55,5 +55,6 @@ Typical order after editing the CSVs: `make consolidated-pipeline` (ledger-sheet
 | `busy_retry:<step>` | Another request held the script lock; rerun |
 | `http_error:<action>:<code>` / `network_error:<action>` | The web app could not be reached or failed; check the deployment and `script_url` |
 | `spreadsheet_mismatch:drop_tabs` | `spreadsheet_id` in `cicd/envs.json` is not the Sheet bound to that deployment; nothing was deleted |
+| `delete_failed:drop_tabs` | A tab delete failed part-way; the printed `deleted` list names only the tabs actually deleted. Rerun sheet-rebuild |
 
 A run that stops after the check step can be repeated as is: imports match rows by id. Backups written by the fill-ids step stay in `local/files/.backup/`.

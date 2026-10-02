@@ -87,4 +87,5 @@ echo "[$ENV_ARG] Installing dependencies..."
 uv sync --locked --quiet
 
 echo "[$ENV_ARG] Running pipeline ($CONFIG_FILE)..."
-uv run --locked python -m core.runner --config "$CONFIG_FILE"
+# exec: a signal sent to this launcher (kill, a scheduler) reaches the job itself.
+exec uv run --locked python -m core.runner --config "$CONFIG_FILE"

@@ -34,4 +34,5 @@ echo "[$ENV_ARG] Running migrations..."
 uv run --locked py-db-migrate run --db postgres
 
 echo "[$ENV_ARG] Running ledger-sheet-extract job ($MODE_ARG)..."
-uv run --locked python -m core.runner --mode "$MODE_ARG"
+# exec: a signal sent to this launcher (kill, a scheduler) reaches the job itself.
+exec uv run --locked python -m core.runner --mode "$MODE_ARG"

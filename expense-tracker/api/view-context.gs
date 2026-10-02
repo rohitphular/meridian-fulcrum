@@ -46,6 +46,8 @@ const _VM_MESSAGES = {
   missing_row_num: 'This record could not be found. Refresh and try again.',
   stale_record: 'This record moved or changed. Refresh, then reopen it before trying again.',
   record_locked: 'This record is locked and cannot be changed.',
+  invalid_transfer_lifecycle: 'Both legs of a transfer must be deleted together, or both kept. Set record_status for this transfer explicitly.',
+  multiple_live_transfer_children: 'This transfer has more than one live linked leg in the Sheet. Delete the extra leg, then import again.',
   field_not_editable: 'This field cannot be changed.',
   invalid_id: 'The record id must be a UUID.',
   // Accounts

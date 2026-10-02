@@ -118,6 +118,7 @@ Inspect master and six detail-tab `sync_notes` for expected validation failures.
 | `unknown_staged_tab:<tab>` | The staged run contains a tab this module has no contract for; fix ledger-sheet-extract's `config.yaml` and extract again |
 | `latest_snapshot_not_loadable:<status>` | The newest staging run is in an unexpected state; run a fresh extract |
 | log `nothing_to_load=true` | The newest snapshot is already acknowledged; run a fresh extract to load new Sheet changes, or hard-sync to re-load that snapshot |
+| log `runner: job_failed reason=interrupted` | Ctrl-C, SIGTERM or SIGHUP stopped the load (the first signal wins; later ones are ignored, so the outcomes are still stored; a hung job needs SIGKILL). Committed rows stay committed and the outcomes of handled rows are stored; run the sync again (extract → load → acknowledge) |
 | Nonempty legacy `transactions` table | Preserve and explicitly migrate legacy records before migration 0005; it refuses destructive replacement |
 
 A lost acknowledgement does not undo committed PostgreSQL rows. Retry instead of deleting/recreating DB rows. Physically deleting a source row is not a tombstone: use `record_status=deleted` where the source contract supports it. All detail tabs now support explicit lifecycle values; physical removal still requires a separately reviewed reconciliation. Source timestamps remain source-owned; DB audit timestamps describe ingestion.

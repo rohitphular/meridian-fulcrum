@@ -6,11 +6,11 @@ Source contracts: [GAS schema](../../../expense-tracker/api/category-schema.gs),
 
 **Prerequisite:** apply migrations through 0020 and synchronize [account types](account-types.md) before categories. The account-types source UUID is reused for both junction tables. Existing unmanaged catalog rows may adopt that UUID once with dependent links updated atomically; subsequent syncs preserve it.
 
-**Identity guarantee:** `category_master.id` is always the UUID from the Sheet's `category_master.id`. Creates, retries, updates and restores keep that UUID; both junction tables use it as `category_id`. The extractor never generates a replacement category UUID or writes one back to the Sheet. UUID text may be canonicalised without changing its identity.
+**Identity guarantee:** `category_master.id` is always the UUID from the Sheet's `category_master.id`. Creates, retries, updates and restores keep that UUID; both junction tables use it as `category_id`. The load never generates a replacement category UUID or writes one back to the Sheet. UUID text may be canonicalised without changing its identity.
 
 ## Every Sheet column
 
-Positions are the current GAS registry positions. The extractor reads by header name and resolves acknowledgement columns by their actual position.
+Positions are the current GAS registry positions. The load reads staged cells by header name and never writes the Sheet; `ledger-sheet-extract acknowledge` writes the three sync cells, found by header name.
 
 | # | Sheet column | Database column / destination | Transformation or handling |
 |---|---|---|---|
@@ -30,11 +30,11 @@ Positions are the current GAS registry positions. The extractor reads by header 
 | 14 | `target_account_mandatory` | `category_master.target_account_mandatory` — BOOLEAN NOT NULL | Same boolean conversion. |
 | 15 | `is_subscription_eligible` | `category_master.is_subscription_eligible` — BOOLEAN NOT NULL | Same boolean conversion. |
 | 16 | `record_status` | `category_master.record_status` — TEXT NOT NULL | Trim; require `active`, `inactive`, `deleted`, or `locked`. Source restores/unlocks can be replicated. |
-| 17 | `sync_status` | No database entity column | Controls extraction/retry; extractor writes committed success or failure back to this Sheet field. |
-| 18 | `sync_date` | No database entity column | Extractor writes a UTC ISO acknowledgement timestamp to the Sheet. |
-| 19 | `sync_notes` | No database entity column | Extractor writes blank on success or a validation/error explanation on failure. |
+| 17 | `sync_status` | No database entity column | Controls selection/retry. The load stores the committed success or failure as the row outcome; `ledger-sheet-extract acknowledge` writes it to this Sheet field. |
+| 18 | `sync_date` | No database entity column | `ledger-sheet-extract acknowledge` writes the load's outcome date (UTC ISO timestamp) to the Sheet. |
+| 19 | `sync_notes` | No database entity column | `ledger-sheet-extract acknowledge` writes blank on success or the load's validation/error explanation on failure. |
 | 20 | `created_at` | **Not copied** to `category_master.created_at` | Source audit timestamp stays in the Sheet; DB timestamp has independent ingestion semantics below. |
-| 21 | `updated_at` | **Not copied** to `category_master.updated_at` | Source audit timestamp stays in the Sheet; the extractor does not overwrite it. |
+| 21 | `updated_at` | **Not copied** to `category_master.updated_at` | Source audit timestamp stays in the Sheet; the load does not overwrite it. |
 
 ## Database-generated columns
 

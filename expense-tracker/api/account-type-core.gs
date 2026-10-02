@@ -57,27 +57,30 @@ function _importAccountTypeCatalog(incoming, fullCatalog) {
   if (finalValidation.ok === false) return finalValidation;
   const plan = _planAccountTypeReferences(rows);
   if (plan.ok === false) return plan;
+  // Every row identical to the stored catalog: leave the tab as it is (a legacy layout
+  // still gets its upgrade write). Dependent reference updates below still apply,
+  // so a retry after a failed dependent write completes the migration.
+  const catalogWritten = state.requires_migration || results.some(function(row) { return row.action !== 'unchanged'; });
+  let sheetWritten = false;
   try {
-    // Every row identical to the stored catalog: leave the tab as it is (a legacy layout
-    // still gets its upgrade write). Dependent reference updates below still apply,
-    // so a retry after a failed dependent write completes the migration.
-    const catalogUnchanged = !state.requires_migration && results.every(function(row) { return row.action === 'unchanged'; });
-    if (!catalogUnchanged) _writeAccountTypeRows(rows, state);
+    if (catalogWritten) { _writeAccountTypeRows(rows, state); sheetWritten = true; }
     plan.writes.forEach(function(write) {
       if (write.row_num < 2 || write.row_num > write.sheet.getLastRow()
           || _accountTypeText(write.sheet.getRange(write.row_num, write.id_column).getValues()[0][0]).toLowerCase() !== write.id)
         throw new Error('source_row_changed');
       write.sheet.getRange(write.row_num, write.column, 1, write.values.length).setValues([write.values]);
+      sheetWritten = true;
     });
   } catch (_) {
-    console.error('_importAccountTypeCatalog: error=account_type_import_failed retry=import_complete_catalog');
-    return { ok: false, error: 'account_type_import_failed' };
+    console.error('_importAccountTypeCatalog: error=account_type_import_failed retry=import_complete_catalog sheet_written=' + sheetWritten);
+    // sheet_written: part of the change reached the Sheet, so cached views must be refreshed.
+    return { ok: false, error: 'account_type_import_failed', sheet_written: sheetWritten };
   }
   const created = results.filter(function(row) { return row.action === 'created'; }).length;
   const skipped = results.filter(function(row) { return row.action === 'unchanged'; }).length;
   const updated = results.length - created - skipped;
   console.log('_importAccountTypeCatalog: created=' + created + ' updated=' + updated + ' unchanged=' + skipped + ' references_migrated=' + plan.changed_rows);
-  return { ok: true, created: created, updated: updated, skipped: skipped, failed: 0, results: results, references_migrated: plan.changed_rows };
+  return { ok: true, created: created, updated: updated, skipped: skipped, failed: 0, results: results, references_migrated: plan.changed_rows, catalog_written: catalogWritten };
 }
 function updateAccountType(body) { return _changeAccountType(body, null); }
 function deleteAccountType(body) { return _changeAccountType(body, 'deleted'); }

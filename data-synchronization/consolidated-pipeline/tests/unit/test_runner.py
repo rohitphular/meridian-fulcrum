@@ -15,7 +15,9 @@ _FAKE_MODULE = """import json, os, sys
 module, args = sys.argv[1], sys.argv[2:]
 stdin = sys.stdin.read()
 with open(os.environ["FAKE_CALLS"], "a") as calls:
-    calls.write(json.dumps({"module": module, "script": os.environ["FAKE_SCRIPT"], "args": args, "stdin": stdin, "venv": os.environ.get("VIRTUAL_ENV"), "pin": os.environ.get("MERIDIAN_FULCRUM_PIN")}) + "\\n")
+    record = {"module": module, "script": os.environ["FAKE_SCRIPT"], "args": args, "stdin": stdin}
+    record.update(venv=os.environ.get("VIRTUAL_ENV"), pin=os.environ.get("MERIDIAN_FULCRUM_PIN"))
+    calls.write(json.dumps(record) + "\\n")
 behaviour = json.load(open(os.environ["FAKE_BEHAVIOUR"])).get(module, {})
 phase = "check" if os.environ["FAKE_SCRIPT"] == "check" else "sign_in" if "--sign-in-only" in args else "run"
 if phase == "check" and behaviour.get("credentials"):
@@ -288,17 +290,19 @@ def test_a_failed_preflight_is_reported(repository: dict) -> None:
     assert [stage["status"] for stage in saved["stages"]] == ["not_run", "not_run", "not_run"]
 
 
-def test_stopping_a_stage_also_stops_the_job_its_launcher_started() -> None:
-    import subprocess
-    import time
+def test_a_signal_while_the_report_is_created_still_finishes_it_interrupted(repository: dict, monkeypatch: pytest.MonkeyPatch) -> None:
+    import os
+    import signal
 
-    launcher = subprocess.Popen(["bash", "-c", "python3 -c 'import time; time.sleep(60)'\necho never"], stdout=subprocess.PIPE, text=True)
-    deadline = time.monotonic() + 10
-    while not runner._descendants(launcher.pid) and time.monotonic() < deadline:
-        time.sleep(0.05)
-    job = runner._descendants(launcher.pid)
-    assert job, "the launcher started its job"
-    runner._stop_stage(launcher, grace_seconds=5)
-    assert launcher.returncode is not None
-    time.sleep(0.2)
-    assert not any(runner._alive(pid) for pid in job)
+    class SignalledReport(runner.RunReport):
+        def __init__(self, *args, **kwargs) -> None:
+            super().__init__(*args, **kwargs)
+            os.kill(os.getpid(), signal.SIGTERM)  # deferred until the handlers are in place
+
+    monkeypatch.setattr(runner, "RunReport", SignalledReport)
+    saved = {signum: signal.getsignal(signum) for signum in runner._STOP_SIGNALS}
+    assert _main() == 1
+    assert {signum: signal.getsignal(signum) for signum in runner._STOP_SIGNALS} == saved, "handlers restored"
+    report = _latest_report()
+    assert report["status"] == "interrupted" and report["failure_reason"] == "signal:sigterm"
+    assert _calls(repository) == []

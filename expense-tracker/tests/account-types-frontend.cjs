@@ -305,3 +305,20 @@ test('Configure asks the server for the filtered list and a landing response kee
   assert.equal(context.elements.configureContent.innerHTML, page);
   assert.match(context.elements.accountTypesList.innerHTML, /1 account type/);
 });
+
+test('an import that only migrates references, or failed after writing, still reloads', async () => {
+  const context = fixture({ accountTypePanel: 'import' });
+  context.elements.accountTypeFile.files = [{ name: 'a.csv', text: async () => 'csv' }];
+  context.api.createAccountTypesBulk = async () => ({ ok: true, created: 0, updated: 0, skipped: 4, failed: 0, results: [], references_migrated: 2, catalog_written: false });
+  await context._submitImport();
+  assert.deepEqual(context.messages, ['0 created · 0 updated · 4 unchanged · 0 failed · 2 references migrated']);
+  assert.deepEqual(context.reloads, ['et:reload']);
+  context.elements.accountTypeFile.files = [{ name: 'a.csv', text: async () => 'csv' }];
+  context.api.createAccountTypesBulk = async () => ({ ok: true, created: 0, updated: 0, skipped: 4, failed: 0, results: [], references_migrated: 0, catalog_written: false });
+  await context._submitImport();
+  assert.deepEqual(context.reloads, ['et:reload'], 'nothing written: no reload');
+  context.elements.accountTypeFile.files = [{ name: 'a.csv', text: async () => 'csv' }];
+  context.api.createAccountTypesBulk = async () => ({ ok: false, error: 'account_type_import_failed', sheet_written: true });
+  await context._submitImport();
+  assert.deepEqual(context.reloads, ['et:reload', 'et:reload']);
+});

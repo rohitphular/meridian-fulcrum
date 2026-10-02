@@ -36,7 +36,23 @@ class _Terminated(BaseException):
     """SIGTERM / SIGHUP (the terminal closed, a scheduler stopped the run)."""
 
 
+_STOP_SIGNALS = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
+
+
+def _ignore_stop_signals() -> None:
+    for signum in _STOP_SIGNALS:
+        signal.signal(signum, signal.SIG_IGN)
+
+
 def _on_signal(signum: int, _frame: Any) -> None:
+    """The first stop signal wins; later ones are ignored while the run shuts down.
+
+    One Ctrl-C usually arrives twice (from the terminal and forwarded by `uv run`),
+    so the handler ignores further signals before it raises.
+    """
+    _ignore_stop_signals()
+    if signum == signal.SIGINT:
+        raise KeyboardInterrupt
     raise _Terminated(signal.Signals(signum).name.lower())
 
 
@@ -77,16 +93,16 @@ def preflight(pipeline: PipelineConfig, config_path: Path, report: RunReport | N
     needs: dict[str, list[Stage]] = {}
     for stage in pipeline.stages:
         started = time.monotonic()
-        checked = subprocess.run(_command(stage, config_path, script="check.sh"), stdin=subprocess.DEVNULL, capture_output=True, text=True, env=_stage_environment())
-        if checked.returncode != 0:
-            print(checked.stdout + checked.stderr, file=sys.stderr, end="")
+        returncode, output = _run_process(_command(stage, config_path, script="check.sh"), None, capture=True)
+        if returncode != 0:
+            print(output, file=sys.stderr, end="")
             if report is not None:
-                lines = [line for line in (checked.stdout + checked.stderr).splitlines() if line.startswith("ERROR")]
+                lines = [line for line in output.splitlines() if line.startswith("ERROR")]
                 report.preflight(stage, False, time.monotonic() - started, lines[-1] if lines else "")
             raise PipelineError(f"preflight_failed:stage={stage.number}:{stage.module}")
         if report is not None:
             report.preflight(stage, True, time.monotonic() - started)
-        for line in checked.stdout.splitlines():
+        for line in output.splitlines():
             if line.startswith("credentials="):
                 kind = line.removeprefix("credentials=")
                 if kind != _GAS_PIN_TOTP:
@@ -122,13 +138,10 @@ def sign_in(stage: Stage, config_path: Path, pin: str, code: str, report: RunRep
     logger.info(f"pipeline: sign_in stage={stage.number} module={stage.module} stored_credentials={not pin}")
     command = _command(stage, config_path, "--sign-in-only")
     started = time.monotonic()
-    if pin:
-        completed = subprocess.run(command, input=f"{pin}\n{code}\n", text=True, env=_stage_environment(credentials=True))
-    else:
-        completed = subprocess.run(command, stdin=subprocess.DEVNULL, env=_stage_environment(credentials=True))
+    returncode, _ = _run_process(command, f"{pin}\n{code}\n" if pin else None, credentials=True)
     if report is not None:
-        report.sign_in(stage, completed.returncode == 0, time.monotonic() - started)
-    if completed.returncode != 0:
+        report.sign_in(stage, returncode == 0, time.monotonic() - started)
+    if returncode != 0:
         raise PipelineError(f"sign_in_failed:stage={stage.number}:{stage.module}")
 
 
@@ -156,28 +169,84 @@ def _alive(pid: int) -> bool:
     return True
 
 
-def _stop_stage(process: subprocess.Popen[str], grace_seconds: float = 10.0) -> None:
-    """Stops the launcher and everything it started (bash → uv → python).
+def _group_alive(pgid: int) -> bool:
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
 
-    Signalling the launcher alone would leave the job running, holding its lock.
-    SIGINT first, so a Python job unwinds (the load still stores its outcomes); SIGKILL after the grace period.
+
+def _stop_stage(process: subprocess.Popen[str], grace_seconds: float = 10.0) -> None:
+    """Stops a launcher and everything it started (bash → uv → python), in its own session.
+
+    The job gets exactly one SIGINT, sent to the leaves of the process tree: `uv` forwards
+    SIGINT to its child, so signalling every process would interrupt the job twice and cut
+    short its clean-up (the load storing its outcomes). Whatever is left after the grace
+    period is killed, by process group, which also reaches processes whose parent has exited.
     """
-    pids = [process.pid, *_descendants(process.pid)]
-    for pid in pids:
+    pgid = process.pid  # start_new_session: the launcher leads its own process group
+    if process.poll() is None and os.getpgid(pgid) != pgid:
+        raise ValueError("stage_not_in_own_session")  # never signal the pipeline's own group
+    tree = [process.pid, *_descendants(process.pid)]
+    leaves = [pid for pid in tree if not _descendants(pid)] or [process.pid]
+    for pid in leaves:
         try:
             os.kill(pid, signal.SIGINT)
         except (ProcessLookupError, PermissionError):
             pass
     deadline = time.monotonic() + grace_seconds
-    while time.monotonic() < deadline and (process.poll() is None or any(_alive(pid) for pid in pids[1:])):
+    # poll() reaps the launcher: an exited but unreaped launcher still counts as a group member.
+    while time.monotonic() < deadline and (process.poll() is None or _group_alive(pgid)):
         time.sleep(0.1)
-    for pid in pids:
-        if _alive(pid):
-            try:
-                os.kill(pid, signal.SIGKILL)
-            except (ProcessLookupError, PermissionError):
-                pass
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
     process.wait()
+
+
+def _run_process(command: list[str], stdin_text: str | None, *, credentials: bool = False, capture: bool = False, on_line: Any = None) -> tuple[int, str]:
+    """Runs a launcher in its own session, so only the pipeline decides how it stops.
+
+    A closed terminal or Ctrl-C reaches the pipeline, which stops the launcher's whole
+    tree (`_stop_stage`); nothing in a stage reads the terminal (typed credentials arrive
+    on stdin). With `on_line` (or `capture`) the output is read line by line.
+    """
+    piped = capture or on_line is not None
+    process = subprocess.Popen(
+        command,
+        stdin=subprocess.PIPE if stdin_text is not None else subprocess.DEVNULL,
+        stdout=subprocess.PIPE if piped else None,
+        stderr=subprocess.STDOUT if piped else None,
+        text=True,
+        bufsize=1,
+        env=_stage_environment(credentials),
+        start_new_session=True,
+    )
+    lines: list[str] = []
+    try:
+        if stdin_text is not None:
+            assert process.stdin is not None
+            process.stdin.write(stdin_text)
+            process.stdin.close()
+        if piped:
+            assert process.stdout is not None
+            for line in process.stdout:
+                if capture:
+                    lines.append(line)
+                else:
+                    sys.stdout.write(line)
+                    sys.stdout.flush()
+                    on_line(line)
+        return process.wait(), "".join(lines)
+    except BaseException:
+        # Stop the tree even when the launcher itself has already exited: its children may not have.
+        _ignore_stop_signals()
+        _stop_stage(process)
+        raise
 
 
 def _run_stage(command: list[str], stdin_text: str | None, on_line: Any, credentials: bool = False) -> int:
@@ -185,30 +254,7 @@ def _run_stage(command: list[str], stdin_text: str | None, on_line: Any, credent
 
     If the pipeline is stopped mid-stage, the stage and its child processes are stopped too.
     """
-    process = subprocess.Popen(
-        command,
-        stdin=subprocess.PIPE if stdin_text is not None else subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1,
-        env=_stage_environment(credentials),
-    )
-    try:
-        if stdin_text is not None:
-            assert process.stdin is not None
-            process.stdin.write(stdin_text)
-            process.stdin.close()
-        assert process.stdout is not None
-        for line in process.stdout:
-            sys.stdout.write(line)
-            sys.stdout.flush()
-            on_line(line)
-        return process.wait()
-    except BaseException:
-        if process.poll() is None:
-            _stop_stage(process)
-        raise
+    return _run_process(command, stdin_text, credentials=credentials, on_line=on_line)[0]
 
 
 def run_stages(pipeline: PipelineConfig, config_path: Path, credential_stages: set[int], pin: str, report: RunReport | None = None) -> list[StageResult]:
@@ -248,59 +294,85 @@ def main() -> None:
     parser.add_argument("--config", type=Path, required=True, help="Pipeline config: config/pipeline.<env>.json")
     args = parser.parse_args()
     config_path = args.config.resolve()
-    report = RunReport(config.OUTPUT_DATA_DIR, config_path, config.REPOSITORY_ROOT)
-    logger.info(f"pipeline: report={report.path.name}")
-    for signum in (signal.SIGTERM, signal.SIGHUP):
-        signal.signal(signum, _on_signal)
+    previous = {signum: signal.getsignal(signum) for signum in _STOP_SIGNALS}
+    # Deferred, not lost, until the report exists and the handlers are in place.
+    signal.pthread_sigmask(signal.SIG_BLOCK, _STOP_SIGNALS)
     try:
-        _run(config_path, report)
+        report = RunReport(config.OUTPUT_DATA_DIR, config_path, config.REPOSITORY_ROOT)
+        for signum in _STOP_SIGNALS:
+            signal.signal(signum, _on_signal)
+    except BaseException:
+        signal.pthread_sigmask(signal.SIG_UNBLOCK, _STOP_SIGNALS)
+        raise
+    try:
+        try:
+            # A signal deferred while the report was created is delivered here, inside the handling.
+            signal.pthread_sigmask(signal.SIG_UNBLOCK, _STOP_SIGNALS)
+            outcome = _outcome(config_path, report)
+        except _Terminated as stopped:  # before the run started, or between the run and the finish
+            outcome = ("interrupted", f"signal:{stopped}", None)
+        except KeyboardInterrupt:
+            outcome = ("interrupted", "interrupted", None)
+        _finish(report, *outcome)
+    finally:
+        # Last resort: the report must never stay "running" on disk.
+        if not report.finished:
+            _ignore_stop_signals()
+            report.finish("failed", "aborted")
+        for signum, handler in previous.items():
+            signal.signal(signum, handler)
+
+
+def _outcome(config_path: Path, report: RunReport) -> tuple[str, str, BaseException | None]:
+    """Runs the pipeline; returns (status, reason, unexpected error to re-raise)."""
+    logger.info(f"pipeline: report={report.path.name}")
+    try:
+        return (*_run(config_path, report), None)
+    except (PipelineConfigError, PipelineError) as error:
+        reason = str(error)
+        return (reason.split(":", 1)[0] if reason.startswith(("preflight_failed", "sign_in_failed")) else "failed"), reason, None
     except _Terminated as stopped:
-        logger.error(f"pipeline: failed reason=interrupted signal={stopped}")
-        report.finish("interrupted", f"signal:{stopped}")
-        sys.exit(1)
+        return "interrupted", f"signal:{stopped}", None
+    except (KeyboardInterrupt, EOFError):
+        return "interrupted", "interrupted", None
     except Exception as error:
         # A pipeline bug must not leave the report "running": record the error type only.
-        logger.error(f"pipeline: failed reason=unexpected_error type={type(error).__name__}")
-        report.finish("failed", f"unexpected_error:{type(error).__name__}")
-        raise
-    finally:
-        if not report.finished:
-            report.finish("failed", "aborted")
+        return "failed", f"unexpected_error:{type(error).__name__}", error
 
 
-def _run(config_path: Path, report: RunReport) -> None:
-    try:
-        pipeline = load(config_path)
-        report.set_pipeline(pipeline.env, pipeline.stages)
-        logger.info(f"pipeline: start=true env={pipeline.env} stages={len(pipeline.stages)}")
-        needs = preflight(pipeline, config_path, report)
-        pin = ""
-        credential_stages: set[int] = set()
-        if needs:
-            stored = credentials_are_stored()
-            report.credentials("stored" if stored else "prompted")
-            pin, code = ("", "") if stored else ask_credentials()
-            stages = needs[_GAS_PIN_TOTP]
-            sign_in(stages[0], config_path, pin, code, report)
-            credential_stages = {stage.number for stage in stages}
-        results = run_stages(pipeline, config_path, credential_stages, pin, report)
-    except (PipelineConfigError, PipelineError) as error:
-        logger.error(f"pipeline: failed reason={error}")
-        report.finish(str(error).split(":", 1)[0] if str(error).startswith(("preflight_failed", "sign_in_failed")) else "failed", str(error))
+def _finish(report: RunReport, status: str, reason: str, unexpected: BaseException | None) -> None:
+    _ignore_stop_signals()  # the report must reach disk; the run is over either way
+    if status == "ok":
+        logger.info("pipeline: complete=true")
+    else:
+        logger.error(f"pipeline: failed reason={reason}")
+    report.finish(status, reason)
+    if unexpected is not None:
+        raise unexpected
+    if status != "ok":
         sys.exit(1)
-    except (KeyboardInterrupt, EOFError):
-        logger.error("pipeline: failed reason=interrupted")
-        report.finish("interrupted", "interrupted")
-        sys.exit(1)
+
+
+def _run(config_path: Path, report: RunReport) -> tuple[str, str]:
+    pipeline = load(config_path)
+    report.set_pipeline(pipeline.env, pipeline.stages)
+    logger.info(f"pipeline: start=true env={pipeline.env} stages={len(pipeline.stages)}")
+    needs = preflight(pipeline, config_path, report)
+    pin = ""
+    credential_stages: set[int] = set()
+    if needs:
+        stored = credentials_are_stored()
+        report.credentials("stored" if stored else "prompted")
+        pin, code = ("", "") if stored else ask_credentials()
+        stages = needs[_GAS_PIN_TOTP]
+        sign_in(stages[0], config_path, pin, code, report)
+        credential_stages = {stage.number for stage in stages}
+    results = run_stages(pipeline, config_path, credential_stages, pin, report)
     print_summary(pipeline.env, results)
     failed = [result for result in results if result.status != "ok" and result.status != "not run"]
     if failed:
-        reason = f"stage_failed:stage={failed[0].stage.number}:{failed[0].stage.module}"
-        logger.error(f"pipeline: failed reason={reason}")
-        report.finish("failed", reason)
-        sys.exit(1)
-    report.finish("ok")
-    logger.info("pipeline: complete=true")
+        return "failed", f"stage_failed:stage={failed[0].stage.number}:{failed[0].stage.module}"
+    return "ok", ""
 
 
 if __name__ == "__main__":

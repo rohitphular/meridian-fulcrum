@@ -136,3 +136,28 @@ test('a failed arrange_sheet_tabs carries a human message like other POST failur
   const result = JSON.parse(JSON.stringify(ctx.doPost({ postData: { contents: JSON.stringify({ action: 'arrange_sheet_tabs', pin: 'x' }) } })));
   assert.deepEqual(result, { ok: false, error: 'busy_retry', message: 'Busy retry.' });
 });
+
+test('a failed tab delete is not reported as deleted', () => {
+  const { ctx, sheets } = runtime([...RETAINED, 'account_types', 'transaction_master']);
+  const spreadsheet = ctx.SpreadsheetApp.getActiveSpreadsheet();
+  const remove = spreadsheet.deleteSheet;
+  spreadsheet.deleteSheet = sheet => { if (sheet.name === 'transaction_master') throw new Error('locked'); return remove(sheet); };
+  const result = ctx.factoryResetDeleteSheets({ confirm: 'factory-reset', spreadsheet_id: 'sheet-id' });
+  assert.equal(result.error, 'delete_failed');
+  assert.deepEqual(Array.from(result.deleted), ['account_types']);
+  assert.ok(sheets.some(sheet => sheet.name === 'transaction_master'));
+});
+
+test('cached views are kept only when an import wrote nothing', () => {
+  const ctx = vm.createContext({ console: { log() {}, error() {}, warn() {} } });
+  vm.runInContext(fs.readFileSync(path.join(API, 'app-router.gs'), 'utf8'), ctx);
+  const changed = result => ctx._routerPostChangedData({ action: 'create_account_types_bulk' }, result);
+  assert.equal(changed({ ok: true, created: 0, updated: 0, skipped: 4 }), false, 'every row unchanged');
+  assert.equal(changed({ ok: true, created: 1, updated: 0, skipped: 3 }), true);
+  assert.equal(changed({ ok: true, created: 0, updated: 0, skipped: 4, references_migrated: 1 }), true, 'dependent rows were written');
+  assert.equal(changed({ ok: true, created: 0, updated: 0, skipped: 4, references_migrated: 0, catalog_written: true }), true, 'layout upgrade');
+  assert.equal(changed({ ok: false, error: 'account_type_import_failed', sheet_written: true }), true, 'failed after writing');
+  assert.equal(changed({ ok: false, error: 'account_type_import_failed', sheet_written: false }), false);
+  // Single-record actions report no counts: always a change.
+  assert.equal(ctx._routerPostChangedData({ action: 'update_account' }, { ok: true, row_num: 4 }), true);
+});

@@ -41,4 +41,5 @@ else
   JOB_ARGS+=(--confirm "$CONFIRM_ARG")
   if [[ -n "$SIGN_IN_FLAG" ]]; then JOB_ARGS+=("$SIGN_IN_FLAG"); fi
 fi
-uv run --locked python -m core.runner "${JOB_ARGS[@]}"
+# exec: a signal sent to this launcher (kill, a scheduler) reaches the job itself.
+exec uv run --locked python -m core.runner "${JOB_ARGS[@]}"

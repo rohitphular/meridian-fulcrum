@@ -66,8 +66,9 @@ class StagingSource:
                 validate_headers(name, list(record[0]))
                 cursor.execute("SELECT sheet_row_num, cells FROM stg_sheet_rows WHERE run_id = %s AND tab = %s ORDER BY sheet_row_num", (self.run.run_id, name))
                 self._snapshots[name] = [{**cells, "_sheet_row_num": row_number} for row_number, cells in cursor.fetchall()]
-            # A reload of the same snapshot starts from no outcomes.
-            cursor.execute("UPDATE stg_sheet_rows SET outcome_status = NULL, outcome_date = NULL, outcome_notes = NULL WHERE run_id = %s", (self.run.run_id,))
+        # Outcomes from an earlier load of this snapshot are kept: rows handled again get
+        # new ones at flush; the others' outcomes stay true, since committed database writes
+        # persist (a normal-sync reload must not wipe what a hard-sync stored for in-sync rows).
         self._conn.commit()
 
     def snapshot_rows(self, name: str) -> list[dict[str, Any]]:

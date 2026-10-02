@@ -27,6 +27,7 @@ _EVENT = re.compile(r"^([A-Za-z_][\w.]*): (.*)$")
 _VALUE = re.compile(r"(\w+)=(\S+)")
 _LIMITS = {"log_tail": 80, "warnings": 60, "errors": 60, "events": 600, "steps": 40}
 _SAVE_INTERVAL_S = 2.0
+_STALE_TEMPORARY_S = 3600
 # Static servers (e.g. an IDE's built-in one) do not list folders, so the page reads this manifest.
 MANIFEST = "index.json"
 _REPORT_NAME = re.compile(r"^\d{2}-\d{2}-\d{4}-\d{2}-\d{2}-\d{2}(?:-\d+)?\.json$")
@@ -51,11 +52,23 @@ def _sort_key(name: str) -> tuple[str, int]:
     return f"{year}{month}{day}{hour}{minute}{second}", int(parts[6]) if len(parts) > 6 else 1
 
 
+def _remove_stale_temporaries(directory: Path) -> None:
+    """A run killed between writing and renaming leaves its `.….<pid>.tmp` file behind."""
+    cutoff = time.time() - _STALE_TEMPORARY_S
+    for path in directory.glob(".*.tmp"):
+        try:
+            if path.stat().st_mtime < cutoff:
+                path.unlink()
+        except OSError:
+            pass
+
+
 def write_manifest(directory: Path) -> None:
     """List every report in the folder (newest first) in data/index.json."""
     names = sorted((path.name for path in directory.iterdir() if _REPORT_NAME.fullmatch(path.name)), key=_sort_key, reverse=True)
     # Per process: two runs finishing together must not share a temporary file.
     temporary = directory / f".{MANIFEST}.{os.getpid()}.tmp"
+    _remove_stale_temporaries(directory)
     temporary.write_text(json.dumps({"updated_at": _now(), "reports": names}, indent=1))
     temporary.replace(directory / MANIFEST)
 
@@ -79,6 +92,7 @@ class RunReport:
         self.path = self._dir / f"{run_id}.json"
         self._started = time.monotonic()
         self._last_save = 0.0
+        self._saved_status = ""
         try:
             config_label = str(config_path.relative_to(repository_root))
         except ValueError:
@@ -207,7 +221,8 @@ class RunReport:
 
     @property
     def finished(self) -> bool:
-        return self.data["status"] != "running"
+        """True once a final status is on disk (not just set in memory)."""
+        return self._saved_status not in ("", "running")
 
     def write_manifest(self) -> None:
         write_manifest(self._dir)
@@ -222,3 +237,4 @@ class RunReport:
         temporary = self.path.with_name(f".{self.path.name}.{os.getpid()}.tmp")
         temporary.write_text(json.dumps(self.data, indent=1))
         temporary.replace(self.path)
+        self._saved_status = self.data["status"]

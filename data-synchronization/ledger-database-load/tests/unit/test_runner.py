@@ -65,3 +65,42 @@ def test_runner_exposes_transaction_structure_failure_without_source_values() ->
 def test_runner_exposes_subscription_structure_failure_without_source_values() -> None:
     assert runner._safe_failure_reason(ValueError("subscriptions: duplicate_source_id")) == "subscription_error:duplicate_source_id"
     assert runner._safe_failure_reason(ValueError("subscriptions: invalid_amount value=private")) == "see_entity_logs"
+
+
+def test_ctrl_c_is_logged_as_interrupted(monkeypatch: pytest.MonkeyPatch) -> None:
+    logger = MagicMock()
+    monkeypatch.setattr(runner, "logger", logger)
+    monkeypatch.setattr(runner.sys, "argv", ["ledger-database-load"])
+    monkeypatch.setattr(runner.config, "db_config", lambda: None)
+    monkeypatch.setattr(runner, "LedgerDatabaseLoadJob", MagicMock(return_value=MagicMock(run=MagicMock(side_effect=KeyboardInterrupt))))
+    import signal
+
+    previous = {signum: signal.getsignal(signum) for signum in runner._STOP_SIGNALS}
+    try:
+        with pytest.raises(SystemExit):
+            runner.main()
+    finally:
+        for signum, handler in previous.items():
+            signal.signal(signum, handler)
+    logger.error.assert_called_once_with("runner: job_failed reason=interrupted")
+
+
+def test_sigterm_unwinds_like_ctrl_c(monkeypatch: pytest.MonkeyPatch) -> None:
+    import os
+    import signal
+
+    logger = MagicMock()
+    monkeypatch.setattr(runner, "logger", logger)
+    monkeypatch.setattr(runner.sys, "argv", ["ledger-database-load"])
+    monkeypatch.setattr(runner.config, "db_config", lambda: None)
+    monkeypatch.setattr(runner, "LedgerDatabaseLoadJob", MagicMock(return_value=MagicMock(run=lambda **_: os.kill(os.getpid(), signal.SIGTERM))))
+    previous = {signum: signal.getsignal(signum) for signum in runner._STOP_SIGNALS}
+    try:
+        with pytest.raises(SystemExit):
+            runner.main()
+        # First signal wins: a second Ctrl-C (uv forwards one) cannot cut the clean-up short.
+        assert all(signal.getsignal(signum) == signal.SIG_IGN for signum in runner._STOP_SIGNALS)
+    finally:
+        for signum, handler in previous.items():
+            signal.signal(signum, handler)
+    logger.error.assert_called_once_with("runner: job_failed reason=interrupted")

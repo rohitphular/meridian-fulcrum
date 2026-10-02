@@ -1495,3 +1495,16 @@ test('a transfer re-imported after being collapsed to one row restores both legs
   const legs = sheet.rows.slice(1).filter(row => row[ctx.txColIndex('id')] === transfer.id || row[ctx.txColIndex('parent_tx_id')] === transfer.id);
   assert.deepEqual(legs.map(row => row[status]), ['active', 'active']);
 });
+
+test('a transfer collapsed to one row re-imports as the same single row unchanged', () => {
+  const { ctx, sheet, transfer } = transactions();
+  ctx.createTransactionsBulk({ transactions: [transfer] });
+  const single = { ...transfer, major_category: 'expense', minor_category: 'food', target_account: '', target_amount_local: '' };
+  assert.equal(ctx.createTransactionsBulk({ transactions: [single] }).updated, 1);
+  const before = JSON.stringify(sheet.rows);
+  const again = ctx.createTransactionsBulk({ transactions: [single] });
+  assert.equal(again.ok, true);
+  assert.equal(again.updated, 0);
+  assert.equal(again.skipped, 1);
+  assert.equal(JSON.stringify(sheet.rows), before, 'no Sheet write, the tombstone stays as it is');
+});

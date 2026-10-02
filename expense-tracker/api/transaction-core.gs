@@ -630,8 +630,10 @@ function createTransactionsBulk(body) {
     const leg = buildRow(Object.assign(_txSharedFields(txBody), {
       tx_type: txBody.tx_type, account_id: acct, tx_amount_local: amt, parent_tx_id: '', record_status: recordStatus,
     }), previous === undefined ? csvId : String(previous[idColIdx]).trim());
-    // A former transfer re-imported as a single row changes shape (its child is tombstoned).
-    const kept = isReplace && previous !== undefined && previousChild === undefined ? keepIfUnchanged([leg]) : null;
+    // A former transfer re-imported as a single row changes shape (its child is tombstoned);
+    // once the child is a tombstone, the same single row again is unchanged.
+    const childGone = previousChild === undefined || String(previousChild[txColIndex('record_status')]) === 'deleted';
+    const kept = isReplace && previous !== undefined && childGone ? keepIfUnchanged([leg]) : null;
     Array.prototype.push.apply(newRows, kept === null ? [leg] : kept);
     batchIds[csvId] = true;
     results.push({ key: csvId, ok: true, action: kept === null ? action : 'unchanged' });

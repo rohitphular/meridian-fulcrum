@@ -247,10 +247,16 @@ test('migration retries safely after a dependent Sheet write fails', () => {
   const accounts = sourceSheet(ctx, 'account_master', { type: 'asset', sub_type: 'everyday_wallet' }); sheets.push(accounts);
   const getRange = accounts.getRange.bind(accounts);
   accounts.getRange = (...args) => ({ ...getRange(...args), setValues() { throw new Error('service failure'); } });
-  assert.equal(ctx.migrateAccountTypeKeys(catalog()).error, 'account_type_import_failed');
+  const failed = ctx.migrateAccountTypeKeys(catalog());
+  assert.equal(failed.error, 'account_type_import_failed');
+  assert.equal(failed.sheet_written, true, 'the catalog tab was rewritten before the failure');
   assert.equal(first(ctx).id, ID);
   accounts.getRange = getRange;
-  assert.equal(ctx.migrateAccountTypeKeys(catalog()).ok, true);
+  const retry = ctx.migrateAccountTypeKeys(catalog());
+  assert.equal(retry.ok, true);
+  assert.equal(retry.created + retry.updated, 0, 'the catalog is already written');
+  assert.equal(retry.catalog_written, false);
+  assert.equal(retry.references_migrated, 1, 'the retry reports the dependent rows it fixed');
   assert.equal(accounts.rows[1][accounts.rows[0].indexOf('sub_type')], 'everyday-wallet');
 });
 test('malformed header layouts and underscore collisions fail before upgrade writes', () => {

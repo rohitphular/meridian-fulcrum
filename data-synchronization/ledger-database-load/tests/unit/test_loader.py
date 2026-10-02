@@ -282,3 +282,23 @@ def test_unknown_staged_tab_fails_before_any_writer(monkeypatch: pytest.MonkeyPa
     with pytest.raises(ValueError, match="^unknown_staged_tab:acount_master$"):
         job.run()
     assert all(not handler.called for handler in handlers)
+
+
+@pytest.mark.parametrize("fails", [False, True])
+def test_outcomes_are_stored_with_ctrl_c_ignored(monkeypatch: pytest.MonkeyPatch, fails: bool) -> None:
+    import signal
+
+    job, tabs, conn, source, handlers = _job(monkeypatch)
+    if fails:
+        handlers[1].side_effect = KeyboardInterrupt
+    seen = []
+    source.flush_pending.side_effect = lambda **_kwargs: seen.append((signal.getsignal(signal.SIGINT), signal.getsignal(signal.SIGTERM)))
+    before = (signal.getsignal(signal.SIGINT), signal.getsignal(signal.SIGTERM))
+    if fails:
+        with pytest.raises(KeyboardInterrupt):
+            job.run()
+        conn.rollback.assert_called_once()
+    else:
+        job.run()
+    assert seen == [(signal.SIG_IGN, signal.SIG_IGN)]
+    assert (signal.getsignal(signal.SIGINT), signal.getsignal(signal.SIGTERM)) == before

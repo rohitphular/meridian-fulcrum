@@ -230,4 +230,9 @@ test('import panel lists file-level errors without reloading, and closes on full
   assert.match(lost.snapshot().result, /Some rows may have been saved/);
   assert.deepEqual(lost.events, ['et:reload']);
   assert.equal(lost.snapshot().busy, false);
+  // The server handler threw part-way: rows may be saved, so it reloads and says so.
+  const threw = loadPanel(() => ({ ok: false, error: 'request_failed' }));
+  await threw._submitImport('account_master', { text: async () => 'id\nx' });
+  assert.match(threw.snapshot().result, /Some rows may have been saved/);
+  assert.deepEqual(threw.events, ['et:reload']);
 });

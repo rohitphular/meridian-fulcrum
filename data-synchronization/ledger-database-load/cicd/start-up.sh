@@ -34,4 +34,5 @@ uv run --locked py-db-migrate run --db postgres
 
 echo "[$ENV_ARG] Running ledger-database-load job ($MODE_ARG)..."
 # ${arr[@]+...} keeps an empty array safe under nounset on macOS Bash 3.2.
-uv run --locked python -m core.runner ${JOB_ARGS[@]+"${JOB_ARGS[@]}"}
+# exec: a signal sent to this launcher (kill, a scheduler) reaches the job itself.
+exec uv run --locked python -m core.runner ${JOB_ARGS[@]+"${JOB_ARGS[@]}"}

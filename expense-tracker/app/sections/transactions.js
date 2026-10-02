@@ -54,6 +54,8 @@ function _transactionError(code) {
     stale_record: 'This record moved or changed. Refresh, then reopen it before trying again.',
     transfer_parent_deleted: 'A live linked transaction needs its original transfer. Delete the linked transaction first, or restore the original.',
     invalid_transfer_pair: 'A transfer must link different accounts and opposite money-in / money-out directions.',
+    invalid_transfer_lifecycle: 'Both legs of a transfer must be deleted together, or both kept. Set record_status for this transfer explicitly.',
+    multiple_live_transfer_children: 'This transfer has more than one live linked leg in the Sheet. Delete the extra leg, then import again.',
     // Bulk-import row results carry codes only; these keep their copy readable.
     invalid_tx_date_local: 'Enter a valid local date and time.',
     invalid_tx_timezone_local: 'The transaction timezone is invalid.',
@@ -1702,6 +1704,8 @@ async function _submitTxImport(file) {
     const progress = el('txImportStatus');
     if (progress !== null) progress.textContent = 'Importing…';
     const response = await ExpenseAPI.createTransactionsBulk({ csv });
+    // request_failed: the handler threw part-way, so rows may already be saved (uncertain).
+    if (response?.error === 'request_failed') throw new Error('request_failed');
     if (Array.isArray(response?.errors) || (typeof response?.error === 'string' && !Array.isArray(response?.results))) {
       _txImportResult = Array.isArray(response.errors)
         ? _renderTxImportOutcome(response)

@@ -58,9 +58,10 @@ test('fill_csv_ids pads a short row that stops before the id column and fills it
   assert.equal(result.ok, true);
   assert.equal(result.filled, 2);
   const lines = result.csv.split('\n');
-  assert.match(lines[1], /^Rent,10,[0-9a-f-]{36}$/);
-  assert.match(lines[2], /^Food,,[0-9a-f-]{36}$/);
+  assert.match(lines[1], /^Rent,10,[0-9a-f-]{36},$/);
+  assert.match(lines[2], /^Food,,[0-9a-f-]{36},$/);
   assert.equal(lines[3], 'Kept,5,keep-1,x');
-  // The filled ids stick: a second pass finds nothing to fill.
+  // The filled ids stick: a second pass finds nothing to fill, and the rows now parse.
   assert.equal(ctx.fillCsvIds({ csv: result.csv }).filled, 0);
+  assert.equal(ctx.parseCsvImport({ csv: result.csv }).ok, true);
 });

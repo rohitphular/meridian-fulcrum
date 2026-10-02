@@ -1257,6 +1257,8 @@ async function _submitImport(fileType, file) {
       return;
     }
     const response = await ExpenseAPI.importAccountData({ file_type: fileType, csv });
+    // request_failed: the handler threw part-way, so rows may already be saved (uncertain).
+    if (response?.error === 'request_failed') throw new Error('request_failed');
     if (Array.isArray(response?.errors) && response.errors.length > 0) {
       _importResult = _renderImportResponse(response);
       showMsg('The CSV has errors. Nothing was imported.', 'warn');
