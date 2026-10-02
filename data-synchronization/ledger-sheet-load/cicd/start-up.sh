@@ -5,6 +5,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 JOB_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 ENVS_FILE="$SCRIPT_DIR/envs.json"
+# Where the caller ran from: a relative --config path is taken from there.
+CALLER_DIR="${CALLER_DIR:-$PWD}"
 
 cd "$JOB_DIR"
 

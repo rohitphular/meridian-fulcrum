@@ -15,8 +15,10 @@ cp data-synchronization/consolidated-pipeline/config/pipeline.example.json data-
   "env": "dev",
   "stages": [
     { "module": "ledger-sheet-load", "mode": "sheet-sync" },
-    { "module": "currency-database-load", "mode": "daily" },
-    { "module": "ledger-sheet-extract", "mode": "normal-sync" }
+    { "module": "ledger-sheet-extract", "mode": "extract" },
+    { "module": "forex-database-load", "mode": "daily" },
+    { "module": "ledger-database-load", "mode": "normal-sync" },
+    { "module": "ledger-sheet-extract", "mode": "acknowledge", "run_after_failure": true }
   ]
 }
 ```
@@ -25,8 +27,9 @@ cp data-synchronization/consolidated-pipeline/config/pipeline.example.json data-
 |---|---|
 | `env` | One environment for every stage; must equal the `<env>` in the file name (a `pipeline.prod.json` that says `dev` is rejected). Each module validates it against its own `cicd/envs.json` |
 | `stages[].module` | A folder under `data-synchronization/` with `cicd/check.sh` and `cicd/start-up.sh` |
-| `stages[].mode` | That module's mode: currency-database-load `daily`/`historical`; ledger-sheet-load `sheet-sync`/`sheet-rebuild`; ledger-sheet-extract `normal-sync`/`hard-sync` |
+| `stages[].mode` | That module's mode: forex-database-load `daily`/`historical`; ledger-sheet-load `sheet-sync`/`sheet-rebuild`; ledger-sheet-extract `extract`/`acknowledge`; ledger-database-load `normal-sync`/`hard-sync` |
 | `stages[].confirm` | ledger-sheet-load `sheet-rebuild` only: the env name, standing in for typing it |
+| `stages[].run_after_failure` | `true` to run this stage even after an earlier stage failed (the acknowledge stage, so a partly failed load still reports its outcomes). Later stages without it are skipped |
 
 Names are lowercase letters, digits and hyphens. Unknown keys are rejected. A module may appear in several stages.
 
@@ -35,10 +38,25 @@ Names are lowercase letters, digits and hyphens. Unknown keys are rejected. A mo
 1. **Preflight**: runs every stage's `cicd/check.sh`, which validates env, mode and the module's own settings without installing, migrating or writing anything. Any failure stops the run before a stage starts. The check is mandatory, not an option: each stage's `start-up.sh` runs the same check again first.
 2. **Credentials**: if a stage declares them (ledger-sheet-load prints `credentials=gas-pin-totp`), they come from `MERIDIAN_FULCRUM_PIN` and `MERIDIAN_FULCRUM_SECRET` in `infrastructure/.env.<env>` when both are set (the stage generates the current code from the secret; nothing is asked). Otherwise the pipeline asks once for the PIN and authenticator code, the only prompt. One set without the other fails with `incomplete_stored_credentials`.
 3. **Sign in**: straight away, while the code is fresh (it is accepted for about a minute): `start-up.sh --sign-in-only`, with the PIN and code on stdin. A wrong PIN or code stops the run before any stage starts. Repeated wrong PINs lock the caller, so the pipeline never retries.
-4. **Stages**, in order. A stage that needs credentials runs with `--skip-sign-in` and gets only the PIN on stdin; the backend checks the PIN on every call, as it does for the app after login. Other stages get no stdin, so nothing can wait for input.
-5. **Stop at the first failure** and print a summary (stage, module, mode, result, seconds). The exit status is 0 only when every stage succeeded.
+4. **Stages**, in order. A stage that needs credentials runs with `--skip-sign-in` and gets only the PIN on stdin; the backend checks the PIN on every call, as it does for the app after login. Other stages get no stdin, so nothing can wait for input, and neither `MERIDIAN_FULCRUM_PIN` nor `MERIDIAN_FULCRUM_SECRET` (forex-database-load, ledger-sheet-extract and ledger-database-load also unset them after loading the env file).
+5. **Stop at the first failure** (stages with `run_after_failure` still run) and print a summary (stage, module, mode, result, seconds). The exit status is 0 only when every stage succeeded.
+6. **Stopped runs**: Ctrl-C, SIGTERM or SIGHUP (the terminal closed) stops the running stage and every process it started (SIGINT, then SIGKILL after 10 s) and marks the report `interrupted`. An unexpected pipeline error marks it `failed`, so a report never stays `running`.
 
 The PIN and code never appear in arguments, the pipeline config or logs; typed ones travel on stdin only, stored ones stay in the env file and the processes that load it. The pipeline logs under `$MERIDIAN_LOG_ROOT/consolidated-pipeline/`; each stage logs under its own module folder.
+
+## Monitor
+
+Every run writes a report to `output/data/dd-mm-yyyy-hh-mm-ss.json` (local start time; gitignored), rewritten after each stage and every couple of seconds while a stage runs. `output/index.html` reads that folder and shows:
+
+- **Runs by month → date → batch** (`hh-mm-ss`), with a status dot and a per-stage strip; filters for all / ok / failed / running.
+- **Headline numbers:** success rate, latest run, median duration, runs and failures in the last 7 days, rows loaded by the last finished run.
+- **The selected run:** status and failure reason, environment, config, credentials mode (stored or prompted — never the values), host, code version; the stage flow; a timeline; preflight and sign-in results.
+- **Each stage:** its launcher steps, warnings and errors, the last log lines, and what it did — files loaded into the Sheet, tabs staged, currency series downloaded, entities loaded into PostgreSQL (processed / succeeded / failed / skipped), outcomes written back (written / edited mid-run / not found).
+- **Trends:** duration of the last 40 runs coloured by result, and the average time per stage.
+
+Reload every 1, 2, 3, 5, 10, 15 or 30 seconds (or off); **Follow latest** keeps the newest run selected. The page finds the reports through `output/data/index.json`, a list of report files the pipeline rewrites at the start and end of each run, so any static server works — `make app-start` (then `http://localhost:8000/data-synchronization/consolidated-pipeline/output/`) or an IDE's built-in server. It only falls back to a folder listing when the list is missing. Opening the file directly (`file://`) does not work: browsers block reading local files from a page.
+
+Only structured log lines (codes, names and counts) and the launchers' step lines are stored; free-form output such as a printed failed response is not.
 
 ## How to run
 
@@ -59,6 +77,9 @@ A single module can also run unattended from a config: `bash data-synchronizatio
 ```
 consolidated-pipeline/
 ├── Makefile
+├── output/
+│   ├── index.html            # monitor page
+│   └── data/                 # run reports, gitignored
 ├── config/
 │   ├── pipeline.example.json # committed template
 │   └── pipeline.<env>.json   # one per env, gitignored (pipeline.dev.json, pipeline.prod.json, …)
@@ -69,6 +90,7 @@ consolidated-pipeline/
 ├── core/
 │   ├── config.py             # paths and log root
 │   ├── pipeline_config.py    # config validation, shared with read-stage.py (standard library only)
+│   ├── report.py             # the run report written for output/index.html
 │   └── runner.py             # preflight, sign-in, stages, summary
 └── tests/unit/
 ```

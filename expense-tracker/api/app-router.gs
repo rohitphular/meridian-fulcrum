@@ -79,6 +79,8 @@ function _routerPostChangedData(body, result) {
   if (body.dry_run === true || _ROUTER_NON_DATA_POST_ACTIONS.indexOf(body.action) !== -1) return false;
   if (result === null || typeof result !== 'object') return false;
   if (result.ok === true) return true;
+  // A partial tab delete reports the tabs it did delete as a list.
+  if (Array.isArray(result.deleted) && result.deleted.length > 0) return true;
   return ['created', 'updated', 'deleted'].some(function(key) { return Number(result[key]) > 0; });
 }
 
@@ -130,7 +132,14 @@ function _dispatchPostRequest(e) {
 
   // Tab ordering takes the script lock itself (sheet-order.gs), so it runs
   // before the POST lock; it moves tabs only and never changes data.
-  if (body.action === 'arrange_sheet_tabs') return json(ensureExpenseTrackerSheetOrder());
+  if (body.action === 'arrange_sheet_tabs') {
+    const arranged = ensureExpenseTrackerSheetOrder();
+    // Same failure contract as every other POST: a human message alongside the code.
+    if (arranged !== null && typeof arranged === 'object' && arranged.ok === false && (typeof arranged.message !== 'string' || arranged.message === '')) {
+      arranged.message = typeof vmMessage === 'function' ? vmMessage(arranged.error, _routerDefaultMessage(arranged.error)) : _routerDefaultMessage(arranged.error);
+    }
+    return json(arranged);
+  }
 
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(10000)) return json({ ok: false, error: 'busy_retry' });

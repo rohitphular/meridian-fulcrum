@@ -740,11 +740,12 @@ async function _submitImport() {
     }
     _subImportResult = _renderImportOutcome(res);
     const results = Array.isArray(res?.results) ? res.results : [];
-    const saved = results.filter(result => result?.ok === true).length;
-    const failed = results.length - saved;
+    const failed = results.filter(result => result?.ok !== true).length;
+    // Rows identical to the Sheet are not rewritten (skipped); only created/updated rows changed data.
+    const written = (res?.created ?? 0) + (res?.updated ?? 0);
     if (Array.isArray(res?.errors)) showMsg('Import rejected: ' + (res.error ?? 'invalid_csv'), 'warn');
-    else showMsg(`${saved} imported · ${failed} failed`, failed > 0 ? 'warn' : 'success');
-    if (saved > 0) document.dispatchEvent(new CustomEvent('et:reload'));
+    else showMsg(`${res?.created ?? 0} created · ${res?.updated ?? 0} updated · ${res?.skipped ?? 0} unchanged · ${failed} failed`, failed > 0 ? 'warn' : 'success');
+    if (written > 0) document.dispatchEvent(new CustomEvent('et:reload'));
   } catch (_) {
     _subImportFile = null;
     _subImportResult = '<p class="pin-error" role="alert">Connection error. Some rows may have been saved. Reload and check before importing again.</p>';

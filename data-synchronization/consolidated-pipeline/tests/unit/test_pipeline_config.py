@@ -97,3 +97,10 @@ def test_read_stage_cli_lists_envs(tmp_path: Path) -> None:
         (tmp_path / name).write_text("{}")
     listed = subprocess.run([sys.executable, str(READ_STAGE), "--list-envs", str(tmp_path)], capture_output=True, text=True)
     assert listed.returncode == 0 and listed.stdout.splitlines() == ["dev", "prod"]
+
+
+def test_run_after_failure_is_an_optional_boolean() -> None:
+    pipeline = parse({"env": "dev", "stages": [{"module": "a", "mode": "x"}, {"module": "b", "mode": "y", "run_after_failure": True}]})
+    assert [stage.run_after_failure for stage in pipeline.stages] == [False, True]
+    with pytest.raises(PipelineConfigError, match="^stage_1_invalid_run_after_failure$"):
+        parse({"env": "dev", "stages": [{"module": "a", "mode": "x", "run_after_failure": "yes"}]})

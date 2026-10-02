@@ -9,9 +9,8 @@ Personal finance management system. Tracks expenses, debts, investments, and lif
 ## Structure
 
 ### Forge
-`forge/`
 
-Standalone prototype modules built independently. Each module solves one problem cleanly before being integrated into the unified Fulcrum app.
+Standalone prototype modules built independently, at the repository root: `expense-tracker/`, plus `data-synchronization/` (Python data jobs) and `infrastructure/` (local PostgreSQL services and environment settings). Each module solves one problem cleanly before being integrated into the unified Fulcrum app.
 
 | Module | Status | What it does |
 |---|---|---|

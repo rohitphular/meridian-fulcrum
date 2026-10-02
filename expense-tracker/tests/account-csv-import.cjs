@@ -217,8 +217,13 @@ test('import panel lists file-level errors without reloading, and closes on full
   const success = loadPanel(() => ({ ok: true, created: 2, updated: 1, failed: 0, results: [{ ok: true, action: 'created' }, { ok: true, action: 'created' }, { ok: true, action: 'updated' }] }));
   await success._submitImport('account_master', { text: async () => 'id\nx' });
   assert.equal(success.state.accImportOpen, false);
-  assert.deepEqual(success.messages, ['2 created · 1 updated']);
+  assert.deepEqual(success.messages, ['2 created · 1 updated · 0 unchanged']);
   assert.deepEqual(success.events, ['et:reload']);
+  // Every row identical to the Sheet: nothing was written, so nothing reloads.
+  const same = loadPanel(() => ({ ok: true, created: 0, updated: 0, skipped: 2, failed: 0, results: [{ ok: true, action: 'unchanged' }, { ok: true, action: 'unchanged' }] }));
+  await same._submitImport('account_master', { text: async () => 'id\nx' });
+  assert.deepEqual(same.messages, ['0 created · 0 updated · 2 unchanged']);
+  assert.deepEqual(same.events, []);
 
   const lost = loadPanel(() => { throw new Error('connection_error'); });
   await lost._submitImport('account_master', { text: async () => 'id\nx' });

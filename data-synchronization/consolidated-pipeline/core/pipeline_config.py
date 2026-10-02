@@ -17,7 +17,7 @@ _NAME = re.compile(r"[a-z][a-z0-9-]*")
 _FILE_NAME = re.compile(r"pipeline\.([a-z][a-z0-9-]*)\.json")
 TEMPLATE_NAME = "pipeline.example.json"
 _TOP_KEYS = {"_comment", "env", "stages"}
-_STAGE_KEYS = {"_comment", "module", "mode", "confirm"}
+_STAGE_KEYS = {"_comment", "module", "mode", "confirm", "run_after_failure"}
 
 
 class PipelineConfigError(ValueError):
@@ -30,6 +30,8 @@ class Stage:
     module: str
     mode: str
     confirm: str = ""
+    # Run this stage even when an earlier stage failed (e.g. acknowledging a partly failed load).
+    run_after_failure: bool = False
 
 
 @dataclass(frozen=True)
@@ -60,7 +62,10 @@ def parse(settings: Any) -> PipelineConfig:
         module = _name(raw.get("module"), f"stage_{number}_invalid_module")
         mode = _name(raw.get("mode"), f"stage_{number}_invalid_mode")
         confirm = _name(raw["confirm"], f"stage_{number}_invalid_confirm") if "confirm" in raw else ""
-        stages.append(Stage(number, module, mode, confirm))
+        run_after_failure = raw.get("run_after_failure", False)
+        if not isinstance(run_after_failure, bool):
+            raise PipelineConfigError(f"stage_{number}_invalid_run_after_failure")
+        stages.append(Stage(number, module, mode, confirm, run_after_failure))
     return PipelineConfig(env, stages)
 
 

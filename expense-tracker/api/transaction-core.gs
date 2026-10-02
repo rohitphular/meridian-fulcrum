@@ -596,9 +596,14 @@ function createTransactionsBulk(body) {
       }
       // An omitted lifecycle field retains each existing leg's lifecycle. An
       // explicit lifecycle applies to the complete pair, including restoration.
-      const childStatus = rawStatus !== '' || previousChild === undefined ? recordStatus : String(previousChild[txColIndex('record_status')]);
+      // A tombstoned child (left by re-importing the transfer as a single row)
+      // follows a live parent instead: one live leg alone would move money out
+      // of one account without it arriving in the other.
+      const storedChildStatus = previousChild === undefined ? '' : String(previousChild[txColIndex('record_status')]);
+      const childStatus = rawStatus !== '' || previousChild === undefined || (storedChildStatus === 'deleted' && recordStatus !== 'deleted')
+        ? recordStatus : storedChildStatus;
       if (getTransactionSchemaField('record_status').enum_values.indexOf(childStatus) === -1 ||
-          (recordStatus === 'deleted' && childStatus !== 'deleted')) {
+          (recordStatus === 'deleted') !== (childStatus === 'deleted')) {
         results.push({ key: csvId, ok: false, error: 'invalid_transfer_lifecycle' });
         failed += 1;
         return;

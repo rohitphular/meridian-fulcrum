@@ -1481,3 +1481,17 @@ test('re-importing identical account master rows keeps their sync status and wri
   assert.equal(JSON.stringify(sheet.rows), before);
   assert.equal(sheet.writes, writes);
 });
+
+test('a transfer re-imported after being collapsed to one row restores both legs together', () => {
+  const { ctx, sheet, transfer } = transactions();
+  ctx.createTransactionsBulk({ transactions: [transfer] });
+  const single = { ...transfer, major_category: 'expense', minor_category: 'food', target_account: '', target_amount_local: '' };
+  assert.equal(ctx.createTransactionsBulk({ transactions: [single] }).updated, 1);
+  const status = ctx.txColIndex('record_status');
+  assert.deepEqual(sheet.rows.slice(1).map(row => row[status]).sort(), ['active', 'deleted'], 'the child was tombstoned');
+  // Back to a transfer with the lifecycle left blank: both legs must be live again.
+  const again = ctx.createTransactionsBulk({ transactions: [{ ...transfer, record_status: '' }] });
+  assert.equal(again.ok, true);
+  const legs = sheet.rows.slice(1).filter(row => row[ctx.txColIndex('id')] === transfer.id || row[ctx.txColIndex('parent_tx_id')] === transfer.id);
+  assert.deepEqual(legs.map(row => row[status]), ['active', 'active']);
+});

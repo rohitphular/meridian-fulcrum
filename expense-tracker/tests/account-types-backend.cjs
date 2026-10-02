@@ -398,3 +398,10 @@ test('a Sheet that still has the retired is_loan column fails closed with a spec
   assert.throws(() => runtime([sheet]).ctx.listAccountTypes(), /account_types_is_loan_column_present/);
   assert.equal(sheet.writes, 0);
 });
+test('re-importing an identical catalog does not rewrite the account_types tab', () => {
+  const { ctx, table } = boot();
+  const writes = table().writes;
+  const result = ctx.createAccountTypesBulk({ account_types: catalog() });
+  assert.equal(result.ok, true); assert.equal(result.skipped, catalog().length); assert.equal(result.updated, 0);
+  assert.equal(table().writes, writes);
+});

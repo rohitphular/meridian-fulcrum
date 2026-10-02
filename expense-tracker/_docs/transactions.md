@@ -1,6 +1,6 @@
 # Transactions
 
-The core ledger. Every money movement is one row in the `transaction_master` Sheet tab. Ledger-extract uses the same entity key and database table name. Existing `transactions` tabs use the [master-tab migration](master-sheet-names.md).
+The core ledger. Every money movement is one row in the `transaction_master` Sheet tab. ledger-database-load uses the same entity key and database table name. Existing `transactions` tabs use the [master-tab migration](master-sheet-names.md).
 
 Schema reference: [data-model.md § Transaction](data-model.md#transaction). Balance arithmetic: [balance-lifecycle.md](balance-lifecycle.md). Hard-block rules: [financial-rules.md](financial-rules.md).
 
@@ -176,7 +176,7 @@ Transfers require distinct accounts and an active category with the same major/m
 
 For interactive transfers, both the parent leg and the child leg are duplicate-checked BEFORE any row is written to the sheet. If either leg would be a duplicate, the entire transfer is rejected and no rows are written. Both built rows are written together in one `setValues` call. POST dispatch serializes mutations with a script lock; this is not a cross-request or cross-sheet database transaction.
 
-Interactive update/delete/restore changes one selected leg and validates the resulting relationship before writing. A live child cannot reference a deleted root; same-account/direction pairs, nested roots and multiple live children are rejected. Delete the child before the parent; restore the parent before the child. `transfer_parent_deleted` or `invalid_transfer_pair` leaves both rows untouched. The API never silently deletes or restores another leg. See [the extraction contract](../../data-synchronization/ledger-sheet-extract/_docs/transaction-master.md#time-and-transfer-semantics).
+Interactive update/delete/restore changes one selected leg and validates the resulting relationship before writing. A live child cannot reference a deleted root; same-account/direction pairs, nested roots and multiple live children are rejected. Delete the child before the parent; restore the parent before the child. `transfer_parent_deleted` or `invalid_transfer_pair` leaves both rows untouched. The API never silently deletes or restores another leg. See [the extraction contract](../../data-synchronization/ledger-database-load/_docs/transaction-master.md#time-and-transfer-semantics).
 
 ### Bulk replacement and sync
 

@@ -1,0 +1,573 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pipeline Monitor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;600;700&display=swap">
+<!-- Shared Fulcrum design tokens (served from the repository root by `make app-start`). -->
+<link rel="stylesheet" href="../../../expense-tracker/_shared/style-tokens.css">
+<style>
+  /* Module-only tokens: run states the shared palette has no name for. */
+  :root { --amber: #C98A12; --amber-soft: #F6E3B8; --ok: var(--teal); --bad: var(--ember); }
+  [data-theme="dark"] { --amber: #E3A93A; --amber-soft: #3A2C10; }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body { background: var(--canvas); color: var(--ink); font-family: var(--grotesk); font-size: var(--text-base); line-height: 1.45; }
+  button, select { font: inherit; color: inherit; }
+  .mono { font-family: var(--mono); }
+  .muted { color: var(--muted); }
+  .eyebrow { font-family: var(--mono); font-size: var(--text-2xs); text-transform: uppercase; letter-spacing: .2em; color: var(--muted); }
+
+  /* ── Top bar ─────────────────────────────────────────────────────────────── */
+  .top { position: sticky; top: 0; z-index: 5; background: var(--panel); border-bottom: 1px solid var(--hair); }
+  .top-in { max-width: 1440px; margin: 0 auto; padding: 12px 20px; display: flex; flex-wrap: wrap; align-items: center; gap: 12px 18px; }
+  .brand h1 { margin: 2px 0 0; font-size: var(--text-2xl); font-weight: 700; letter-spacing: -.01em; }
+  .spacer { flex: 1; }
+  .ctrl { display: flex; align-items: center; gap: 8px; }
+  .ctrl label { font-family: var(--mono); font-size: var(--text-2xs); text-transform: uppercase; letter-spacing: .1em; color: var(--muted); }
+  select, .btn { height: 34px; border: 1px solid var(--hair-strong); background: var(--panel); border-radius: 8px; padding: 0 10px; cursor: pointer; }
+  .btn:hover, select:hover { border-color: var(--muted); }
+  .btn.icon { width: 34px; padding: 0; }
+  .btn.on { border-color: var(--teal); color: var(--teal); }
+  .pulse { display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: var(--text-xs); color: var(--muted); }
+  .pulse i { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .pulse.live i { background: var(--teal); animation: blink 1.2s ease-in-out infinite; }
+  @keyframes blink { 50% { opacity: .25; } }
+
+  /* ── Layout ──────────────────────────────────────────────────────────────── */
+  .wrap { max-width: 1440px; margin: 0 auto; padding: 18px 20px 40px; }
+  .grid { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 18px; align-items: start; }
+  @media (max-width: 960px) { .grid { grid-template-columns: minmax(0, 1fr); } .nav { position: static !important; max-height: none !important; } }
+  /* Grid items never grow past their track (wide tables and the stage flow scroll inside). */
+  .grid > *, .stack > *, .two > *, .card { min-width: 0; }
+  .card { overflow-x: auto; }
+  .card { background: var(--panel); border: 1px solid var(--hair); border-radius: 14px; padding: 16px 18px; }
+  .card h2 { margin: 0 0 2px; font-size: var(--text-xl); font-weight: 600; }
+  .card .sub { color: var(--muted); font-size: var(--text-sm); }
+  .stack { display: grid; gap: 18px; }
+
+  /* ── KPIs ────────────────────────────────────────────────────────────────── */
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin-bottom: 18px; }
+  .kpi { background: var(--panel); border: 1px solid var(--hair); border-radius: 14px; padding: 14px 16px; display: flex; gap: 12px; align-items: center; min-height: 86px; }
+  .kpi .v { font-size: var(--text-3xl); font-weight: 700; letter-spacing: -.02em; line-height: 1.1; }
+  .kpi .l { font-family: var(--mono); font-size: var(--text-2xs); text-transform: uppercase; letter-spacing: .12em; color: var(--muted); }
+  .kpi .h { font-size: var(--text-xs); color: var(--muted); }
+
+  /* ── Navigator tree ──────────────────────────────────────────────────────── */
+  .nav { position: sticky; top: 84px; max-height: calc(100vh - 104px); overflow: auto; padding: 10px 8px; }
+  .nav-head { display: flex; align-items: center; gap: 8px; padding: 4px 8px 10px; }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; padding: 0 8px 10px; }
+  .chip { font-family: var(--mono); font-size: var(--text-2xs); text-transform: uppercase; letter-spacing: .08em; border: 1px solid var(--hair-strong); border-radius: 999px; padding: 4px 9px; cursor: pointer; background: transparent; }
+  .chip.on { border-color: var(--ink); background: var(--ink); color: var(--panel); }
+  details > summary { list-style: none; cursor: pointer; }
+  details > summary::-webkit-details-marker { display: none; }
+  .month > summary { display: flex; align-items: center; gap: 8px; padding: 8px; border-radius: 8px; font-weight: 600; }
+  .day > summary { display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 22px; border-radius: 8px; }
+  summary:hover, .batch:hover { background: var(--row-hover); }
+  .caret { width: 10px; transition: transform .15s; color: var(--muted); }
+  details[open] > summary .caret { transform: rotate(90deg); }
+  .count { margin-left: auto; display: flex; gap: 6px; font-family: var(--mono); font-size: var(--text-xs); }
+  .count .ok { color: var(--ok); } .count .bad { color: var(--bad); }
+  .batch { display: grid; grid-template-columns: 10px 1fr auto; align-items: center; gap: 8px; padding: 6px 8px 6px 40px; border-radius: 8px; cursor: pointer; font-family: var(--mono); font-size: var(--text-sm); }
+  .batch.sel { background: var(--row-hover); box-shadow: inset 3px 0 0 var(--ink); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .dot.ok { background: var(--ok); } .dot.failed, .dot.preflight_failed, .dot.sign_in_failed, .dot.interrupted { background: var(--bad); }
+  .dot.running { background: var(--amber); animation: blink 1.2s infinite; }
+  .minibar { display: flex; gap: 2px; }
+  .minibar span { width: 6px; height: 12px; border-radius: 2px; background: var(--hair-strong); }
+
+  /* ── Badges / status ─────────────────────────────────────────────────────── */
+  .badge { display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: var(--text-2xs); text-transform: uppercase; letter-spacing: .08em; padding: 3px 8px; border-radius: 6px; border: 1px solid var(--hair-strong); color: var(--muted); white-space: nowrap; }
+  .badge.ok { color: var(--ok); border-color: var(--teal-soft); }
+  .badge.failed, .badge.preflight_failed, .badge.sign_in_failed, .badge.interrupted { color: var(--bad); border-color: var(--ember-soft); }
+  .badge.running { color: var(--amber); border-color: var(--amber-soft); }
+  .badge.pending, .badge.not_run { color: var(--muted); }
+
+  /* ── Run detail ──────────────────────────────────────────────────────────── */
+  .run-head { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 10px 22px; }
+  .run-head h2 { font-size: var(--text-2xl); }
+  .facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px 18px; margin-top: 14px; }
+  .fact .l { font-family: var(--mono); font-size: var(--text-2xs); text-transform: uppercase; letter-spacing: .1em; color: var(--muted); }
+  .fact .v { font-family: var(--mono); font-size: var(--text-sm); word-break: break-word; }
+  .banner { margin-top: 14px; border: 1px solid var(--ember-soft); color: var(--bad); border-radius: 10px; padding: 10px 12px; font-family: var(--mono); font-size: var(--text-sm); }
+  .flow { display: flex; align-items: stretch; gap: 0; overflow-x: auto; padding: 4px 0 2px; }
+  .node { flex: 1 0 150px; position: relative; padding: 12px 14px 12px 22px; background: var(--canvas); border: 1px solid var(--hair); border-radius: 12px; margin-right: 18px; cursor: pointer; }
+  .node:not(:last-child)::after { content: ""; position: absolute; right: -14px; top: 50%; width: 10px; height: 10px; border-top: 2px solid var(--hair-strong); border-right: 2px solid var(--hair-strong); transform: translateY(-50%) rotate(45deg); }
+  .node::before { content: ""; position: absolute; left: 0; top: 10px; bottom: 10px; width: 4px; border-radius: 0 4px 4px 0; background: var(--hair-strong); }
+  .node.ok::before { background: var(--ok); } .node.failed::before { background: var(--bad); } .node.running::before { background: var(--amber); }
+  .node .n { font-family: var(--mono); font-size: var(--text-2xs); color: var(--muted); letter-spacing: .1em; text-transform: uppercase; }
+  .node .m { font-weight: 600; margin: 2px 0; }
+  .node .d { font-family: var(--mono); font-size: var(--text-xs); color: var(--muted); }
+  .node.sel { border-color: var(--ink); }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: var(--text-xs); color: var(--muted); margin-top: 8px; }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+
+  /* ── Stage panels ────────────────────────────────────────────────────────── */
+  .stage { border: 1px solid var(--hair); border-radius: 12px; overflow: hidden; }
+  .stage > summary { display: flex; align-items: center; gap: 10px; padding: 12px 14px; background: var(--canvas); }
+  .stage > summary .t { font-weight: 600; }
+  .stage-body { padding: 14px; display: grid; gap: 14px; }
+  .mets { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; }
+  .met { border: 1px solid var(--hair); border-radius: 10px; padding: 8px 10px; }
+  .met .v { font-family: var(--mono); font-size: var(--text-lg); font-weight: 500; }
+  .met .l { font-family: var(--mono); font-size: var(--text-2xs); text-transform: uppercase; letter-spacing: .1em; color: var(--muted); }
+  table { width: 100%; border-collapse: collapse; font-size: var(--text-sm); }
+  th { text-align: left; font-family: var(--mono); font-size: var(--text-2xs); text-transform: uppercase; letter-spacing: .1em; color: var(--muted); font-weight: 500; padding: 6px 8px; border-bottom: 1px solid var(--hair-strong); }
+  td { padding: 6px 8px; border-bottom: 1px solid var(--hair); font-family: var(--mono); }
+  td.r, th.r { text-align: right; }
+  tr:hover td { background: var(--row-hover); }
+  .bar { height: 6px; border-radius: 3px; background: var(--hair); overflow: hidden; display: flex; min-width: 80px; }
+  .bar span { display: block; height: 100%; }
+  .log { max-height: 280px; overflow: auto; background: var(--canvas); border: 1px solid var(--hair); border-radius: 10px; padding: 8px 10px; font-family: var(--mono); font-size: var(--text-xs); }
+  .log div { white-space: pre-wrap; word-break: break-word; padding: 1px 0; }
+  .lv-WARN { color: var(--amber); } .lv-ERROR, .lv-CRIT { color: var(--bad); }
+  .steps { display: flex; flex-wrap: wrap; gap: 6px; }
+  .step { font-family: var(--mono); font-size: var(--text-xs); border: 1px solid var(--hair); border-radius: 999px; padding: 3px 9px; color: var(--muted); }
+  .sec-t { font-family: var(--mono); font-size: var(--text-2xs); text-transform: uppercase; letter-spacing: .14em; color: var(--muted); margin-bottom: 6px; }
+  .empty { text-align: center; padding: 40px 20px; color: var(--muted); }
+  .empty h2 { color: var(--ink); }
+  .empty code { font-family: var(--mono); background: var(--canvas); padding: 2px 6px; border-radius: 6px; }
+  svg text { font-family: var(--mono); fill: var(--muted); font-size: 10px; }
+  .hit { cursor: pointer; }
+  .hit:hover { opacity: .8; }
+  .two { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 18px; }
+  @media (max-width: 1100px) { .two { grid-template-columns: minmax(0, 1fr); } }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="top-in">
+    <div class="brand"><div class="eyebrow">Fulcrum · data synchronization</div><h1>Pipeline monitor</h1></div>
+    <div class="spacer"></div>
+    <span class="pulse" id="pulse"><i></i><span id="updated">not loaded</span></span>
+    <div class="ctrl">
+      <label for="reload">Reload</label>
+      <select id="reload">
+        <option value="0">Off</option>
+        <option value="1">1 s</option><option value="2">2 s</option><option value="3">3 s</option>
+        <option value="5">5 s</option><option value="10">10 s</option><option value="15">15 s</option><option value="30">30 s</option>
+      </select>
+    </div>
+    <button class="btn" id="follow" title="Always show the newest run">Follow latest</button>
+    <button class="btn icon" id="refresh" title="Reload now" aria-label="Reload now">↻</button>
+    <button class="btn icon" id="theme" title="Toggle theme" aria-label="Toggle theme">☽</button>
+  </div>
+</header>
+
+<main class="wrap">
+  <section class="kpis" id="kpis"></section>
+  <div class="grid">
+    <aside class="card nav" id="nav"></aside>
+    <section class="stack" id="detail"></section>
+  </div>
+</main>
+
+<script>
+'use strict';
+// Reads run reports written by the consolidated pipeline into ./data
+// (dd-mm-yyyy-hh-mm-ss.json, local start time, listed in data/index.json).
+// Finished runs are cached; the list and running runs are re-read on every reload.
+
+const FILE = /^(\d{2})-(\d{2})-(\d{4})-(\d{2})-(\d{2})-(\d{2})(?:-(\d+))?\.json$/;
+const FAILED = new Set(['failed', 'preflight_failed', 'sign_in_failed', 'interrupted']);
+const STORE = 'pipeline_monitor_';
+const state = { runs: new Map(), files: [], selected: null, selStage: null, filter: 'all', follow: true, timer: null, error: '' };
+
+const el = id => document.getElementById(id);
+const esc = value => String(value ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+const store = { get(key, fallback) { try { return localStorage.getItem(STORE + key) ?? fallback; } catch { return fallback; } }, set(key, value) { try { localStorage.setItem(STORE + key, value); } catch { /* private mode */ } } };
+const num = value => { const n = Number(String(value ?? '').split('/')[0]); return Number.isFinite(n) ? n : 0; };
+const isFail = status => FAILED.has(status);
+// A running run's file is rewritten every few seconds; between writes, count from its start.
+const runSeconds = run => run.status === 'running' && run.started_at ? Math.max(run.duration_seconds || 0, (Date.now() - Date.parse(run.started_at)) / 1000) : run.duration_seconds;
+
+function fmtDur(seconds) {
+  const s = Math.max(0, Math.round(Number(seconds) || 0));
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`;
+  return `${Math.floor(s / 3600)}h ${String(Math.floor(s % 3600 / 60)).padStart(2, '0')}m`;
+}
+function fmtAgo(date) {
+  const s = (Date.now() - date.getTime()) / 1000;
+  if (s < 60) return 'just now';
+  if (s < 3600) return `${Math.floor(s / 60)} min ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
+  return `${Math.floor(s / 86400)} d ago`;
+}
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const label = s => String(s).replace(/_/g, ' ');
+
+// ── Data ───────────────────────────────────────────────────────────────────
+function parseName(name) {
+  const m = FILE.exec(name);
+  if (!m) return null;
+  const [, dd, mm, yyyy, hh, mi, ss, n] = m;
+  return { name, date: new Date(+yyyy, +mm - 1, +dd, +hh, +mi, +ss), month: `${yyyy}-${mm}`, day: `${yyyy}-${mm}-${dd}`, batch: `${hh}:${mi}:${ss}${n ? ` #${n}` : ''}` };
+}
+
+async function listFiles() {
+  // data/index.json (written by the pipeline) works on any static server, including
+  // an IDE's built-in one that cannot list folders; a folder listing is the fallback.
+  let names = [];
+  const manifest = await fetch('data/index.json', { cache: 'no-store' }).catch(() => null);
+  if (manifest?.ok) {
+    try { names = (await manifest.json()).reports ?? []; } catch { names = []; }
+  } else {
+    const listing = await fetch('data/', { cache: 'no-store' });
+    if (!listing.ok) throw new Error(`No run reports found: data/index.json is missing and the data folder cannot be listed (HTTP ${listing.status}). Run the pipeline once to create them.`);
+    const html = await listing.text();
+    for (const match of html.matchAll(/href="([^"]+)"/g)) names.push(decodeURIComponent(match[1].split('/').pop()));
+  }
+  return [...new Set(names)].filter(name => FILE.test(name)).map(parseName).sort((a, b) => b.date - a.date || b.name.localeCompare(a.name));
+}
+
+async function loadRun(file) {
+  const cached = state.runs.get(file.name);
+  if (cached && cached.status !== 'running') return cached;
+  const response = await fetch(`data/${encodeURIComponent(file.name)}`, { cache: 'no-store' });
+  if (!response.ok) return cached ?? null;
+  try {
+    const run = await response.json();
+    run._file = file;
+    state.runs.set(file.name, run);
+    return run;
+  } catch { return cached ?? null; }   // a run mid-write; keep the previous copy
+}
+
+async function refresh() {
+  try {
+    state.files = await listFiles();
+    await Promise.all(state.files.map(loadRun));
+    state.error = '';
+  } catch (error) {
+    state.error = location.protocol === 'file:' ? 'file' : error.message;
+  }
+  for (const name of [...state.runs.keys()]) if (!state.files.some(f => f.name === name)) state.runs.delete(name);
+  const newest = state.files[0]?.name ?? null;
+  if (state.follow || !state.runs.has(state.selected)) state.selected = newest;
+  render();
+  el('updated').textContent = `updated ${new Date().toLocaleTimeString()}`;
+}
+
+// ── Derived numbers ────────────────────────────────────────────────────────
+function lastEvent(stage, test) { for (let i = stage.events.length - 1; i >= 0; i--) if (test(stage.events[i])) return stage.events[i]; return null; }
+function eventsWhere(stage, test) { return stage.events.filter(test); }
+
+function entityRows(stage) {
+  // ledger-database-load: the last `<writer>: done …` (or progress) line per entity.
+  const out = new Map();
+  for (const e of stage.events) {
+    if (!/^upsert_/.test(e.event) || !('processed' in e.values)) continue;
+    out.set(e.event.replace(/^upsert_/, ''), { ...e.values, final: e.values.processed?.split('/')[0] === e.values.processed?.split('/')[1] });
+  }
+  for (const e of stage.events) {
+    if (e.event === 'upsert_details' && e.values.tab && ('created' in e.values || 'failed' in e.values)) {
+      out.set(e.values.tab, { processed: `${num(e.values.created) + num(e.values.updated) + num(e.values.unchanged)}`, succeeded: num(e.values.created) + num(e.values.updated), failed: e.values.failed ?? 0, skipped: e.values.unchanged ?? 0, elapsed_s: e.values.elapsed_s, detail: true });
+    }
+  }
+  return [...out].map(([name, v]) => ({ name, ...v }));
+}
+
+function stageSummary(stage) {
+  const m = stage.module, mode = stage.mode;
+  const cards = [], tables = [];
+  if (m === 'ledger-sheet-load') {
+    const files = eventsWhere(stage, e => e.event === 'load_data' && e.values.file);
+    const sum = k => files.reduce((t, e) => t + num(e.values[k]), 0);
+    if (files.length) {
+      cards.push(['files', files.length], ['created', sum('created')], ['updated', sum('updated')], ['unchanged', sum('unchanged')]);
+      tables.push({ title: 'Files loaded into the Sheet', cols: ['file', 'created', 'updated', 'unchanged'], rows: files.map(e => [e.values.file, num(e.values.created), num(e.values.updated), num(e.values.unchanged)]), bar: [1, 2, 3] });
+    }
+    const filled = eventsWhere(stage, e => e.event === 'fill_ids' && e.values.filled);
+    if (filled.length) cards.push(['ids filled', filled.reduce((t, e) => t + num(e.values.filled), 0)]);
+  } else if (m === 'ledger-sheet-extract' && mode === 'extract') {
+    const tabs = eventsWhere(stage, e => e.event === 'store_snapshot' && e.values.tab);
+    const run = lastEvent(stage, e => e.event === 'store_snapshot' && e.values.run_id);
+    if (tabs.length) {
+      cards.push(['tabs', tabs.length], ['rows staged', tabs.reduce((t, e) => t + num(e.values.rows), 0)]);
+      tables.push({ title: 'Tabs staged', cols: ['tab', 'rows'], rows: tabs.map(e => [e.values.tab, num(e.values.rows)]), bar: [1] });
+    }
+    if (run) cards.push(['superseded', num(run.values.superseded_runs)], ['pruned', num(run.values.pruned_runs)]);
+  } else if (m === 'ledger-sheet-extract' && mode === 'acknowledge') {
+    const tabs = eventsWhere(stage, e => e.event === 'acknowledge' && e.values.tab);
+    const sum = k => tabs.reduce((t, e) => t + num(e.values[k]), 0);
+    if (tabs.length) {
+      cards.push(['written', sum('written')], ['edited mid-run', sum('edited_since_snapshot')], ['not found', sum('not_found')]);
+      tables.push({ title: 'Outcomes written to the Sheet', cols: ['tab', 'written', 'edited_since_snapshot', 'not_found'], rows: tabs.map(e => [e.values.tab, num(e.values.written), num(e.values.edited_since_snapshot), num(e.values.not_found)]), bar: [1, 2, 3] });
+    } else if (lastEvent(stage, e => e.event === 'acknowledge' && e.values.nothing_to_acknowledge)) cards.push(['outcomes', 'none']);
+  } else if (m === 'ledger-database-load') {
+    const rows = entityRows(stage);
+    const sum = k => rows.reduce((t, r) => t + num(r[k]), 0);
+    if (rows.length) {
+      cards.push(['entities', rows.length], ['loaded', sum('succeeded')], ['failed', sum('failed')], ['skipped', sum('skipped')]);
+      tables.push({ title: 'Entities loaded into PostgreSQL', cols: ['entity', 'processed', 'succeeded', 'failed', 'skipped', 'elapsed'], rows: rows.map(r => [r.name, r.processed, num(r.succeeded), num(r.failed), num(r.skipped), r.elapsed_s ? fmtDur(r.elapsed_s) : '']), bar: [2, 3, 4] });
+    }
+    if (lastEvent(stage, e => e.event === 'run' && e.values.nothing_to_load)) cards.push(['to load', 'nothing']);
+  } else if (m === 'forex-database-load') {
+    const done = lastEvent(stage, e => e.event === 'runner' && e.values.complete === undefined && e.values.fiat_currencies);
+    const tickers = eventsWhere(stage, e => e.event === 'download_closes' && e.values.ticker);
+    if (done) cards.push(['currencies', num(done.values.fiat_currencies)], ['dates', num(done.values.dates)]);
+    const range = lastEvent(stage, e => e.values.from_date && e.values.to_date);
+    if (range) cards.push(['from', range.values.from_date], ['to', range.values.to_date]);
+    if (tickers.length) tables.push({ title: 'Provider series downloaded', cols: ['ticker', 'rows'], rows: tickers.map(e => [e.values.ticker, num(e.values.rows)]), bar: [1] });
+  }
+  cards.push(['warnings', stage.warnings.length], ['errors', stage.errors.length]);
+  return { cards, tables };
+}
+
+function runTotals(run) {
+  const t = { loaded: 0, failedRows: 0, written: 0, staged: 0, sheetUpdated: 0 };
+  for (const s of run.stages ?? []) {
+    if (s.module === 'ledger-database-load') for (const r of entityRows(s)) { t.loaded += num(r.succeeded); t.failedRows += num(r.failed); }
+    if (s.module === 'ledger-sheet-extract' && s.mode === 'acknowledge') t.written += eventsWhere(s, e => e.event === 'acknowledge' && e.values.tab).reduce((a, e) => a + num(e.values.written), 0);
+    if (s.module === 'ledger-sheet-extract' && s.mode === 'extract') t.staged += eventsWhere(s, e => e.event === 'store_snapshot' && e.values.tab).reduce((a, e) => a + num(e.values.rows), 0);
+    if (s.module === 'ledger-sheet-load') t.sheetUpdated += eventsWhere(s, e => e.event === 'load_data').reduce((a, e) => a + num(e.values.created) + num(e.values.updated), 0);
+  }
+  return t;
+}
+
+// ── Graphics ───────────────────────────────────────────────────────────────
+const statusColor = status => status === 'ok' ? 'var(--ok)' : status === 'running' ? 'var(--amber)' : isFail(status) ? 'var(--bad)' : 'var(--hair-strong)';
+
+function donut(okCount, badCount, size = 54) {
+  const total = okCount + badCount, r = size / 2 - 6, c = 2 * Math.PI * r;
+  const ok = total ? okCount / total : 0;
+  return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" aria-hidden="true">
+    <circle cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke="${total ? 'var(--bad)' : 'var(--hair)'}" stroke-width="7"/>
+    <circle cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke="var(--ok)" stroke-width="7" stroke-dasharray="${ok * c} ${c}" transform="rotate(-90 ${size / 2} ${size / 2})" stroke-linecap="${ok > 0 && ok < 1 ? 'round' : 'butt'}"/>
+  </svg>`;
+}
+
+function historyChart(runs) {
+  const list = runs.slice(0, 40).reverse();
+  if (!list.length) return '<div class="muted">No runs yet.</div>';
+  const W = 760, H = 170, pad = { l: 40, r: 8, t: 10, b: 26 };
+  const max = Math.max(...list.map(r => r.duration_seconds || 0), 1);
+  const bw = (W - pad.l - pad.r) / list.length;
+  const ticks = [0, max / 2, max];
+  let svg = `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Run duration history">`;
+  for (const t of ticks) {
+    const y = pad.t + (H - pad.t - pad.b) * (1 - t / max);
+    svg += `<line x1="${pad.l}" x2="${W - pad.r}" y1="${y}" y2="${y}" stroke="var(--hair)"/><text x="${pad.l - 6}" y="${y + 3}" text-anchor="end">${fmtDur(t)}</text>`;
+  }
+  list.forEach((run, i) => {
+    const h = Math.max(2, (H - pad.t - pad.b) * ((run.duration_seconds || 0) / max));
+    const x = pad.l + i * bw + bw * 0.15, y = H - pad.b - h;
+    const sel = run._file.name === state.selected;
+    svg += `<g class="hit" data-run="${esc(run._file.name)}"><title>${esc(run._file.day)} ${esc(run._file.batch)} · ${esc(label(run.status))} · ${fmtDur(run.duration_seconds)}</title>
+      <rect x="${x}" y="${y}" width="${bw * 0.7}" height="${h}" rx="3" fill="${statusColor(run.status)}" opacity="${sel ? 1 : 0.75}"/>
+      ${sel ? `<rect x="${x - 2}" y="${y - 2}" width="${bw * 0.7 + 4}" height="${h + 4}" rx="4" fill="none" stroke="var(--ink)"/>` : ''}</g>`;
+    if (list.length <= 16 || i % Math.ceil(list.length / 12) === 0) svg += `<text x="${x + bw * 0.35}" y="${H - 8}" text-anchor="middle">${esc(run._file.batch.slice(0, 5))}</text>`;
+  });
+  return svg + '</svg>';
+}
+
+function stageMix(runs) {
+  // Average seconds per module across finished runs: where the time goes.
+  const totals = new Map();
+  for (const run of runs.slice(0, 30)) for (const s of run.stages ?? []) {
+    if (!s.seconds) continue;
+    const key = `${s.module} · ${s.mode}`;
+    const t = totals.get(key) ?? { sum: 0, n: 0 };
+    t.sum += s.seconds; t.n += 1; totals.set(key, t);
+  }
+  const rows = [...totals].map(([k, v]) => [k, v.sum / v.n]).sort((a, b) => b[1] - a[1]);
+  if (!rows.length) return '<div class="muted">No finished stages yet.</div>';
+  const max = rows[0][1];
+  return `<table><tbody>${rows.map(([k, v]) => `<tr><td>${esc(k)}</td><td style="width:45%"><div class="bar"><span style="width:${(v / max) * 100}%;background:var(--teal)"></span></div></td><td class="r">${fmtDur(v)}</td></tr>`).join('')}</tbody></table>`;
+}
+
+function gantt(run) {
+  const stages = (run.stages ?? []).filter(s => s.started_at);
+  if (!stages.length) return '<div class="muted">No stage has started yet.</div>';
+  const t0 = Math.min(...stages.map(s => Date.parse(s.started_at)));
+  const end = s => s.finished_at ? Date.parse(s.finished_at) : Date.now();
+  const t1 = Math.max(...stages.map(end), t0 + 1000);
+  const W = 760, row = 26, pad = { l: 190, r: 10, t: 6 };
+  const H = pad.t + stages.length * row + 22;
+  const x = t => pad.l + (W - pad.l - pad.r) * ((t - t0) / (t1 - t0));
+  let svg = `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Stage timeline">`;
+  for (let i = 0; i <= 4; i++) {
+    const t = t0 + (t1 - t0) * i / 4, xx = x(t);
+    svg += `<line x1="${xx}" x2="${xx}" y1="${pad.t}" y2="${H - 18}" stroke="var(--hair)"/><text x="${xx}" y="${H - 4}" text-anchor="middle">+${fmtDur((t - t0) / 1000)}</text>`;
+  }
+  stages.forEach((s, i) => {
+    const y = pad.t + i * row, a = x(Date.parse(s.started_at)), b = Math.max(x(end(s)), a + 3);
+    svg += `<g class="hit" data-stage="${s.number}"><title>${esc(s.module)} (${esc(s.mode)}) · ${esc(label(s.status))} · ${fmtDur(s.seconds || (end(s) - Date.parse(s.started_at)) / 1000)}</title>
+      <text x="${pad.l - 8}" y="${y + 16}" text-anchor="end" style="fill:var(--ink)">${s.number}. ${esc(s.module)}</text>
+      <rect x="${a}" y="${y + 5}" width="${b - a}" height="15" rx="4" fill="${statusColor(s.status)}" opacity=".85"/></g>`;
+  });
+  return svg + '</svg>';
+}
+
+// ── Rendering ──────────────────────────────────────────────────────────────
+const allRuns = () => state.files.map(f => state.runs.get(f.name)).filter(Boolean);
+
+function renderKpis(runs) {
+  const finished = runs.filter(r => r.status !== 'running');
+  const ok = finished.filter(r => r.status === 'ok').length, bad = finished.length - ok;
+  const week = runs.filter(r => Date.now() - r._file.date.getTime() < 7 * 86400e3);
+  const weekBad = week.filter(r => isFail(r.status)).length;
+  const latest = runs[0];
+  const durations = finished.map(r => r.duration_seconds).filter(Boolean).sort((a, b) => a - b);
+  const median = durations.length ? durations[Math.floor(durations.length / 2)] : 0;
+  const lastFinished = finished[0];
+  const totals = lastFinished ? runTotals(lastFinished) : null;
+  el('kpis').innerHTML = [
+    `<div class="kpi">${donut(ok, bad)}<div><div class="v">${finished.length ? Math.round(ok / finished.length * 100) : 0}%</div><div class="l">success rate</div><div class="h">${ok} ok · ${bad} failed · ${runs.length} runs</div></div></div>`,
+    `<div class="kpi"><div><div class="v">${latest ? `<span class="badge ${esc(latest.status)}">${esc(label(latest.status))}</span>` : '—'}</div><div class="l">latest run</div><div class="h">${latest ? `${esc(latest.env || '')} · ${fmtAgo(latest._file.date)}` : 'no runs yet'}</div></div></div>`,
+    `<div class="kpi"><div><div class="v">${fmtDur(median)}</div><div class="l">median duration</div><div class="h">${durations.length ? `fastest ${fmtDur(durations[0])} · slowest ${fmtDur(durations.at(-1))}` : 'no finished runs'}</div></div></div>`,
+    `<div class="kpi"><div><div class="v">${week.length}</div><div class="l">runs · last 7 days</div><div class="h">${weekBad ? `<span style="color:var(--bad)">${weekBad} failed</span>` : 'none failed'}</div></div></div>`,
+    `<div class="kpi"><div><div class="v">${totals ? totals.loaded.toLocaleString() : '—'}</div><div class="l">rows loaded · last finished</div><div class="h">${totals ? `${totals.staged.toLocaleString()} staged · ${totals.written.toLocaleString()} acknowledged${totals.failedRows ? ` · <span style="color:var(--bad)">${totals.failedRows} failed</span>` : ''}` : ''}</div></div></div>`,
+  ].join('');
+}
+
+function renderNav(runs) {
+  const filtered = runs.filter(r => state.filter === 'all' || (state.filter === 'failed' ? isFail(r.status) : r.status === state.filter));
+  const months = new Map();
+  for (const run of filtered) {
+    const f = run._file;
+    if (!months.has(f.month)) months.set(f.month, new Map());
+    const days = months.get(f.month);
+    if (!days.has(f.day)) days.set(f.day, []);
+    days.get(f.day).push(run);
+  }
+  const counts = list => { const ok = list.filter(r => r.status === 'ok').length, bad = list.filter(r => isFail(r.status)).length; return `<span class="count"><span class="ok">${ok}✓</span>${bad ? `<span class="bad">${bad}✗</span>` : ''}</span>`; };
+  const selDay = state.runs.get(state.selected)?._file;
+  const chips = ['all', 'ok', 'failed', 'running'].map(f => `<button class="chip ${state.filter === f ? 'on' : ''}" data-filter="${f}">${f}</button>`).join('');
+  let html = `<div class="nav-head"><div><div class="eyebrow">Runs</div><div class="sub">month → date → batch</div></div></div><div class="chips">${chips}</div>`;
+  if (!filtered.length) html += '<div class="empty" style="padding:20px">No runs match.</div>';
+  let first = true;
+  for (const [month, days] of months) {
+    const [y, m] = month.split('-');
+    const monthRuns = [...days.values()].flat();
+    const openMonth = first || selDay?.month === month;
+    html += `<details class="month" ${openMonth ? 'open' : ''}><summary><span class="caret">▸</span>${MONTHS[+m - 1]} ${y}${counts(monthRuns)}</summary>`;
+    let firstDay = true;
+    for (const [day, list] of days) {
+      const d = list[0]._file.date;
+      const openDay = (first && firstDay) || selDay?.day === day;
+      html += `<details class="day" ${openDay ? 'open' : ''}><summary><span class="caret">▸</span><span class="mono">${String(d.getDate()).padStart(2, '0')}</span> <span class="muted">${DAYS[d.getDay()]}</span>${counts(list)}</summary>`;
+      for (const run of list) {
+        const bar = (run.stages ?? []).map(s => `<span title="${esc(s.module)} · ${esc(label(s.status))}" style="background:${statusColor(s.status)}"></span>`).join('');
+        html += `<div class="batch ${run._file.name === state.selected ? 'sel' : ''}" data-run="${esc(run._file.name)}"><span class="dot ${esc(run.status)}"></span><span>${esc(run._file.batch)} <span class="muted">${esc(run.env || '')}</span></span><span class="minibar">${bar}</span></div>`;
+      }
+      html += '</details>';
+      firstDay = false;
+    }
+    html += '</details>';
+    first = false;
+  }
+  el('nav').innerHTML = html;
+}
+
+function stagePanel(stage, open) {
+  const { cards, tables } = stageSummary(stage);
+  const dur = stage.seconds ? fmtDur(stage.seconds) : stage.started_at ? fmtDur((Date.now() - Date.parse(stage.started_at)) / 1000) : '';
+  const table = t => {
+    const max = Math.max(1, ...t.rows.flatMap(r => (t.bar ?? []).map(i => num(r[i]))));
+    const colors = ['var(--teal)', 'var(--amber)', 'var(--muted)'];
+    return `<div><div class="sec-t">${esc(t.title)}</div><table><thead><tr>${t.cols.map((c, i) => `<th class="${i ? 'r' : ''}">${esc(label(c))}</th>`).join('')}<th></th></tr></thead><tbody>${t.rows.map(r => `<tr>${r.map((v, i) => `<td class="${i ? 'r' : ''}">${esc(typeof v === 'number' ? v.toLocaleString() : v)}</td>`).join('')}<td style="width:22%"><div class="bar">${(t.bar ?? []).map((i, k) => `<span style="width:${num(r[i]) / max * 100}%;background:${colors[k] ?? 'var(--muted)'}"></span>`).join('')}</div></td></tr>`).join('')}</tbody></table></div>`;
+  };
+  const issues = [...stage.errors, ...stage.warnings];
+  return `<details class="stage" ${open ? 'open' : ''} id="stage-${stage.number}"><summary><span class="caret">▸</span><span class="mono muted">${stage.number}</span><span class="t">${esc(stage.module)}</span><span class="badge">${esc(stage.mode)}</span>${stage.run_after_failure ? '<span class="badge" title="Runs even after an earlier failure">after failure</span>' : ''}<span class="spacer"></span><span class="mono muted">${dur}</span><span class="badge ${esc(stage.status)}">${esc(label(stage.status))}</span></summary>
+    <div class="stage-body">
+      <div class="mets">${cards.map(([l, v]) => `<div class="met"><div class="v" style="${(l === 'failed' || l === 'errors') && num(v) ? 'color:var(--bad)' : l === 'warnings' && num(v) ? 'color:var(--amber)' : ''}">${esc(typeof v === 'number' ? v.toLocaleString() : v)}</div><div class="l">${esc(l)}</div></div>`).join('')}</div>
+      ${stage.steps.length ? `<div><div class="sec-t">Launcher steps</div><div class="steps">${stage.steps.map(s => `<span class="step" title="${esc(s.t)}">${esc(s.text)}</span>`).join('')}</div></div>` : ''}
+      ${tables.map(table).join('')}
+      ${issues.length ? `<div><div class="sec-t">Warnings and errors (${issues.length})</div><div class="log">${issues.map(e => `<div class="lv-${esc(e.level)}">${esc(e.t.slice(11, 19))} ${esc(e.level)} [${esc(e.logger)}] ${esc(e.message)}</div>`).join('')}</div></div>` : ''}
+      ${stage.log_tail.length ? `<details><summary class="sec-t" style="margin:0">Log tail · last ${stage.log_tail.length} of ${stage.lines} lines</summary><div class="log" style="margin-top:6px">${stage.log_tail.map(e => `<div class="lv-${esc(e.level)}">${esc(e.t.slice(11, 19))} ${esc(e.level.padEnd(5))} [${esc(e.logger)}] ${esc(e.message)}</div>`).join('')}</div></details>` : ''}
+    </div></details>`;
+}
+
+function renderDetail(runs) {
+  if (state.error) {
+    el('detail').innerHTML = `<div class="card empty"><h2>The run reports could not be read</h2><p>${state.error === 'file'
+      ? 'Browsers cannot read a folder from <code>file://</code>. Serve the repository and open the page over HTTP:'
+      : esc(state.error)}</p><p><code>make app-start</code> → <code>http://localhost:8000/data-synchronization/consolidated-pipeline/output/</code></p></div>`;
+    return;
+  }
+  const run = state.runs.get(state.selected);
+  if (!run) {
+    el('detail').innerHTML = `<div class="card empty"><h2>No runs yet</h2><p>Each <code>make consolidated-pipeline</code> run writes a report to <code>output/data/</code>; it appears here on the next reload.</p></div>`;
+    return;
+  }
+  const f = run._file, t = run.totals ?? {};
+  const stages = run.stages ?? [];
+  const pre = run.preflight ?? [];
+  const facts = [
+    ['environment', run.env], ['started', new Date(run.started_at).toLocaleString()], ['finished', run.finished_at ? new Date(run.finished_at).toLocaleTimeString() : 'running…'],
+    ['duration', fmtDur(runSeconds(run))], ['config', run.config], ['credentials', label(run.credentials)], ['host', run.host], ['code version', run.code_version || '—'],
+  ];
+  const nodes = stages.map(s => `<div class="node ${esc(s.status)} ${state.selStage === s.number ? 'sel' : ''}" data-stage="${s.number}"><div class="n">stage ${s.number}</div><div class="m">${esc(s.module)}</div><div class="d">${esc(s.mode)} · ${s.seconds ? fmtDur(s.seconds) : label(s.status)}</div></div>`).join('');
+  el('detail').innerHTML = `
+    <div class="card">
+      <div class="run-head"><div><div class="eyebrow">${esc(MONTHS[f.date.getMonth()])} ${f.date.getDate()}, ${f.date.getFullYear()} · batch ${esc(f.batch)}</div><h2>${esc(f.name.replace(/\.json$/, ''))}</h2></div><span class="spacer"></span>
+        <span class="badge ${esc(run.status)}" style="font-size:12px;padding:6px 10px">${run.status === 'running' ? '● ' : ''}${esc(label(run.status))}</span></div>
+      ${run.failure_reason ? `<div class="banner">${esc(run.failure_reason)}</div>` : ''}
+      <div class="facts">${facts.map(([l, v]) => `<div class="fact"><div class="l">${esc(l)}</div><div class="v">${esc(v)}</div></div>`).join('')}</div>
+    </div>
+    <div class="card"><div class="sec-t">Stages · ${t.ok ?? stages.filter(s => s.status === 'ok').length} ok · ${t.failed ?? stages.filter(s => s.status === 'failed').length} failed · ${t.not_run ?? 0} not run</div><div class="flow">${nodes}</div>
+      <div class="legend"><span><i style="background:var(--ok)"></i>ok</span><span><i style="background:var(--bad)"></i>failed</span><span><i style="background:var(--amber)"></i>running</span><span><i style="background:var(--hair-strong)"></i>pending / not run</span></div></div>
+    <div class="two">
+      <div class="card"><div class="sec-t">Timeline</div>${gantt(run)}</div>
+      <div class="card"><div class="sec-t">Preflight &amp; sign-in</div><table><tbody>${pre.map(p => `<tr><td>${p.number}. ${esc(p.module)}</td><td>${esc(p.mode)}</td><td class="r">${p.ok ? '<span class="badge ok">ok</span>' : `<span class="badge failed" title="${esc(p.message)}">failed</span>`}</td></tr>`).join('') || '<tr><td class="muted">not run</td></tr>'}
+        ${run.sign_in ? `<tr><td>sign-in</td><td>${esc(run.sign_in.module)}</td><td class="r"><span class="badge ${run.sign_in.ok ? 'ok' : 'failed'}">${run.sign_in.ok ? 'ok' : 'failed'}</span></td></tr>` : ''}</tbody></table>
+        ${pre.filter(p => !p.ok && p.message).map(p => `<div class="banner">${esc(p.message)}</div>`).join('')}</div>
+    </div>
+    <div class="stack">${stages.map(s => stagePanel(s, state.selStage ? s.number === state.selStage : (isFail(s.status) || s.status === 'running'))).join('')}</div>
+    <div class="two">
+      <div class="card"><h2>Run history</h2><div class="sub">Duration of the last ${Math.min(40, runs.length)} runs, coloured by result. Click a bar to open it.</div>${historyChart(runs)}</div>
+      <div class="card"><h2>Where the time goes</h2><div class="sub">Average stage duration over the last ${Math.min(30, runs.length)} runs.</div>${stageMix(runs)}</div>
+    </div>`;
+}
+
+function render() {
+  const runs = allRuns();
+  renderKpis(runs);
+  renderNav(runs);
+  renderDetail(runs);
+  const live = runs.some(r => r.status === 'running');
+  el('pulse').classList.toggle('live', live || state.timer !== null);
+  el('follow').classList.toggle('on', state.follow);
+}
+
+// ── Controls ───────────────────────────────────────────────────────────────
+function setReload(seconds) {
+  if (state.timer) clearInterval(state.timer);
+  state.timer = seconds > 0 ? setInterval(refresh, seconds * 1000) : null;
+  store.set('reload', String(seconds));
+  el('pulse').classList.toggle('live', state.timer !== null);
+}
+function setTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  store.set('theme', theme);
+  el('theme').textContent = theme === 'dark' ? '☀' : '☽';
+}
+
+document.addEventListener('click', event => {
+  const runEl = event.target.closest('[data-run]');
+  const stageEl = event.target.closest('[data-stage]');
+  const filterEl = event.target.closest('[data-filter]');
+  if (runEl) { state.selected = runEl.dataset.run; state.selStage = null; state.follow = false; render(); window.scrollTo({ top: 0, behavior: 'smooth' }); }
+  else if (stageEl) { state.selStage = Number(stageEl.dataset.stage); render(); el(`stage-${state.selStage}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+  else if (filterEl) { state.filter = filterEl.dataset.filter; render(); }
+});
+el('reload').addEventListener('change', event => setReload(Number(event.target.value)));
+el('refresh').addEventListener('click', refresh);
+el('follow').addEventListener('click', () => { state.follow = !state.follow; state.selStage = null; if (state.follow) state.selected = state.files[0]?.name ?? null; render(); });
+el('theme').addEventListener('click', () => setTheme(document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark'));
+
+const savedTheme = store.get('theme', matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+setTheme(savedTheme);
+const savedReload = store.get('reload', '5');
+el('reload').value = ['0', '1', '2', '3', '5', '10', '15', '30'].includes(savedReload) ? savedReload : '5';
+setReload(Number(el('reload').value));
+refresh();
+</script>
+</body>
+</html>

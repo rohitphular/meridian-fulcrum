@@ -32,3 +32,6 @@ _volume/
 # Consolidated pipeline configs, one per env (per machine; copy config/pipeline.example.json)
 data-synchronization/consolidated-pipeline/config/pipeline.*.json
 !data-synchronization/consolidated-pipeline/config/pipeline.example.json
+
+# Consolidated pipeline run reports (read by output/index.html)
+data-synchronization/consolidated-pipeline/output/data/

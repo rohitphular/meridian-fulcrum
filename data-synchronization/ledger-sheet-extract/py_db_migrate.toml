@@ -6,4 +6,4 @@ password          = "${FULCRUM_DB_PASSWORD}"
 connect_database  = "${FULCRUM_DB_NAME}"
 migrations_path   = "migrations"
 schema            = "public"
-tracking_table    = "schema_migrations_ledger_extract"  # name predates the ledger-sheet-extract rename; changing it re-runs every migration
+tracking_table    = "schema_migrations_ledger_sheet_extract"

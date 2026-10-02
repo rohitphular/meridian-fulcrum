@@ -55,7 +55,7 @@ Account subtype choices and labels come from active or locked rows in the `accou
 
 `account_closing_date_local` is populated via `update_account` when an account is closed — set alongside `record_status: inactive`.
 
-Opening, closing and tracking dates accept valid ISO local dates/datetimes without a UTC offset, with up to six fractional-second digits. Invalid calendar dates and time rollovers are rejected; closing cannot precede the recorded opening date. Text is preserved without UTC conversion. `local_timezone` remains optional. When supplied, the backend validates the IANA zone and rejects ambiguous/nonexistent local times before writing; accepted aliases/casing are stored canonically for ledger-sheet-extract. Native Sheet date cells are returned using the spreadsheet's displayed wall time, without an unintended JSON UTC shift.
+Opening, closing and tracking dates accept valid ISO local dates/datetimes without a UTC offset, with up to six fractional-second digits. Invalid calendar dates and time rollovers are rejected; closing cannot precede the recorded opening date. Text is preserved without UTC conversion. `local_timezone` remains optional. When supplied, the backend validates the IANA zone and rejects ambiguous/nonexistent local times before writing; accepted aliases/casing are stored canonically for ledger-database-load. Native Sheet date cells are returned using the spreadsheet's displayed wall time, without an unintended JSON UTC shift.
 
 `record_status` can be changed to `active`, `inactive`, or `locked` via `update_account`. Setting it to `deleted` via `update_account` is rejected with `invalid_record_status` — the `deleted` state is set only via `delete_account`; restoring from `deleted` requires `restore_account`.
 
@@ -72,7 +72,7 @@ There is no API to write `current_value_local` directly and no transaction opera
 
 ### Sync lifecycle
 
-On create, `sync_status` defaults to `create-pending`. Updates, imports, delete and restore operations clear stale sync date/notes and preserve the original creation timestamp. Direct Sheet business/lifecycle edits, including the tracking timestamp after the audit columns, also queue affected rows and refresh `updated_at`; audit-only edits do not requeue. The trigger writes only sync/audit cells. The Python ledger-sheet-extract job transitions the account to `in-sync` once the record is confirmed persisted externally. If synchronisation fails, the status is set to `create-failed` or `update-failed`. The full set of valid values is: `create-pending | update-pending | in-sync | create-failed | update-failed`.
+On create, `sync_status` defaults to `create-pending`. Updates, imports, delete and restore operations clear stale sync date/notes and preserve the original creation timestamp. Direct Sheet business/lifecycle edits, including the tracking timestamp after the audit columns, also queue affected rows and refresh `updated_at`; audit-only edits do not requeue. The trigger writes only sync/audit cells. Once the Python ledger-database-load job has persisted the record, `ledger-sheet-extract acknowledge` writes its outcome back: `in-sync` on success; if synchronisation fails, the status is set to `create-failed` or `update-failed`. The full set of valid values is: `create-pending | update-pending | in-sync | create-failed | update-failed`.
 
 ### Deactivate (record_status = inactive)
 

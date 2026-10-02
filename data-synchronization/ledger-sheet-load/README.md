@@ -1,6 +1,6 @@
 # ledger-sheet-load
 
-Loads the local CSV files in `local/files` into an environment's expense-tracker Google Sheet. The job only calls the deployed GAS web app: every file goes to its entity's own CSV import endpoint, the same one the app uses, so parsing, validation and the Sheet writes all happen in Apps Script. It never touches PostgreSQL; run [ledger-sheet-extract](../ledger-sheet-extract/README.md) afterwards to move the loaded rows into the database.
+Loads the local CSV files in `local/files` into an environment's expense-tracker Google Sheet. The job only calls the deployed GAS web app: every file goes to its entity's own CSV import endpoint, the same one the app uses, so parsing, validation and the Sheet writes all happen in Apps Script. It never touches PostgreSQL; run the ledger sync afterwards to move the loaded rows into the database ([ledger-sheet-extract](../ledger-sheet-extract/README.md) `extract` → [ledger-database-load](../ledger-database-load/README.md) → `acknowledge`, normally via `make consolidated-pipeline`).
 
 See [usage](./_runbooks/USAGE-INSTRUCTIONS.md) for prerequisites, commands and troubleshooting.
 
@@ -22,7 +22,7 @@ Whichever mode you pick, every CSV is first scanned for rows without an `id` and
 5. **Load** (`steps/load_data.py`): one request per file, in the dependency order listed in `config.yaml` (`create_account_types_bulk`, `create_categories_bulk`, `import_account_data` with `file_type`, `create_subscriptions_bulk`, then `create_transactions_bulk` for every `transaction_master_*.csv` by name).
 6. **Order tabs** (`steps/order_tabs.py`): `arrange_sheet_tabs` reapplies the configured order through `ensureExpenseTrackerSheetOrder()`; tabs outside the order, such as `dummy`, move to the end.
 
-**Unchanged rows stay as they are:** a CSV row identical to the Sheet row is not rewritten, so an `in-sync` row stays `in-sync` and ledger-sheet-extract skips it; the load log reports `created`, `updated` and `unchanged` per file.
+**Unchanged rows stay as they are:** a CSV row identical to the Sheet row is not rewritten, so an `in-sync` row stays `in-sync` and the ledger sync (ledger-sheet-extract → ledger-database-load) skips it; the load log reports `created`, `updated` and `unchanged` per file.
 
 **What a sync does not do:** rows are matched by `id`, so a sync updates and adds rows but never deletes one; a row removed from a CSV stays in the Sheet until you rebuild. The Account Types import only updates existing classifications, so adding a new one needs a rebuild.
 
@@ -41,6 +41,7 @@ ledger-sheet-load/
 │   └── start-up.sh          # runs check.sh, env loading, locked sync, run
 ├── core/
 │   ├── config.py            # config.yaml and environment variables
+│   ├── context.py           # LoadContext: client, data folder, files and settings passed to each step
 │   ├── credentials.py       # PIN / authenticator prompts
 │   ├── datasets.py          # file list and exact-byte CSV reads/writes
 │   ├── gas_client.py        # GET/POST to the GAS web app; expect_ok

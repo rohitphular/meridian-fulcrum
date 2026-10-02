@@ -9,6 +9,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 JOB_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 ENVS_FILE="$SCRIPT_DIR/envs.json"
+# Where the caller ran from: a relative --config path is taken from there.
+CALLER_DIR="${CALLER_DIR:-$PWD}"
 
 cd "$JOB_DIR"
 
@@ -18,7 +20,7 @@ cd "$JOB_DIR"
 # as arguments instead and asks for a missing mode.
 
 USAGE="Usage: ./cicd/start-up.sh --config FILE [--stage N]
-       ./cicd/start-up.sh --interactive dev|prod [normal-sync|hard-sync]"
+       ./cicd/start-up.sh --interactive dev|prod [extract|acknowledge]"
 usage() { echo "ERROR: $USAGE"; exit 1; }
 
 INTERACTIVE=0
@@ -56,6 +58,9 @@ else
     echo "ERROR: env and mode come from the pipeline config; pass --interactive to give them as arguments."
     exit 1
   fi
+  if [[ -n "$CONFIG_FILE" && "$CONFIG_FILE" != /* ]]; then
+    CONFIG_FILE="$CALLER_DIR/$CONFIG_FILE"
+  fi
   if [[ -z "$CONFIG_FILE" ]]; then
     echo "ERROR: unattended runs need --config FILE (data-synchronization/consolidated-pipeline/config/pipeline.<env>.json); pass --interactive to give env and mode as arguments."
     exit 1
@@ -80,6 +85,12 @@ for k in d.keys():
 PYTHON
 )
 
+# Checked first: under bash 3.2 (macOS) with set -u an empty array is "unbound".
+if [[ ${#VALID_ENVS[@]} -eq 0 ]]; then
+  echo "ERROR: cicd/envs.json declares no environments."
+  exit 1
+fi
+
 env_is_valid=0
 for e in "${VALID_ENVS[@]}"; do
   if [[ "$ENV_ARG" == "$e" ]]; then env_is_valid=1; break; fi
@@ -93,21 +104,19 @@ fi
 
 # Choose mode before any migrations or writes; explicit mode supports schedulers.
 if [[ -z "$MODE_ARG" ]]; then
-  echo "  1) normal-sync — skip existing in-sync records"
-  echo "  2) hard-sync — include in-sync records"
+  echo "  1) extract     — read the enabled tabs into a new staging snapshot"
+  echo "  2) acknowledge — write the loaded outcomes to the Sheet's sync cells"
   # printf, not read -p: bash only shows a read prompt on a terminal, and make pipes stdin.
-  printf "Select sync mode (1/2): "; CHOICE=""; read -r CHOICE || true
+  printf "Select mode (1/2): "; CHOICE=""; read -r CHOICE || true
   case "$CHOICE" in
-    1) MODE_ARG="normal-sync" ;;
-    2) MODE_ARG="hard-sync" ;;
+    1) MODE_ARG="extract" ;;
+    2) MODE_ARG="acknowledge" ;;
     *) echo "Invalid choice."; exit 1 ;;
   esac
 fi
-JOB_ARGS=()
 case "$MODE_ARG" in
-  normal-sync) ;;
-  hard-sync) JOB_ARGS=(--reprocess) ;;
-  *) echo "ERROR: mode must be normal-sync or hard-sync."; exit 1 ;;
+  extract|acknowledge) ;;
+  *) echo "ERROR: mode must be extract or acknowledge."; exit 1 ;;
 esac
 
 # ── Step 2: Read non-secrets from envs.json ───────────────────────────────────

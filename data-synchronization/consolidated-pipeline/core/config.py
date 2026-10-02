@@ -8,4 +8,7 @@ from pathlib import Path
 _MERIDIAN_LOG_ROOT: str = os.environ["MERIDIAN_LOG_ROOT"]
 
 DATA_SYNC_ROOT = Path(__file__).resolve().parents[2]
+REPOSITORY_ROOT = DATA_SYNC_ROOT.parent
+# Run reports for output/index.html (gitignored).
+OUTPUT_DATA_DIR = Path(__file__).resolve().parents[1] / "output" / "data"
 CONFIG_DIR = Path(__file__).resolve().parents[1] / "config"

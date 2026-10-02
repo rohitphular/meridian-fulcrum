@@ -7,8 +7,8 @@ The [README](../README.md) is the current behaviour contract: modes, steps and w
 - Python 3.12+, uv, and SSH access to the private shared-library Git sources.
 - The current expense-tracker GAS backend deployed to the selected environment (`bash expense-tracker/cicd/deploy.sh`).
 - `cicd/envs.json` holding that environment's `script_url` and `spreadsheet_id`. Keep them in step with `expense-tracker/cicd/envs.json`; the launcher refuses `TODO` values.
-- `infrastructure/.env.<env>` with `MERIDIAN_LOG_ROOT`. No other secret is read from it.
-- The PIN and a fresh authenticator code for that environment, typed when asked.
+- `infrastructure/.env.<env>` with `MERIDIAN_LOG_ROOT`, and optionally `MERIDIAN_FULCRUM_PIN` and `MERIDIAN_FULCRUM_SECRET` (the Base32 TOTP secret). When both are set, the job signs in with them and generates the code itself.
+- Otherwise, the PIN and a fresh authenticator code for that environment, typed when asked (or read from stdin when unattended).
 - The `rates` tab already holds every account currency.
 
 ## Environment variables
@@ -37,7 +37,7 @@ Unattended runs (the default, used by the [consolidated-pipeline](../../consolid
 
 The launcher validates the environment and mode before anything runs, loads the env file, exports the selected `script_url` and `spreadsheet_id` (so a stale value in the env file cannot override them), syncs the committed lockfile and runs the job. The job lists the files, shows what it is about to do and asks for confirmation (type the environment name for sheet-rebuild; `y` for sheet-sync) before it asks for the PIN.
 
-Typical order after editing the CSVs: `ledger-sheet-load` (sheet-sync) → `ledger-sheet-extract` (normal-sync).
+Typical order after editing the CSVs: `make consolidated-pipeline` (ledger-sheet-load → ledger-sheet-extract `extract` → forex-database-load → ledger-database-load → ledger-sheet-extract `acknowledge`).
 
 ## Troubleshooting
 

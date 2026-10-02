@@ -23,7 +23,7 @@ function accountOpeningValue(value, type) {
 
 // Validates local wall-clock syntax and calendar components without the server's
 // timezone or JavaScript's permissive rollover parsing. Key supports ordering at
-// the six fractional-second digits accepted by ledger-sheet-extract.
+// the six fractional-second digits accepted by ledger-database-load.
 function accountLocalDateTimeKey(value) {
   if (typeof value !== 'string') return null;
   const parts = /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,6}))?)?)?$/.exec(value.trim());

@@ -50,7 +50,7 @@ Subscriptions differ from transactions in two fundamental ways:
 
 The schedule uses the row's timezone, with `Europe/London` only for undated rows whose zone is blank. Today and both boundary dates are inclusive. Day 31 clamps to the final day of shorter months; annual February 29 clamps to February 28 outside leap years. The start/end timestamps remain exact source values, but recurrence is a **calendar-date reminder**, not a time-of-day execution schedule.
 
-Dates are local timestamps with seconds and optional up to six fractional digits. Explicit offsets and `Z` are not accepted; use the separate IANA timezone. Source writes canonicalize accepted timezone aliases/casing. Invalid dates, reversed boundaries and ambiguous/nonexistent daylight-saving wall times fail validation, matching ledger-sheet-extract. The server-side CSV import also accepts date-only boundaries (normalized to midnight), minute-only timestamps (seconds set to zero) and an ISO `T` separator before validation.
+Dates are local timestamps with seconds and optional up to six fractional digits. Explicit offsets and `Z` are not accepted; use the separate IANA timezone. Source writes canonicalize accepted timezone aliases/casing. Invalid dates, reversed boundaries and ambiguous/nonexistent daylight-saving wall times fail validation, matching ledger-database-load. The server-side CSV import also accepts date-only boundaries (normalized to midnight), minute-only timestamps (seconds set to zero) and an ISO `T` separator before validation.
 
 `list_subscriptions` returns every lifecycle state, including deleted rows needed for restore/export. It computes `next_payment_date`, `schedule_status` (`current`, `upcoming`, `expired`, `invalid`, `inactive`) and, for invalid active schedules, `schedule_error`. These are response-only fields. Inactive, locked and deleted rows have no next date. An expired row or a schedule with no remaining occurrence before its end also has no next date.
 
@@ -65,7 +65,7 @@ Reading subscriptions never changes their stored lifecycle or audit/sync values.
 - Every successful mutation preserves `id`/`created_at`, advances pending sync status, clears old `sync_date`/`sync_notes`, and stamps `updated_at`.
 - Direct Sheet business/lifecycle edits, including pasted blocks and the trailing date/timezone columns, queue the same pending sync state through `onEdit`. Metadata-only edits do not queue a row. Physical removal is not a database delete: sync a tombstone instead.
 
-These changes require deploying the backend. Use hard-sync once for source edits made before the new edit hook was deployed; normal-sync then skips existing in-sync rows. The [ledger contract](../../data-synchronization/ledger-sheet-extract/_docs/subscription-master.md) defines database identity, conversion and acknowledgements.
+These changes require deploying the backend. Use hard-sync once for source edits made before the new edit hook was deployed; normal-sync then skips existing in-sync rows. The [ledger contract](../../data-synchronization/ledger-database-load/_docs/subscription-master.md) defines database identity, conversion and acknowledgements.
 
 ## Account and category linkage
 

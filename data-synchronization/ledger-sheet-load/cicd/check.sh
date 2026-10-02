@@ -9,6 +9,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 JOB_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 ENVS_FILE="$SCRIPT_DIR/envs.json"
+# Where the caller ran from: a relative --config path is taken from there.
+CALLER_DIR="${CALLER_DIR:-$PWD}"
 
 cd "$JOB_DIR"
 
@@ -58,6 +60,9 @@ else
     echo "ERROR: env and mode come from the pipeline config; pass --interactive to give them as arguments."
     exit 1
   fi
+  if [[ -n "$CONFIG_FILE" && "$CONFIG_FILE" != /* ]]; then
+    CONFIG_FILE="$CALLER_DIR/$CONFIG_FILE"
+  fi
   if [[ -z "$CONFIG_FILE" ]]; then
     echo "ERROR: unattended runs need --config FILE (data-synchronization/consolidated-pipeline/config/pipeline.<env>.json); pass --interactive to give env and mode as arguments."
     exit 1
@@ -81,6 +86,12 @@ for k in d.keys():
         print(k)
 PYTHON
 )
+
+# Checked first: under bash 3.2 (macOS) with set -u an empty array is "unbound".
+if [[ ${#VALID_ENVS[@]} -eq 0 ]]; then
+  echo "ERROR: cicd/envs.json declares no environments."
+  exit 1
+fi
 
 env_is_valid=0
 for e in "${VALID_ENVS[@]}"; do

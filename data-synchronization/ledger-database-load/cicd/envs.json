@@ -1,0 +1,5 @@
+{
+  "_comment": "Environments this job runs in. It needs no per-env settings: it reads only PostgreSQL (credentials and log root in infrastructure/.env.<env>).",
+  "dev": {},
+  "prod": {}
+}

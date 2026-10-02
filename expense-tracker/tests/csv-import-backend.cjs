@@ -52,3 +52,15 @@ test('fill_csv_ids adds a lowercase UUID to blank ids only and keeps every other
   assert.equal(ctx.fillCsvIds({ csv: 'id,a\n"open' }).error, 'invalid_csv');
   assert.equal(ctx.fillCsvIds({}).error, 'missing_csv');
 });
+
+test('fill_csv_ids pads a short row that stops before the id column and fills its id', () => {
+  const result = ctx.fillCsvIds({ csv: 'name,amount,id,note\nRent,10\nFood\nKept,5,keep-1,x\n' });
+  assert.equal(result.ok, true);
+  assert.equal(result.filled, 2);
+  const lines = result.csv.split('\n');
+  assert.match(lines[1], /^Rent,10,[0-9a-f-]{36}$/);
+  assert.match(lines[2], /^Food,,[0-9a-f-]{36}$/);
+  assert.equal(lines[3], 'Kept,5,keep-1,x');
+  // The filled ids stick: a second pass finds nothing to fill.
+  assert.equal(ctx.fillCsvIds({ csv: result.csv }).filled, 0);
+});

@@ -16,7 +16,7 @@ Daily-use masters come first, followed by configuration, account details and sys
 | 10 | `account_liability_credit_card` | Credit-card details |
 | 11 | `account_liability_mortgage` | Mortgage details |
 | 12 | `account_liability_personal_loan` | Personal-loan details |
-| 13 | `computed_insights` | Optional computed-insight storage |
+| 13 | `computed_insights` | Legacy tab; no longer written or read |
 | 14 | `advisor_chat` | Advisor conversation history |
 | 15 | `audit_access` | Access audit records |
 

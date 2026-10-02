@@ -58,7 +58,11 @@ function _importAccountTypeCatalog(incoming, fullCatalog) {
   const plan = _planAccountTypeReferences(rows);
   if (plan.ok === false) return plan;
   try {
-    _writeAccountTypeRows(rows, state);
+    // Every row identical to the stored catalog: leave the tab as it is (a legacy layout
+    // still gets its upgrade write). Dependent reference updates below still apply,
+    // so a retry after a failed dependent write completes the migration.
+    const catalogUnchanged = !state.requires_migration && results.every(function(row) { return row.action === 'unchanged'; });
+    if (!catalogUnchanged) _writeAccountTypeRows(rows, state);
     plan.writes.forEach(function(write) {
       if (write.row_num < 2 || write.row_num > write.sheet.getLastRow()
           || _accountTypeText(write.sheet.getRange(write.row_num, write.id_column).getValues()[0][0]).toLowerCase() !== write.id)

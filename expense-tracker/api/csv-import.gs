@@ -78,7 +78,7 @@ function _csvCell(value) {
 }
 
 // body: { csv } → { ok, csv, filled, rows }. Gives every data row with a blank
-// `id` cell a new lowercase UUID and returns the file text; nothing is written
+// or missing `id` cell a new lowercase UUID and returns the file text; nothing is written
 // to any Sheet. A file with no blank ids (or no id column) comes back untouched.
 function fillCsvIds(body) {
   if (body === undefined || body === null || typeof body.csv !== 'string' || body.csv.trim() === '') return { ok: false, error: 'missing_csv' };
@@ -92,7 +92,10 @@ function fillCsvIds(body) {
   if (idColumn === -1) return { ok: true, csv: source, filled: 0, rows: rows, id_column: false };
   let filled = 0;
   decoded.records.slice(1).forEach(function(record) {
-    if (record.values.length <= idColumn || record.values[idColumn].trim() !== '') return;
+    // A short row (its cells stop before the id column) has a blank id too: pad it
+    // with empty cells up to the id, or it would get a new id on every import.
+    if (record.values.length > idColumn && record.values[idColumn].trim() !== '') return;
+    while (record.values.length <= idColumn) record.values.push('');
     record.values[idColumn] = Utilities.getUuid().toLowerCase();
     filled++;
   });

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 from uuid import UUID
 
@@ -8,21 +9,21 @@ from gspread.utils import absolute_range_name, rowcol_to_a1
 from py_google_workspace.gsheets import SheetsClient
 from py_logging import get_logger
 
-from sheets.contracts import HEADERS
 from sheets.requests import SheetsRequests
 
 logger = get_logger(__name__)
 _LEGACY_MASTER_SHEETS = {"account_master": "accounts", "category_master": "categories", "subscription_master": "subscriptions", "transaction_master": "transactions"}
-_SYNC_FIELDS = {"sync_status", "sync_date", "sync_notes"}
+SYNC_FIELDS = ("sync_status", "sync_date", "sync_notes")
+_REQUIRED_HEADERS = ("id", *SYNC_FIELDS)
 _SYNC_STATUSES = {"in-sync", "create-pending", "create-failed", "update-pending", "update-failed"}
 
 
 class SnapshotSheetsClient(SheetsClient):
-    """Pinned-library adapter: validated snapshots and buffered sync acknowledgements.
+    """Pinned-library adapter: one batched read of the enabled tabs, and sync-cell writes.
 
-    Reads raw numeric cells (not currency-formatted display strings). Rechecks the
-    source before acknowledgements. Sheets has no compare-and-swap; operators must
-    still avoid concurrent edits during extraction, especially the final write.
+    Reads raw numeric cells (not currency-formatted display strings). Each tab's
+    business columns are checked against the GAS contract by ledger-database-load;
+    here only the structure the staging and acknowledge steps rely on is checked.
     """
 
     def __init__(self, service_account_file: str, spreadsheet_id: str) -> None:
@@ -32,7 +33,6 @@ class SnapshotSheetsClient(SheetsClient):
         self._read_requests.call(lambda: super(SnapshotSheetsClient, self).__init__(service_account_file, spreadsheet_id, is_readonly=False))
         self._snapshots: dict[str, list[dict[str, Any]]] = {}
         self._headers: dict[str, list[str]] = {}
-        self._pending: dict[str, list[tuple[int, int, list[Any]]]] = {}
 
     def _ensure_sheets_exist(self, names: list[str]) -> None:
         metadata = self._read_requests.call(lambda: self._ss.fetch_sheet_metadata(params={"fields": "sheets.properties.title"}))
@@ -75,15 +75,10 @@ class SnapshotSheetsClient(SheetsClient):
     @staticmethod
     def _parse_snapshot(name: str, values: list[list[Any]]) -> tuple[list[str], list[dict[str, Any]]]:
         headers = values[0] if values else []
-        legacy_type_headers = set(HEADERS["account_types"]) - {"detail_sheet"}
-        if name == "account_types" and len(headers) == len(legacy_type_headers) and set(headers) == legacy_type_headers:
-            logger.error("_parse_snapshot: entity=account_types error=account_types_migration_required action=import_complete_updated_account_types_csv_in_expense_tracker_configure")
-            raise ValueError("account_types_migration_required")
-        if name == "account_types" and "is_loan" in headers:
-            logger.error("_parse_snapshot: entity=account_types error=account_types_is_loan_column_present action=delete_is_loan_column_from_account_types_sheet")
-            raise ValueError("account_types_is_loan_column_present")
-        if len(headers) != len(set(headers)) or set(headers) != set(HEADERS[name]):
-            raise ValueError(f"sheet_header_mismatch:{name}")
+        if len(headers) != len(set(headers)):
+            raise ValueError(f"sheet_header_duplicate:{name}")
+        if any(field not in headers for field in _REQUIRED_HEADERS):
+            raise ValueError(f"sheet_header_missing_id_or_sync_columns:{name}")
         rows = []
         for row_number, raw in enumerate(values[1:], start=2):
             if len(raw) > len(headers):
@@ -118,68 +113,29 @@ class SnapshotSheetsClient(SheetsClient):
             if str(row.get("sync_status") or "").strip() not in _SYNC_STATUSES:
                 raise ValueError(f"invalid_sync_status:{name}:row={row['_sheet_row_num']}")
 
-    def snapshot_rows(self, name: str) -> list[dict[str, Any]]:
-        # Copies isolate handler normalisation/reconciliation from the source guard.
-        records = [row.copy() for row in self._snapshots[name] if any(value not in (None, "") for key, value in row.items() if key != "_sheet_row_num")]
-        for record in records:
-            record["id"] = str(UUID(str(record["id"]).strip()))
-            for reference in ("parent_tx_id", "account_id"):
-                if str(record.get(reference) or "").strip():
-                    try:
-                        record[reference] = str(UUID(str(record[reference]).strip()))
-                    except ValueError:
-                        pass  # The row handler reports invalid references to sync_notes.
-        return records
+    def snapshot(self, name: str) -> tuple[list[str], list[dict[str, Any]]]:
+        """Headers and raw rows of a captured tab, exactly as read (fully blank rows dropped)."""
+        rows = [row for row in self._snapshots[name] if any(value not in (None, "") for key, value in row.items() if key != "_sheet_row_num")]
+        return list(self._headers[name]), rows
 
-    def batch_update_rows(self, name: str, updates: list[tuple[int, int, list[Any]]]) -> None:
-        """Queue committed successes or validation failures; never source audit fields."""
-        for row_number, column, values in updates:
-            fields = HEADERS[name][column - 1 : column - 1 + len(values)]
-            if len(fields) != len(values) or not set(fields) <= _SYNC_FIELDS:
-                raise ValueError("writeback_must_only_touch_sync_fields")
-            if not any(row["_sheet_row_num"] == row_number for row in self._snapshots[name]):
-                raise ValueError("writeback_row_outside_snapshot")
-            for field, value in zip(fields, values):
-                self._pending.setdefault(name, []).append((row_number, self._headers[name].index(field) + 1, [value]))
+    def read_tabs(self, names: list[str]) -> dict[str, tuple[list[str], list[dict[str, Any]]]]:
+        """A fresh read of the tabs (no validation), for the acknowledge step."""
+        return self._read_snapshots(names)
 
-    @staticmethod
-    def _same_snapshot(current: list[dict[str, Any]], expected: list[dict[str, Any]]) -> bool:
-        """Compare raw scalar cell types as well as values: False must not equal 0."""
-        if len(current) != len(expected):
-            return False
-        for actual_row, original_row in zip(current, expected, strict=True):
-            if actual_row.keys() != original_row.keys():
-                return False
-            for field, original_value in original_row.items():
-                actual_value = actual_row[field]
-                if type(actual_value) is not type(original_value) or actual_value != original_value:
-                    return False
-        return True
+    def write_with_retry(self, plan: Callable[[], list[dict[str, Any]]]) -> None:
+        """Write the cell ranges `plan` returns, re-planning before every attempt.
 
-    def assert_unchanged(self) -> None:
-        """Check every captured tab, also used before committing detail writes."""
-        snapshots = self._read_snapshots(list(self._snapshots))
-        for name, expected in self._snapshots.items():
-            headers, current = snapshots[name]
-            if headers != self._headers[name] or not self._same_snapshot(current, expected):
-                raise RuntimeError(f"sheet_changed_before_acknowledgement:{name}")
+        The plan re-reads the Sheet, so a row edited during a quota wait is never
+        given a stale acknowledgement.
+        """
 
-    def flush_pending(self) -> None:
-        if not self._pending:
-            self.assert_unchanged()
-            return
-        ranges = []
-        for name, updates in self._pending.items():
-            for row_number, column, values in updates:
-                ranges.append({"range": absolute_range_name(name, rowcol_to_a1(row_number, column)), "values": [values]})
+        def attempt() -> None:
+            ranges = plan()
+            if ranges:
+                self._ss.values_batch_update(body={"valueInputOption": "RAW", "data": ranges})
 
-        def write_acknowledgements() -> None:
-            # Run AFTER write backoff, before every attempt. A concurrent edit
-            # during a quota wait must not receive a stale in-sync acknowledgement.
-            self.assert_unchanged()
-            self._ss.values_batch_update(body={"valueInputOption": "RAW", "data": ranges})
+        self._write_requests.call(attempt)
 
-        # One write for all tabs avoids partial acknowledgement between tabs.
-        self._write_requests.call(write_acknowledgements)
-        self._pending.clear()
-        logger.info("flush_pending: complete=true")
+
+def cell_range(name: str, row_number: int, column: int, value: Any) -> dict[str, Any]:
+    return {"range": absolute_range_name(name, rowcol_to_a1(row_number, column)), "values": [[value]]}

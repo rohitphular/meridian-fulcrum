@@ -1,8 +1,0 @@
-[databases.postgres]
-image             = "postgres:17"
-connect_database  = "fulcrum_db"
-migrations_path   = "migrations"
-tracking_table    = "schema_migrations_ledger_extract"
-introspect_schema = "public"
-output            = "database/models"
-exclude           = ["schema_migrations_ledger_extract"]

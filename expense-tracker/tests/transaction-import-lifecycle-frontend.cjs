@@ -47,7 +47,7 @@ test('choosing a file only enables Import; the raw text is sent unparsed on Impo
   await f._submitTxImport(f.snapshot().file);
   assert.deepEqual(JSON.parse(JSON.stringify(f.requests)), [{ csv: RAW }]);
   assert.equal(f.state.txImportOpen, false);
-  assert.deepEqual(f.messages.map(([text, kind]) => [text, kind]), [['1 created · 0 updated', undefined]]);
+  assert.deepEqual(f.messages.map(([text, kind]) => [text, kind]), [['1 created · 0 updated · 0 unchanged', undefined]]);
   assert.deepEqual(f.events.map(event => event.type), ['et:reload']);
   assert.equal(f.snapshot().file, null);
   assert.equal(f.nodes.txImportFile.value, '');

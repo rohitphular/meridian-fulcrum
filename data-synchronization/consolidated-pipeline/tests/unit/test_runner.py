@@ -15,7 +15,7 @@ _FAKE_MODULE = """import json, os, sys
 module, args = sys.argv[1], sys.argv[2:]
 stdin = sys.stdin.read()
 with open(os.environ["FAKE_CALLS"], "a") as calls:
-    calls.write(json.dumps({"module": module, "script": os.environ["FAKE_SCRIPT"], "args": args, "stdin": stdin, "venv": os.environ.get("VIRTUAL_ENV")}) + "\\n")
+    calls.write(json.dumps({"module": module, "script": os.environ["FAKE_SCRIPT"], "args": args, "stdin": stdin, "venv": os.environ.get("VIRTUAL_ENV"), "pin": os.environ.get("MERIDIAN_FULCRUM_PIN")}) + "\\n")
 behaviour = json.load(open(os.environ["FAKE_BEHAVIOUR"])).get(module, {})
 phase = "check" if os.environ["FAKE_SCRIPT"] == "check" else "sign_in" if "--sign-in-only" in args else "run"
 if phase == "check" and behaviour.get("credentials"):
@@ -32,7 +32,7 @@ def _fake_launcher(script: str) -> str:
 @pytest.fixture
 def repository(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict:
     data_sync = tmp_path / "data-synchronization"
-    for module in ("currency-database-load", "ledger-sheet-load", "ledger-sheet-extract"):
+    for module in ("forex-database-load", "ledger-sheet-load", "ledger-sheet-extract"):
         launcher = data_sync / module / "cicd" / "start-up.sh"
         launcher.parent.mkdir(parents=True)
         launcher.write_text(_fake_launcher("start-up"))
@@ -48,7 +48,7 @@ def repository(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict:
                 "env": "dev",
                 "stages": [
                     {"module": "ledger-sheet-load", "mode": "sheet-sync"},
-                    {"module": "currency-database-load", "mode": "daily"},
+                    {"module": "forex-database-load", "mode": "daily"},
                     {"module": "ledger-sheet-extract", "mode": "normal-sync"},
                 ],
             }
@@ -89,11 +89,11 @@ def test_pipeline_checks_all_signs_in_once_then_runs_stages_in_order(repository:
     calls = _calls(repository)
     assert [(call["module"], call["script"], call["args"]) for call in calls] == [
         ("ledger-sheet-load", "check", ["--config", config, "--stage", "1"]),
-        ("currency-database-load", "check", ["--config", config, "--stage", "2"]),
+        ("forex-database-load", "check", ["--config", config, "--stage", "2"]),
         ("ledger-sheet-extract", "check", ["--config", config, "--stage", "3"]),
         ("ledger-sheet-load", "start-up", ["--config", config, "--stage", "1", "--sign-in-only"]),
         ("ledger-sheet-load", "start-up", ["--config", config, "--stage", "1", "--skip-sign-in"]),
-        ("currency-database-load", "start-up", ["--config", config, "--stage", "2"]),
+        ("forex-database-load", "start-up", ["--config", config, "--stage", "2"]),
         ("ledger-sheet-extract", "start-up", ["--config", config, "--stage", "3"]),
     ]
     # Credentials travel on stdin only: PIN + code to sign in, then the PIN alone.
@@ -104,7 +104,7 @@ def test_pipeline_checks_all_signs_in_once_then_runs_stages_in_order(repository:
 
 
 def test_pipeline_without_credential_stages_never_prompts(repository: dict, monkeypatch: pytest.MonkeyPatch) -> None:
-    repository["config"].write_text(json.dumps({"env": "dev", "stages": [{"module": "currency-database-load", "mode": "daily"}]}))
+    repository["config"].write_text(json.dumps({"env": "dev", "stages": [{"module": "forex-database-load", "mode": "daily"}]}))
     monkeypatch.setattr(runner.getpass, "getpass", MagicMock(side_effect=AssertionError("no prompt expected")))
     assert _main() is None
     assert [call["script"] for call in _calls(repository)] == ["check", "start-up"]
@@ -126,13 +126,13 @@ def test_a_failed_sign_in_runs_no_stage(repository: dict) -> None:
 
 
 def test_the_run_stops_at_the_first_failed_stage(repository: dict, capsys: pytest.CaptureFixture[str]) -> None:
-    _set_behaviour(repository, {"currency-database-load": {"run": 3}})
+    _set_behaviour(repository, {"forex-database-load": {"run": 3}})
     assert _main() == 1
     runs = [call["module"] for call in _calls(repository) if call["script"] == "start-up" and "--sign-in-only" not in call["args"]]
-    assert runs == ["ledger-sheet-load", "currency-database-load"]
+    assert runs == ["ledger-sheet-load", "forex-database-load"]
     output = capsys.readouterr().out
     assert "failed (exit 3)" in output and "not run" in output
-    repository["logger"].error.assert_called_once_with("pipeline: failed reason=stage_failed:stage=2:currency-database-load")
+    repository["logger"].error.assert_called_once_with("pipeline: failed reason=stage_failed:stage=2:forex-database-load")
 
 
 @pytest.mark.parametrize("pin,code,reason", [("", _CODE, "pin_required"), (_PIN, "12", "invalid_authenticator_code")])
@@ -153,9 +153,9 @@ def test_unknown_modules_are_rejected_before_any_launcher_runs(repository: dict,
 
 
 def test_unsupported_credential_kinds_are_rejected(repository: dict) -> None:
-    _set_behaviour(repository, {"currency-database-load": {"credentials": "something-else"}})
+    _set_behaviour(repository, {"forex-database-load": {"credentials": "something-else"}})
     assert _main() == 1
-    repository["logger"].error.assert_called_once_with("pipeline: failed reason=unsupported_credentials:stage=2:currency-database-load")
+    repository["logger"].error.assert_called_once_with("pipeline: failed reason=unsupported_credentials:stage=2:forex-database-load")
 
 
 def test_the_pin_and_code_never_reach_the_log(repository: dict) -> None:
@@ -171,10 +171,10 @@ def test_stages_do_not_inherit_the_pipeline_virtualenv(repository: dict, monkeyp
 
 
 def test_a_module_without_check_sh_is_rejected(repository: dict) -> None:
-    (runner.config.DATA_SYNC_ROOT / "currency-database-load" / "cicd" / "check.sh").unlink()
+    (runner.config.DATA_SYNC_ROOT / "forex-database-load" / "cicd" / "check.sh").unlink()
     assert _main() == 1
     assert _calls(repository) == []
-    repository["logger"].error.assert_called_once_with("pipeline: failed reason=unknown_module:stage=2:currency-database-load")
+    repository["logger"].error.assert_called_once_with("pipeline: failed reason=unknown_module:stage=2:forex-database-load")
 
 
 def test_stored_credentials_mean_no_prompt_and_nothing_on_stdin(repository: dict, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -187,9 +187,118 @@ def test_stored_credentials_mean_no_prompt_and_nothing_on_stdin(repository: dict
     assert all(call["stdin"] == "" for call in calls)
 
 
+def test_stored_credentials_reach_only_the_stages_that_declare_them(repository: dict, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MERIDIAN_FULCRUM_PIN", _PIN)
+    monkeypatch.setenv("MERIDIAN_FULCRUM_SECRET", "GEZDGNBVGY3TQOJQ")
+    assert _main() is None
+    with_pin = {(call["module"], call["script"]) for call in _calls(repository) if call["pin"] is not None}
+    assert with_pin == {("ledger-sheet-load", "start-up")}
+
+
+def test_a_stopped_pipeline_stops_its_stage_and_finishes_its_report(repository: dict, monkeypatch: pytest.MonkeyPatch) -> None:
+    stopped = MagicMock()
+    real_popen = runner.subprocess.Popen
+
+    def popen(command, *args, **kwargs):
+        if not command[1].endswith("start-up.sh") or "--sign-in-only" in command:
+            return real_popen(command, *args, **kwargs)  # checks and sign-in run for real
+        process = MagicMock()
+
+        def output():
+            yield "line\n"
+            raise runner._Terminated("sigterm")  # the signal arrives while the stage runs
+
+        process.stdout = output()
+        process.poll.return_value = None
+        stopped.process = process
+        return process
+
+    monkeypatch.setattr(runner.subprocess, "Popen", popen)
+    stop = MagicMock()
+    monkeypatch.setattr(runner, "_stop_stage", stop)
+    assert _main() == 1
+    stop.assert_called_once_with(stopped.process)
+    saved = _latest_report()
+    assert saved["status"] == "interrupted" and saved["failure_reason"] == "signal:sigterm"
+    assert saved["stages"][0]["status"] == "failed" and saved["stages"][1]["status"] == "not_run"
+
+
+def test_an_unexpected_error_still_finishes_the_report(repository: dict, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(runner, "run_stages", MagicMock(side_effect=ValueError("boom")))
+    with pytest.raises(ValueError):
+        runner.main()
+    saved = _latest_report()
+    assert saved["status"] == "failed" and saved["failure_reason"] == "unexpected_error:ValueError"
+
+
 @pytest.mark.parametrize("variable", ["MERIDIAN_FULCRUM_PIN", "MERIDIAN_FULCRUM_SECRET"])
 def test_one_stored_variable_without_the_other_is_an_error(repository: dict, monkeypatch: pytest.MonkeyPatch, variable: str) -> None:
     monkeypatch.setenv(variable, "set")
     assert _main() == 1
     assert all(call["script"] == "check" for call in _calls(repository))
     repository["logger"].error.assert_called_once_with("pipeline: failed reason=incomplete_stored_credentials")
+
+
+def test_a_run_after_failure_stage_still_runs_after_an_earlier_failure(repository: dict, capsys: pytest.CaptureFixture[str]) -> None:
+    repository["config"].write_text(
+        json.dumps(
+            {
+                "env": "dev",
+                "stages": [
+                    {"module": "forex-database-load", "mode": "daily"},
+                    {"module": "ledger-sheet-extract", "mode": "normal-sync"},
+                    {"module": "forex-database-load", "mode": "daily"},
+                    {"module": "ledger-sheet-load", "mode": "sheet-sync", "run_after_failure": True},
+                ],
+            }
+        )
+    )
+    _set_behaviour(repository, {"ledger-sheet-extract": {"run": 1}})
+    assert _main() == 1
+    runs = [(call["module"], call["args"][3]) for call in _calls(repository) if call["script"] == "start-up" and "--sign-in-only" not in call["args"]]
+    assert runs == [("forex-database-load", "1"), ("ledger-sheet-extract", "2"), ("ledger-sheet-load", "4")]
+    output = capsys.readouterr().out
+    assert output.count("not run") == 1
+    repository["logger"].error.assert_called_once_with("pipeline: failed reason=stage_failed:stage=2:ledger-sheet-extract")
+
+
+def _latest_report() -> dict:
+    files = sorted(path for path in runner.config.OUTPUT_DATA_DIR.glob("*.json") if path.name != "index.json")
+    assert files, "the run wrote a report"
+    return json.loads(files[-1].read_text())
+
+
+def test_a_pipeline_run_writes_its_report_without_credentials(repository: dict) -> None:
+    assert _main() is None
+    saved = _latest_report()
+    assert saved["status"] == "ok" and saved["credentials"] == "prompted"
+    assert [entry["ok"] for entry in saved["preflight"]] == [True, True, True]
+    assert saved["sign_in"]["ok"] is True and saved["sign_in"]["module"] == "ledger-sheet-load"
+    assert [stage["status"] for stage in saved["stages"]] == ["ok", "ok", "ok"]
+    assert _PIN not in json.dumps(saved) and _CODE not in json.dumps(saved)
+
+
+def test_a_failed_preflight_is_reported(repository: dict) -> None:
+    _set_behaviour(repository, {"ledger-sheet-extract": {"check": 1}})
+    assert _main() == 1
+    saved = _latest_report()
+    assert saved["status"] == "preflight_failed"
+    assert saved["failure_reason"] == "preflight_failed:stage=3:ledger-sheet-extract"
+    assert [entry["ok"] for entry in saved["preflight"]] == [True, True, False]
+    assert [stage["status"] for stage in saved["stages"]] == ["not_run", "not_run", "not_run"]
+
+
+def test_stopping_a_stage_also_stops_the_job_its_launcher_started() -> None:
+    import subprocess
+    import time
+
+    launcher = subprocess.Popen(["bash", "-c", "python3 -c 'import time; time.sleep(60)'\necho never"], stdout=subprocess.PIPE, text=True)
+    deadline = time.monotonic() + 10
+    while not runner._descendants(launcher.pid) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    job = runner._descendants(launcher.pid)
+    assert job, "the launcher started its job"
+    runner._stop_stage(launcher, grace_seconds=5)
+    assert launcher.returncode is not None
+    time.sleep(0.2)
+    assert not any(runner._alive(pid) for pid in job)

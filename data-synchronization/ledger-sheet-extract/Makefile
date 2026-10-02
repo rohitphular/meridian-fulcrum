@@ -10,7 +10,7 @@ help:
 ##@ Run
 
 .PHONY: run
-run: ## Run the extract job — ENV=dev|prod required, MODE=normal-sync|hard-sync optional  (e.g. make run ENV=dev MODE=normal-sync)
+run: ## Run the extract job — ENV=dev|prod required, MODE=extract|acknowledge optional  (e.g. make run ENV=dev MODE=extract)
 	@[ -n "$(ENV)" ] || (echo "Usage: make run ENV=dev|prod"; exit 1)
 	bash cicd/start-up.sh --interactive "$(ENV)" "$(MODE)"
 
@@ -23,11 +23,7 @@ lint: ## Lint and format-check — must pass before deploy
 
 .PHONY: upgrade-libs
 upgrade-libs: ## Re-resolve all meridian-common-libs packages to their latest commits on main
-	uv lock --upgrade-package py-logging --upgrade-package py-db-migrate --upgrade-package py-google-workspace --upgrade-package py-db-schema
-
-.PHONY: generate-models
-generate-models: ## Regenerate typed model files (spins up a fresh Docker PostgreSQL container — requires Docker running)
-	uv run --locked py-db-schema generate --db postgres
+	uv lock --upgrade-package py-logging --upgrade-package py-db-migrate --upgrade-package py-google-workspace
 
 .PHONY: test test-unit test-integration
 test: ## Run unit and disposable PostgreSQL integration tests

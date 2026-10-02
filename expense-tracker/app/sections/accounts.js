@@ -1271,11 +1271,12 @@ async function _submitImport(fileType, file) {
       throw new Error(response?.error ?? 'incomplete_import_response');
     }
     const failures = response.results.filter(result => !result.ok);
-    changed = failures.length < response.results.length;
+    // Rows identical to the Sheet are not rewritten (skipped), so they change nothing.
+    changed = (response.created ?? 0) + (response.updated ?? 0) > 0;
     if (failures.length === 0) {
       _resetImport();
       state.accImportOpen = false;
-      showMsg(`${response.created ?? 0} created · ${response.updated ?? 0} updated`);
+      showMsg(`${response.created ?? 0} created · ${response.updated ?? 0} updated · ${response.skipped ?? 0} unchanged`);
     } else {
       _importResult = _renderImportResponse(response);
       showMsg(`${failures.length} account rows failed. Review the failed lines, correct the file and import it again.`, 'warn');

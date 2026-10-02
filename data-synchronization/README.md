@@ -5,9 +5,10 @@ The daily entry path is **Expense Tracker UI → Apps Script → Google Sheets**
 | Component | Reads | Writes |
 |---|---|---|
 | Expense Tracker | Its Google Sheets tabs | Source business fields, lifecycle and pending-sync metadata |
-| [currency-database-load](currency-database-load/README.md) | Market provider data, or configured historical CSV files | PostgreSQL `currency_master` and dated `currency_rates` |
+| [forex-database-load](forex-database-load/README.md) | Market provider data, or configured historical CSV files | PostgreSQL `currency_master` and dated `currency_rates` |
 | [ledger-sheet-load](ledger-sheet-load/README.md) | Local CSV files in `local/files` | Google Sheets tabs, through the GAS import endpoints (sheet-rebuild or sheet-sync); fills missing CSV ids |
-| [ledger-sheet-extract](ledger-sheet-extract/README.md) | Enabled source tabs and PostgreSQL currency references | Validated ledger tables; only sync status/date/notes back to Sheets |
+| [ledger-sheet-extract](ledger-sheet-extract/README.md) | `extract`: enabled Sheet tabs (one batched read). `acknowledge`: the load's outcomes | Staging tables (`stg_*`, kept 6 months); only sync status/date/notes back to the Sheet |
+| [ledger-database-load](ledger-database-load/README.md) | The newest staged snapshot and PostgreSQL currency references (no Google access) | Validated ledger tables; per-row outcomes in staging |
 | [consolidated-pipeline](consolidated-pipeline/README.md) | `consolidated-pipeline/config/pipeline.<env>.json` (gitignored, one per env) | Nothing itself: runs the listed modules in order, unattended |
 
 The app's **Rates** tab contains current display rates. Neither data-sync job copies that tab into PostgreSQL or updates it from PostgreSQL. Both use XAU as one gram of gold, but current app totals and historical database valuations may differ because they use different valuation dates/rates. Accounts need a currency supported by the database catalog and the required rate history.
@@ -17,12 +18,14 @@ The app's **Rates** tab contains current display rates. Neither data-sync job co
 `make data-sync` runs one module interactively: it lists every module that has a `cicd/start-up.sh` (except consolidated-pipeline), asks for the environment, and the module then asks for its own mode. To run several modules in a row unattended, use the [consolidated-pipeline](consolidated-pipeline/README.md) (`make consolidated-pipeline`).
 
 1. Save entries in the app and wait for the save result. Use **Refresh** to pull changes from another device or a completed sync. The app requires connectivity; there is no offline write queue. If a request loses its response, refresh and check whether it saved before resubmitting.
-2. From the repository root, run `make data-sync`, choose **currency-database-load**, then the intended environment and **daily** mode. For older ledger dates, use its documented historical-import procedure first. Daily mode refreshes a rolling window, not all historical dates.
-3. Run `make data-sync` again, choose **ledger-sheet-extract**, the same environment, and **normal-sync** for routine updates. Pending/failed rows process; existing in-sync rows skip, with missing-row recovery and account-type dependency refresh exceptions described in the module README.
-4. Choose **hard-sync** after a deliberate transformation/rate correction when existing in-sync records must be reprocessed. This honors the enabled tabs; it does not repair missing facts, conflicting identities or immutable account fields.
-5. Check the command exit status and source `sync_notes`. Correct failed source/dependency data and run normal-sync again. Prior successful commits remain valid; retry uses the same source UUIDs.
+2. From the repository root, run `make consolidated-pipeline`, pick the environment. It starts PostgreSQL, then runs: ledger-sheet-load (`sheet-sync`) → ledger-sheet-extract (`extract`) → forex-database-load (`daily`) → ledger-database-load (`normal-sync`) → ledger-sheet-extract (`acknowledge`). For older ledger dates, use forex-database-load's documented historical-import procedure first; daily mode refreshes a rolling window, not all historical dates.
+3. Normal-sync processes pending/failed rows; existing in-sync rows skip, with missing-row recovery and account-type dependency refresh exceptions described in the ledger-database-load README.
+4. Use **hard-sync** (a `ledger-database-load` stage with mode `hard-sync`) after a deliberate transformation/rate correction when existing in-sync records must be reprocessed. It honors the staged tabs; it does not repair missing facts, conflicting identities or immutable account fields.
+5. Check the summary and the Sheet's `sync_notes`. The acknowledge stage still runs after a failed load, so failed rows show their reason. Correct the source/dependency data and run again. Prior successful commits remain valid; retries use the same source UUIDs.
 
-Run ledger extraction during a quiet editing window. It checks captured content before commits and acknowledgements, but Sheets and PostgreSQL have no shared transaction or atomic compare-and-swap. A concurrent edit stops the run; earlier commits may already exist. Missing source rows are not database deletions: use the app's lifecycle actions/tombstones.
+To run one step on its own, use `make data-sync` and pick the module.
+
+Sheets and PostgreSQL have no shared transaction. The load works from a stored snapshot, so editing the Sheet mid-run does not stop it; rows edited after the snapshot are simply left pending and picked up by the next run. Missing source rows are not database deletions: use the app's lifecycle actions/tombstones.
 
 ## Environment selection
 
@@ -34,15 +37,16 @@ Every module has the same shape: `Makefile` with `run` (`ENV=dev|prod`, optional
 
 | Module | Env var prefix | Modes |
 |---|---|---|
-| currency-database-load | `CDL_` | `daily`, `historical` |
+| forex-database-load | `FDL_` | `daily`, `historical` |
 | ledger-sheet-load | `LSL_` | `sheet-rebuild`, `sheet-sync` |
-| ledger-sheet-extract | `LSE_` | `normal-sync`, `hard-sync` |
+| ledger-sheet-extract | `LSE_` | `extract`, `acknowledge` |
+| ledger-database-load | — (database only) | `normal-sync`, `hard-sync` |
 
 Each launcher logs under its own folder, `$MERIDIAN_LOG_ROOT/<module>/`, because py-logging names its folders after the top-level Python package (`core`, `database`, ...), which every module shares.
 
 ## Bulk loads from CSV
 
-After editing the files in `local/files`, run `make data-sync` → **ledger-sheet-load** → environment → **sheet-sync** (update rows by id, add new ones) or **sheet-rebuild** (delete and reload the CSV-backed tabs). Then run ledger-sheet-extract as above. This replaces the former `make factory-reset`.
+After editing the files in `local/files`, run `make data-sync` → **ledger-sheet-load** → environment → **sheet-sync** (update rows by id, add new ones) or **sheet-rebuild** (delete and reload the CSV-backed tabs). Then run the ledger sync as above (`extract` → ledger-database-load → `acknowledge`), or simply `make consolidated-pipeline`. This replaces the former `make factory-reset`.
 
 ## Setup and release
 

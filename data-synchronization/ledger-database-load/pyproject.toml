@@ -1,0 +1,41 @@
+[project]
+name = "ledger-database-load"
+version = "0.1.0"
+description = "Transform staged expense-tracker Sheet rows and load them into the PostgreSQL ledger"
+requires-python = ">=3.12"
+dependencies = [
+    "py-logging",
+    "py-db-migrate[postgres]",
+    "psycopg2-binary>=2.9",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+py-logging          = { git = "git+ssh://git@github.com/rohitphular/meridian-common-libs.git", subdirectory = "py-logging" }
+py-db-migrate       = { git = "git+ssh://git@github.com/rohitphular/meridian-common-libs.git", subdirectory = "py-db-migrate" }
+py-db-schema        = { git = "git+ssh://git@github.com/rohitphular/meridian-common-libs.git", subdirectory = "py-db-schema" }
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.9",
+    "py-db-schema[postgres]",
+]
+
+[tool.ruff]
+line-length = 200
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.pytest.ini_options]
+# importlib: unit and integration tests may share a file name (no __init__.py in job modules).
+addopts = "--import-mode=importlib"
+pythonpath = ["."]
+testpaths = ["tests"]

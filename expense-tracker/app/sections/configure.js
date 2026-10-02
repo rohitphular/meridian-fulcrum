@@ -467,8 +467,8 @@ async function _submitImport() {
     if (result === null || typeof result !== 'object') result = { ok: false, error: 'invalid_response' };
     state.accountTypeImport = { filename: file.name, result };
     if (result.ok === true) {
-      showMsg(`${result.created ?? 0} created · ${result.updated ?? 0} updated · ${result.failed ?? 0} failed`, result.failed > 0 ? 'warn' : 'success');
-      document.dispatchEvent(new CustomEvent('et:reload'));
+      showMsg(`${result.created ?? 0} created · ${result.updated ?? 0} updated · ${result.skipped ?? 0} unchanged · ${result.failed ?? 0} failed`, result.failed > 0 ? 'warn' : 'success');
+      if ((result.created ?? 0) + (result.updated ?? 0) > 0) document.dispatchEvent(new CustomEvent('et:reload'));
     } else showMsg(IMPORT_ERRORS[result.error] ?? result.error ?? 'Import failed.', 'warn');
   } finally {
     state.accountTypeBusy = false;

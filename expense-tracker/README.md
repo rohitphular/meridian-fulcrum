@@ -7,8 +7,8 @@ Part of the **[Fulcrum Forge](../)** family of static web apps backed by Google 
 ## What it does
 
 - **Capture** — log income, expenses, and transfers via the app, or by typing rows directly into the Google Sheet
-- **Maintain balances** — every transaction adjusts the affected accounts; edits use a two-phase reversal so balances stay exact
-- **Multi-currency** — per-account currency with FX rates against a configurable base currency (default GBP); per-transaction `fx_rate` override for cross-currency transfers
+- **Maintain balances** — balances are computed at read time from the opening snapshot and eligible movements, never stored per transaction (see [_docs/balance-lifecycle.md](_docs/balance-lifecycle.md))
+- **Multi-currency** — per-account currency with rates against an XAU (one gram of gold) base and a selectable display currency; there is no per-transaction `fx_rate` field (see [_docs/rates.md](_docs/rates.md))
 - **Classify** — two-level category taxonomy (`major → minor`) scoped per transaction type
 - **Analyse** — insight section with income/expense/net/savings-rate cards, monthly trend, drillable category breakdown, per-account spend
 - **Manage accounts** — account choices and detail eligibility come from the existing `account_types` Sheet catalog
@@ -27,7 +27,7 @@ Browser  ──HTTPS──>  Google Apps Script Web App  ──Sheets API──>
 ```
 
 - **Frontend**: vanilla JS ES modules; loads `index.html` and runs as-is — no bundler.
-- **Backend**: Google Apps Script V8 runtime; ~22 `.gs` modules organised by domain (accounts, transactions, categories, rates, advisor).
+- **Backend**: Google Apps Script V8 runtime; 61 `.gs` modules organised by domain (accounts, transactions, categories, rates, advisor).
 - **Store**: a single Google Sheet with one tab per entity (`transaction_master`, `account_master`, `category_master`, `subscription_master`, `account_types`, `rates`, `audit_access`). Master CSV and PostgreSQL names match their Sheet tabs; existing installations use the [master-tab migration](_docs/master-sheet-names.md).
 - **Auth**: PIN + optional TOTP gate with IP-based rate limiting.
 
@@ -54,7 +54,7 @@ Browser  ──HTTPS──>  Google Apps Script Web App  ──Sheets API──>
 - Edit frontend (`app/*`) — refresh the browser; no deploy needed. The runtime hostname detection in `config.js` picks dev locally / prod when hosted.
 - Edit backend (`api/*.gs`) — push and deploy via the pipeline:
   ```bash
-  bash expense-tracker/cicd/deploy.sh        # interactive: pick app + env
+  bash expense-tracker/cicd/deploy.sh        # interactive: pick env + description
   # or directly:
   bash cicd/deploy.sh dev "expense-tracker: <change description>"
   ```

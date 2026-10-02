@@ -25,7 +25,11 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
-# Relative paths are taken from the caller's directory, before changing into the module.
+# Relative paths are taken from the caller's directory, before changing into the module
+# (also for a missing file, so the error names the path that was looked for).
+if [[ -n "$CONFIG_FILE" && "$CONFIG_FILE" != /* ]]; then
+  CONFIG_FILE="$PWD/$CONFIG_FILE"
+fi
 if [[ -n "$CONFIG_FILE" && -f "$CONFIG_FILE" ]]; then
   CONFIG_FILE="$(cd "$(dirname "$CONFIG_FILE")" && pwd)/$(basename "$CONFIG_FILE")"
 fi

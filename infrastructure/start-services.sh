@@ -65,7 +65,7 @@ docker compose -f "$SCRIPT_DIR/postgres/docker-compose.yml" up -d
 
 echo "  Waiting for PostgreSQL to be healthy..."
 n=0
-until docker inspect --format='{{.State.Health.Status}}' "$CONTAINER_NAME" 2>/dev/null | grep -q "healthy"; do
+until docker inspect --format='{{.State.Health.Status}}' "$CONTAINER_NAME" 2>/dev/null | grep -qx "healthy"; do
   n=$((n+1)); [ $n -le 30 ] || { echo "  ERROR: PostgreSQL failed to become healthy after 60s"; exit 1; }
   sleep 2
 done

@@ -120,3 +120,19 @@ test('ledger-sheet-load only calls actions the router serves; delete and fill id
   assert.ok(!fs.existsSync(path.join(__dirname, '../scripts')), 'the bash scripts moved to the Python module');
   assert.doesNotMatch(fs.readFileSync(path.join(__dirname, '../../Makefile'), 'utf8'), /factory-reset/);
 });
+
+test('a partly failed tab delete still invalidates cached views', () => {
+  const ctx = vm.createContext({ console: { log() {}, error() {}, warn() {} } });
+  vm.runInContext(fs.readFileSync(path.join(API, 'app-router.gs'), 'utf8'), ctx);
+  assert.equal(ctx._routerPostChangedData({ action: 'factory_reset_delete_sheets' }, { ok: false, error: 'delete_failed', deleted: ['account_master'] }), true);
+  assert.equal(ctx._routerPostChangedData({ action: 'factory_reset_delete_sheets' }, { ok: false, error: 'delete_failed', deleted: [] }), false);
+});
+
+test('a failed arrange_sheet_tabs carries a human message like other POST failures', () => {
+  const ctx = vm.createContext({ console: { log() {}, error() {}, warn() {} } });
+  vm.runInContext(fs.readFileSync(path.join(API, 'app-router.gs'), 'utf8'), ctx);
+  Object.assign(ctx, { json: value => value, extractMeta: () => ({ ip: 'test' }), checkLocked: () => false, checkPin: () => true, recordAccess() {},
+    ensureExpenseTrackerSheetOrder: () => ({ ok: false, error: 'busy_retry' }) });
+  const result = JSON.parse(JSON.stringify(ctx.doPost({ postData: { contents: JSON.stringify({ action: 'arrange_sheet_tabs', pin: 'x' }) } })));
+  assert.deepEqual(result, { ok: false, error: 'busy_retry', message: 'Busy retry.' });
+});

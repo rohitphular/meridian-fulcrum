@@ -155,7 +155,7 @@ def test_default_reads_env_and_mode_from_the_pipeline_config(launcher: tuple[Pat
 def test_unattended_rebuild_passes_the_config_confirmation_and_sign_in_flag(launcher: tuple[Path, Path, dict[str, str]], tmp_path: Path) -> None:
     script, calls_file, environment = launcher
     config = tmp_path / "pipeline.dev.json"
-    config.write_text(json.dumps({"env": "dev", "stages": [{"module": "currency-database-load", "mode": "daily"}, {"module": "ledger-sheet-load", "mode": "sheet-rebuild", "confirm": "dev"}]}))
+    config.write_text(json.dumps({"env": "dev", "stages": [{"module": "forex-database-load", "mode": "daily"}, {"module": "ledger-sheet-load", "mode": "sheet-rebuild", "confirm": "dev"}]}))
     completed = _run(script, environment, "--config", str(config), "--stage", "2", "--skip-sign-in")
     assert completed.returncode == 0, completed.stderr
     assert _calls(calls_file)[-1]["argv"] == [*_RUN, "--env", "dev", "--mode", "sheet-rebuild", "--confirm", "dev", "--skip-sign-in"]

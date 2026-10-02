@@ -1715,15 +1715,16 @@ async function _submitTxImport(file) {
     }
     const created = response.created ?? 0;
     const updated = response.updated ?? 0;
+    const unchanged = response.skipped ?? 0;
     const failed = response.results.filter(result => !result.ok).length;
     changed = created + updated > 0;
     _txImportResult = _renderTxImportOutcome(response);
     if (failed === 0 && !(created > 0 && response.without_id > 0)) {
       _txImportResult = null;
       state.txImportOpen = false;
-      showMsg(`${created} created · ${updated} updated`);
+      showMsg(`${created} created · ${updated} updated · ${unchanged} unchanged`);
     } else if (failed === 0) {
-      showMsg(`${created} created · ${updated} updated`);
+      showMsg(`${created} created · ${updated} updated · ${unchanged} unchanged`);
     } else {
       showMsg(`${failed} transaction row${failed !== 1 ? 's' : ''} failed. Fix those lines in the file and import it again.`, 'warn');
     }
