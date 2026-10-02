@@ -16,8 +16,9 @@ logger = get_logger(__name__)
 def run(context: LoadContext) -> Path | None:
     """Gives every CSV row without an id a UUID; returns the backup folder, if any file changed.
 
-    The server parses each file and returns it with ids filled (fill_csv_ids); only those
-    cells change. Changed files are backed up first, then overwritten, so later syncs
+    The server parses each file and returns it with ids filled (fill_csv_ids): a short row
+    is padded to the header width, and a file with any filled id is re-serialised with
+    minimal quoting. Changed files are backed up first, then overwritten, so later syncs
     update rows by id instead of adding them again.
     """
     backup_dir: Path | None = None

@@ -58,7 +58,7 @@ Implementation: `ldgPeriodBounds(period, today, from, to)`, `LDG_PERIODS`, `LDG_
 
 ## Caching
 
-View GETs are cached (CacheService, up to 10 minutes) under a key made of `data_version`, action and every param including `quote_currency`, `tz` and `today`. `data_version` changes after every successful POST and on manual Sheet edits (`onEdit`). Payloads over 90 KB are not cached and are recomputed on each request; exports are never cached.
+View GETs are cached (CacheService, up to 10 minutes) under a key made of `data_version`, action and every param including `quote_currency`, `tz` and `today`. `data_version` changes on manual Sheet edits (`onEdit`) and after a POST that may have changed data. A successful POST bumps it unless it reports numeric `created: 0` and `updated: 0` with no `references_migrated > 0`, `catalog_written` or `deleted`; single-record actions (no counts) always bump it. A failed POST bumps it when it reports `sheet_written: true`, a non-empty `deleted` list, or `created` / `updated` / `deleted` above 0. `dry_run` requests and `advisor_chat`, `clear_advisor_history` and `fill_csv_ids` never bump it. Payloads over 90 KB are not cached and are recomputed on each request; exports are never cached.
 
 ## What changed from the old client
 

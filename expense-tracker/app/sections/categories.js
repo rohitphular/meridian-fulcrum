@@ -656,6 +656,7 @@ function _categoryImportError(result) {
     sheet_header_mismatch: 'The category Sheet headers need to be aligned with the current schema.',
     connection_error: 'Connection error. The server may have saved some rows. Reload before retrying.',
     invalid_response: 'The server did not return a complete import result. Reload before retrying; some rows may have been saved.',
+    request_failed: 'Import stopped part-way. Some rows may have been saved. Refresh and check before importing the file again.',
   };
   const code = typeof result?.error === 'string' ? result.error : 'unknown_error';
   const values = Array.isArray(result?.invalid_values) ? result.invalid_values.map(String).join(', ') : '';
@@ -709,6 +710,8 @@ async function _submitCatImport() {
     if (!Array.isArray(results) || results.length === 0) {
       state.catImportReport = { globalError: { ...res, error: typeof res?.error === 'string' ? res.error : 'invalid_response' } };
       showMsg(_categoryImportError(state.catImportReport.globalError), 'warn');
+      // request_failed: the handler threw part-way, so rows may already be saved.
+      if (res?.error === 'request_failed') document.dispatchEvent(new CustomEvent('et:reload'));
       return;
     }
     if (results.some(result => result === null || typeof result !== 'object' || typeof result.ok !== 'boolean')) {
@@ -728,6 +731,7 @@ async function _submitCatImport() {
   } catch (_) {
     state.catImportReport = { globalError: { error: 'connection_error' } };
     console.warn('[categories] _submitCatImport: error=connection_error');
+    document.dispatchEvent(new CustomEvent('et:reload'));
   } finally {
     state.catImportBusy = false;
     _refreshCatImportPanel();

@@ -22,7 +22,7 @@ Source is split into per-domain `.gs` modules. GAS flattens them all into one na
 | Views | `view-config.gs`, `view-home.gs`, `view-transactions.gs`, `view-accounts.gs`, `view-config-lists.gs`, `view-subscriptions.gs`, `view-categories.gs` | Ready-to-render view models, form options and exports for each screen (see [View GETs](#view-gets)) |
 | Insights | `insights-registry.gs`, `insights-cashflow.gs`, `insights-comparisons.gs`, `insights-categories.gs`, `insights-networth.gs`, `insights-counterparty-geo.gs` | `get_insight`: registry, dispatcher, shared `ins*` helpers and one compute function per insight |
 | CSV import | `csv-import.gs`, `account-type-import.gs`, `category-import.gs`, `account-import.gs`, `subscription-import.gs`, `transaction-import.gs` | Server-side CSV parsing and validation for every import endpoint (`{ csv, dry_run }`), writing through the entity bulk functions |
-| Factory reset | `factory-reset.gs` | `factory_reset_delete_sheets` for the [ledger-sheet-load](../../data-synchronization/ledger-sheet-load/README.md) job's sheet-rebuild mode; `fill_csv_ids` (csv-import.gs) for both modes |
+| Factory reset | `factory-reset.gs` | `factory_reset_delete_sheets` for the [ledger-sheet-load](../../data-synchronization/ledger-sheet-load/README.md) job's sheet-rebuild mode (its `deleted` list names only tabs actually deleted, also on `delete_failed`); `fill_csv_ids` (csv-import.gs) for both modes |
 | Retired | `workflow-engine.gs` | Placeholder only; balances are computed at read time |
 | Manifest | `appsscript.json` | GAS runtime config — timezone, V8 engine, web app access |
 | clasp link | `.clasp.json` | Links this directory to a GAS project. Committed with `"scriptId": "${SCRIPT_ID_PLACEHOLDER}"`; the real `scriptId` is written by `cicd/deploy.sh` at deploy time and reverted on exit. |
@@ -36,7 +36,7 @@ The frontend is a pure renderer: every screen reads a view GET that returns conv
 - Register new GET actions only in a view file's hook (`view<Name>Register(actions)`, called by `grGetActions()` in `get-registry.gs`); never in the router's if-chain.
 - Every view accepts `quote_currency` (default GBP), `tz` (IANA, default Europe/London) and optional `today` (validated `YYYY-MM-DD`). The client sends the first two automatically (`ExpenseAPI.view`).
 - Success: `{ ok: true, data_version, computed_at, quote: { currency, symbol, rate_available }, warnings: [{ code: 'missing_rate', currencies }], data }`. Failure: `{ ok: false, error, field?, message?, details? }`.
-- `cache: true` actions are stored in CacheService (≤ 600 s) under `data_version` + action + all params; payloads over 90 KB are not cached. `data_version` changes after every successful POST and on manual Sheet edits.
+- `cache: true` actions are stored in CacheService (≤ 600 s) under `data_version` + action + all params; payloads over 90 KB are not cached. `data_version` changes on manual Sheet edits (`onEdit`) and after a POST that may have changed data. A successful POST bumps it unless it reports numeric `created: 0` and `updated: 0` with no `references_migrated > 0`, `catalog_written` or `deleted`; single-record actions (no counts) always bump it. A failed POST bumps it when it reports `sheet_written: true`, a non-empty `deleted` list, or `created` / `updated` / `deleted` above 0. `dry_run` requests and `advisor_chat`, `clear_advisor_history` and `fill_csv_ids` never bump it.
 
 | Action | File | Params | Cached |
 |---|---|---|---|

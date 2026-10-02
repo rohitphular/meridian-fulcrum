@@ -101,8 +101,18 @@ test('duplicate clicks cannot submit twice and transport failures report connect
   fail(new Error('network'));
   await pending;
   assert.equal(context.state.catImportReport.globalError.error, 'connection_error');
+  assert.deepEqual(context.reloads, ['et:reload'], 'rows may have been saved');
   assert.equal(context.state.catImportBusy, false);
   assert.equal(context.loading(), 0);
+});
+
+test('a server handler that threw part-way reloads and says rows may have been saved', async () => {
+  const context = fixture();
+  context._selectCatImportFile(file());
+  context.api.createCategoriesBulk = async () => ({ ok: false, error: 'request_failed' });
+  await context._submitCatImport();
+  assert.match(context.messages.map(entry => entry.message).join(' '), /Some rows may have been saved/);
+  assert.deepEqual(context.reloads, ['et:reload']);
 });
 
 test('malformed server results never masquerade as success', async () => {
