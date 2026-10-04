@@ -1,8 +1,7 @@
-// Chart theme and presentation helpers for Home and Insights.
+// Chart theme and presentation helpers for Home and Reports.
 // Chart configuration and display formatting only: every number and label
-// comes from the server (get_home_view / get_insight); nothing is computed here.
-import { esc } from '../../core/utils.js';
-
+// comes from the server (get_home_view / get_report payloads, already converted
+// to the display currency by GAS); nothing is computed here.
 // ── CSS colors (read at render time — picks up dark/light theme) ──────────────
 
 export function getCssColors() {
@@ -55,20 +54,16 @@ export function styleColor(style, C, index = 0) {
   }
 }
 
-// DTI status (server key) → colour.
-const _DTI_COLORS = { excellent: '#34d399', good: '#14b8a6', caution: '#f59e0b', high_risk: '#f87171', debt_free: '#34d399', na: '#94a3b8' };
-export function dtiStatusColor(status) {
-  return _DTI_COLORS[status] ?? _DTI_COLORS.na;
-}
-
 // ── Value formatting (display only) ───────────────────────────────────────────
 
 function _num(value, decimals) {
   return Math.abs(value).toLocaleString('en-GB', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
 }
 
-// Formats a server value by its format key (see insights-registry.gs FORMAT).
-export function fmtValue(value, format, sym) {
+// Formats a server value by its format key (contract/report-payload.md FORMAT).
+// 'local' is an amount in an account's own currency (never converted): with the
+// row's currency code when the caller has one, else a plain number.
+export function fmtValue(value, format, sym, currency = '') {
   if (value === null || value === undefined || value === '') return '—';
   if (typeof value === 'string' && format !== 'month' && format !== 'date') return value;
   const n = Number(value);
@@ -76,13 +71,29 @@ export function fmtValue(value, format, sym) {
     case 'money':         return (n < 0 ? '−' : '') + sym + _num(n, 0);
     case 'money2':        return (n < 0 ? '−' : '') + sym + _num(n, 2);
     case 'money_delta':   return (n < 0 ? '−' : '+') + sym + _num(n, 0);
-    case 'percent':       return (n < 0 ? '−' : '') + _num(n, 1) + '%';
+    case 'local':         return (n < 0 ? '−' : '') + _num(n, 2) + (currency ? ' ' + currency : '');
+    case 'percent':
+    case 'progress':      return (n < 0 ? '−' : '') + _num(n, 1) + '%';
     case 'percent_delta': return (n < 0 ? '−' : '+') + _num(n, 1) + '%';
     case 'count':         return Number.isFinite(n) ? n.toLocaleString('en-GB') : String(value);
     case 'days':          return Number.isFinite(n) ? `${n} day${n === 1 ? '' : 's'}` : String(value);
     case 'month':         return fmtMonthKey(String(value));
+    case 'date':          return fmtDateKey(String(value));
     default:              return String(value);
   }
+}
+
+// Text with values: { text: 'Down {0} on last month', values: [{ value, format }] }
+// → the text with each {n} replaced by its formatted value. A plain string is
+// returned as is. The result is plain text: callers esc() it.
+export function fmtText(text, sym) {
+  if (text === null || text === undefined) return '';
+  if (typeof text !== 'object') return String(text);
+  const values = Array.isArray(text.values) ? text.values : [];
+  return String(text.text ?? '').replace(/\{(\d+)\}/g, (match, index) => {
+    const item = values[Number(index)];
+    return item === undefined ? match : fmtValue(item?.value, item?.format, sym);
+  });
 }
 
 // Axis tick text for a format key.
@@ -96,6 +107,13 @@ export function fmtTick(value, format, sym) {
   // money2 axes (per-day rates) keep pence below 100 so small ticks stay distinct.
   if (format === 'money2' && abs < 100) return sign + sym + abs.toLocaleString('en-GB', { maximumFractionDigits: 2 });
   return sign + sym + Math.round(abs);
+}
+
+// 'YYYY-MM-DD' (UTC calendar date) → '30 Sep 2026'.
+export function fmtDateKey(key) {
+  const [yr, mo, dy] = key.split('-').map(Number);
+  if (!yr || !mo || !dy) return key;
+  return new Date(Date.UTC(yr, mo - 1, dy)).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
 }
 
 export function fmtMonthKey(key) {
@@ -148,37 +166,4 @@ export function baseChartOptions(sym, C, format = 'money') {
       },
     },
   };
-}
-
-// ── Drill transaction table (renders server TxRows as-is) ─────────────────────
-
-// rows: list_transactions_view TxRows (get_insight drill.rows).
-export function renderDrillRowsTable(rows) {
-  const body = (rows ?? []).map(row => {
-    const date = String(row.tx_date_local ?? '').slice(0, 10) || '—';
-    const cp   = String(row.counterparty_name ?? '').trim() || '—';
-    const cat  = row.category?.label && row.category.label !== '—' ? row.category.label : '—';
-    const amt  = row.amount?.quote_display ?? row.amount?.native_display ?? '—';
-    return `<tr class="drill-row">
-      <td class="drill-td drill-td-muted">${esc(date)}</td>
-      <td class="drill-td">${esc(cp)}</td>
-      <td class="drill-td drill-td-muted">${esc(cat)}</td>
-      <td class="drill-td drill-td-num">${esc(amt)}</td>
-    </tr>`;
-  }).join('');
-
-  return `
-    <div class="drill-table-wrap">
-      <table class="drill-table">
-        <thead>
-          <tr class="drill-thead-row">
-            <th class="drill-th">Date</th>
-            <th class="drill-th">Counterparty</th>
-            <th class="drill-th">Category</th>
-            <th class="drill-th drill-th-num">Amount</th>
-          </tr>
-        </thead>
-        <tbody>${body || '<tr><td colspan="4" class="drill-empty">No transactions</td></tr>'}</tbody>
-      </table>
-    </div>`;
 }

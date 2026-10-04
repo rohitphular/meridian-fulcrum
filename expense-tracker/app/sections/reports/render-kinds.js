@@ -1,13 +1,15 @@
 /* global Chart */
-// Generic renderer for get_insight payloads (schema: api/insights-registry.gs).
-// Renders stat cards, charts (line / area / bar / hbar / stacked / mixed /
-// donut / pie / gauge / waterfall + reference lines), tables, notes, the drill
-// panel and breadcrumbs. Chart.js configuration and display formatting only:
-// every number, label, tone and drill value comes from the server.
+// Generic renderer for published report payloads (data-synchronization/analytics/
+// contract/report-payload.md, returned by get_report / get_home_view).
+// Renders tabs, controls, breadcrumbs, stat cards, charts (line / area / bar /
+// hbar / stacked / stacked_hbar / mixed / donut / pie / gauge / waterfall + reference
+// lines), tables, notes and the drill panel. Chart.js configuration and display
+// formatting only: every number, label, tone and drill value comes from the
+// server (money already converted by GAS); Text with values is filled here.
 import { esc } from '../../core/utils.js';
 import {
   getCssColors, baseChartOptions, buildPalette, toneColor, styleColor,
-  fmtValue, fmtTick, renderDrillRowsTable,
+  fmtValue, fmtText, fmtTick,
 } from './chart-theme.js';
 
 // ── HTML pieces ───────────────────────────────────────────────────────────────
@@ -22,8 +24,15 @@ function _statCardsHtml(cards, sym) {
     <div class="stat-card">
       <p class="stat-card-label">${esc(card.label)}</p>
       <p class="stat-card-value ${esc(_toneClass(card.tone))}">${esc(fmtValue(card.value, card.format, sym))}</p>
-      ${card.sub ? `<p class="stat-card-sub">${esc(card.sub)}</p>` : ''}
+      ${card.sub ? `<p class="stat-card-sub">${esc(fmtText(card.sub, sym))}</p>` : ''}
     </div>`).join('')}</div>`;
+}
+
+function _tabsHtml(tabs) {
+  if (!Array.isArray(tabs) || tabs.length === 0) return '';
+  return `<div class="insight-tabs" style="margin-bottom:12px">${tabs.map(tab =>
+    `<button class="insight-tab${tab.active ? ' active' : ''}" data-action="report-tab" data-tab="${esc(tab.key)}">${esc(tab.label)}</button>`
+  ).join('')}</div>`;
 }
 
 function _controlsHtml(controls) {
@@ -32,7 +41,7 @@ function _controlsHtml(controls) {
     <div class="insight-tabs" style="margin-bottom:12px">
       ${control.label ? `<span style="font-size:var(--text-xs);color:var(--muted);align-self:center">${esc(control.label)}</span>` : ''}
       ${(control.options ?? []).map(option => `<button class="insight-tab${String(option.value) === String(control.value) ? ' active' : ''}"
-        data-action="insight-control" data-param="${esc(control.param)}" data-value="${esc(String(option.value))}">${esc(option.label)}</button>`).join('')}
+        data-action="report-control" data-param="${esc(control.param)}" data-value="${esc(String(option.value))}">${esc(option.label)}</button>`).join('')}
     </div>`).join('');
 }
 
@@ -42,99 +51,104 @@ function _breadcrumbsHtml(crumbs) {
     const last = index === crumbs.length - 1;
     const item = last
       ? `<strong>${esc(crumb.label)}</strong>`
-      : `<button class="btn btn-secondary btn-sm" data-action="insight-crumb" data-index="${index}">${esc(crumb.label)}</button>`;
+      : `<button class="btn btn-secondary btn-sm" data-action="report-crumb" data-index="${index}">${esc(crumb.label)}</button>`;
     return item + (last ? '' : '<span style="color:var(--muted)">›</span>');
   }).join('')}</div>`;
 }
 
-function _cellHtml(value, column, sym, rowTone) {
-  if (column.format === 'progress') {
+// One table cell. Text with values is filled; 'local' amounts use the row's
+// own currency cell when the row has one.
+function _cellHtml(value, column, sym, rowTone, cells) {
+  if (column.format === 'progress' && (typeof value === 'number' || value === null || value === undefined)) {
     const pct = Math.max(0, Math.min(100, Number(value) || 0));
     return `<td class="drill-td" style="min-width:90px"><div style="display:flex;align-items:center;gap:6px">
       <div style="flex:1;height:6px;background:var(--hair);border-radius:3px;overflow:hidden"><div style="width:${pct}%;height:100%;background:var(--teal)"></div></div>
-      <span style="font-size:var(--text-xs);color:var(--muted)">${esc(fmtValue(value, 'percent', sym))}</span></div></td>`;
+      <span style="font-size:var(--text-xs);color:var(--muted)">${esc(fmtValue(value, 'progress', sym))}</span></div></td>`;
   }
-  const text = fmtValue(value, column.format, sym);
+  const currency = typeof cells?.currency === 'string' ? cells.currency : '';
+  const text = value !== null && typeof value === 'object' ? fmtText(value, sym) : fmtValue(value, column.format, sym, currency);
   const numeric = typeof value === 'number' && String(column.format ?? '').startsWith('money');
   const cls = numeric && rowTone ? _toneClass(rowTone) : '';
   const align = column.align ?? (numeric ? 'right' : 'left');
   return `<td class="drill-td ${esc(cls)}" style="text-align:${esc(align)}">${esc(text)}</td>`;
 }
 
+function _sectionTitle(text, sym) {
+  return text ? `<p style="font-size:var(--text-xs);color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.06em;margin:16px 0 6px">${esc(fmtText(text, sym))}</p>` : '';
+}
+
 function _tableHtml(table, tableIndex, sym) {
   const columns = table.columns ?? [];
-  const sortable = new Set(table.sortable ?? []);
-  const sort = table.sort ?? null;
-  const head = columns.map(column => {
-    const align = column.align ?? 'left';
-    if (!sortable.has(column.key)) return `<th class="drill-th" style="text-align:${esc(align)}">${esc(column.label)}</th>`;
-    const indicator = sort?.col === column.key ? (sort.dir === 'asc' ? ' ↑' : ' ↓') : '';
-    return `<th class="drill-th" style="text-align:${esc(align)};cursor:pointer" data-action="insight-sort" data-col="${esc(column.key)}">${esc(column.label + indicator)}</th>`;
-  }).join('');
+  const head = columns.map(column => `<th class="drill-th" style="text-align:${esc(column.align ?? 'left')}">${esc(column.label)}</th>`).join('');
   const rows = (table.rows ?? []).map((row, rowIndex) => {
-    const drillAttrs = row.drill ? ` data-action="insight-row-drill" data-table="${tableIndex}" data-row="${rowIndex}" style="cursor:pointer"` : '';
-    return `<tr class="drill-row"${drillAttrs}>${columns.map(column => _cellHtml(row.cells?.[column.key], column, sym, row.tone)).join('')}</tr>`;
+    const drillAttrs = row.drill && tableIndex >= 0 ? ` data-action="report-row-drill" data-table="${tableIndex}" data-row="${rowIndex}" style="cursor:pointer"` : '';
+    return `<tr class="drill-row"${drillAttrs}>${columns.map(column => _cellHtml(row.cells?.[column.key], column, sym, row.tone, row.cells)).join('')}</tr>`;
   }).join('');
   const total = table.total_row
-    ? `<tr class="drill-row" style="font-weight:600">${columns.map(column => _cellHtml(table.total_row.cells?.[column.key], column, sym, null)).join('')}</tr>`
+    ? `<tr class="drill-row" style="font-weight:600">${columns.map(column => _cellHtml(table.total_row.cells?.[column.key], column, sym, null, table.total_row.cells)).join('')}</tr>`
     : '';
   return `
-    ${table.title ? `<p style="font-size:var(--text-xs);color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.06em;margin:16px 0 6px">${esc(table.title)}</p>` : ''}
+    ${_sectionTitle(table.title, sym)}
     <div class="drill-table-wrap">
       <table class="drill-table">
         <thead><tr class="drill-thead-row">${head}</tr></thead>
-        <tbody>${rows || `<tr><td colspan="${columns.length || 1}" class="drill-empty">${esc(table.empty_text ?? 'Nothing to show')}</td></tr>`}${total}</tbody>
+        <tbody>${rows || `<tr><td colspan="${columns.length || 1}" class="drill-empty">${esc(fmtText(table.empty_text ?? 'Nothing to show', sym))}</td></tr>`}${total}</tbody>
       </table>
     </div>`;
 }
 
-function _chartHtml(chart, index, attr = 'data-chart-index') {
-  if (chart.empty_text && !(chart.labels ?? []).length) {
-    return `<div class="chart-wrap"><p class="chart-empty">${esc(chart.empty_text)}</p></div>`;
+// compact (Home panels): no drill hints, a fixed height, no click-through.
+function _chartHtml(chart, index, sym, attr = 'data-chart-index', compact = false) {
+  if (chart.empty_text && !(chart.labels ?? []).length && chart.kind !== 'gauge') {
+    return `<div class="chart-wrap"><p class="chart-empty">${esc(fmtText(chart.empty_text, sym))}</p></div>`;
   }
-  const height = Number.isFinite(chart.height) ? chart.height : (chart.kind === 'gauge' ? 180 : null);
+  const fixed = Number.isFinite(chart.height) ? chart.height : (chart.kind === 'gauge' ? 180 : null);
+  const height = compact ? (chart.kind === 'gauge' ? 160 : 190) : fixed;
   const style = height ? ` style="height:${height}px;position:relative"` : ' style="position:relative"';
   const gauge = chart.kind === 'gauge' && chart.gauge ? `
     <div style="position:absolute;left:50%;bottom:14%;transform:translateX(-50%);text-align:center;pointer-events:none">
-      <div style="font-size:var(--text-xl);font-weight:700" data-role="gauge-label">${esc(chart.gauge.label ?? '')}</div>
-      ${chart.gauge.sub ? `<div style="font-size:var(--text-sm);color:var(--muted)">${esc(chart.gauge.sub)}</div>` : ''}
+      <div style="font-size:var(--text-xl);font-weight:700" data-role="gauge-label">${esc(fmtText(chart.gauge.label ?? '', sym))}</div>
+      ${chart.gauge.sub ? `<div style="font-size:var(--text-sm);color:var(--muted)">${esc(fmtText(chart.gauge.sub, sym))}</div>` : ''}
     </div>` : '';
+  const hints = compact ? '' : `
+    ${chart.drill?.hint ? `<p style="font-size:var(--text-xs);color:var(--muted);margin:4px 0 0;text-align:center">${esc(fmtText(chart.drill.hint, sym))}</p>` : ''}
+    ${chart.drill?.null_text ? `<p class="hidden" data-role="chart-drill-note" style="font-size:var(--text-xs);color:var(--muted);margin:4px 0 0;text-align:center"><em>${esc(fmtText(chart.drill.null_text, sym))}</em></p>` : ''}`;
   return `
-    ${chart.title ? `<p style="font-size:var(--text-xs);color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.06em;margin:16px 0 6px">${esc(chart.title)}</p>` : ''}
+    ${compact ? '' : _sectionTitle(chart.title, sym)}
     <div class="chart-wrap">
       <div class="chart-container"${style}><canvas ${attr}="${index}"></canvas>${gauge}</div>
-    </div>
-    ${chart.drill?.hint ? `<p style="font-size:var(--text-xs);color:var(--muted);margin:4px 0 0;text-align:center">${esc(chart.drill.hint)}</p>` : ''}
-    ${chart.drill?.null_text ? `<p class="hidden" data-role="chart-drill-note" style="font-size:var(--text-xs);color:var(--muted);margin:4px 0 0;text-align:center"><em>${esc(chart.drill.null_text)}</em></p>` : ''}`;
+    </div>${hints}`;
 }
 
-function _notesHtml(notes) {
+function _notesHtml(notes, sym) {
   if (!Array.isArray(notes) || notes.length === 0) return '';
-  return notes.map(note => `<p class="home-dti-note" style="font-size:var(--text-xs);color:${note.tone === 'warn' ? 'var(--ember)' : 'var(--muted)'};margin:8px 0 0"><em>${esc(note.text)}</em></p>`).join('');
+  return notes.map(note => `<p class="report-note" style="color:${note?.tone === 'warn' ? 'var(--ember)' : 'var(--muted)'}"><em>${esc(fmtText(note, sym))}</em></p>`).join('');
+}
+
+function _emptyHtml(empty, sym) {
+  return `<div class="chart-wrap"><p class="chart-empty">${esc(fmtText(empty?.text ?? empty, sym))}</p></div>`;
 }
 
 // ── Drill panel ───────────────────────────────────────────────────────────────
 
+// Drill = { title, subtitle?, charts?, table?, query? } (Text in title / subtitle).
 export function drillPanelHtml(drill, sym) {
   if (!drill) return '';
-  const more = Number.isFinite(drill.total_count) && Number.isFinite(drill.shown_count) && drill.total_count > drill.shown_count
-    ? `<p style="font-size:var(--text-xs);color:var(--muted);margin:6px 0 0">Showing the latest ${esc(String(drill.shown_count))} of ${esc(String(drill.total_count))}.</p>` : '';
-  const total = Number.isFinite(drill.total_quote) ? ` · ${esc(fmtValue(drill.total_quote, 'money', sym))}` : '';
-  const open = drill.query ? `<button class="btn btn-secondary btn-sm" data-action="insight-open-transactions">Open in Transactions</button>` : '';
+  const open = drill.query ? `<button class="btn btn-secondary btn-sm" data-action="report-open-transactions">Open in Transactions</button>` : '';
+  const note = drill.query?.note ? `<p class="report-note"><em>${esc(fmtText(drill.query.note, sym))}</em></p>` : '';
   return `
-    <div style="margin-top:20px;padding:16px;background:var(--panel);border:1px solid var(--hair);border-radius:8px">
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:10px">
-        <h3 style="font-size:var(--text-sm);font-weight:600;margin:0">${esc(drill.title ?? '')}</h3>
+    <div class="report-drill-panel">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">
+        <h3 style="font-size:var(--text-sm);font-weight:600;margin:0">${esc(fmtText(drill.title ?? '', sym))}</h3>
         <div style="display:flex;gap:8px;align-items:center;font-size:var(--text-xs);color:var(--muted)">
-          <span>${esc(drill.subtitle ?? '')}${total}</span>
+          <span>${esc(fmtText(drill.subtitle ?? '', sym))}</span>
           ${open}
-          <button data-action="insight-drill-close" style="background:none;border:none;color:var(--muted);font-size:var(--text-sm);cursor:pointer;padding:0 4px">✕</button>
+          <button data-action="report-drill-close" aria-label="Close detail" style="background:none;border:none;color:var(--muted);font-size:var(--text-sm);cursor:pointer;padding:0 4px">✕</button>
         </div>
       </div>
-      ${(drill.charts ?? []).map((chart, index) => _chartHtml(chart, index, 'data-drill-chart-index')).join('')}
+      ${(drill.charts ?? []).map((chart, index) => _chartHtml(chart, index, sym, 'data-drill-chart-index')).join('')}
       ${drill.table ? _tableHtml(drill.table, -1, sym) : ''}
-      ${(drill.rows ?? []).length > 0 || (!drill.table && !(drill.charts ?? []).length) ? renderDrillRowsTable(drill.rows) : ''}
-      ${more}
+      ${note}
     </div>`;
 }
 
@@ -157,7 +171,7 @@ function _lineDataset(dataset, C, index, count) {
   if (dataset.fill === 'signed') fill = { target: 'origin', above: 'rgba(96,165,250,0.15)', below: 'rgba(248,113,113,0.18)' };
   return {
     type: 'line', label: dataset.label, data: dataset.data, borderColor: color, backgroundColor: _alpha(color, '18'),
-    borderWidth: 2, fill, tension: 0.3, pointRadius: count > 60 ? 0 : 2, pointHoverRadius: 4, spanGaps: false,
+    borderWidth: 2, fill, tension: 0.3, pointRadius: count > 60 ? 0 : 3, pointHoverRadius: 5, spanGaps: false,
     borderDash: dataset.dashed ? [4, 4] : undefined, hidden: dataset.hidden === true, yAxisID: dataset.axis === 'y2' ? 'y2' : 'y',
   };
 }
@@ -187,7 +201,7 @@ function _y2Scale(chart, base, sym) {
 }
 
 // Shows / hides the chart's server-given note for a point without a drill
-// value (e.g. an 'Other tags' segment that merges several tags).
+// target (e.g. an 'Other' segment that merges several values).
 function _toggleDrillNote(instance, show) {
   const note = instance?.canvas?.closest?.('.chart-wrap')?.nextElementSibling;
   const target = note?.dataset?.role === 'chart-drill-note' ? note
@@ -195,29 +209,31 @@ function _toggleDrillNote(instance, show) {
   target?.classList?.toggle('hidden', !show);
 }
 
-// Click → onDrill({ [drill.param]: values[i] }). With drill.series_param the
-// clicked line's dataset key is sent too (e.g. { month, tag }), so the click
-// resolves the nearest point of the series under the pointer, not the first
-// dataset at that index; reference lines (after the server datasets) never drill.
+// Click → onDrill({ [drill.param]: values[i] }, mode, query). mode 'panel' /
+// 'replace' name a published variant; mode 'query' carries queries[i] (opens
+// Transactions; null = not drillable). With drill.series_param the clicked
+// line's dataset key is added after the primary param; reference lines (after
+// the server datasets) never drill.
 function _drillClick(chart, onDrill) {
   const drill = chart.drill;
   if (!drill || typeof onDrill !== 'function') return undefined;
   const datasets = chart.datasets ?? [];
+  const mode = drill.mode ?? 'panel';
   return (evt, elements, instance) => {
-    // A click on a line point names its series; elsewhere in the column only the index.
     const onSeries = drill.series_param && typeof instance?.getElementsAtEventForMode === 'function'
       ? instance.getElementsAtEventForMode(evt, 'nearest', { intersect: true }, false) : [];
     const hit = onSeries[0] ?? elements[0];
     if (hit === undefined) return;
     const value = (drill.values ?? [])[hit.index];
-    if (value === undefined || value === null || value === '') { _toggleDrillNote(instance, true); return; }
+    const query = mode === 'query' ? (drill.queries ?? [])[hit.index] ?? null : null;
+    if (value === undefined || value === null || value === '' || (mode === 'query' && query === null)) { _toggleDrillNote(instance, true); return; }
     _toggleDrillNote(instance, false);
     const params = { [drill.param]: value };
     if (drill.series_param && onSeries.length > 0) {
       const key = hit.datasetIndex < datasets.length ? datasets[hit.datasetIndex]?.key : undefined;
       if (key !== undefined && key !== null && key !== '') params[drill.series_param] = key;
     }
-    onDrill(params, drill.mode ?? 'panel');
+    onDrill(params, mode, query);
   };
 }
 
@@ -268,7 +284,7 @@ export function chartConfig(chart, sym, C, onDrill) {
           ...base, onClick,
           plugins: { ...base.plugins, legend: { display: false }, tooltip: { ...base.plugins.tooltip, callbacks: {
             label: ctx => { const raw = Array.isArray(ctx.raw) ? ctx.raw[1] - ctx.raw[0] : ctx.raw; return `  ${fmtValue(raw, format, sym)}`; } } } },
-          scales: { ...base.scales, x: { ...base.scales.x, ticks: { ...base.scales.x.ticks, maxRotation: 30, font: { size: 11 } } }, y: withY({}) },
+          scales: { ...base.scales, x: { ...base.scales.x, ticks: { ...base.scales.x.ticks, maxRotation: 0, font: { size: 12 } } }, y: withY({}) },
         },
       };
     }
@@ -283,7 +299,7 @@ export function chartConfig(chart, sym, C, onDrill) {
           plugins: { ...base.plugins, legend },
           scales: {
             x: { ...base.scales.y, stacked, ...(chart.y_min !== undefined ? { min: chart.y_min } : {}), ...(chart.y_max !== undefined ? { max: chart.y_max } : {}) },
-            y: { stacked, ticks: { color: C.muted, font: { size: 11 } }, grid: { color: C.hair }, border: { display: false } },
+            y: { stacked, ticks: { color: C.muted, font: { size: 12 } }, grid: { color: C.hair }, border: { display: false } },
           },
         },
       };
@@ -319,30 +335,43 @@ export function chartConfig(chart, sym, C, onDrill) {
 
 // ── Public render ─────────────────────────────────────────────────────────────
 
-// Renders a get_insight data payload into container. handlers:
-// { onDrill(drill, mode), onControl(param, value), onSort(col), onCrumb(drill|null),
+// Renders a report payload into container. handlers:
+// { onDrill(params, mode, query), onTab(key), onControl(param, value), onCrumb(drill|null),
 //   onDrillClose(), onOpenTransactions(query) }. Returns the Chart.js instances created.
 export function renderInsightPayload(container, data, sym, handlers = {}) {
   if (!container || !data) return [];
   if (data.empty) {
-    container.innerHTML = `${_breadcrumbsHtml(data.breadcrumbs)}${_controlsHtml(data.controls)}<div class="chart-wrap"><p class="chart-empty">${esc(data.empty.text)}</p></div>`;
+    container.innerHTML = `${_tabsHtml(data.tabs)}${_breadcrumbsHtml(data.breadcrumbs)}${_controlsHtml(data.controls)}${_emptyHtml(data.empty, sym)}`;
     _attachPayloadEvents(container, data, handlers);
     return [];
   }
   const charts = data.charts ?? [];
   container.innerHTML = `
+    ${_tabsHtml(data.tabs)}
     ${_breadcrumbsHtml(data.breadcrumbs)}
     ${_controlsHtml(data.controls)}
     ${_statCardsHtml(data.stat_cards, sym)}
-    ${charts.map((chart, index) => _chartHtml(chart, index)).join('')}
+    ${charts.map((chart, index) => _chartHtml(chart, index, sym)).join('')}
     ${(data.tables ?? []).map((table, index) => _tableHtml(table, index, sym)).join('')}
-    ${_notesHtml(data.notes)}
-    <div data-role="insight-drill">${drillPanelHtml(data.drill, sym)}</div>`;
+    ${_notesHtml(data.notes, sym)}
+    <div data-role="report-drill">${drillPanelHtml(data.drill, sym)}</div>`;
   _attachPayloadEvents(container, data, handlers);
 
   const instances = _buildCharts(container, 'data-chart-index', charts, sym, handlers.onDrill);
   _drillInstances.set(container, _buildCharts(container, 'data-drill-chart-index', data.drill?.charts ?? [], sym, handlers.onDrill));
   return [...instances, ..._drillInstances.get(container)];
+}
+
+// A Home panel: the payload's charts (or, without charts, its tables) at a fixed
+// height; no tabs, controls, drills or click-through. Returns the Chart.js instances.
+export function renderCompactPayload(container, data, sym) {
+  if (!container || !data) return [];
+  const charts = data.charts ?? [];
+  if (data.empty) container.innerHTML = _emptyHtml(data.empty, sym);
+  else if (charts.length > 0) container.innerHTML = charts.map((chart, index) => _chartHtml(chart, index, sym, 'data-chart-index', true)).join('');
+  else if ((data.tables ?? []).length > 0) container.innerHTML = (data.tables ?? []).map(table => _tableHtml(table, -1, sym)).join('');
+  else container.innerHTML = `${_statCardsHtml(data.stat_cards, sym)}${_notesHtml(data.notes, sym)}`;
+  return data.empty ? [] : _buildCharts(container, 'data-chart-index', charts, sym, undefined);
 }
 
 // Instantiates the canvases carrying attr (chart index) inside root.
@@ -367,10 +396,11 @@ function _destroyDrillCharts(container) {
   _drillInstances.set(container, []);
 }
 
-// Replaces only the drill panel (drill mode 'panel'); returns the drill-panel
-// Chart.js instances (the previous ones are destroyed here).
+// Replaces only the drill panel (drill mode 'panel') with data.drill (the
+// variant's payload); returns the drill-panel Chart.js instances (the previous
+// ones are destroyed here).
 export function renderInsightDrill(container, data, sym, handlers = {}) {
-  const slot = container?.querySelector('[data-role="insight-drill"]');
+  const slot = container?.querySelector('[data-role="report-drill"]');
   if (!slot) return [];
   _destroyDrillCharts(container);
   slot.innerHTML = drillPanelHtml(data?.drill, sym);
@@ -389,25 +419,25 @@ const _currentDrill = new WeakMap();
 
 function _attachPayloadEvents(container, data, handlers) {
   _currentDrill.set(container, data.drill ?? null);
-  if (container._insightAbort) container._insightAbort.abort();
+  if (container._reportAbort) container._reportAbort.abort();
   const abort = new AbortController();
-  container._insightAbort = abort;
+  container._reportAbort = abort;
   container.addEventListener('click', e => {
     const target = e.target.closest('[data-action]');
     if (!target || !container.contains(target)) return;
     const action = target.dataset.action;
-    if (action === 'insight-control') handlers.onControl?.(target.dataset.param, target.dataset.value);
-    else if (action === 'insight-sort') handlers.onSort?.(target.dataset.col);
-    else if (action === 'insight-crumb') handlers.onCrumb?.((data.breadcrumbs ?? [])[Number(target.dataset.index)]?.drill ?? null);
-    else if (action === 'insight-row-drill') {
-      const row = (data.tables ?? [])[Number(target.dataset.table)]?.rows?.[Number(target.dataset.row)];
-      if (row?.drill) handlers.onDrill?.({ [row.drill.param]: row.drill.value }, row.drill.mode ?? 'panel');
-    } else if (action === 'insight-drill-close') {
+    if (action === 'report-tab') handlers.onTab?.(target.dataset.tab);
+    else if (action === 'report-control') handlers.onControl?.(target.dataset.param, target.dataset.value);
+    else if (action === 'report-crumb') handlers.onCrumb?.((data.breadcrumbs ?? [])[Number(target.dataset.index)]?.drill ?? null);
+    else if (action === 'report-row-drill') {
+      const drill = (data.tables ?? [])[Number(target.dataset.table)]?.rows?.[Number(target.dataset.row)]?.drill;
+      if (drill) handlers.onDrill?.({ [drill.param]: drill.value }, drill.mode ?? 'panel', drill.mode === 'query' ? drill.query ?? null : null);
+    } else if (action === 'report-drill-close') {
       _destroyDrillCharts(container);
-      const slot = container.querySelector('[data-role="insight-drill"]');
+      const slot = container.querySelector('[data-role="report-drill"]');
       if (slot) slot.innerHTML = '';
       handlers.onDrillClose?.();
-    } else if (action === 'insight-open-transactions') {
+    } else if (action === 'report-open-transactions') {
       const drill = _currentDrill.get(container);
       if (drill?.query) handlers.onOpenTransactions?.(drill.query);
     }

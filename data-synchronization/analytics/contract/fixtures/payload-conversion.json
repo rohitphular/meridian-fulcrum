@@ -1,0 +1,323 @@
+{
+ "_comment": "The cross-language payload fixture (contract/fixtures/payload-conversion.json).",
+ "payload": {
+  "contract_version": 1,
+  "report_id": "00000000-0000-0000-0000-000000000001",
+  "predefined_key": null,
+  "variant_key": "",
+  "anchor_date": null,
+  "title": "",
+  "description": "",
+  "period": null,
+  "compare": null,
+  "tab": null,
+  "tabs": [],
+  "controls": [],
+  "stat_cards": [
+   {
+    "key": "worth",
+    "label": "Net worth",
+    "value": 100.0,
+    "format": "money",
+    "sub": {
+     "text": "{0} vs {1} ({2})",
+     "values": [
+      {
+       "value": 1.5,
+       "format": "money_delta"
+      },
+      {
+       "value": "2026-09",
+       "format": "month"
+      },
+      {
+       "value": 12.5,
+       "format": "percent_delta"
+      }
+     ]
+    }
+   },
+   {
+    "key": "count",
+    "label": "Transactions",
+    "value": 42,
+    "format": "count"
+   },
+   {
+    "key": "rate",
+    "label": "Savings rate",
+    "value": 12.5,
+    "format": "percent"
+   }
+  ],
+  "charts": [
+   {
+    "id": "mix",
+    "kind": "mixed",
+    "labels": [
+     "Jan",
+     "Feb"
+    ],
+    "datasets": [
+     {
+      "key": "spend",
+      "label": "Spending",
+      "data": [
+       1.25,
+       null
+      ],
+      "style": "expense"
+     },
+     {
+      "key": "rate",
+      "label": "Rate",
+      "data": [
+       10.0,
+       20.0
+      ],
+      "style": "compare",
+      "axis": "y2"
+     }
+    ],
+    "y_format": "money",
+    "ref_lines": [
+     {
+      "value": 2.0,
+      "label": "Budget"
+     },
+     {
+      "value": 30.0,
+      "label": "Target",
+      "axis": "y2"
+     }
+    ],
+    "y2_format": "percent"
+   },
+   {
+    "id": "flow",
+    "kind": "waterfall",
+    "labels": [
+     "Start",
+     "In"
+    ],
+    "datasets": [
+     {
+      "key": "steps",
+      "label": "Steps",
+      "data": [
+       [
+        0.0,
+        3.0
+       ],
+       [
+        3.0,
+        4.5
+       ]
+      ],
+      "style": "primary"
+     }
+    ],
+    "y_format": "money",
+    "ref_lines": []
+   },
+   {
+    "id": "counts",
+    "kind": "bar",
+    "labels": [
+     "A"
+    ],
+    "datasets": [
+     {
+      "key": "n",
+      "label": "Count",
+      "data": [
+       7
+      ],
+      "style": "primary"
+     }
+    ],
+    "y_format": "count",
+    "ref_lines": []
+   },
+   {
+    "id": "gauge",
+    "kind": "gauge",
+    "labels": [],
+    "datasets": [],
+    "y_format": "percent",
+    "ref_lines": [],
+    "gauge": {
+     "value": 25.0,
+     "max": 100
+    }
+   }
+  ],
+  "tables": [
+   {
+    "id": "rows",
+    "columns": [
+     {
+      "key": "name",
+      "label": "Name",
+      "format": "text",
+      "align": "left"
+     },
+     {
+      "key": "amount",
+      "label": "Amount",
+      "format": "money",
+      "align": "right"
+     },
+     {
+      "key": "local",
+      "label": "Local",
+      "format": "local",
+      "align": "right"
+     },
+     {
+      "key": "share",
+      "label": "Share",
+      "format": "percent",
+      "align": "right"
+     },
+     {
+      "key": "note",
+      "label": "Note",
+      "format": "text",
+      "align": "left"
+     }
+    ],
+    "rows": [
+     {
+      "key": "a",
+      "cells": {
+       "name": "Tesco",
+       "amount": 2.5,
+       "local": 250.0,
+       "share": 40.0,
+       "note": {
+        "text": "{0} a month",
+        "values": [
+         {
+          "value": 0.75,
+          "format": "money"
+         }
+        ]
+       }
+      }
+     }
+    ],
+    "sortable": [],
+    "sort": null,
+    "total_row": {
+     "cells": {
+      "name": "Total",
+      "amount": 2.5,
+      "local": null,
+      "share": 100.0
+     }
+    }
+   }
+  ],
+  "drill": {
+   "title": {
+    "text": "Balances on {0}",
+    "values": [
+     {
+      "value": "2026-09-30",
+      "format": "date"
+     }
+    ]
+   },
+   "subtitle": {
+    "text": "{0} in total",
+    "values": [
+     {
+      "value": 9.0,
+      "format": "money"
+     }
+    ]
+   },
+   "charts": [
+    {
+     "id": "months",
+     "kind": "bar",
+     "labels": [
+      "Sep"
+     ],
+     "datasets": [
+      {
+       "key": "spend",
+       "label": "Spending",
+       "data": [
+        4.0
+       ],
+       "style": "expense"
+      }
+     ],
+     "y_format": "money",
+     "ref_lines": []
+    }
+   ],
+   "table": {
+    "id": "drill",
+    "columns": [
+     {
+      "key": "account",
+      "label": "Account",
+      "format": "text",
+      "align": "left"
+     },
+     {
+      "key": "value",
+      "label": "Value",
+      "format": "money2",
+      "align": "right"
+     }
+    ],
+    "rows": [
+     {
+      "key": "x",
+      "cells": {
+       "account": "Bank",
+       "value": 5.5
+      }
+     }
+    ],
+    "sortable": [],
+    "sort": null
+   }
+  },
+  "breadcrumbs": [],
+  "notes": [
+   {
+    "text": "Down {0}",
+    "values": [
+     {
+      "value": 0.5,
+      "format": "money_delta"
+     }
+    ]
+   }
+  ],
+  "empty": null,
+  "warnings": []
+ },
+ "money_paths": [
+  "stat_cards[0].value",
+  "stat_cards[0].sub.values[0].value",
+  "charts[0].datasets[0].data[0]",
+  "charts[0].ref_lines[0].value",
+  "charts[1].datasets[0].data[0][0]",
+  "charts[1].datasets[0].data[0][1]",
+  "charts[1].datasets[0].data[1][0]",
+  "charts[1].datasets[0].data[1][1]",
+  "tables[0].rows[0].cells.amount",
+  "tables[0].rows[0].cells.note.values[0].value",
+  "tables[0].total_row.cells.amount",
+  "notes[0].values[0].value",
+  "drill.subtitle.values[0].value",
+  "drill.charts[0].datasets[0].data[0]",
+  "drill.table.rows[0].cells.value"
+ ]
+}
