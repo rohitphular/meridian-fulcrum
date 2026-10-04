@@ -365,7 +365,7 @@ function txvFormError(result, body) {
 const TXV_BALANCE_CHECKED_TYPES = ['asset', 'investment'];
 const _TXV_BALANCE_EPSILON = 0.000001;   // absorbs float drift in summed balances
 
-// Same comparison as _buildAccountNetMap / ldgBuild.
+// Same comparison as _buildAccountNetMap.
 function _txvAffectsBalance(cutoff, dateLocal, timezone) {
   if (cutoff.cutoff === null) return true;
   const localKey = localDateTimeKey(sheetLocalDateTimeText(dateLocal));
@@ -377,8 +377,7 @@ function _txvAffectsBalance(cutoff, dateLocal, timezone) {
 }
 
 function _txvBalanceSymbol(currency) {
-  // Read the rates tab directly: listRates() seeds an empty tab, a write.
-  try { return fxSymbol(currency, fxSymbolMap(sheetToObjects(getOrCreateSheet(RATES_SHEET, getRateSheetColumns())))); }
+  try { return fxSymbol(currency, fxSymbolMap(listRates())); }
   catch (_) { return ''; }
 }
 

@@ -9,9 +9,10 @@ The daily entry path is **Expense Tracker UI → Apps Script → Google Sheets**
 | [ledger-sheet-load](ledger-sheet-load/README.md) | Local CSV files in `local/files` | Google Sheets tabs, through the GAS import endpoints (sheet-rebuild or sheet-sync); fills missing CSV ids |
 | [ledger-sheet-extract](ledger-sheet-extract/README.md) | `extract`: enabled Sheet tabs (one batched read). `acknowledge`: the load's outcomes | Staging tables (`stg_*`, kept 6 months); only sync status/date/notes back to the Sheet |
 | [ledger-database-load](ledger-database-load/README.md) | The newest staged snapshot and PostgreSQL currency references (no Google access) | Validated ledger tables; per-row outcomes in staging |
+| [analytics](analytics/README.md) | PostgreSQL ledger, rates and `report_master` (one consistent snapshot) | `analytics` schema (runs, report payloads); the published report tabs in the Sheet |
 | [consolidated-pipeline](consolidated-pipeline/README.md) | `consolidated-pipeline/config/pipeline.<env>.json` (gitignored, one per env) | Nothing itself: runs the listed modules in order, unattended |
 
-The app's **Rates** tab contains current display rates. Neither data-sync job copies that tab into PostgreSQL or updates it from PostgreSQL. Both use XAU as one gram of gold, but current app totals and historical database valuations may differ because they use different valuation dates/rates. Accounts need a currency supported by the database catalog and the required rate history.
+The app's **Rates** tab is published from PostgreSQL by forex-database-load (`publish-sheet`: the latest rate per currency) and is read-only in the app. Both use XAU as one gram of gold. Accounts need a currency supported by the database catalog and the required rate history.
 
 ## Daily workflow
 
@@ -37,7 +38,8 @@ Every module has the same shape: `Makefile` with `run` (`ENV=dev|prod`, optional
 
 | Module | Env var prefix | Modes |
 |---|---|---|
-| forex-database-load | `FDL_` | `daily`, `historical` |
+| analytics | `ANA_` | `refresh`, `build`, `publish`, `check` |
+| forex-database-load | `FDL_` | `daily`, `historical`, `publish-sheet` |
 | ledger-sheet-load | `LSL_` | `sheet-rebuild`, `sheet-sync` |
 | ledger-sheet-extract | `LSE_` | `extract`, `acknowledge` |
 | ledger-database-load | — (database only) | `normal-sync`, `hard-sync` |
@@ -52,9 +54,9 @@ After editing the files in `local/files`, run `make data-sync` → **ledger-shee
 
 - Deploy the matching Expense Tracker frontend and Apps Script backend after code changes. Local tests do not update an existing deployment.
 - Follow the [source schema migration instructions](../expense-tracker/_docs/master-sheet-names.md). Import Account Types first, then categories/accounts and desired detail tabs. Enable only existing tabs with current headers.
-- Run currency migrations before ledger migrations on a new database. The launchers apply pending migrations for the selected environment. Ledger currently requires migrations through `0023`; currency requires `0006`, which rejects nonfinite rates and non-identity XAU values without rewriting historical data.
+- Run currency migrations before ledger migrations on a new database. The launchers apply pending migrations for the selected environment. Ledger currently requires migrations through `0024`; currency requires `0006`, which rejects nonfinite rates and non-identity XAU values without rewriting historical data.
 - Complete any missing per-row subscription timezones before importing/syncing dated subscriptions. No timezone is inferred from names or currencies.
-- Insights are computed live by the backend. The retired `expense-tracker/job` precomputation job (incompatible with the current data model) was removed on 2026-10-01; it is in git history if ever needed.
+- Insights are still computed live by the backend until the app reads what [analytics](analytics/README.md) publishes (tasks 14–16 of `temp/report-processor/`). The retired `expense-tracker/job` precomputation job was removed on 2026-10-01.
 - `make app-start` serves the repository on loopback for desktop development. Use the hosted frontend on mobile. Do not expose the repository's generic static server to a network: it contains private local configuration alongside public app assets.
 
 See the [September 25 review](./_docs/REVIEW-2026-09-25.md) for the fixed gaps, validation evidence and remaining boundaries.

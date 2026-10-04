@@ -1,0 +1,1285 @@
+{
+  "_comment": "Pre-built reports, Home numbers and internal datasets. key = predefined_key (stable; the job selects its logic by key). id = the fixed report_master UUID (uuid5 of the key), so a CSV rebuild always recreates the same rows. kind: chart (listed under Pre-built, fits a Home panel), number (single value, fits a Home tile), dataset (internal, e.g. the Accounts screen; not listed). periods: presets the variant set covers (empty = the report has no period selector; default_period still anchors the computation). drills: published=aggregate means every drill value is precomputed; query_only means the drill opens list_transactions_view with a filter. sortable: tables re-ordered by the GAS reader without recomputing.",
+  "contract_version": 1,
+  "uuid_namespace": "6f9c1d2e-4b7a-5c3d-8e1f-0a2b3c4d5e6f",
+  "groups": [
+    "Overview",
+    "Cash flow",
+    "Comparisons",
+    "Categories and tags",
+    "Net worth and debt",
+    "Payees and places"
+  ],
+  "default_layout": {
+    "tiles": [
+      "kpi-net-worth",
+      "kpi-total-assets",
+      "kpi-total-liabilities",
+      "kpi-monthly-income"
+    ],
+    "panels": [
+      "home-income-trend",
+      "home-debt-to-income",
+      "14-networth-trend",
+      "08-category-pie"
+    ]
+  },
+  "reports": [
+    {
+      "key": "home-income-trend",
+      "id": "91c00162-8dc8-544d-8d2e-949424a8068a",
+      "title": "Income trend",
+      "group": "Overview",
+      "kind": "chart",
+      "chart": "bar",
+      "description": "Monthly income since your first transaction, with the peak month highlighted.",
+      "periods": [],
+      "default_period": "all",
+      "tabs": [],
+      "controls": [],
+      "drills": [],
+      "sortable": null,
+      "home_slot": "panel"
+    },
+    {
+      "key": "home-debt-to-income",
+      "id": "4cbefd92-450b-5e07-974e-eb45980ada94",
+      "title": "Debt to income",
+      "group": "Overview",
+      "kind": "chart",
+      "chart": "gauge",
+      "description": "Debt as a share of annualised income, with its status band.",
+      "periods": [],
+      "default_period": "all",
+      "tabs": [],
+      "controls": [],
+      "drills": [],
+      "sortable": null,
+      "home_slot": "panel"
+    },
+    {
+      "key": "kpi-net-worth",
+      "id": "95fc7a46-f7ec-5e37-96c9-05b936101489",
+      "title": "Net worth",
+      "group": "Overview",
+      "kind": "number",
+      "chart": null,
+      "description": "Assets minus liabilities, all non-deleted accounts.",
+      "periods": [],
+      "default_period": null,
+      "tabs": [],
+      "controls": [],
+      "drills": [],
+      "sortable": null,
+      "home_slot": "tile"
+    },
+    {
+      "key": "kpi-total-assets",
+      "id": "ffb23094-18f8-546b-89e2-c3f51754e1c8",
+      "title": "Total assets",
+      "group": "Overview",
+      "kind": "number",
+      "chart": null,
+      "description": "Asset and investment accounts.",
+      "periods": [],
+      "default_period": null,
+      "tabs": [],
+      "controls": [],
+      "drills": [],
+      "sortable": null,
+      "home_slot": "tile"
+    },
+    {
+      "key": "kpi-total-liabilities",
+      "id": "5c73af7f-1ed0-58ad-8102-c08728998b26",
+      "title": "Total liabilities",
+      "group": "Overview",
+      "kind": "number",
+      "chart": null,
+      "description": "Liability accounts (what you owe).",
+      "periods": [],
+      "default_period": null,
+      "tabs": [],
+      "controls": [],
+      "drills": [],
+      "sortable": null,
+      "home_slot": "tile"
+    },
+    {
+      "key": "kpi-total-debt",
+      "id": "a24a8c6c-f46f-59a5-ab47-1e9545a72cc0",
+      "title": "Total debt",
+      "group": "Overview",
+      "kind": "number",
+      "chart": null,
+      "description": "Outstanding debt across liability accounts.",
+      "periods": [],
+      "default_period": null,
+      "tabs": [],
+      "controls": [],
+      "drills": [],
+      "sortable": null,
+      "home_slot": "tile"
+    },
+    {
+      "key": "kpi-monthly-income",
+      "id": "908b6ea5-1258-5efe-bc2b-b792ef810433",
+      "title": "Monthly income",
+      "group": "Overview",
+      "kind": "number",
+      "chart": null,
+      "description": "Average income over complete months.",
+      "periods": [],
+      "default_period": null,
+      "tabs": [],
+      "controls": [],
+      "drills": [],
+      "sortable": null,
+      "home_slot": "tile"
+    },
+    {
+      "key": "kpi-annualised-income",
+      "id": "11731ea5-05da-5b56-bd41-5e09ce395b13",
+      "title": "Annualised income",
+      "group": "Overview",
+      "kind": "number",
+      "chart": null,
+      "description": "Monthly income × 12.",
+      "periods": [],
+      "default_period": null,
+      "tabs": [],
+      "controls": [],
+      "drills": [],
+      "sortable": null,
+      "home_slot": "tile"
+    },
+    {
+      "key": "kpi-spend-this-month",
+      "id": "00518be9-441b-5d23-86fd-dd62c6a561a4",
+      "title": "Spending this month",
+      "group": "Overview",
+      "kind": "number",
+      "chart": null,
+      "description": "Money out this calendar month to date.",
+      "periods": [],
+      "default_period": null,
+      "tabs": [],
+      "controls": [],
+      "drills": [],
+      "sortable": null,
+      "home_slot": "tile"
+    },
+    {
+      "key": "kpi-savings-rate-this-month",
+      "id": "36a8f4a9-d7d2-5c0d-bba1-45c216efd17f",
+      "title": "Savings rate this month",
+      "group": "Overview",
+      "kind": "number",
+      "chart": null,
+      "description": "(Income − spending) ÷ income, this month to date.",
+      "periods": [],
+      "default_period": null,
+      "tabs": [],
+      "controls": [],
+      "drills": [],
+      "sortable": null,
+      "home_slot": "tile"
+    },
+    {
+      "key": "kpi-debt-to-income",
+      "id": "e5e9084b-6bce-5571-a0c3-fc0c891374bf",
+      "title": "Debt to income",
+      "group": "Overview",
+      "kind": "number",
+      "chart": null,
+      "description": "Debt ÷ annualised income, with its status band.",
+      "periods": [],
+      "default_period": null,
+      "tabs": [],
+      "controls": [],
+      "drills": [],
+      "sortable": null,
+      "home_slot": "tile"
+    },
+    {
+      "key": "kpi-liquid-cash",
+      "id": "9ad81e9a-a7ed-5b0a-9459-63c2f6df8761",
+      "title": "Liquid cash",
+      "group": "Overview",
+      "kind": "number",
+      "chart": null,
+      "description": "Balances of deposit accounts.",
+      "periods": [],
+      "default_period": null,
+      "tabs": [],
+      "controls": [],
+      "drills": [],
+      "sortable": null,
+      "home_slot": "tile"
+    },
+    {
+      "key": "kpi-debt-free",
+      "id": "97afefee-8a53-5929-a873-87375a55be49",
+      "title": "Debt-free in",
+      "group": "Overview",
+      "kind": "number",
+      "chart": null,
+      "description": "Months to clear debt at the current pace of repayment.",
+      "periods": [],
+      "default_period": null,
+      "tabs": [],
+      "controls": [],
+      "drills": [],
+      "sortable": null,
+      "home_slot": "tile"
+    },
+    {
+      "key": "kpi-recurring-monthly",
+      "id": "d74d4496-259f-54b1-b239-b6c981cca155",
+      "title": "Recurring payments per month",
+      "group": "Overview",
+      "kind": "number",
+      "chart": null,
+      "description": "Monthly equivalent of detected recurring payments.",
+      "periods": [],
+      "default_period": null,
+      "tabs": [],
+      "controls": [],
+      "drills": [],
+      "sortable": null,
+      "home_slot": "tile"
+    },
+    {
+      "key": "00-earn-burn-rate",
+      "id": "aec2f065-9542-58c5-a81f-d706bb85baf6",
+      "title": "Income, expense and savings",
+      "group": "Cash flow",
+      "kind": "chart",
+      "chart": "line",
+      "description": "Trailing-average income, expense and savings per day.",
+      "periods": [
+        "last_3",
+        "last_6",
+        "last_12",
+        "ytd",
+        "last_year"
+      ],
+      "default_period": "last_3",
+      "tabs": [],
+      "controls": [
+        {
+          "param": "window",
+          "label": "Smoothing",
+          "values": [
+            7,
+            14,
+            30,
+            90
+          ],
+          "default": 30
+        }
+      ],
+      "drills": [],
+      "sortable": null,
+      "home_slot": "panel"
+    },
+    {
+      "key": "19-cashflow-waterfall",
+      "id": "1ed3dfe2-b96c-5c63-b4ff-68780da03f8c",
+      "title": "Cash flow waterfall",
+      "group": "Cash flow",
+      "kind": "chart",
+      "chart": "waterfall",
+      "description": "Opening net worth, income, spending by category and closing net worth.",
+      "periods": [
+        "this_week",
+        "last_week",
+        "last_7",
+        "last_30",
+        "last_60",
+        "last_90",
+        "this_month",
+        "last_month",
+        "last_3",
+        "last_6",
+        "last_12",
+        "this_quarter",
+        "last_quarter",
+        "ytd",
+        "last_year"
+      ],
+      "default_period": "this_month",
+      "tabs": [],
+      "controls": [],
+      "drills": [
+        {
+          "param": "major",
+          "published": "query_only"
+        }
+      ],
+      "sortable": null,
+      "home_slot": "panel"
+    },
+    {
+      "key": "20-savings-rate",
+      "id": "e2aaf4c7-ddaa-5ee6-a7d3-cb902d45703b",
+      "title": "Savings rate",
+      "group": "Cash flow",
+      "kind": "chart",
+      "chart": "mixed",
+      "description": "Share of income saved each month.",
+      "periods": [
+        "this_week",
+        "last_week",
+        "last_7",
+        "last_30",
+        "last_60",
+        "last_90",
+        "this_month",
+        "last_month",
+        "last_3",
+        "last_6",
+        "last_12",
+        "this_quarter",
+        "last_quarter",
+        "ytd",
+        "last_year"
+      ],
+      "default_period": "last_12",
+      "tabs": [],
+      "controls": [],
+      "drills": [],
+      "sortable": null,
+      "home_slot": "panel"
+    },
+    {
+      "key": "21-income-sources",
+      "id": "f45977d2-582e-5701-854a-5a546b6bcda0",
+      "title": "Income sources",
+      "group": "Cash flow",
+      "kind": "chart",
+      "chart": "donut",
+      "description": "Where your income comes from.",
+      "periods": [
+        "this_week",
+        "last_week",
+        "last_7",
+        "last_30",
+        "last_60",
+        "last_90",
+        "this_month",
+        "last_month",
+        "last_3",
+        "last_6",
+        "last_12",
+        "this_quarter",
+        "last_quarter",
+        "ytd",
+        "last_year"
+      ],
+      "default_period": "last_12",
+      "tabs": [
+        {
+          "key": "source",
+          "label": "By source"
+        },
+        {
+          "key": "category",
+          "label": "By category"
+        },
+        {
+          "key": "trend",
+          "label": "Trend"
+        }
+      ],
+      "controls": [],
+      "drills": [
+        {
+          "param": "source",
+          "published": "query_only"
+        },
+        {
+          "param": "major",
+          "published": "query_only"
+        }
+      ],
+      "sortable": null,
+      "home_slot": "panel"
+    },
+    {
+      "key": "29-daily-spend",
+      "id": "1fb6c503-813b-59bd-98e8-d28404927480",
+      "title": "Daily spend",
+      "group": "Cash flow",
+      "kind": "chart",
+      "chart": "bar",
+      "description": "Money out per day, all categories.",
+      "periods": [
+        "last_7",
+        "last_30",
+        "last_60",
+        "last_90",
+        "this_month",
+        "last_month"
+      ],
+      "default_period": "last_30",
+      "tabs": [],
+      "controls": [],
+      "drills": [
+        {
+          "param": "date",
+          "published": "query_only"
+        }
+      ],
+      "sortable": null,
+      "home_slot": "panel"
+    },
+    {
+      "key": "30-daily-spend-no-payments",
+      "id": "d76763e0-a133-5463-a19b-27ea7e8aeb41",
+      "title": "Daily spend without payments",
+      "group": "Cash flow",
+      "kind": "chart",
+      "chart": "bar",
+      "description": "Money out per day, excluding subscription-eligible categories.",
+      "periods": [
+        "last_7",
+        "last_30",
+        "last_60",
+        "last_90",
+        "this_month",
+        "last_month"
+      ],
+      "default_period": "last_30",
+      "tabs": [],
+      "controls": [],
+      "drills": [
+        {
+          "param": "date",
+          "published": "query_only"
+        }
+      ],
+      "sortable": null,
+      "home_slot": "panel"
+    },
+    {
+      "key": "01-mom-cumulative",
+      "id": "e4640482-c40e-5024-a864-c93ec3b44fce",
+      "title": "Month on month",
+      "group": "Comparisons",
+      "kind": "chart",
+      "chart": "line",
+      "description": "Cumulative spend through the month vs the previous month.",
+      "periods": [
+        "this_month",
+        "last_month"
+      ],
+      "default_period": "this_month",
+      "tabs": [
+        {
+          "key": "transactions",
+          "label": "Transactions"
+        },
+        {
+          "key": "accounts",
+          "label": "Accounts"
+        }
+      ],
+      "controls": [],
+      "drills": [],
+      "sortable": null,
+      "home_slot": "panel"
+    },
+    {
+      "key": "02-yoy-monthly",
+      "id": "9a1802f5-1c43-5e1e-8459-8998f361a49f",
+      "title": "Year on year",
+      "group": "Comparisons",
+      "kind": "chart",
+      "chart": "line",
+      "description": "Monthly spend vs the same months last year.",
+      "periods": [
+        "this_month",
+        "last_month",
+        "ytd",
+        "last_year"
+      ],
+      "default_period": "ytd",
+      "tabs": [
+        {
+          "key": "transactions",
+          "label": "Transactions"
+        },
+        {
+          "key": "accounts",
+          "label": "Accounts"
+        }
+      ],
+      "controls": [],
+      "drills": [],
+      "sortable": null,
+      "home_slot": "panel"
+    },
+    {
+      "key": "03-wow-daily",
+      "id": "1ee2390c-5d28-53e4-a2da-0cab87b27fbb",
+      "title": "Week on week",
+      "group": "Comparisons",
+      "kind": "chart",
+      "chart": "line",
+      "description": "Daily spend this week vs last week.",
+      "periods": [
+        "this_week",
+        "last_week",
+        "last_7"
+      ],
+      "default_period": "this_week",
+      "tabs": [
+        {
+          "key": "transactions",
+          "label": "Transactions"
+        },
+        {
+          "key": "accounts",
+          "label": "Accounts"
+        }
+      ],
+      "controls": [],
+      "drills": [],
+      "sortable": null,
+      "home_slot": "panel"
+    },
+    {
+      "key": "04-qtd-comparison",
+      "id": "3296d1ae-bd5f-5d0b-b031-aec0cedd599a",
+      "title": "Quarter to date",
+      "group": "Comparisons",
+      "kind": "chart",
+      "chart": "line",
+      "description": "Spend so far this quarter vs the same days of the previous quarter.",
+      "periods": [
+        "this_quarter",
+        "last_quarter"
+      ],
+      "default_period": "this_quarter",
+      "tabs": [
+        {
+          "key": "transactions",
+          "label": "Transactions"
+        },
+        {
+          "key": "accounts",
+          "label": "Accounts"
+        }
+      ],
+      "controls": [],
+      "drills": [],
+      "sortable": null,
+      "home_slot": "panel"
+    },
+    {
+      "key": "05-ytd-comparison",
+      "id": "c45ba5d5-5dfb-5939-8515-8aa9b7eb2d46",
+      "title": "Year to date",
+      "group": "Comparisons",
+      "kind": "chart",
+      "chart": "line",
+      "description": "Monthly cumulative spend this year vs last year.",
+      "periods": [
+        "ytd",
+        "last_year"
+      ],
+      "default_period": "ytd",
+      "tabs": [
+        {
+          "key": "transactions",
+          "label": "Transactions"
+        },
+        {
+          "key": "accounts",
+          "label": "Accounts"
+        }
+      ],
+      "controls": [],
+      "drills": [],
+      "sortable": null,
+      "home_slot": "panel"
+    },
+    {
+      "key": "06-last-12-months",
+      "id": "8a3d9379-e8c0-54ff-b68f-9f48435a4cdb",
+      "title": "Last 12 months",
+      "group": "Comparisons",
+      "kind": "chart",
+      "chart": "mixed",
+      "description": "Income, expenses and net per month.",
+      "periods": [],
+      "default_period": "last_12",
+      "tabs": [
+        {
+          "key": "transactions",
+          "label": "Transactions"
+        },
+        {
+          "key": "accounts",
+          "label": "Accounts"
+        }
+      ],
+      "controls": [],
+      "drills": [],
+      "sortable": null,
+      "home_slot": "panel"
+    },
+    {
+      "key": "07-last-8-weeks",
+      "id": "449c4186-1837-55a0-a1bc-b2e6291ff768",
+      "title": "Last 8 weeks",
+      "group": "Comparisons",
+      "kind": "chart",
+      "chart": "bar",
+      "description": "Weekly income and expenses.",
+      "periods": [],
+      "default_period": null,
+      "tabs": [],
+      "controls": [],
+      "drills": [],
+      "sortable": null,
+      "home_slot": "panel"
+    },
+    {
+      "key": "08-category-pie",
+      "id": "533152a9-c187-5de6-a443-48d6e4106555",
+      "title": "Spending by category",
+      "group": "Categories and tags",
+      "kind": "chart",
+      "chart": "donut",
+      "description": "How spending splits across categories.",
+      "periods": [
+        "this_week",
+        "last_week",
+        "last_7",
+        "last_30",
+        "last_60",
+        "last_90",
+        "this_month",
+        "last_month",
+        "last_3",
+        "last_6",
+        "last_12",
+        "this_quarter",
+        "last_quarter",
+        "ytd",
+        "last_year"
+      ],
+      "default_period": "this_month",
+      "tabs": [],
+      "controls": [],
+      "drills": [
+        {
+          "param": "major",
+          "published": "query_only"
+        }
+      ],
+      "sortable": null,
+      "home_slot": "panel"
+    },
+    {
+      "key": "09-category-trend",
+      "id": "79dbbbd1-92a9-553a-b854-a10a8f820957",
+      "title": "Category trend",
+      "group": "Categories and tags",
+      "kind": "chart",
+      "chart": "stacked",
+      "description": "Monthly spend per category.",
+      "periods": [
+        "this_week",
+        "last_week",
+        "last_7",
+        "last_30",
+        "last_60",
+        "last_90",
+        "this_month",
+        "last_month",
+        "last_3",
+        "last_6",
+        "last_12",
+        "this_quarter",
+        "last_quarter",
+        "ytd",
+        "last_year"
+      ],
+      "default_period": "last_6",
+      "tabs": [],
+      "controls": [],
+      "drills": [],
+      "sortable": null,
+      "home_slot": "panel"
+    },
+    {
+      "key": "10-top-categories",
+      "id": "16f3aab0-ca56-5d50-a9ab-5c077236389f",
+      "title": "Top categories",
+      "group": "Categories and tags",
+      "kind": "chart",
+      "chart": "hbar",
+      "description": "Highest-spending categories vs the previous period.",
+      "periods": [
+        "this_week",
+        "last_week",
+        "last_7",
+        "last_30",
+        "last_60",
+        "last_90",
+        "this_month",
+        "last_month",
+        "last_3",
+        "last_6",
+        "last_12",
+        "this_quarter",
+        "last_quarter",
+        "ytd",
+        "last_year"
+      ],
+      "default_period": "this_month",
+      "tabs": [],
+      "controls": [],
+      "drills": [],
+      "sortable": null,
+      "home_slot": "panel"
+    },
+    {
+      "key": "11-category-drilldown",
+      "id": "45e57f3c-9242-5585-b0f5-17ecb105d5e6",
+      "title": "Category drill-down",
+      "group": "Categories and tags",
+      "kind": "chart",
+      "chart": "hbar",
+      "description": "Categories, then their sub-categories.",
+      "periods": [
+        "this_week",
+        "last_week",
+        "last_7",
+        "last_30",
+        "last_60",
+        "last_90",
+        "this_month",
+        "last_month",
+        "last_3",
+        "last_6",
+        "last_12",
+        "this_quarter",
+        "last_quarter",
+        "ytd",
+        "last_year"
+      ],
+      "default_period": "this_month",
+      "tabs": [],
+      "controls": [],
+      "drills": [
+        {
+          "param": "major",
+          "published": "aggregate",
+          "mode": "replace"
+        },
+        {
+          "param": "minor",
+          "published": "query_only"
+        }
+      ],
+      "sortable": null,
+      "home_slot": "panel"
+    },
+    {
+      "key": "12-tag-pie",
+      "id": "45c7f6d6-d809-55d3-88fc-c937dc290b25",
+      "title": "Spending by tag",
+      "group": "Categories and tags",
+      "kind": "chart",
+      "chart": "donut",
+      "description": "How tagged spending is distributed.",
+      "periods": [
+        "this_week",
+        "last_week",
+        "last_7",
+        "last_30",
+        "last_60",
+        "last_90",
+        "this_month",
+        "last_month",
+        "last_3",
+        "last_6",
+        "last_12",
+        "this_quarter",
+        "last_quarter",
+        "ytd",
+        "last_year"
+      ],
+      "default_period": "this_month",
+      "tabs": [],
+      "controls": [],
+      "drills": [
+        {
+          "param": "tag",
+          "published": "query_only"
+        }
+      ],
+      "sortable": null,
+      "home_slot": "panel"
+    },
+    {
+      "key": "13-tag-trend",
+      "id": "0068ae34-4bb2-5e0a-a96f-5df6b5099488",
+      "title": "Tag trend",
+      "group": "Categories and tags",
+      "kind": "chart",
+      "chart": "line",
+      "description": "Monthly spend per tag.",
+      "periods": [
+        "this_week",
+        "last_week",
+        "last_7",
+        "last_30",
+        "last_60",
+        "last_90",
+        "this_month",
+        "last_month",
+        "last_3",
+        "last_6",
+        "last_12",
+        "this_quarter",
+        "last_quarter",
+        "ytd",
+        "last_year"
+      ],
+      "default_period": "last_6",
+      "tabs": [],
+      "controls": [],
+      "drills": [
+        {
+          "param": "month",
+          "published": "aggregate"
+        },
+        {
+          "param": "tag",
+          "published": "aggregate"
+        }
+      ],
+      "sortable": null,
+      "home_slot": "panel"
+    },
+    {
+      "key": "14-networth-trend",
+      "id": "2313a5bc-427c-589a-ba76-74af59c4285a",
+      "title": "Net worth trend",
+      "group": "Net worth and debt",
+      "kind": "chart",
+      "chart": "line",
+      "description": "Net worth at each month end.",
+      "periods": [
+        "this_week",
+        "last_week",
+        "last_7",
+        "last_30",
+        "last_60",
+        "last_90",
+        "this_month",
+        "last_month",
+        "last_3",
+        "last_6",
+        "last_12",
+        "this_quarter",
+        "last_quarter",
+        "ytd",
+        "last_year"
+      ],
+      "default_period": "last_12",
+      "tabs": [],
+      "controls": [],
+      "drills": [
+        {
+          "param": "date",
+          "published": "aggregate"
+        }
+      ],
+      "sortable": null,
+      "home_slot": "panel"
+    },
+    {
+      "key": "15-account-balances",
+      "id": "6bd2bd33-5158-5965-a57a-9fbca11d24a3",
+      "title": "Account balances",
+      "group": "Net worth and debt",
+      "kind": "chart",
+      "chart": "hbar",
+      "description": "Current balance of every account, by type.",
+      "periods": [],
+      "default_period": null,
+      "tabs": [],
+      "controls": [],
+      "drills": [],
+      "sortable": null,
+      "home_slot": "panel"
+    },
+    {
+      "key": "16-asset-vs-liability",
+      "id": "e32f4cb9-4f50-5030-add4-579a757dd5ea",
+      "title": "Assets vs liabilities",
+      "group": "Net worth and debt",
+      "kind": "chart",
+      "chart": "area",
+      "description": "Total assets and liabilities over time.",
+      "periods": [
+        "this_week",
+        "last_week",
+        "last_7",
+        "last_30",
+        "last_60",
+        "last_90",
+        "this_month",
+        "last_month",
+        "last_3",
+        "last_6",
+        "last_12",
+        "this_quarter",
+        "last_quarter",
+        "ytd",
+        "last_year"
+      ],
+      "default_period": "last_12",
+      "tabs": [],
+      "controls": [],
+      "drills": [],
+      "sortable": null,
+      "home_slot": "panel"
+    },
+    {
+      "key": "17-liability-paydown",
+      "id": "b07e24bf-d9af-58fc-9fb5-d7e5c6538b05",
+      "title": "Liability paydown",
+      "group": "Net worth and debt",
+      "kind": "chart",
+      "chart": "line",
+      "description": "What you owe on each liability over time.",
+      "periods": [
+        "this_week",
+        "last_week",
+        "last_7",
+        "last_30",
+        "last_60",
+        "last_90",
+        "this_month",
+        "last_month",
+        "last_3",
+        "last_6",
+        "last_12",
+        "this_quarter",
+        "last_quarter",
+        "ytd",
+        "last_year"
+      ],
+      "default_period": "last_12",
+      "tabs": [],
+      "controls": [],
+      "drills": [],
+      "sortable": null,
+      "home_slot": "panel"
+    },
+    {
+      "key": "26-loan-progress",
+      "id": "f4faf970-9e3e-5585-b011-fbd67f2d8ef8",
+      "title": "Loan progress",
+      "group": "Net worth and debt",
+      "kind": "chart",
+      "chart": "table",
+      "description": "Repayment progress of each loan.",
+      "periods": [],
+      "default_period": null,
+      "tabs": [],
+      "controls": [],
+      "drills": [
+        {
+          "param": "account",
+          "published": "aggregate"
+        }
+      ],
+      "sortable": null,
+      "home_slot": "panel"
+    },
+    {
+      "key": "27-debt-to-income",
+      "id": "84a3fdb2-0140-52ac-801a-d25fa34c6d9a",
+      "title": "Debt to income trend",
+      "group": "Net worth and debt",
+      "kind": "chart",
+      "chart": "gauge",
+      "description": "Debt-to-income over time against common thresholds.",
+      "periods": [
+        "this_week",
+        "last_week",
+        "last_7",
+        "last_30",
+        "last_60",
+        "last_90",
+        "this_month",
+        "last_month",
+        "last_3",
+        "last_6",
+        "last_12",
+        "this_quarter",
+        "last_quarter",
+        "ytd",
+        "last_year"
+      ],
+      "default_period": "last_12",
+      "tabs": [
+        {
+          "key": "transactions",
+          "label": "Income trend"
+        },
+        {
+          "key": "accounts",
+          "label": "DTI ratio"
+        }
+      ],
+      "controls": [],
+      "drills": [],
+      "sortable": null,
+      "home_slot": "panel"
+    },
+    {
+      "key": "22-top-counterparties",
+      "id": "99ceb7bf-ab89-502b-a127-9f49b420fcc8",
+      "title": "Top payees",
+      "group": "Payees and places",
+      "kind": "chart",
+      "chart": "hbar",
+      "description": "Where you spend the most.",
+      "periods": [
+        "this_week",
+        "last_week",
+        "last_7",
+        "last_30",
+        "last_60",
+        "last_90",
+        "this_month",
+        "last_month",
+        "last_3",
+        "last_6",
+        "last_12",
+        "this_quarter",
+        "last_quarter",
+        "ytd",
+        "last_year"
+      ],
+      "default_period": "last_3",
+      "tabs": [],
+      "controls": [
+        {
+          "param": "top_n",
+          "label": "Show",
+          "values": [
+            10,
+            15,
+            20
+          ],
+          "default": 15
+        }
+      ],
+      "drills": [
+        {
+          "param": "counterparty",
+          "published": "aggregate"
+        }
+      ],
+      "sortable": null,
+      "home_slot": "panel"
+    },
+    {
+      "key": "23-recurring-payments",
+      "id": "38c31b37-830a-54ea-8005-5a5675724504",
+      "title": "Recurring payments",
+      "group": "Payees and places",
+      "kind": "chart",
+      "chart": "table",
+      "description": "Payees you pay regularly.",
+      "periods": [
+        "this_week",
+        "last_week",
+        "last_7",
+        "last_30",
+        "last_60",
+        "last_90",
+        "this_month",
+        "last_month",
+        "last_3",
+        "last_6",
+        "last_12",
+        "this_quarter",
+        "last_quarter",
+        "ytd",
+        "last_year"
+      ],
+      "default_period": "last_6",
+      "tabs": [],
+      "controls": [],
+      "drills": [
+        {
+          "param": "counterparty",
+          "published": "aggregate"
+        }
+      ],
+      "sortable": {
+        "columns": [
+          "counterparty",
+          "category",
+          "frequency",
+          "amount",
+          "last_date"
+        ],
+        "default": {
+          "col": "amount",
+          "dir": "desc"
+        }
+      },
+      "home_slot": "panel"
+    },
+    {
+      "key": "24-spend-by-country",
+      "id": "435e0bf3-0384-5107-bec1-5ba02e56ca28",
+      "title": "Spend by country",
+      "group": "Payees and places",
+      "kind": "chart",
+      "chart": "hbar",
+      "description": "Spending by country.",
+      "periods": [
+        "this_week",
+        "last_week",
+        "last_7",
+        "last_30",
+        "last_60",
+        "last_90",
+        "this_month",
+        "last_month",
+        "last_3",
+        "last_6",
+        "last_12",
+        "this_quarter",
+        "last_quarter",
+        "ytd",
+        "last_year"
+      ],
+      "default_period": "last_12",
+      "tabs": [],
+      "controls": [],
+      "drills": [
+        {
+          "param": "country",
+          "published": "aggregate"
+        }
+      ],
+      "sortable": null,
+      "home_slot": "panel"
+    },
+    {
+      "key": "25-spend-by-city",
+      "id": "e3e7776d-c6cc-52a9-b9f6-a9b8bbf7ce46",
+      "title": "Spend by city",
+      "group": "Payees and places",
+      "kind": "chart",
+      "chart": "hbar",
+      "description": "Spending by city, home country vs abroad.",
+      "periods": [
+        "this_week",
+        "last_week",
+        "last_7",
+        "last_30",
+        "last_60",
+        "last_90",
+        "this_month",
+        "last_month",
+        "last_3",
+        "last_6",
+        "last_12",
+        "this_quarter",
+        "last_quarter",
+        "ytd",
+        "last_year"
+      ],
+      "default_period": "last_12",
+      "tabs": [],
+      "controls": [],
+      "drills": [
+        {
+          "param": "city",
+          "published": "query_only"
+        }
+      ],
+      "sortable": null,
+      "home_slot": "panel"
+    },
+    {
+      "key": "28-forex-spend",
+      "id": "aa5dfdc5-50d4-5bfd-9105-53f30b89f421",
+      "title": "Foreign currency spend",
+      "group": "Payees and places",
+      "kind": "chart",
+      "chart": "donut",
+      "description": "Spending by account currency.",
+      "periods": [
+        "this_week",
+        "last_week",
+        "last_7",
+        "last_30",
+        "last_60",
+        "last_90",
+        "this_month",
+        "last_month",
+        "last_3",
+        "last_6",
+        "last_12",
+        "this_quarter",
+        "last_quarter",
+        "ytd",
+        "last_year"
+      ],
+      "default_period": "last_12",
+      "tabs": [],
+      "controls": [],
+      "drills": [],
+      "sortable": null,
+      "home_slot": "panel"
+    },
+    {
+      "key": "dataset-accounts-summary",
+      "id": "ce8c55a5-5310-53d0-b2f6-a77ee37a175d",
+      "title": "Accounts summary",
+      "group": "Accounts",
+      "kind": "dataset",
+      "chart": null,
+      "description": "Assets, liabilities, net worth, liquid cash and totals per account type.",
+      "periods": [],
+      "default_period": null,
+      "tabs": [],
+      "controls": [],
+      "drills": [],
+      "sortable": null,
+      "home_slot": null
+    },
+    {
+      "key": "dataset-account-balances",
+      "id": "73218b69-e8e7-5f09-8baf-d4a80393f387",
+      "title": "Account balances",
+      "group": "Accounts",
+      "kind": "dataset",
+      "chart": null,
+      "description": "Current balance of every account, local and XAU.",
+      "periods": [],
+      "default_period": null,
+      "tabs": [],
+      "controls": [],
+      "drills": [],
+      "sortable": null,
+      "home_slot": null
+    }
+  ]
+}

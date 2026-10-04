@@ -1,0 +1,47 @@
+id,report_type,predefined_key,report_name,report_description,measure,period_preset,period_from,period_to,compare_mode,time_grain,group_by_1,group_by_2,top_n,include_other,filter_account_ids,filter_categories,filter_tags,filter_payees,filter_currencies,filter_countries,filter_tx_types,filter_amount_min,filter_amount_max,chart_kind,record_status
+91c00162-8dc8-544d-8d2e-949424a8068a,predefined,home-income-trend,Income trend,"Monthly income since your first transaction, with the peak month highlighted.",,,,,,,,,,,,,,,,,,,,,locked
+4cbefd92-450b-5e07-974e-eb45980ada94,predefined,home-debt-to-income,Debt to income,"Debt as a share of annualised income, with its status band.",,,,,,,,,,,,,,,,,,,,,locked
+95fc7a46-f7ec-5e37-96c9-05b936101489,predefined,kpi-net-worth,Net worth,"Assets minus liabilities, all non-deleted accounts.",,,,,,,,,,,,,,,,,,,,,locked
+ffb23094-18f8-546b-89e2-c3f51754e1c8,predefined,kpi-total-assets,Total assets,Asset and investment accounts.,,,,,,,,,,,,,,,,,,,,,locked
+5c73af7f-1ed0-58ad-8102-c08728998b26,predefined,kpi-total-liabilities,Total liabilities,Liability accounts (what you owe).,,,,,,,,,,,,,,,,,,,,,locked
+a24a8c6c-f46f-59a5-ab47-1e9545a72cc0,predefined,kpi-total-debt,Total debt,Outstanding debt across liability accounts.,,,,,,,,,,,,,,,,,,,,,locked
+908b6ea5-1258-5efe-bc2b-b792ef810433,predefined,kpi-monthly-income,Monthly income,Average income over complete months.,,,,,,,,,,,,,,,,,,,,,locked
+11731ea5-05da-5b56-bd41-5e09ce395b13,predefined,kpi-annualised-income,Annualised income,Monthly income × 12.,,,,,,,,,,,,,,,,,,,,,locked
+00518be9-441b-5d23-86fd-dd62c6a561a4,predefined,kpi-spend-this-month,Spending this month,Money out this calendar month to date.,,,,,,,,,,,,,,,,,,,,,locked
+36a8f4a9-d7d2-5c0d-bba1-45c216efd17f,predefined,kpi-savings-rate-this-month,Savings rate this month,"(Income − spending) ÷ income, this month to date.",,,,,,,,,,,,,,,,,,,,,locked
+e5e9084b-6bce-5571-a0c3-fc0c891374bf,predefined,kpi-debt-to-income,Debt to income,"Debt ÷ annualised income, with its status band.",,,,,,,,,,,,,,,,,,,,,locked
+9ad81e9a-a7ed-5b0a-9459-63c2f6df8761,predefined,kpi-liquid-cash,Liquid cash,Balances of deposit accounts.,,,,,,,,,,,,,,,,,,,,,locked
+97afefee-8a53-5929-a873-87375a55be49,predefined,kpi-debt-free,Debt-free in,Months to clear debt at the current pace of repayment.,,,,,,,,,,,,,,,,,,,,,locked
+d74d4496-259f-54b1-b239-b6c981cca155,predefined,kpi-recurring-monthly,Recurring payments per month,Monthly equivalent of detected recurring payments.,,,,,,,,,,,,,,,,,,,,,locked
+aec2f065-9542-58c5-a81f-d706bb85baf6,predefined,00-earn-burn-rate,"Income, expense and savings","Trailing-average income, expense and savings per day.",,,,,,,,,,,,,,,,,,,,,locked
+1ed3dfe2-b96c-5c63-b4ff-68780da03f8c,predefined,19-cashflow-waterfall,Cash flow waterfall,"Opening net worth, income, spending by category and closing net worth.",,,,,,,,,,,,,,,,,,,,,locked
+e2aaf4c7-ddaa-5ee6-a7d3-cb902d45703b,predefined,20-savings-rate,Savings rate,Share of income saved each month.,,,,,,,,,,,,,,,,,,,,,locked
+f45977d2-582e-5701-854a-5a546b6bcda0,predefined,21-income-sources,Income sources,Where your income comes from.,,,,,,,,,,,,,,,,,,,,,locked
+1fb6c503-813b-59bd-98e8-d28404927480,predefined,29-daily-spend,Daily spend,"Money out per day, all categories.",,,,,,,,,,,,,,,,,,,,,locked
+d76763e0-a133-5463-a19b-27ea7e8aeb41,predefined,30-daily-spend-no-payments,Daily spend without payments,"Money out per day, excluding subscription-eligible categories.",,,,,,,,,,,,,,,,,,,,,locked
+e4640482-c40e-5024-a864-c93ec3b44fce,predefined,01-mom-cumulative,Month on month,Cumulative spend through the month vs the previous month.,,,,,,,,,,,,,,,,,,,,,locked
+9a1802f5-1c43-5e1e-8459-8998f361a49f,predefined,02-yoy-monthly,Year on year,Monthly spend vs the same months last year.,,,,,,,,,,,,,,,,,,,,,locked
+1ee2390c-5d28-53e4-a2da-0cab87b27fbb,predefined,03-wow-daily,Week on week,Daily spend this week vs last week.,,,,,,,,,,,,,,,,,,,,,locked
+3296d1ae-bd5f-5d0b-b031-aec0cedd599a,predefined,04-qtd-comparison,Quarter to date,Spend so far this quarter vs the same days of the previous quarter.,,,,,,,,,,,,,,,,,,,,,locked
+c45ba5d5-5dfb-5939-8515-8aa9b7eb2d46,predefined,05-ytd-comparison,Year to date,Monthly cumulative spend this year vs last year.,,,,,,,,,,,,,,,,,,,,,locked
+8a3d9379-e8c0-54ff-b68f-9f48435a4cdb,predefined,06-last-12-months,Last 12 months,"Income, expenses and net per month.",,,,,,,,,,,,,,,,,,,,,locked
+449c4186-1837-55a0-a1bc-b2e6291ff768,predefined,07-last-8-weeks,Last 8 weeks,Weekly income and expenses.,,,,,,,,,,,,,,,,,,,,,locked
+533152a9-c187-5de6-a443-48d6e4106555,predefined,08-category-pie,Spending by category,How spending splits across categories.,,,,,,,,,,,,,,,,,,,,,locked
+79dbbbd1-92a9-553a-b854-a10a8f820957,predefined,09-category-trend,Category trend,Monthly spend per category.,,,,,,,,,,,,,,,,,,,,,locked
+16f3aab0-ca56-5d50-a9ab-5c077236389f,predefined,10-top-categories,Top categories,Highest-spending categories vs the previous period.,,,,,,,,,,,,,,,,,,,,,locked
+45e57f3c-9242-5585-b0f5-17ecb105d5e6,predefined,11-category-drilldown,Category drill-down,"Categories, then their sub-categories.",,,,,,,,,,,,,,,,,,,,,locked
+45c7f6d6-d809-55d3-88fc-c937dc290b25,predefined,12-tag-pie,Spending by tag,How tagged spending is distributed.,,,,,,,,,,,,,,,,,,,,,locked
+0068ae34-4bb2-5e0a-a96f-5df6b5099488,predefined,13-tag-trend,Tag trend,Monthly spend per tag.,,,,,,,,,,,,,,,,,,,,,locked
+2313a5bc-427c-589a-ba76-74af59c4285a,predefined,14-networth-trend,Net worth trend,Net worth at each month end.,,,,,,,,,,,,,,,,,,,,,locked
+6bd2bd33-5158-5965-a57a-9fbca11d24a3,predefined,15-account-balances,Account balances,"Current balance of every account, by type.",,,,,,,,,,,,,,,,,,,,,locked
+e32f4cb9-4f50-5030-add4-579a757dd5ea,predefined,16-asset-vs-liability,Assets vs liabilities,Total assets and liabilities over time.,,,,,,,,,,,,,,,,,,,,,locked
+b07e24bf-d9af-58fc-9fb5-d7e5c6538b05,predefined,17-liability-paydown,Liability paydown,What you owe on each liability over time.,,,,,,,,,,,,,,,,,,,,,locked
+f4faf970-9e3e-5585-b011-fbd67f2d8ef8,predefined,26-loan-progress,Loan progress,Repayment progress of each loan.,,,,,,,,,,,,,,,,,,,,,locked
+84a3fdb2-0140-52ac-801a-d25fa34c6d9a,predefined,27-debt-to-income,Debt to income trend,Debt-to-income over time against common thresholds.,,,,,,,,,,,,,,,,,,,,,locked
+99ceb7bf-ab89-502b-a127-9f49b420fcc8,predefined,22-top-counterparties,Top payees,Where you spend the most.,,,,,,,,,,,,,,,,,,,,,locked
+38c31b37-830a-54ea-8005-5a5675724504,predefined,23-recurring-payments,Recurring payments,Payees you pay regularly.,,,,,,,,,,,,,,,,,,,,,locked
+435e0bf3-0384-5107-bec1-5ba02e56ca28,predefined,24-spend-by-country,Spend by country,Spending by country.,,,,,,,,,,,,,,,,,,,,,locked
+e3e7776d-c6cc-52a9-b9f6-a9b8bbf7ce46,predefined,25-spend-by-city,Spend by city,"Spending by city, home country vs abroad.",,,,,,,,,,,,,,,,,,,,,locked
+aa5dfdc5-50d4-5bfd-9105-53f30b89f421,predefined,28-forex-spend,Foreign currency spend,Spending by account currency.,,,,,,,,,,,,,,,,,,,,,locked
+ce8c55a5-5310-53d0-b2f6-a77ee37a175d,predefined,dataset-accounts-summary,Accounts summary,"Assets, liabilities, net worth, liquid cash and totals per account type.",,,,,,,,,,,,,,,,,,,,,locked
+73218b69-e8e7-5f09-8baf-d4a80393f387,predefined,dataset-account-balances,Account balances,"Current balance of every account, local and XAU.",,,,,,,,,,,,,,,,,,,,,locked

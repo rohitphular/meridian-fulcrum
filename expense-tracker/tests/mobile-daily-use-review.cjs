@@ -104,7 +104,7 @@ test('an auth or locked answer to any view GET reopens the PIN gate; get_app_con
   ExpenseAPI.onAuthError(code => reopened.push(code));
   answers.push({ ok: false, error: 'auth' }, { ok: false, error: 'locked' }, { ok: false, error: 'invalid_page' }, { ok: false, error: 'auth' }, { ok: false, error: 'auth' });
   assert.equal((await ExpenseAPI.view('list_transactions_view', { page: 2 })).error, 'auth');
-  await ExpenseAPI.view('get_insight', { id: '29-daily-spend' });
+  await ExpenseAPI.view('get_report', { id: '00000000-0000-4000-8000-000000000000' });
   await ExpenseAPI.view('list_accounts_view');
   await ExpenseAPI.getSuggestedTransactions();
   assert.equal((await ExpenseAPI.getAppContext()).error, 'auth');
@@ -261,10 +261,10 @@ test('late suggestions update only their panel and retain the active transaction
   assert.equal(form.innerHTML, 'keep');
 });
 
-test('mobile delete cards contain confirmation actions including blocked account and rate deletions', () => {
-  // Open confirmations hold record ids (accounts / categories) or the currency (rates).
+test('mobile delete cards contain confirmation actions including blocked account deletions; rate cards are read-only', () => {
+  // Open confirmations hold record ids (accounts / categories); rates have no actions.
   const state = { accDeleteRow: 'a', accDeleteBlocked: { referenced_count: 1 }, quoteCurrency: 'GBP',
-    catDeleteRow: 'c', rateDeleteCurrency: 'USD', rateDeleteBlocked: { error: 'currency_in_use_by_accounts', referenced_count: 1 } };
+    catDeleteRow: 'c' };
   // Accounts and rates render their server view models (list_accounts_view / list_rates_view).
   const accountRow = { row_num: 2, id: 'a', type: 'asset', account_name: '<Bank>', description: '', sub_type_label: 'Current', currency: 'GBP', currency_symbol: '£',
     balance: { native: 10, quote: 10, display_sign: 'positive', is_foreign: false }, record_status: 'active', sync_status: '', allowed_actions: ['view', 'edit', 'transactions', 'delete'] };
@@ -278,13 +278,12 @@ test('mobile delete cards contain confirmation actions including blocked account
   assert.match(categoryHtml, /<div class="cat-cards">[\s\S]*cat-confirm-delete/);
   assert.doesNotMatch(categoryHtml, /<Lunch>|cat-has-active/);
   const rateContent = { innerHTML: '' };
-  state.views = { list_rates_view: { ok: true, data: { rows: [{ currency: 'USD', symbol: '$', rate: 97.7, rate_label: '97.70', updated_at: '', is_base: false, allowed_actions: ['edit', 'delete'], used_by_accounts: ['<Brokerage>'] }] } } };
-  const rates = load('app/sections/rates.js', { state, el: id => (id === 'ratesContent' ? rateContent : null), closeContextMenu() {},
-    showLoading() {}, hideLoading() {}, ExpenseAPI: { view: () => new Promise(() => {}) } }, ['renderRates'], '_attachRateEvents = () => {};');
+  state.views = { list_rates_view: { ok: true, data: { rows: [{ currency: 'USD', symbol: '$', rate: 97.7, rate_label: '97.70', rate_date: '2026-10-03', updated_at: '', is_base: false, readonly: true, allowed_actions: [], used_by_accounts: ['<Brokerage>'] }] } } };
+  const rates = load('app/sections/rates.js', { state, el: id => (id === 'ratesContent' ? rateContent : null),
+    showLoading() {}, hideLoading() {}, ExpenseAPI: { view: () => new Promise(() => {}) } }, ['renderRates']);
   rates.renderRates();
-  assert.match(rateContent.innerHTML, /<div class="rate-cards">[\s\S]*record-confirm-card[\s\S]*rate-cancel-delete/);
-  assert.match(rateContent.innerHTML, /used by: <strong>&lt;Brokerage&gt;<\/strong>/);
-  assert.doesNotMatch(rateContent.innerHTML, /rate-has-active/);
+  assert.match(rateContent.innerHTML, /<div class="rate-cards">[\s\S]*rate-card-code">USD/);
+  assert.doesNotMatch(rateContent.innerHTML, /record-confirm-card|rate-menu|data-action/);
 });
 
 // Insights / Home rendering from server payloads: home-insights-frontend.cjs.

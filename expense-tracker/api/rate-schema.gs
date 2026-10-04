@@ -2,13 +2,11 @@
 // FULCRUM FORGE — Rate schema: column definitions and helpers
 // GAS global scope — referenced by rate-core.gs and rate-validation.gs
 //
-// NOTE — intentional schema differences from other entities:
-//   • No `record_status` — rates are upserted/deleted, not soft-deleted.
-//   • No `sync_status`   — rates are not individually synced to an external
-//       system; the whole rates table is managed via the UI only.
-//   • No `created_at`    — row creation time is not tracked; updated_at covers
-//       the most recent change.
-// These omissions are by design and must not be added without a sheet migration.
+// The rates tab is owned by forex-database-load (mode publish-sheet), which
+// rewrites it from PostgreSQL: latest rate per currency (units per gram of XAU),
+// symbol, publish time (updated_at) and the rate's own date (rate_date). The app
+// only reads it; nothing in GAS edits rates. Hence no record_status, sync_status
+// or created_at columns.
 // =============================================================================
 
 const RATE_SCHEMA = {
@@ -34,7 +32,7 @@ const RATE_SCHEMA = {
     group:                 'core',
     applies_to:            null,
     required_for:          null,
-    editable:              true,
+    editable:              false,
     default_value:         null,
   },
   symbol: {
@@ -46,7 +44,7 @@ const RATE_SCHEMA = {
     group:                 'core',
     applies_to:            null,
     required_for:          [],
-    editable:              true,
+    editable:              false,
     default_value:         '',
   },
   updated_at: {
@@ -54,6 +52,18 @@ const RATE_SCHEMA = {
     sheet_column_position: 4,
     ui_label:              'Updated At',
     type:                  'datetime',
+    enum_values:           null,
+    group:                 'core',
+    applies_to:            null,
+    required_for:          [],
+    editable:              false,
+    default_value:         null,
+  },
+  rate_date: {
+    sheet_column_name:     'rate_date',
+    sheet_column_position: 5,
+    ui_label:              'Rate date',
+    type:                  'date',
     enum_values:           null,
     group:                 'core',
     applies_to:            null,

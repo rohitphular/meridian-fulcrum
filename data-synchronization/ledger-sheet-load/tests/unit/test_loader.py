@@ -90,7 +90,9 @@ def test_files_load_in_dependency_order_with_transactions_last_by_name(data_dir:
     assert loads[1] == ("create_categories_bulk", "")
     assert loads[2] == ("import_account_data", "account_master")
     assert loads[9] == ("create_subscriptions_bulk", "")
-    assert loads[10:] == [("create_transactions_bulk", ""), ("create_transactions_bulk", "")]
+    # Report configuration after the accounts and categories its filters refer to.
+    assert loads[10:12] == [("create_reports_bulk", ""), ("import_dashboard_layout", "")]
+    assert loads[12:] == [("create_transactions_bulk", ""), ("create_transactions_bulk", "")]
     assert len(loads) == len(_FIXED_FILES) + 2
 
 

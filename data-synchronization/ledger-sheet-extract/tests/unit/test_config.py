@@ -45,3 +45,8 @@ def test_every_master_must_be_listed(missing: str) -> None:
     del settings["entities"][missing]
     with pytest.raises(ValueError, match=f"^missing_entity_configuration:{missing}$"):
         config.enabled_tabs(settings)
+
+
+def test_report_master_is_staged_for_the_load() -> None:
+    # ledger-database-load has a report_master contract, so the tab is staged with the others.
+    assert "report_master" in config.enabled_tabs(config.load_config())

@@ -205,3 +205,21 @@ def test_write_with_retry_replans_before_every_attempt(monkeypatch: pytest.Monke
 
 def test_cell_range_addresses_one_cell() -> None:
     assert cell_range("account_master", 3, 4, "in-sync") == {"range": "'account_master'!D3", "values": [["in-sync"]]}
+
+
+def test_report_master_stages_like_any_master_tab() -> None:
+    """Every column of the contract is staged; pre-built (locked) and user rows alike."""
+    import json
+    from pathlib import Path
+
+    contract = Path(__file__).resolve().parents[3] / "analytics" / "contract" / "report-definition.json"
+    headers = json.loads(contract.read_text())["columns"]
+    row = dict.fromkeys(headers, "")
+    row.update(id=IDENTITY, report_type="predefined", predefined_key="08-category-pie", report_name="Spending by category", record_status="locked", sync_status="create-pending")
+    client = _client()
+    client._ss.fetch_sheet_metadata.return_value = {"sheets": [{"properties": {"title": "report_master"}}]}
+    client._ss.values_batch_get.return_value = {"valueRanges": [{"values": [headers, [row[h] for h in headers]]}]}
+    client.capture(["report_master"])
+    staged_headers, rows = client.snapshot("report_master")
+    assert staged_headers == headers
+    assert rows[0]["predefined_key"] == "08-category-pie" and rows[0]["_sheet_row_num"] == 2

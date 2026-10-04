@@ -113,6 +113,10 @@ Fetches 365 calendar dates, from the current UTC date minus 364 days through tha
 
 Entry point: `core/runner.py`
 
+### Publish to Sheet (`publish-sheet`)
+
+Copies the latest rate of every currency in `currency_master` that has one into the app's `rates` tab: `currency`, `rate` (units per gram of XAU), `symbol`, `updated_at` (publish time, UTC) and `rate_date`. XAU comes first, then `currency_rank`. One write replaces the tab (created if missing) and clears older rows below; values are written RAW. The app only reads this tab. Run it after `daily` (the consolidated pipeline does). It needs `spreadsheet_id` in `cicd/envs.json` and `FDL_SERVICE_ACCOUNT_FILE` (a service-account key with Editor access to the spreadsheet) in `infrastructure/.env.<env>`; the check step fails with a clear message if either is missing. Requests go through the shared paced client (`py_google_workspace.SheetsRequests`: spaced requests, bounded 429 backoff).
+
 ### Historical (one-time backfill)
 
 Loads fiat rates from locally downloaded CSV files (one file per currency, downloaded manually from stooq in the original XAU/{CCY} format). Processes files in the same priority order as the daily job. Logs a warning for any missing files and skips them. When yfinance is enabled, fetches tracked crypto over the imported fiat date range through today, retaining actual source dates.
@@ -199,6 +203,7 @@ Unique constraint on `(quote_currency_code, rate_date)` — source upserts overw
 | `FULCRUM_DB_PASSWORD`        | Yes  | —      | Postgres password |
 | `FULCRUM_DB_NAME`            | Yes  | —      | Postgres database name |
 | `FDL_HISTORICAL_CSV_DIR` | Yes¹ | —      | Absolute path to the folder containing downloaded stooq CSV files |
+| `FDL_SERVICE_ACCOUNT_FILE` | publish-sheet | —      | Path to the service-account JSON key (Editor on the spreadsheet); the same key as `LSE_SERVICE_ACCOUNT_FILE` works |
 | `MERIDIAN_LOG_ROOT`     | Yes  | —      | Root directory for log output |
 
 ¹ Required only when running historical mode.

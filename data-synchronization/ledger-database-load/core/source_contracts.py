@@ -1,5 +1,6 @@
 """Current GAS sheet contract; regression-tested against its schema registry."""
 
+from core import report_contract
 from core.account_detail_contracts import CONTRACTS
 
 DETAIL_HEADERS = {name: contract.headers for name, contract in CONTRACTS.items()}
@@ -114,6 +115,8 @@ HEADERS = {
         "subscription_timezone_local",
     ),
     **DETAIL_HEADERS,
+    # report_master columns come from the report contract (same file as GAS and analytics).
+    "report_master": report_contract.columns(),
 }
 
 

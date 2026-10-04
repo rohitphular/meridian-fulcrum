@@ -1,265 +1,332 @@
-// Phase 4 (P4-A): home.js, the insights.js shell and insights/render-kinds.js
-// only render server payloads. The payloads are produced by the real GAS code
-// (get_home_view / get_insight on the view fixture), so this also checks the
-// client against the server contract.
+// Task 15: home.js (configurable dashboard) and the generic report renderer
+// (sections/reports/render-kinds.js + chart-theme.js) only render published
+// payloads. Payloads are published into mock Sheets exactly as the analytics
+// job lays them out and read back through the real GAS views (get_home_view,
+// get_dashboard_layout, get_report), so the client is checked against the
+// server contract. Nothing is computed in the browser.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const vm = require('node:vm');
 const { test } = require('node:test');
-const { gasRuntime } = require('./support/gas-runtime.cjs');
-const { ID, ACCOUNTS, seedViewFixture } = require('./support/view-fixture.cjs');
+const { ROOT, read, flush, plain, FakeChart, fakeDom, loadModules, appServer, loadApi, loadUtils } = require('./support/frontend-harness.cjs');
+const { publish, payload, predefinedId, CONTRACT } = require('./support/report-publish.cjs');
 
-const root = path.resolve(__dirname, '..');
-const read = file => fs.readFileSync(path.join(root, file), 'utf8');
-const esc = value => String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
-const flush = () => new Promise(resolve => setImmediate(resolve));
-const plain = value => JSON.parse(JSON.stringify(value));
+const { fmtAsOf } = loadUtils();
+const PUBLISHED_AT = '2026-09-30T06:00:00.000Z';
+const ID = predefinedId;
 
-const CSS = { '--teal': '#14b8a6', '--ember': '#e4572e', '--muted': '#888888', '--ink': '#111111', '--hair': '#dddddd', '--panel': '#ffffff' };
+// The browser's own short month (ICU: 'Sep' or 'Sept').
+const MONTH_SEP_26 = new Date(2026, 8, 1).toLocaleDateString('en-GB', { month: 'short', year: '2-digit' });
 
-class FakeChart {
-  constructor(canvas, config) { this.canvas = canvas; this.config = config; this.destroyed = false; FakeChart.instances.push(this); }
-  destroy() { this.destroyed = true; }
-}
-FakeChart.instances = [];
+const tile = (label, grams, extra = {}) => payload({ stat_cards: [{ key: 'value', label, value: grams, format: 'money', ...extra }] });
+const bars = (labels, grams) => payload({ charts: [{ id: 'c', kind: 'bar', labels, datasets: [{ key: 'v', label: 'Income', data: grams, style: 'income' }], y_format: 'money', ref_lines: [],
+  drill: { param: 'month', values: labels, mode: 'panel', hint: 'Tap a month' } }] });
 
-// Loads ES-module source files into one vm context (imports stripped, exports unwrapped).
-function loadModules(files, globals, exposed, setup = '') {
-  const source = files.map(file => read(file)
-    .replace(/^import\s[\s\S]*?from\s+['"][^'"]+['"];\s*/gm, '')
-    .replace(/\bexport (?=(?:async )?function|const|let)/g, '')).join('\n');
-  const context = vm.createContext({
-    console: { log() {}, warn() {}, error() {} }, esc, Chart: FakeChart, setImmediate,
-    getComputedStyle: () => ({ getPropertyValue: name => CSS[name] ?? '' }),
-    document: { documentElement: {}, dispatchEvent() {}, createElement: () => ({ className: '', innerHTML: '' }) },
-    window: {}, CustomEvent: class { constructor(type, init) { this.type = type; this.detail = init?.detail; } },
-    AbortController, WeakMap, ...globals,
+// The default layout with published payloads: two tiles ready, one failed, one not published.
+function publishedHome(runtime) {
+  publish(runtime.sheets, {
+    published_at: PUBLISHED_AT,
+    outputs: [
+      { report_id: ID('kpi-net-worth'), payload: tile('Net worth', 40.5, { tone: 'positive', sub: { text: '{0} on last month', values: [{ value: 1.5, format: 'money_delta' }] } }) },
+      { report_id: ID('kpi-total-assets'), payload: tile('Total assets', 50) },
+      { report_id: ID('home-income-trend'), payload: bars(['Aug 26', 'Sep 26'], [10, 12.5]) },
+      { report_id: ID('home-debt-to-income'), payload: payload({ charts: [{ id: 'g', kind: 'gauge', labels: [], datasets: [], y_format: 'percent', ref_lines: [],
+        gauge: { value: 17.6, max: 100, tone: 'positive', label: { text: '{0}', values: [{ value: 17.6, format: 'percent' }] }, sub: 'Excellent' } }] }) },
+      { report_id: ID('08-category-pie'), payload: payload({ empty: { text: 'No spending in this period.' } }) },
+    ],
+    results: [
+      { report_id: ID('kpi-net-worth'), status: 'ready' }, { report_id: ID('kpi-total-assets'), status: 'ready' },
+      { report_id: ID('kpi-total-liabilities'), status: 'failed', error_code: 'missing_rate' },
+      { report_id: ID('home-income-trend'), status: 'ready' }, { report_id: ID('home-debt-to-income'), status: 'ready' }, { report_id: ID('08-category-pie'), status: 'ready' },
+    ],
   });
-  vm.runInContext(source + '\n' + setup + '\nglobalThis.exposed = {' + exposed.join(',') + '};', context);
-  return context.exposed;
 }
 
-function server(overrides) {
-  const runtime = gasRuntime({ properties: { MERIDIAN_FULCRUM_PIN: '1234' } });
-  seedViewFixture(runtime, overrides);
-  runtime.get = params => JSON.parse(runtime.ctx.doGet({ parameter: { pin: '1234', today: '2026-09-30', ...params } }).getContent());
-  return runtime;
-}
-
-function element(id) {
-  return { id, innerHTML: '', children: [], appendChild(child) { this.children.push(child); }, addEventListener() {}, querySelectorAll: () => [], classList: { toggle() {} } };
+function homeApp(runtime, { stateExtra = {}, wrapView } = {}) {
+  const dom = fakeDom();
+  const state = { views: {}, homeCustomise: null, quoteCurrency: 'GBP', ...stateExtra };
+  const messages = [], events = [];
+  const api = loadApi(runtime, state);
+  const ExpenseAPI = wrapView ? { ...api, view: (action, params) => api.view(action, params).then(response => wrapView(action, response)) } : api;
+  const home = loadModules(['app/sections/reports/chart-theme.js', 'app/sections/reports/render-kinds.js', 'app/sections/reports/viewer.js', 'app/sections/home.js'], {
+    state, el: dom.el, fmtAsOf, shareSnapshot() {}, ExpenseAPI, showLoading() {}, hideLoading() {},
+    showMsg: (text, kind) => messages.push([text, kind ?? 'success']),
+    document: { documentElement: {}, dispatchEvent: event => events.push(event.type) },
+  }, ['renderHome']);
+  const html = () => dom.el('homeContent').innerHTML;
+  const click = dataset => dom.fire('homeContent', 'click', dataset);
+  return { home, dom, state, messages, events, html, click };
 }
 
 // ── Home ──────────────────────────────────────────────────────────────────────
 
-const OWED = ACCOUNTS.map(account => (account.id === ID(13) ? { ...account, opening_value_local: -2000 } : account));
-
-function loadHome(state, view) {
-  const elements = {};
-  const el = id => (elements[id] ??= element(id));
-  const calls = [];
-  const home = loadModules(['app/sections/insights/chart-theme.js', 'app/sections/home.js'], {
-    state, el, shareSnapshot() {},
-    ExpenseAPI: { view: async (action, params) => { calls.push([action, plain(params)]); return view(action, params); } },
-  }, ['renderHome']);
-  return { home, elements, calls };
-}
-
-test('home.js renders get_home_view as-is (figures, status label/colour, projection, chart series)', async () => {
-  const response = server({ accounts: OWED }).get({ action: 'get_home_view' });
+test('home renders 4 number tiles and 4 compact panels from get_home_view (converted values, Text, statuses, As of)', async () => {
+  const runtime = appServer();
+  publishedHome(runtime);
   FakeChart.instances = [];
-  const state = { views: {} };
-  const { home, elements, calls } = loadHome(state, async () => response);
-  home.renderHome();
-  assert.match(elements.homeContent.innerHTML, /Loading…/);
+  const app = homeApp(runtime);
+  app.home.renderHome();
+  assert.match(app.html(), /Loading…/);
   await flush();
-  assert.deepEqual(calls, [['get_home_view', {}]]);
-  assert.equal(state.views.get_home_view, response);
-  const html = elements.homeContent.innerHTML;
-  assert.match(html, /17\.6%/);
-  assert.match(html, /Excellent/);
-  assert.match(html, /−£1,760/);          // total debt (server total_debt)
-  assert.match(html, /2 yrs 6 mo/);        // debt_free.months = 30
-  assert.match(html, /£60<\/span>/);       // monthly reduction
-  assert.match(html, /Jul 26/);            // peak label from the server
-  assert.match(html, /all time/);
-  assert.match(html, /No exchange rate for <strong>USD<\/strong>/);
-  const [income, gauge] = FakeChart.instances;
-  assert.deepEqual(plain(income.config.data.labels), response.data.income.chart.labels);
-  assert.deepEqual(plain(income.config.data.datasets[0].data), response.data.income.chart.income);
-  assert.equal(income.config.data.datasets[0].backgroundColor[response.data.income.chart.peak_index], 'rgba(52,211,153,1)');
-  assert.deepEqual(plain(gauge.config.data.datasets[0].data), [response.data.dti.gauge_value, 100 - response.data.dti.gauge_value]);
-  assert.equal(gauge.config.data.datasets[0].backgroundColor[0], '#34d399');
+  assert.deepEqual(runtime.calls.map(call => call[1].action), ['get_home_view']);
+  const html = app.html();
+  assert.equal((html.match(/class="home-tile[ "]/g) ?? []).length, 4);
+  assert.equal((html.match(/class="home-panel[ "]/g) ?? []).length, 4);
+  // 40.5 g × 80 (GBP rate) = £3,240, converted by GAS; the browser formats only.
+  assert.match(html, /Net worth<\/div>\s*<div class="home-tile-value positive">£3,240<\/div>\s*<div class="home-tile-sub">\+£120 on last month<\/div>/);
+  assert.match(html, /Total assets<\/div>\s*<div class="home-tile-value ">£4,000<\/div>/);
+  assert.match(html, /Total liabilities<\/div>\s*<div class="home-tile-value ">—<\/div>\s*<div class="home-tile-sub">This report could not be computed \(missing_rate\)\.<\/div>/);
+  assert.match(html, /Reports appear after the next refresh\./);   // kpi-monthly-income has no payload
+  assert.match(html, /Income trend/);
+  assert.ok(html.includes(`As of ${fmtAsOf(PUBLISHED_AT)}`));
+  assert.doesNotMatch(html, /Customise dashboard|Save layout/);
+  // Panels: charts only, fixed height, no drill hint and no click-through.
+  const income = app.dom.el('homePanelBody_panel_1').innerHTML;
+  assert.match(income, /height:190px/);
+  assert.doesNotMatch(income, /Tap a month/);
+  assert.match(app.dom.el('homePanelBody_panel_2').innerHTML, /17\.6%[\s\S]*Excellent/);
+  assert.match(app.dom.el('homePanelBody_panel_4').innerHTML, /No spending in this period\./);
+  const [bar, gauge] = FakeChart.instances;
+  assert.deepEqual(plain(bar.config.data.datasets[0].data), [800, 1000]);
+  assert.equal(bar.config.options.onClick, undefined);
+  assert.deepEqual(plain(gauge.config.data.datasets[0].data), [17.6, 82.4]);
 });
 
-test('home.js shows the last payload at once, then the server message on failure', async () => {
-  const cached = server().get({ action: 'get_home_view' });
-  const state = { views: { get_home_view: cached } };
-  const { home, elements } = loadHome(state, async () => ({ ok: false, error: 'boom', message: 'Home is down.' }));
-  home.renderHome();
-  assert.match(elements.homeContent.innerHTML, /Debt-free/);
+test('home shows the last payload at once, keeps it on a failed refresh, and says when nothing is published', async () => {
+  const runtime = appServer();
+  publishedHome(runtime);
+  const cached = runtime.get({ action: 'get_home_view' });
+  const failing = homeApp(runtime, { stateExtra: { views: { get_home_view: cached } }, wrapView: () => ({ ok: false, error: 'boom', message: 'Home is down.' }) });
+  failing.home.renderHome();
+  assert.match(failing.html(), /£3,240/);
   await flush();
-  assert.match(elements.homeContent.innerHTML, /Debt-free/);   // keeps the last good payload
-  const fresh = loadHome({ views: {} }, async () => ({ ok: false, error: 'boom', message: 'Home is down.' }));
+  assert.match(failing.html(), /£3,240/);
+  const fresh = homeApp(runtime, { wrapView: () => ({ ok: false, error: 'boom', message: 'Home is down.' }) });
   fresh.home.renderHome();
   await flush();
-  assert.match(fresh.elements.homeContent.innerHTML, /Home is down\./);
-  const none = loadHome({ views: {} }, async () => server({ accounts: [], transactions: [] }).get({ action: 'get_home_view' }));
-  none.home.renderHome();
+  assert.match(fresh.html(), /Home is down\./);
+  const nothing = homeApp(appServer());
+  nothing.home.renderHome();
   await flush();
-  assert.match(none.elements.homeContent.innerHTML, /No data yet/);
+  const html = nothing.html();
+  assert.match(html, /<div class="insight-warn">Reports appear after the next refresh\.<\/div>/);
+  assert.equal((html.match(/home-tile-value ">—</g) ?? []).length, 4);
+  assert.doesNotMatch(html, /As of/);
 });
 
-test('home.js holds no business logic (no compute, thresholds, conversion or raw collections)', () => {
+test('customise: change through the searchable picker, remove, move, cancel, then save posts all 8 slots', async () => {
+  const runtime = appServer();
+  publishedHome(runtime);
+  const app = homeApp(runtime);
+  app.home.renderHome();
+  await flush();
+  const before = plain(runtime.ctx.readDashboardLayout().slots);
+  app.click({ action: 'home-customise' });
+  await flush();
+  assert.equal(runtime.calls.at(-1)[1].action, 'get_dashboard_layout');
+  assert.match(app.html(), /Customise dashboard/);
+  assert.match(app.html(), /Save layout/);
+  assert.match(app.html(), /Reset to default/, 'the layout view offers the default slots');
+  // Remove tile 2, move panel 1 later, change tile 2 through the picker.
+  app.click({ action: 'home-remove', slot: 'tile_2' });
+  assert.match(app.html(), /data-action="home-pick" data-slot="tile_2">\+ Add number/);
+  app.click({ action: 'home-move', slot: 'panel_1', step: '1' });
+  app.click({ action: 'home-pick', slot: 'tile_2' });
+  let html = app.html();
+  assert.match(html, /Choose a number for tile 2/);
+  assert.match(html, /<span>Net worth<\/span><span class="field-hint">Already on Home<\/span>/);
+  assert.match(html, /data-id="[^"]+" disabled>\s*<span>Net worth/);
+  assert.doesNotMatch(html.slice(html.indexOf('homePickerList'), html.indexOf('Tiles take single-number')), /Income trend/, 'tiles offer number reports only');
+  app.dom.fire('homeContent', 'input', { id: 'homePickerSearch', value: 'DEBT' });
+  const list = app.dom.el('homePickerList').innerHTML;
+  assert.match(list, /Total debt/);
+  assert.doesNotMatch(list, /Net worth/);
+  assert.equal(app.html(), html, 'searching re-renders only the option list');
+  app.click({ action: 'home-choose', id: ID('kpi-total-debt') });
+  // Cancel discards the draft.
+  app.click({ action: 'home-cancel' });
+  assert.equal(app.state.homeCustomise, null);
+  assert.match(app.html(), /Your dashboard/);
+  assert.equal(runtime.calls.filter(call => call[0] === 'POST').length, 0);
+  // Again, then save.
+  app.click({ action: 'home-customise' });
+  await flush();
+  app.click({ action: 'home-pick', slot: 'tile_2' });
+  app.click({ action: 'home-choose', id: ID('kpi-total-debt') });
+  app.click({ action: 'home-remove', slot: 'tile_4' });
+  app.click({ action: 'home-move', slot: 'panel_1', step: '1' });
+  app.click({ action: 'home-move', slot: 'panel_4', step: '1' });   // last panel: no later slot
+  app.click({ action: 'home-save' });
+  await flush();
+  const post = runtime.calls.find(call => call[0] === 'POST');
+  assert.equal(post[1].action, 'update_dashboard_layout');
+  assert.deepEqual(post[1].slots, {
+    tile_1: before.tile_1, tile_2: ID('kpi-total-debt'), tile_3: before.tile_3, tile_4: '',
+    panel_1: before.panel_2, panel_2: before.panel_1, panel_3: before.panel_3, panel_4: before.panel_4,
+  });
+  assert.deepEqual(plain(runtime.ctx.readDashboardLayout().slots), post[1].slots);
+  assert.deepEqual(app.messages.at(-1), ['Dashboard saved.', 'success']);
+  assert.deepEqual(app.events, ['et:reload']);
+  assert.equal(app.state.homeCustomise, null);
+});
+
+test('customise: a server refusal stays in edit mode with its message; Reset applies server defaults when offered', async () => {
+  const runtime = appServer();
+  const number = runtime.ctx.createReport({ report_name: 'Spend number', measure: 'spend', period_preset: 'this_month', chart_kind: 'number' }).id;
+  const defaults = { tile_1: ID('kpi-net-worth'), tile_2: ID('kpi-total-assets'), tile_3: ID('kpi-total-liabilities'), tile_4: ID('kpi-monthly-income'),
+    panel_1: ID('home-income-trend'), panel_2: ID('home-debt-to-income'), panel_3: ID('14-networth-trend'), panel_4: ID('08-category-pie') };
+  const app = homeApp(runtime, { wrapView: (action, response) => (action === 'get_dashboard_layout' ? { ...response, data: { ...response.data, default_slots: defaults } } : response) });
+  app.home.renderHome();
+  await flush();
+  app.click({ action: 'home-customise' });
+  await flush();
+  app.click({ action: 'home-pick', slot: 'tile_4' });
+  assert.match(app.html(), /My reports[\s\S]*Spend number/);
+  app.click({ action: 'home-choose', id: number });
+  assert.match(app.html(), /Spend number[\s\S]*Shown after you save the layout\./);
+  // Reset (server defaults) puts the contract layout back into the draft.
+  assert.match(app.html(), /Reset to default/);
+  app.click({ action: 'home-reset' });
+  assert.equal(app.state.homeCustomise.slots.tile_4.report_id, defaults.tile_4);
+  assert.equal(app.state.homeCustomise.slots.tile_4.title, 'Monthly income');
+  // The chosen report is deleted on the server before the save: the refusal is shown.
+  app.click({ action: 'home-pick', slot: 'tile_4' });
+  app.click({ action: 'home-choose', id: number });
+  const rowNum = runtime.sheets.find(sheet => sheet.name === 'report_master').rows.findIndex(row => row[0] === number) + 1;
+  runtime.ctx.deleteReport({ row_num: rowNum });
+  app.click({ action: 'home-save' });
+  await flush();
+  assert.match(app.html(), /<p class="pin-error" role="alert">This report has been deleted\.<\/p>/);
+  assert.match(app.html(), /Customise dashboard/);
+  assert.deepEqual(app.events, []);
+});
+
+test('home layout: tiles 1×4 and panels 2×2 on desktop; tiles 2×2 and panels stacked on mobile', () => {
+  const css = read('app/style/expense-tracker.css');
+  assert.match(css, /\.home-tiles \{ display: grid; grid-template-columns: repeat\(4, minmax\(0, 1fr\)\)/);
+  assert.match(css, /\.home-panels \{ display: grid; grid-template-columns: repeat\(2, minmax\(0, 1fr\)\)/);
+  const mobile = css.slice(css.indexOf('.home-option[disabled]'));
+  assert.match(mobile, /@media \(max-width: 640px\) \{\s*\.home-tiles  \{ grid-template-columns: repeat\(2, minmax\(0, 1fr\)\); \}\s*\.home-panels \{ grid-template-columns: 1fr; \}/);
+});
+
+test('home.js holds no business logic (no compute, conversion, thresholds or collections)', () => {
   const source = read('app/sections/home.js');
-  for (const banned of ['_compute', 'toBase', 'state.transactions', 'state.accounts', 'computeDailyTotalAssets', 'sumAmountBase', '_dtiStatus', '< 20', '< 36', '< 50', 'insight-utils']) {
-    assert.ok(!source.includes(banned), banned);
-  }
-});
-
-// ── Insights shell ────────────────────────────────────────────────────────────
-
-function loadShell(state, view, setup = '', extra = {}) {
-  const elements = {};
-  const el = id => (elements[id] ??= element(id));
-  const calls = [], rendered = [], drills = [];
-  const shell = loadModules(['app/sections/insights.js'], {
-    state, el, shareSnapshot() {},
-    renderInsightPayload: (container, data, sym, handlers) => { rendered.push({ container, data, sym, handlers }); return [new FakeChart(null, {})]; },
-    renderInsightDrill: (container, data, sym) => { drills.push({ container, data, sym }); },
-    ExpenseAPI: { view: async (action, params) => { calls.push([action, plain(params)]); return view(action, params); } },
-    ...extra,
-  }, ['renderInsights'], setup);
-  return { shell, elements, calls, rendered, drills };
-}
-
-function shellState(runtime, extra = {}) {
-  const context = runtime.get({ action: 'get_app_context' }).data;
-  return { context, views: {}, insightId: '29-daily-spend', insightPeriod: 'last_3', insightCustomFrom: '', insightCustomTo: '', insightTab: 'transactions',
-    insightDrill: null, insightParams: {}, quoteCurrency: 'GBP', ...extra };
-}
-
-test('insights.js: server insights request get_insight from UI state and hand the payload to the renderer', async () => {
-  const runtime = server();
-  const state = shellState(runtime);
-  const { shell, elements, calls, rendered, drills } = loadShell(state, async (action, params) => runtime.get({ action, ...params, drill: params.drill ? JSON.stringify(params.drill) : '' }));
-  shell.renderInsights();
-  await flush(); await flush();
-  // last_3 is not offered by 29 → snapped to its default period.
-  assert.equal(state.insightPeriod, 'last_30');
-  assert.deepEqual(calls, [['get_insight', { id: '29-daily-spend', period: 'last_30' }]]);
-  assert.equal(rendered.length, 1);
-  assert.equal(rendered[0].container, elements.insightChart);
-  assert.equal(rendered[0].sym, '£');
-  assert.equal(rendered[0].data.insight_id, '29-daily-spend');
-  assert.equal(rendered[0].data.stat_cards[0].value, 70);
-  assert.match(elements.insightContent.innerHTML, /Daily spend \(with payments\)/);
-  assert.doesNotMatch(elements.insightContent.innerHTML, /insightModeSelect|Pre-Computed/);
-  // Panel drill: re-request with the drill, re-render only the drill panel.
-  rendered[0].handlers.onDrill({ date: '2026-09-20' }, 'panel');
-  await flush(); await flush();
-  assert.deepEqual(calls[1], ['get_insight', { id: '29-daily-spend', period: 'last_30', drill: { date: '2026-09-20' } }]);
-  assert.equal(drills.length, 1);
-  assert.equal(drills[0].data.drill.rows[0].id, ID(37));
-  assert.equal(rendered.length, 1);
-  // Controls and sort become params; the drill is cleared.
-  rendered[0].handlers.onControl('window', '7');
-  await flush(); await flush();
-  assert.deepEqual(calls[2], ['get_insight', { id: '29-daily-spend', window: '7', period: 'last_30' }]);
-  rendered[1].handlers.onSort('amount');
-  await flush(); await flush();
-  assert.deepEqual(calls[3][1], { id: '29-daily-spend', window: '7', sort: 'amount', sort_dir: 'desc', period: 'last_30' });
-  // Open in Transactions: deep link via state.filters.
-  rendered[2].handlers.onOpenTransactions({ params: { range: 'custom', from: '2026-09-20', to: '2026-09-20', types: 'money-out' } });
-  assert.deepEqual(plain(state.filters), { range: 'custom', from: '2026-09-20', to: '2026-09-20', types: 'money-out' });
-});
-
-test('insights.js: server errors show the server message; a stale drill is dropped once', async () => {
-  const runtime = server();
-  const state = shellState(runtime, { insightPeriod: 'this_month', insightDrill: { date: '2026-01-01' } });
-  const { shell, elements, calls, rendered } = loadShell(state, async (action, params) => runtime.get({ action, ...params, drill: params.drill ? JSON.stringify(params.drill) : '' }));
-  shell.renderInsights();
-  for (let i = 0; i < 6; i++) await flush();
-  assert.deepEqual(calls.map(call => call[1].drill ?? null), [{ date: '2026-01-01' }, null]);
-  assert.equal(state.insightDrill, null);
-  assert.equal(rendered.length, 1);
-  const failing = loadShell(shellState(runtime), async () => ({ ok: false, error: 'insight_failed', message: 'This insight could not be computed. Refresh and try again.' }));
-  failing.shell.renderInsights();
-  await flush(); await flush();
-  assert.match(failing.elements.insightInner.innerHTML, /could not be computed/);
-  assert.ok(elements.insightChart);
-});
-
-test('every registered insight is server-computed and the shell has no client insight path', () => {
-  const registry = server().get({ action: 'get_app_context' }).data.nav.insights_registry;
-  assert.equal(registry.length, 30);
-  for (const entry of registry) assert.equal(entry.server, true, entry.id);
-  const source = read('app/sections/insights.js');
-  for (const banned of ['import(', 'insight-utils', 'getPeriodBounds', 'filterTxByRange', 'findMissingRates', 'state.transactions', 'state.accounts', 'insightChartInstance', 'server !== true', '_renderLegacy'])
-    assert.ok(!source.includes(banned), banned);
-  assert.deepEqual(fs.readdirSync(path.join(root, 'app/sections/insights')).sort(), ['chart-theme.js', 'render-kinds.js']);
-});
-
-test('insights.js has no precomputed/live toggle, local registry or payload math', () => {
-  const source = read('app/sections/insights.js');
-  for (const banned of ['insightMode', 'precomputed', 'getComputedInsights', '_renderFromPayload', 'const INSIGHTS', 'sumAmountBase', 'toBase']) assert.ok(!source.includes(banned), banned);
-  assert.ok(!fs.existsSync(path.join(root, 'app/sections/insights/18-income-vs-expenses.js')));
-  for (const ported of ['10-top-categories', '29-daily-spend', '30-daily-spend-no-payments']) assert.ok(!fs.existsSync(path.join(root, `app/sections/insights/${ported}.js`)), ported);
+  for (const banned of ['.reduce(', '.sort(', 'toBase', 'rate *', 'state.transactions', 'state.accounts', 'dti', 'has_data', 'insight-utils']) assert.ok(!source.includes(banned), banned);
 });
 
 // ── Generic renderer ──────────────────────────────────────────────────────────
 
 function loadRenderer() {
-  return loadModules(['app/sections/insights/chart-theme.js', 'app/sections/insights/render-kinds.js'], {}, ['renderInsightPayload', 'renderInsightDrill', 'chartConfig', 'fmtValue', 'getCssColors']);
+  return loadModules(['app/sections/reports/chart-theme.js', 'app/sections/reports/render-kinds.js'], {},
+    ['renderInsightPayload', 'renderInsightDrill', 'renderCompactPayload', 'chartConfig', 'fmtValue', 'fmtText', 'fmtTick', 'getCssColors']);
 }
 
-function container() {
-  const box = element('insightChart');
-  box.contains = () => true;
-  box.querySelectorAll = selector => {
-    if (selector !== 'canvas[data-chart-index]') return [];
-    return [...box.innerHTML.matchAll(/data-chart-index="(\d+)"/g)].map(match => ({ dataset: { chartIndex: match[1] }, parentElement: null }));
-  };
-  box.querySelector = () => null;
-  return box;
-}
-
-test('render-kinds: stat cards, bar chart tones and the drill click come straight from the payload', () => {
-  const runtime = server();
-  const data = runtime.get({ action: 'get_insight', id: '29-daily-spend', period: 'this_month', drill: JSON.stringify({ date: '2026-09-20' }) }).data;
-  const r = loadRenderer();
-  FakeChart.instances = [];
-  const box = container();
-  const drills = [];
-  const charts = r.renderInsightPayload(box, data, '£', { onDrill: (drill, mode) => drills.push([plain(drill), mode]) });
-  assert.equal(charts.length, 1);
-  const html = box.innerHTML;
-  for (const text of ['Total spend', '£70', 'Avg / spend day', '£35', '29 Sep', '2 / 30', 'Tap a bar', '20 Sep', '1 transaction', '£10.00', 'Food → Groceries', 'Open in Transactions']) assert.ok(html.includes(text), text);
-  const config = charts[0].config;
-  assert.equal(config.type, 'bar');
-  assert.deepEqual(plain(config.data.labels), data.charts[0].labels);
-  assert.equal(config.data.datasets[0].backgroundColor[19], '#14b8a6cc');
-  assert.equal(config.data.datasets[0].backgroundColor[0], '#dddddd');
-  assert.equal(config.options.scales.y.min, 0);
-  config.options.onClick(null, [{ index: 19 }]);
-  assert.deepEqual(drills, [[{ date: '2026-09-20' }, 'panel']]);
+test('fmtValue / fmtText format server values by format key only; Text placeholders are filled', () => {
+  const { fmtValue, fmtText } = loadRenderer();
+  assert.deepEqual([
+    fmtValue(-1234.4, 'money', '£'), fmtValue(12.345, 'money2', '£'), fmtValue(-5, 'money_delta', '£'), fmtValue(5, 'money_delta', '£'),
+    fmtValue(17.64, 'percent', '£'), fmtValue(42.5, 'progress', '£'), fmtValue(3, 'days', '£'), fmtValue('2 / 30', 'text', '£'), fmtValue(null, 'money', '£'),
+    fmtValue(1200, 'count', '£'), fmtValue('2026-09', 'month', '£'), fmtValue(-1234.5, 'local', '£'), fmtValue(250, 'local', '£', 'USD'),
+  ], ['−£1,234', '£12.35', '−£5', '+£5', '17.6%', '42.5%', '3 days', '2 / 30', '—', '1,200', MONTH_SEP_26, '−1,234.50', '250.00 USD']);
+  assert.match(fmtValue('2026-09-30', 'date', '£'), /^30 Sept? 2026$/);
+  assert.equal(fmtText({ text: '{0} vs {1} ({2})', values: [{ value: 120, format: 'money_delta' }, { value: '2026-09', format: 'month' }, { value: 12.5, format: 'percent_delta' }] }, '£'), `+£120 vs ${MONTH_SEP_26} (+12.5%)`);
+  assert.equal(fmtText('plain', '£'), 'plain');
+  assert.equal(fmtText({ text: '{1} missing', values: [] }, '£'), '{1} missing');
+  assert.equal(fmtText({ text: 'No rate {0}', values: [{ value: null, format: 'money' }] }, '£'), 'No rate —');
 });
 
-test('render-kinds: hbar with compare dataset and a delta table; empty payloads', () => {
-  const runtime = server();
-  const data = runtime.get({ action: 'get_insight', id: '10-top-categories', period: 'last_3' }).data;
+test('fmtTick keeps pence on small money2 axes', () => {
+  const { fmtTick } = loadRenderer();
+  assert.deepEqual([fmtTick(1.25, 'money2', '£'), fmtTick(-0.5, 'money2', '£'), fmtTick(250.4, 'money2', '£'), fmtTick(1500, 'money2', '£'), fmtTick(1.25, 'money', '£')],
+    ['£1.25', '−£0.5', '£250', '£2k', '£1']);
+});
+
+function box(dom, id = 'reportViewerChart') {
+  return dom.el(id);
+}
+
+test('the Python payload fixture, read through get_report, renders converted Text, local cells and the drill panel', () => {
+  const runtime = appServer();
+  const fixture = JSON.parse(fs.readFileSync(path.join(CONTRACT, 'fixtures/payload-conversion.json'), 'utf8')).payload;
+  const reportId = ID('22-top-counterparties');
+  fixture.stat_cards[1].sub = { text: '<b>{0}</b> & more', values: [{ value: 2, format: 'count' }] };
+  publish(runtime.sheets, { outputs: [{ report_id: reportId, payload: fixture }] });
+  const response = runtime.get({ action: 'get_report', id: reportId });
   const r = loadRenderer();
-  const box = container();
-  const [chart] = r.renderInsightPayload(box, data, '£', {});
-  assert.equal(chart.config.options.indexAxis, 'y');
-  assert.deepEqual(plain(chart.config.data.datasets.map(d => d.backgroundColor)), ['#14b8a6', '#f59e0b']);
-  assert.match(box.innerHTML, /Change vs Apr 26 – Jun 26/);
-  assert.match(box.innerHTML, /class="drill-td negative"[^>]*>\+£1[56]</);
-  const empty = runtime.get({ action: 'get_insight', id: '10-top-categories', period: 'last_week' }).data;
-  const emptyBox = container();
-  assert.deepEqual(plain(r.renderInsightPayload(emptyBox, empty, '£', {})), []);
-  assert.match(emptyBox.innerHTML, /No spending data for this period\./);
+  const dom = fakeDom();
+  FakeChart.instances = [];
+  r.renderInsightPayload(box(dom), response.data.payload, response.quote.symbol, {});
+  const html = box(dom).innerHTML;
+  assert.ok(html.includes(`<p class="stat-card-sub">+£120 vs ${MONTH_SEP_26} (+12.5%)</p>`));   // 1.5 g × 80
+  assert.match(html, /<p class="stat-card-sub">&lt;b&gt;2&lt;\/b&gt; &amp; more<\/p>/);
+  assert.match(html, />£60 a month</);                     // 0.75 g × 80 inside a table cell Text
+  assert.match(html, /text-align:right">250\.00</);        // local: not converted, no currency cell → plain number
+  assert.match(html, /Balances on 30 Sept? 2026/);
+  assert.match(html, /£720 in total/);                    // drill subtitle Text: 9 g × 80
+  assert.doesNotMatch(html, /\[object Object\]/);
+  assert.equal(FakeChart.instances[0].config.data.datasets[0].data[0], 100);   // 1.25 g × 80
+});
+
+test('render-kinds: local cells use the row currency; tabs, controls, crumbs and row drills call the handlers', () => {
+  const r = loadRenderer();
+  const dom = fakeDom();
+  const container = box(dom);
+  const calls = [];
+  const data = payload({
+    tabs: [{ key: 'transactions', label: 'Transactions', active: true }, { key: 'accounts', label: 'Accounts', active: false }],
+    controls: [{ param: 'window', label: 'Smoothing', value: 30, options: [{ value: 7, label: '7d' }, { value: 30, label: '30d' }] }],
+    breadcrumbs: [{ label: 'All categories', drill: null }, { label: 'Food', drill: { major: 'food' } }],
+    tables: [{ id: 't', columns: [{ key: 'name', label: 'Account', format: 'text' }, { key: 'currency', label: 'CCY', format: 'text' }, { key: 'owed', label: 'Owed', format: 'local', align: 'right' }, { key: 'paid', label: 'Paid', format: 'progress' }],
+      rows: [
+        { key: 'a', cells: { name: 'Car loan', currency: 'USD', owed: 1234.5, paid: 42.5 }, drill: { param: 'account', value: 'a', mode: 'panel' } },
+        { key: 'b', cells: { name: 'Tesco', currency: 'GBP', owed: 10, paid: 0 }, drill: { param: 'counterparty', value: 'tesco', mode: 'query', query: { action: 'list_transactions_view', params: { counterparty: 'tesco' }, note: 'All payments' } } },
+      ], sortable: ['owed'], sort: null }],
+  });
+  r.renderInsightPayload(container, data, '£', {
+    onTab: key => calls.push(['tab', key]), onControl: (param, value) => calls.push(['control', param, value]),
+    onCrumb: drill => calls.push(['crumb', plain(drill)]), onDrill: (target, mode, query) => calls.push(['drill', plain(target), mode, plain(query)]),
+  });
+  const html = container.innerHTML;
+  assert.match(html, />1,234\.50 USD</);
+  assert.match(html, /width:42\.5%/);
+  assert.doesNotMatch(html, /insight-sort|cursor:pointer" data-action="report-sort/, 'no client sorting');
+  dom.fire(container, 'click', { action: 'report-tab', tab: 'accounts' });
+  dom.fire(container, 'click', { action: 'report-control', param: 'window', value: '7' });
+  dom.fire(container, 'click', { action: 'report-crumb', index: '0' });
+  dom.fire(container, 'click', { action: 'report-row-drill', table: '0', row: '0' });
+  dom.fire(container, 'click', { action: 'report-row-drill', table: '0', row: '1' });
+  assert.deepEqual(calls, [
+    ['tab', 'accounts'], ['control', 'window', '7'], ['crumb', null],
+    ['drill', { account: 'a' }, 'panel', null],
+    ['drill', { counterparty: 'tesco' }, 'query', { action: 'list_transactions_view', params: { counterparty: 'tesco' }, note: 'All payments' }],
+  ]);
+});
+
+test('render-kinds: chart drills — panel / replace send the value, query sends queries[i], null targets show the note', () => {
+  const r = loadRenderer();
+  const C = r.getCssColors();
+  const drills = [];
+  const onDrill = (target, mode, query) => drills.push([plain(target), mode, plain(query)]);
+  const toggles = [];
+  const note = { dataset: { role: 'chart-drill-note' }, classList: { toggle: (name, on) => toggles.push(on) } };
+  const canvas = { closest: () => ({ nextElementSibling: { dataset: {}, nextElementSibling: note } }) };
+  const queries = [{ action: 'list_transactions_view', params: { from: '2026-09-20', to: '2026-09-20', types: 'money-out' }, note: "That day's spending" }, null];
+  const query = r.chartConfig({ kind: 'bar', labels: ['20 Sep', '21 Sep'], datasets: [{ key: 'v', label: 'Spend', data: [5, 0] }],
+    drill: { param: 'date', values: ['2026-09-20', '2026-09-21'], mode: 'query', queries, hint: 'Tap a day', null_text: 'Nothing that day.' } }, '£', C, onDrill);
+  query.options.onClick({}, [{ index: 0, datasetIndex: 0 }], { canvas });
+  query.options.onClick({}, [{ index: 1, datasetIndex: 0 }], { canvas });
+  const replace = r.chartConfig({ kind: 'hbar', labels: ['Food'], datasets: [{ key: 'v', label: 'Spend', data: [5] }], drill: { param: 'major', values: ['food'], mode: 'replace' } }, '£', C, onDrill);
+  replace.options.onClick({}, [{ index: 0, datasetIndex: 0 }], { canvas });
+  const series = r.chartConfig({ kind: 'line', labels: ['Aug 26', 'Sep 26'], datasets: [{ key: 'food', label: 'food', data: [1, 2] }, { key: 'work', label: 'work', data: [3, 4] }],
+    drill: { param: 'month', series_param: 'tag', values: ['2026-08', '2026-09'], mode: 'panel' } }, '£', C, onDrill);
+  series.options.onClick({}, [{ index: 1, datasetIndex: 0 }], { getElementsAtEventForMode: () => [{ index: 1, datasetIndex: 1 }] });
+  assert.deepEqual(drills, [
+    [{ date: '2026-09-20' }, 'query', queries[0]],
+    [{ major: 'food' }, 'replace', null],
+    [{ month: '2026-09', tag: 'work' }, 'panel', null],
+  ]);
+  // toggle('hidden', on): the note is hidden after a drill and shown for a null target.
+  assert.deepEqual(toggles, [true, false, true]);
 });
 
 test('render-kinds: chart kinds (donut, gauge, waterfall, mixed with ref lines and y2) are config only', () => {
@@ -278,85 +345,54 @@ test('render-kinds: chart kinds (donut, gauge, waterfall, mixed with ref lines a
     ref_lines: [{ value: 20, label: 'Target', tone: 'warn', axis: 'y2' }] }, '£', C);
   assert.deepEqual(plain(mixed.data.datasets.map(d => [d.type, d.yAxisID])), [['bar', 'y'], ['line', 'y2'], ['line', 'y2']]);
   assert.deepEqual(plain(mixed.data.datasets[2].data), [20, 20]);
-  assert.equal(mixed.options.scales.y2.position, 'right');
   assert.equal(mixed.options.scales.y2.ticks.callback(20), '20%');
 });
 
-test('render-kinds: drill panels draw their own charts (replaced and destroyed per drill), progress cells, y_max', () => {
+test('render-kinds: the drill panel shows the Drill shape (Text title, charts, table, Open in Transactions) and is replaced per drill', () => {
   const r = loadRenderer();
+  const dom = fakeDom();
+  const container = box(dom);
   FakeChart.instances = [];
-  const box = container();
-  const slot = { innerHTML: '', scrollIntoView() {}, querySelectorAll: selector => (selector === 'canvas[data-drill-chart-index]'
-    ? [...slot.innerHTML.matchAll(/data-drill-chart-index="(\d+)"/g)].map(match => ({ dataset: { drillChartIndex: match[1] }, parentElement: null })) : []) };
-  box.querySelector = selector => (selector === '[data-role="insight-drill"]' ? slot : null);
+  r.renderInsightPayload(container, payload({ charts: [] }), '£', {});
   const trend = { kind: 'bar', labels: ['Aug 26', 'Sep 26'], datasets: [{ key: 'spend', label: 'Spend', data: [5, 9], style: 'primary' }], y_format: 'money', y_max: 20 };
-  const data = {
-    stat_cards: [], charts: [], drill: null, notes: [], breadcrumbs: [], controls: [],
-    tables: [{ id: 'loans', columns: [{ key: 'name', label: 'Loan', format: 'text' }, { key: 'paid', label: 'Paid', format: 'progress' }],
-      rows: [{ key: 'a', cells: { name: 'Car', paid: 42.5 }, drill: { param: 'account_id', value: 'a', mode: 'panel' } }], sortable: [], sort: null }],
-  };
-  assert.deepEqual(plain(r.renderInsightPayload(box, data, '£', {})), []);
-  assert.match(box.innerHTML, /width:42\.5%/);
-  assert.match(box.innerHTML, /42\.5%<\/span>/);
-  assert.match(box.innerHTML, /data-action="insight-row-drill" data-table="0" data-row="0"/);
-  const first = r.renderInsightDrill(box, { drill: { title: 'Car', subtitle: '2 repayments', rows: [], total_count: 2, shown_count: 0, charts: [trend] } }, '£');
-  assert.equal(first.length, 1);
+  const first = r.renderInsightDrill(container, { drill: { title: { text: 'Tesco · {0}', values: [{ value: 400, format: 'money' }] }, subtitle: '2 payments', charts: [trend],
+    query: { action: 'list_transactions_view', params: { counterparty: 'tesco' }, note: 'All payments to this payee' } } }, '£');
+  const slot = container.querySelector('[data-role="report-drill"]');
+  assert.match(slot.innerHTML, /Tesco · £400/);
+  assert.match(slot.innerHTML, /Open in Transactions/);
+  assert.match(slot.innerHTML, /All payments to this payee/);
+  assert.doesNotMatch(slot.innerHTML, /No transactions/);
   assert.equal(first[0].config.options.scales.y.max, 20);
-  assert.doesNotMatch(slot.innerHTML, /No transactions/);   // a chart-only drill shows no empty table
-  const second = r.renderInsightDrill(box, { drill: { title: 'Van', rows: [], charts: [trend, trend] } }, '£');
-  assert.equal(first[0].destroyed, true);
+  const opened = [];
+  r.renderInsightPayload(container, payload({ drill: { title: 'Tesco', query: { action: 'list_transactions_view', params: { counterparty: 'tesco' } } } }), '£', { onOpenTransactions: query => opened.push(plain(query.params)) });
+  dom.fire(container, 'click', { action: 'report-open-transactions' });
+  assert.deepEqual(opened, [{ counterparty: 'tesco' }]);
+  const second = r.renderInsightDrill(container, { drill: { title: 'Van', charts: [trend, trend] } }, '£');
   assert.equal(second.length, 2);
 });
 
-test('render-kinds: series drills send the clicked line key; null drill values show the server note', () => {
+test('render-kinds: compact Home panels draw charts at a fixed height, tables when there is no chart, never drills', () => {
   const r = loadRenderer();
-  const C = r.getCssColors();
-  const drills = [];
-  const chart = { kind: 'line', labels: ['Aug 26', 'Sep 26'], y_format: 'money',
-    datasets: [{ key: 'food', label: 'food', data: [1, 2] }, { key: 'work', label: 'work', data: [3, 4] }],
-    ref_lines: [{ value: 2, label: 'Avg', tone: 'muted' }],
-    drill: { param: 'month', series_param: 'tag', values: ['2026-08', '2026-09'], mode: 'panel' } };
-  const config = r.chartConfig(chart, '£', C, (drill, mode) => drills.push([plain(drill), mode]));
-  const instance = hits => ({ getElementsAtEventForMode: () => hits });
-  // A point on the second line: month + that series' key (not dataset 0).
-  config.options.onClick({}, [{ index: 1, datasetIndex: 0 }], instance([{ index: 1, datasetIndex: 1 }]));
-  // Off the lines: month only. On a reference line: month only.
-  config.options.onClick({}, [{ index: 0, datasetIndex: 0 }], instance([]));
-  config.options.onClick({}, [{ index: 0, datasetIndex: 0 }], instance([{ index: 0, datasetIndex: 2 }]));
-  assert.deepEqual(drills, [[{ month: '2026-09', tag: 'work' }, 'panel'], [{ month: '2026-08' }, 'panel'], [{ month: '2026-08' }, 'panel']]);
-  // Without series_param the first element's index is used as before.
-  const plainDrills = [];
-  const byIndex = r.chartConfig({ ...chart, drill: { param: 'month', values: ['2026-08', '2026-09'] } }, '£', C, drill => plainDrills.push(plain(drill)));
-  byIndex.options.onClick({}, [{ index: 1, datasetIndex: 1 }], instance([]));
-  assert.deepEqual(plainDrills, [{ month: '2026-09' }]);
-  // A null value (an 'Other' bucket) does not drill and reveals the note rendered under the chart.
-  const box = container();
-  const noteChart = { kind: 'donut', labels: ['a', 'Other tags'], datasets: [{ key: 'spend', label: 'Spend', data: [2, 1], style: 'palette' }],
-    drill: { param: 'tag', values: ['a', null], mode: 'panel', hint: 'Tap a tag', null_text: 'Other tags groups the smaller tags.' } };
-  r.renderInsightPayload(box, { stat_cards: [], charts: [noteChart], tables: [], notes: [], breadcrumbs: [], controls: [], drill: null }, '£', {});
-  assert.match(box.innerHTML, /class="hidden" data-role="chart-drill-note"[^>]*><em>Other tags groups the smaller tags\.<\/em>/);
-  const toggles = [];
-  const note = { dataset: { role: 'chart-drill-note' }, classList: { toggle: (name, on) => toggles.push([name, on]) } };
-  const hint = { dataset: {}, nextElementSibling: note };
-  const canvas = { closest: () => ({ nextElementSibling: hint }) };
-  const donutDrills = [];
-  const donut = r.chartConfig(noteChart, '£', C, drill => donutDrills.push(plain(drill)));
-  donut.options.onClick({}, [{ index: 1, datasetIndex: 0 }], { canvas });
-  donut.options.onClick({}, [{ index: 0, datasetIndex: 0 }], { canvas });
-  assert.deepEqual(donutDrills, [{ tag: 'a' }]);
-  assert.deepEqual(toggles, [['hidden', false], ['hidden', true]]);
+  const dom = fakeDom();
+  FakeChart.instances = [];
+  const panel = dom.el('panel');
+  const charts = r.renderCompactPayload(panel, payload({ stat_cards: [{ key: 'x', label: 'X', value: 1, format: 'count' }],
+    charts: [{ kind: 'bar', title: 'Hidden title', labels: ['a'], datasets: [{ key: 'v', label: 'V', data: [1] }], drill: { param: 'a', values: ['a'], mode: 'panel', hint: 'Tap' } }] }), '£');
+  assert.equal(charts[0].config.options.onClick, undefined);
+  assert.doesNotMatch(panel.innerHTML, /Tap|Hidden title|stat-card/);
+  const table = dom.el('table');
+  r.renderCompactPayload(table, payload({ tables: [{ id: 't', columns: [{ key: 'n', label: 'Loan', format: 'text' }], rows: [{ key: 'a', cells: { n: 'Car' }, drill: { param: 'account', value: 'a', mode: 'panel' } }] }] }), '£');
+  assert.match(table.innerHTML, /Car/);
+  assert.doesNotMatch(table.innerHTML, /report-row-drill/);
 });
 
-test('fmtTick keeps pence on small money2 axes', () => {
-  const { fmtTick } = loadModules(['app/sections/insights/chart-theme.js'], {}, ['fmtTick']);
-  assert.deepEqual([fmtTick(1.25, 'money2', '£'), fmtTick(-0.5, 'money2', '£'), fmtTick(250.4, 'money2', '£'), fmtTick(1500, 'money2', '£'), fmtTick(1.25, 'money', '£')],
-    ['£1.25', '−£0.5', '£250', '£2k', '£1']);
-});
-
-test('fmtValue formats server values by format key only', () => {
-  const { fmtValue } = loadRenderer();
-  assert.deepEqual([
-    fmtValue(-1234.4, 'money', '£'), fmtValue(12.345, 'money2', '£'), fmtValue(-5, 'money_delta', '£'), fmtValue(5, 'money_delta', '£'),
-    fmtValue(17.64, 'percent', '£'), fmtValue(3, 'days', '£'), fmtValue('2 / 30', 'text', '£'), fmtValue(null, 'money', '£'), fmtValue(1200, 'count', '£'),
-  ], ['−£1,234', '£12.35', '−£5', '+£5', '17.6%', '3 days', '2 / 30', '—', '1,200']);
+test('the old Insights shell is gone; the renderer lives in sections/reports', () => {
+  assert.equal(fs.existsSync(path.join(ROOT, 'app/sections/insights.js')), false);
+  assert.equal(fs.existsSync(path.join(ROOT, 'app/sections/insights')), false);
+  assert.deepEqual(fs.readdirSync(path.join(ROOT, 'app/sections/reports')).sort(), ['builder.js', 'chart-theme.js', 'render-kinds.js', 'viewer.js']);
+  const nav = read('app/core/nav.js') + read('app/index.html');
+  assert.match(nav, /data-section="reports">Reports</);
+  assert.doesNotMatch(nav, /insight/i);
+  const renderer = read('app/sections/reports/render-kinds.js') + read('app/sections/reports/chart-theme.js');
+  for (const banned of ['.reduce(', '.sort(', 'rate *', 'toBase', 'get_insight', 'renderDrillRowsTable', 'total_quote']) assert.ok(!renderer.includes(banned), banned);
 });

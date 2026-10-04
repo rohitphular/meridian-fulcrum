@@ -11,7 +11,22 @@ const RATES_SHEET              = 'rates';
 const SUBSCRIPTIONS_SHEET      = 'subscription_master';
 const AUDIT_SHEET              = 'audit_access';
 const ADVISOR_SHEET            = 'advisor_chat';
-const COMPUTED_INSIGHTS_SHEET  = 'computed_insights';
+
+// Report processor (data-synchronization/analytics/contract/sheet-tabs.json).
+// App-owned configuration, written by GAS from the app:
+const REPORT_MASTER_SHEET      = 'report_master';
+const DASHBOARD_LAYOUT_SHEET   = 'dashboard_layout';
+// Published by the analytics job; GAS only reads them (getSheetByName, never
+// getOrCreateSheet: a missing tab means "not published yet").
+const REPORT_META_SHEET        = 'report_meta';
+const REPORT_STATUS_SHEET      = 'report_status';
+const REPORT_INDEX_A_SHEET     = 'report_index_a';
+const REPORT_INDEX_B_SHEET     = 'report_index_b';
+const REPORT_DATA_A_SHEET      = 'report_data_a';
+const REPORT_DATA_B_SHEET      = 'report_data_b';
+const REPORT_OUTPUT_SHEETS = [
+  REPORT_META_SHEET, REPORT_STATUS_SHEET, REPORT_INDEX_A_SHEET, REPORT_INDEX_B_SHEET, REPORT_DATA_A_SHEET, REPORT_DATA_B_SHEET,
+];
 
 // Explicit in-place migration; legacy data must never be hidden by a new empty tab.
 const MASTER_SHEET_RENAMES = [
@@ -43,7 +58,14 @@ const EXPENSE_TRACKER_SHEET_ORDER = [
   ACCOUNT_LIABILITY_CREDIT_CARD_SHEET,
   ACCOUNT_LIABILITY_MORTGAGE_SHEET,
   ACCOUNT_LIABILITY_PERSONAL_LOAN_SHEET,
-  COMPUTED_INSIGHTS_SHEET,
+  REPORT_MASTER_SHEET,
+  DASHBOARD_LAYOUT_SHEET,
+  REPORT_META_SHEET,
+  REPORT_STATUS_SHEET,
+  REPORT_INDEX_A_SHEET,
+  REPORT_INDEX_B_SHEET,
+  REPORT_DATA_A_SHEET,
+  REPORT_DATA_B_SHEET,
   ADVISOR_SHEET,
   AUDIT_SHEET,
 ];

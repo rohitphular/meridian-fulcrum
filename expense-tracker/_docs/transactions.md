@@ -13,7 +13,7 @@ Schema reference: [data-model.md § Transaction](data-model.md#transaction). Bal
 - Ten independent filter dimensions, combined with AND (date range, type, account, major category, minor category, country, city, area, tag, free-text search)
 - Active-filter count on the Filters button
 - Sortable, paginated table; mobile uses card layout
-- Date-range scoping (shared with the insight section)
+- Date-range scoping (report query drills open the list with a custom range)
 - CSV / JSON export of the **currently filtered rows** (both date-range and active filter dimensions apply)
 - CSV bulk import — choose a file and import; the backend parses and validates it, then reports created/updated/unchanged/failed counts and line-numbered failures. ID-based insert or replacement
 - Warning banner separating malformed rows from the main table
@@ -127,7 +127,7 @@ Server-side (`page`, `page_size`), default 50 rows per page (selectable: 10 / 25
 
 Rows missing `id`, `tx_date_local`, or with an invalid `tx_type` are diverted into a collapsed warning section. They:
 
-- Do NOT participate in list totals or insights (they come back in `warn_rows`)
+- Do NOT participate in list totals (they come back in `warn_rows`)
 - Balance aggregation independently excludes deleted rows, invalid dates, nonpositive/nonfinite amounts, unknown accounts and pre-tracking movements. A missing transaction ID alone is a UI warning and does not remove an otherwise valid movement from the balance.
 - ARE visible by clicking the `⚠ N rows have warnings` banner
 - ARE only fixable by editing the underlying store directly — the app surfaces them as a diagnostic only

@@ -106,17 +106,19 @@ fi
 if [[ -z "$MODE_ARG" ]]; then
   echo "  1) Daily — rolling last 365 days"
   echo "  2) Historical — full load from local CSV files"
+  echo "  3) Publish to Sheet — latest rates to the app's rates tab"
   # printf, not read -p: bash only shows a read prompt on a terminal, and make pipes stdin.
-  printf "Select (1/2): "; CHOICE=""; read -r CHOICE || true
+  printf "Select (1/2/3): "; CHOICE=""; read -r CHOICE || true
   case "$CHOICE" in
     1) MODE_ARG="daily" ;;
     2) MODE_ARG="historical" ;;
+    3) MODE_ARG="publish-sheet" ;;
     *) echo "Invalid choice."; exit 1 ;;
   esac
 fi
 case "$MODE_ARG" in
-  daily|historical) ;;
-  *) echo "ERROR: mode must be daily or historical."; exit 1 ;;
+  daily|historical|publish-sheet) ;;
+  *) echo "ERROR: mode must be daily, historical or publish-sheet."; exit 1 ;;
 esac
 
 # ── Step 2: Env file exists ───────────────────────────────────────────────────
@@ -125,6 +127,28 @@ ENV_FILE="$ROOT/infrastructure/.env.$ENV_ARG"
 if [[ ! -f "$ENV_FILE" ]]; then
   echo "ERROR: env file not found: $ENV_FILE"
   exit 1
+fi
+
+# publish-sheet writes the app's rates tab: it needs the environment's spreadsheet
+# (cicd/envs.json) and a service-account key path in the env file.
+SPREADSHEET_ID=""
+if [[ "$MODE_ARG" == "publish-sheet" ]]; then
+  SPREADSHEET_ID=$(python3 - "$ENVS_FILE" "$ENV_ARG" <<'PYTHON'
+import json
+import sys
+with open(sys.argv[1]) as config_file:
+    settings = json.load(config_file)[sys.argv[2]]
+print(settings.get("spreadsheet_id", "TODO"))
+PYTHON
+)
+  if [[ -z "$SPREADSHEET_ID" || "$SPREADSHEET_ID" == "TODO" ]]; then
+    echo "ERROR: '$ENV_ARG' spreadsheet_id is not configured in cicd/envs.json."
+    exit 1
+  fi
+  if ! grep -Eq '^FDL_SERVICE_ACCOUNT_FILE=.+' "$ENV_FILE"; then
+    echo "ERROR: FDL_SERVICE_ACCOUNT_FILE is not set in $ENV_FILE (path to the service-account JSON key shared with the spreadsheet as Editor)."
+    exit 1
+  fi
 fi
 
 echo "[$ENV_ARG] Check passed: $(basename "$JOB_DIR") $MODE_ARG"

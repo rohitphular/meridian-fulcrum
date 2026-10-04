@@ -20,8 +20,8 @@ See [spreadsheet tab order](sheet-order.md) for the preferred layout and automat
 8. **[categories.md](categories.md)** — Two-level taxonomy, archive semantics, account-type hints, CSV import
 9. **[rates.md](rates.md)** — FX rates, upsert semantics, conversion function, row-level vs global rate priority
 10. **[subscriptions.md](subscriptions.md)** — Recurring payment obligations, 21-column schema, frequency, amount, account and category linkage
-11. **[calculations.md](calculations.md)** — Product decisions applied by the server everywhere: net worth, income / spending exclusions, periods, conversion, caching
-12. **[insight/INSIGHT.md](insight/INSIGHT.md)** — The server-computed insight section and one doc per insight ([insight.md](insight.md) is the superseded early design)
+11. **[calculations.md](calculations.md)** — Definitions applied everywhere: net worth, income / spending exclusions, periods (UTC for reports), conversion, caching
+12. **[reports.md](reports.md)** — Reports, Home and Accounts figures: computed by the analytics job, published, read and converted by GAS
 
 ## Historical
 
@@ -37,7 +37,7 @@ The following decisions are reference-implementation choices, NOT requirements. 
 | Apps Script `doGet` / `doPost` | HTTP entry points with action dispatch | Any HTTP framework: Express, FastAPI, Spring, ASP.NET |
 | Vanilla JS modules | Static SPA with no build step | React / Vue / Svelte / Solid / native mobile — the section pattern (form-above-table, sort, filter, paginate) maps cleanly |
 | `_audit` sheet for IP tracking | A keyed counter + lock-state store | Redis, a DB table, even an in-memory map for single-instance deploys |
-| Chart.js | A 2D bar charting library | Any equivalent — the insight chart shapes are simple bars |
+| Chart.js | A 2D charting library | Any equivalent — the report payload names generic chart kinds |
 | Session in `sessionStorage` | Per-tab client session containing the PIN | Cookie + server session, JWT, encrypted client storage |
 
 Required regardless of platform:

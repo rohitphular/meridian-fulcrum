@@ -22,13 +22,23 @@ const ACCOUNT_TYPE_IMPORT_MESSAGES = {
   reserved_account_subtype_key: 'subtype keys must differ from type keys.',
 };
 
+// Like the other master CSVs, the file holds the business columns and
+// record_status only; audit and sync columns are server-owned. An older file
+// that still has them is accepted and those columns are ignored.
+const ACCOUNT_TYPE_SERVER_COLUMNS = ['sync_status', 'sync_date', 'sync_notes', 'created_at', 'updated_at'];
+
+function getAccountTypeCsvColumns() {
+  return getAccountTypeSheetColumns().filter(function(column) { return ACCOUNT_TYPE_SERVER_COLUMNS.indexOf(column) === -1; });
+}
+
 // body: { csv, dry_run? }. dry_run checks the file only and never reads a Sheet,
 // so the factory-reset preflight can run it against an old spreadsheet.
 function importAccountTypesCsv(body) {
   const parsed = parseCsvImport(body);
   if (parsed.ok === false) return parsed;
-  const columns = getAccountTypeSheetColumns();
-  if (parsed.headers.length !== columns.length || columns.some(function(column) { return parsed.headers.indexOf(column) === -1; })) {
+  const columns = getAccountTypeCsvColumns();
+  const unexpected = parsed.headers.filter(function(header) { return columns.indexOf(header) === -1 && ACCOUNT_TYPE_SERVER_COLUMNS.indexOf(header) === -1; });
+  if (unexpected.length > 0 || columns.some(function(column) { return parsed.headers.indexOf(column) === -1; })) {
     const retired = parsed.headers.indexOf('is_loan') === -1 ? '' : ' The retired is_loan column must be removed.';
     return { ok: false, error: 'invalid_csv_headers', errors: ['CSV headers must match the account_types export: ' + columns.join(', ') + '.' + retired] };
   }

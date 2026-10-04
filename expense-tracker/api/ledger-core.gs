@@ -1,65 +1,20 @@
 // =============================================================================
-// FULCRUM FORGE — Ledger core: balance replay, snapshots, periods, transfer pairs
+// FULCRUM FORGE — Ledger core: date keys, periods, transfer pairs, tracking start
 //
-// Ported from app/sections/insights/insight-utils.js (_balanceEvents,
-// _balanceSnapshots, accountBalanceByMonth, computeBalancesAt,
-// computeDailyTotalAssets, getPeriodBounds), app/core/daterange.js and
-// app/core/date-utils.js. Current balances follow _buildAccountNetMap
-// (account-core.gs) exactly so ledger totals equal listAccounts().
-//
-// Rules:
-// - Tracking start: accountLocalDateTimeKey (date-only / HH:MM allowed). For an
-//   account with local_timezone the cutoff is compared as a UTC instant;
-//   without a zone (legacy) wall-time keys are compared.
+// What the Transactions list and input validation still need. Reports, balances
+// over time and net worth are computed by the analytics job
+// (data-synchronization/analytics) and read through report-store.gs.
+// - Periods are inclusive of today (the list's range filter, see below).
 // - Transaction dates: strict localDateTimeKey (seconds required); blank
-//   tx_timezone_local means Europe/London. Rows without seconds are skipped.
-// - Movement: non-deleted, known account, finite amount > 0, money-in (+) or
-//   money-out (-). Transfer legs are included (they move balances).
-// - Dated snapshots bucket each event by calendar date: for zoned accounts the
-//   instant's date in the request tz, for legacy accounts the wall date.
-// - Period filters / income-spend buckets use the recorded wall date
-//   (ldgTxDateKey); "today" is the zoned today of the request tz.
-//   "Balance at D" = all events with date key <= D. No new Date(string) parsing.
-// - Income / spend eligibility excludes deleted rows and own-account transfers.
-// All amounts are native (account currency); convert with fx-utils.gs.
+//   tx_timezone_local means Europe/London. Filters use the recorded wall date.
+// - Tracking start (ldgAccountCutoff) mirrors _buildAccountNetMap, which the
+//   balance check in transaction-validation.gs uses.
 // Globals in this file use the ldg / _ldg prefix.
 // =============================================================================
 
-const LDG_DEFAULT_TIMEZONE = 'Europe/London';
-const _LDG_MEMO_LIMIT = 20000;
-const _ldgFormatters = new Map();
-const _ldgInstantMemo = new Map();
 
 function _ldgText(value) {
   return value === undefined || value === null ? '' : String(value).trim();
-}
-
-function _ldgFormatter(timezone) {
-  if (_ldgFormatters.has(timezone)) return _ldgFormatters.get(timezone);
-  const formatter = ianaDateFormatter(timezone);
-  _ldgFormatters.set(timezone, formatter);
-  return formatter;
-}
-
-// Unique UTC instant (ms) of a 'YYYY-MM-DD HH:MM:SS[.ffffff]' wall key in a
-// zone, or NaN for gaps, folds, invalid zones. Reuses localWallTimeCandidates.
-function _ldgWallInstant(key, timezone) {
-  const memoKey = timezone + '|' + key;
-  if (_ldgInstantMemo.has(memoKey)) return _ldgInstantMemo.get(memoKey);
-  let result = NaN;
-  try {
-    const matches = localWallTimeCandidates(key, timezone);
-    if (matches.length === 1) result = matches[0] + Number('0.' + (key.length > 20 ? key.slice(20) : '0')) * 1000;
-  } catch (_) { result = NaN; }
-  if (_ldgInstantMemo.size >= _LDG_MEMO_LIMIT) _ldgInstantMemo.clear();
-  _ldgInstantMemo.set(memoKey, result);
-  return result;
-}
-
-// 'YYYY-MM-DD' of an instant in a zone.
-function ldgDateKeyInZone(instant, timezone) {
-  const parts = zonedDateParts(new Date(Math.floor(instant)), _ldgFormatter(timezone));
-  return parts.year.padStart(4, '0') + '-' + parts.month + '-' + parts.day;
 }
 
 // ── Calendar-key arithmetic (UTC date math on 'YYYY-MM-DD') ──────────────────
@@ -100,22 +55,6 @@ function ldgMonthEnd(key, months) {
 // Inclusive day count between two date keys.
 function ldgDaysBetween(fromKey, toKey) {
   return Math.round((_ldgDate(toKey).getTime() - _ldgDate(fromKey).getTime()) / 86400000) + 1;
-}
-
-// Ordered 'YYYY-MM-DD' keys from → to inclusive.
-function ldgDateKeys(fromKey, toKey) {
-  const keys = [];
-  if (!ldgIsDateKey(fromKey) || !ldgIsDateKey(toKey) || fromKey > toKey) return keys;
-  for (let key = fromKey; key <= toKey; key = ldgAddDays(key, 1)) keys.push(key);
-  return keys;
-}
-
-// Ordered 'YYYY-MM' keys spanning from → to inclusive (ports monthRange).
-function ldgMonthKeys(fromKey, toKey) {
-  const keys = [];
-  if (!ldgIsDateKey(fromKey) || !ldgIsDateKey(toKey) || fromKey > toKey) return keys;
-  for (let key = ldgMonthStart(fromKey); key <= toKey; key = ldgMonthStart(key, 1)) keys.push(key.slice(0, 7));
-  return keys;
 }
 
 // ISO weekday 1 (Mon) .. 7 (Sun).
@@ -226,11 +165,6 @@ function ldgTxLocalKey(tx) {
   return localDateTimeKey(sheetLocalDateTimeText(tx.tx_date_local));
 }
 
-function ldgTxZone(tx) {
-  const zone = _ldgText(tx.tx_timezone_local);
-  return zone === '' ? LDG_DEFAULT_TIMEZONE : zone;
-}
-
 // Calendar date of a transaction for period filters and income/spend buckets:
 // the RECORDED wall date (the date the row displays), as the old client
 // (daterange.js txInRange, insight-utils groupBy*) and the legacy balance replay
@@ -239,21 +173,6 @@ function ldgTxZone(tx) {
 function ldgTxDateKey(tx) {
   const key = ldgTxLocalKey(tx);
   return key === null ? null : key.slice(0, 10);
-}
-
-// Alternative: the row's instant (its own zone, blank = Europe/London)
-// re-expressed as a calendar date in the request tz. Falls back to the wall
-// date when the zones match or the wall time cannot be resolved (DST gap/fold).
-// Not used for filters; available for views that need viewer-day buckets.
-function ldgTxZonedDateKey(tx, timezone) {
-  const key = ldgTxLocalKey(tx);
-  if (key === null) return null;
-  const zone = ldgTxZone(tx);
-  const tz = _ldgText(timezone) === '' ? LDG_DEFAULT_TIMEZONE : _ldgText(timezone);
-  if (zone === tz) return key.slice(0, 10);
-  const instant = _ldgWallInstant(key, zone);
-  if (!Number.isFinite(instant)) return key.slice(0, 10);
-  return ldgDateKeyInZone(instant, tz);
 }
 
 // ── Transfer pairing ──────────────────────────────────────────────────────────
@@ -293,22 +212,7 @@ function ldgIsTransferLeg(tx, pairs) {
   return pairs.live_child_parents[_ldgText(tx.id).toLowerCase()] === true;
 }
 
-// Product decision: income / spending / cash-flow exclude deleted rows and
-// transfers between own accounts.
-function ldgIsFlowEligible(tx, pairs) {
-  return _ldgText(tx.record_status) !== 'deleted' && !ldgIsTransferLeg(tx, pairs);
-}
-
-// 'income' | 'spend' | null for flow-eligible rows.
-function ldgFlowKind(tx, pairs) {
-  if (!ldgIsFlowEligible(tx, pairs)) return null;
-  const type = _ldgText(tx.tx_type);
-  if (type === 'money-in') return 'income';
-  if (type === 'money-out') return 'spend';
-  return null;
-}
-
-// ── Balance replay ────────────────────────────────────────────────────────────
+// ── Tracking start ────────────────────────────────────────────────────────────
 
 // Mirrors _buildAccountNetMap's tracking-start handling.
 // Returns { zone, key, cutoff, valid }: key = wall key, cutoff = comparable key
@@ -320,182 +224,4 @@ function ldgAccountCutoff(account) {
   const cutoff = key === null || zone === '' ? key : localDateTimeUtcKey(key, zone);
   const blank = text === undefined || text === null || String(text).trim() === '';
   return { zone: zone, key: key, cutoff: cutoff, valid: blank || cutoff !== null };
-}
-
-function _ldgUtcKeyInstant(utcKey) {
-  return Date.parse(utcKey.slice(0, 10) + 'T' + utcKey.slice(11, 23) + 'Z') + Number('0.' + utcKey.slice(23));
-}
-
-// Builds the replay once per request. opts.tz = request timezone for dated
-// buckets (default Europe/London). Returns:
-// { tz, accounts: {id: {id, currency, type, record_status, opening, valid, cutoff}},
-//   order: [ids], current: {id: native net movement}, events: [{account_id, date_key, amount}],
-//   invalid_account_ids: [ids] }
-function ldgBuild(accounts, txs, opts) {
-  const tz = opts !== undefined && opts !== null && _ldgText(opts.tz) !== '' ? _ldgText(opts.tz) : LDG_DEFAULT_TIMEZONE;
-  const info = Object.create(null);
-  const order = [];
-  const net = Object.create(null);
-  const events = [];
-  const invalid = [];
-  (accounts || []).forEach(function(account) {
-    const id = account.id;
-    const cutoff = ldgAccountCutoff(account);
-    const openingRaw = account.opening_value_local;
-    const opening = openingRaw === undefined || openingRaw === null || String(openingRaw).trim() === '' ? NaN : Number(openingRaw);
-    info[id] = {
-      id: id, currency: _ldgText(account.account_currency_local).toUpperCase(), type: _ldgText(account.type),
-      record_status: _ldgText(account.record_status), opening: Number.isFinite(opening) ? opening : null,
-      valid: cutoff.valid, cutoff: cutoff,
-    };
-    order.push(id);
-    net[id] = 0;
-    if (!cutoff.valid) { invalid.push(id); return; }
-    if (!Number.isFinite(opening)) return;
-    let openingDate = '';
-    if (cutoff.key !== null) {
-      openingDate = cutoff.zone === '' ? cutoff.key.slice(0, 10) : ldgDateKeyInZone(_ldgUtcKeyInstant(cutoff.cutoff), tz);
-    }
-    events.push({ account_id: id, date_key: openingDate, amount: opening });
-  });
-
-  (txs || []).forEach(function(tx) {
-    if (String(tx.record_status) === 'deleted') return;
-    const accId = String(tx.account_id === undefined || tx.account_id === null ? '' : tx.account_id).trim();
-    if (accId === '' || info[accId] === undefined) return;
-    const amount = Number(tx.tx_amount_local);
-    if (!Number.isFinite(amount) || amount <= 0) return;
-    const account = info[accId];
-    if (!account.valid) return;
-    const localKey = ldgTxLocalKey(tx);
-    if (localKey === null) return;
-    const type = String(tx.tx_type === undefined || tx.tx_type === null ? '' : tx.tx_type).trim();
-    const sign = type === 'money-in' ? 1 : type === 'money-out' ? -1 : 0;
-    const cutoff = account.cutoff;
-    let affects = true;
-    let instant = NaN;
-    if (cutoff.zone !== '') {
-      instant = _ldgWallInstant(localKey, ldgTxZone(tx));
-      if (cutoff.cutoff !== null) {
-        const txKey = localDateTimeUtcKey(localKey, ldgTxZone(tx));
-        if (txKey === null || txKey < cutoff.cutoff) affects = false;
-      }
-    } else if (cutoff.cutoff !== null && localKey < cutoff.cutoff) {
-      affects = false;
-    }
-    if (!affects || sign === 0) return;
-    // Current balance: every eligible movement, including future-dated rows.
-    net[accId] += sign * amount;
-    // Dated replay: zoned accounts need a resolvable instant (DST gaps/folds skipped).
-    if (cutoff.zone !== '') {
-      if (!Number.isFinite(instant)) return;
-      events.push({ account_id: accId, date_key: ldgDateKeyInZone(instant, tz), amount: sign * amount });
-    } else {
-      events.push({ account_id: accId, date_key: localKey.slice(0, 10), amount: sign * amount });
-    }
-  });
-  events.sort(function(a, b) { return a.date_key < b.date_key ? -1 : a.date_key > b.date_key ? 1 : 0; });
-  return { tz: tz, accounts: info, order: order, current: net, events: events, invalid_account_ids: invalid };
-}
-
-// { id: current native balance } = opening + all eligible movements
-// (null for a non-numeric opening). Equals listAccounts().current_value_local.
-function ldgCurrentBalances(ledger) {
-  const out = Object.create(null);
-  ledger.order.forEach(function(id) {
-    const account = ledger.accounts[id];
-    out[id] = account.opening === null ? null : account.opening + ledger.current[id];
-  });
-  return out;
-}
-
-// Balances at the end of each date key (any order); returns an array aligned
-// with dateKeys of { id: native balance }. Invalid tracking → balance 0.
-function ldgSnapshots(ledger, dateKeys) {
-  const indexed = dateKeys.map(function(key, index) { return { key: key, index: index }; });
-  indexed.sort(function(a, b) { return a.key < b.key ? -1 : a.key > b.key ? 1 : 0; });
-  const balances = Object.create(null);
-  ledger.order.forEach(function(id) { balances[id] = 0; });
-  const out = new Array(dateKeys.length);
-  let eventIndex = 0;
-  indexed.forEach(function(item) {
-    while (eventIndex < ledger.events.length && ledger.events[eventIndex].date_key <= item.key) {
-      const event = ledger.events[eventIndex++];
-      balances[event.account_id] += event.amount;
-    }
-    out[item.index] = Object.assign({}, balances);
-  });
-  return out;
-}
-
-function ldgBalancesAt(ledger, dateKey) {
-  return ldgSnapshots(ledger, [dateKey])[0];
-}
-
-// { 'YYYY-MM': { id: native balance at month end } } (ports accountBalanceByMonth).
-function ldgBalanceByMonth(ledger, monthKeys) {
-  const ordered = monthKeys.slice().sort();
-  const ends = ordered.map(function(month) { return ldgMonthEnd(month + '-01'); });
-  const snapshots = ldgSnapshots(ledger, ends);
-  const out = {};
-  ordered.forEach(function(month, index) { out[month] = snapshots[index]; });
-  return out;
-}
-
-// Sums native balances in the quote currency. filter(accountInfo) selects
-// accounts (default: all). Accounts whose currency has no rate are excluded
-// and listed in missing_currencies (never converted 1:1).
-function ldgSumQuote(ledger, balances, fx, filter) {
-  let total = 0;
-  const missing = Object.create(null);
-  ledger.order.forEach(function(id) {
-    const account = ledger.accounts[id];
-    if (filter !== undefined && filter !== null && !filter(account)) return;
-    const native = balances[id];
-    if (native === null || native === undefined || !Number.isFinite(native)) return;
-    const quote = fxToQuote(native, account.currency, fx.rate_map, fx.quote_currency);
-    if (!Number.isFinite(quote)) { missing[account.currency === '' ? '(blank)' : account.currency] = true; return; }
-    total += quote;
-  });
-  return { total: total, missing_currencies: Object.keys(missing).sort() };
-}
-
-// Daily total balance in quote currency from → to (ports computeDailyTotalAssets).
-// Returns { dates: [...], totals: [...], missing_currencies: [...] }.
-function ldgDailyTotals(ledger, fromKey, toKey, fx, filter) {
-  const dates = ldgDateKeys(fromKey, toKey);
-  const snapshots = ldgSnapshots(ledger, dates);
-  let missing = [];
-  const totals = snapshots.map(function(balances) {
-    const sum = ldgSumQuote(ledger, balances, fx, filter);
-    missing = sum.missing_currencies;
-    return sum.total;
-  });
-  return { dates: dates, totals: totals, missing_currencies: missing };
-}
-
-// ── Net worth (product decision: one definition everywhere) ───────────────────
-
-// All non-deleted accounts (active, inactive, locked). Assets = asset +
-// investment; liabilities = liability (stored negative). total_liabilities is
-// the owed magnitude (positive when owed); net_worth = assets - liabilities.
-function ldgIsNetWorthAccount(account) {
-  return account.record_status !== 'deleted' && (account.type === 'asset' || account.type === 'investment' || account.type === 'liability');
-}
-
-function ldgNetWorth(ledger, balances, fx) {
-  const assets = ldgSumQuote(ledger, balances, fx, function(account) {
-    return ldgIsNetWorthAccount(account) && account.type !== 'liability';
-  });
-  const liabilities = ldgSumQuote(ledger, balances, fx, function(account) {
-    return ldgIsNetWorthAccount(account) && account.type === 'liability';
-  });
-  const missing = Object.create(null);
-  assets.missing_currencies.concat(liabilities.missing_currencies).forEach(function(code) { missing[code] = true; });
-  return {
-    total_assets: assets.total,
-    total_liabilities: -liabilities.total,
-    net_worth: assets.total + liabilities.total,
-    missing_currencies: Object.keys(missing).sort(),
-  };
 }

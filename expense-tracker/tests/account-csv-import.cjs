@@ -236,3 +236,17 @@ test('import panel lists file-level errors without reloading, and closes on full
   assert.match(threw.snapshot().result, /Some rows may have been saved/);
   assert.deepEqual(threw.events, ['et:reload']);
 });
+
+test('detail CSVs need no audit or sync columns: the server sets them, and re-import is unchanged', () => {
+  const { ctx, sheet } = runtime();
+  ctx.importAccountDataCsv({ file_type: 'account_master', csv: MASTER_HEADER + '\n' + masterRow(ACCOUNT_ID, 'Bank') });
+  const header = 'id,account_id,account_name,is_interest_paid,rate_type,interest_payment_frequency,interest_rate,record_status';
+  const csv = header + '\n' + [DETAIL_ID, ACCOUNT_ID, 'Bank', 'false', '', '', '1.5', 'active'].join(',') + '\n';
+  const first = plain(ctx.importAccountDataCsv({ file_type: 'account_deposit', csv }));
+  assert.deepEqual([first.ok, first.created], [true, 1]);
+  const columns = sheet('account_deposit').rows[0];
+  const row = Object.fromEntries(columns.map((column, index) => [column, sheet('account_deposit').rows[1][index]]));
+  assert.equal(row.sync_status, 'create-pending');
+  assert.notEqual(row.created_at, '');
+  assert.equal(plain(ctx.importAccountDataCsv({ file_type: 'account_deposit', csv })).skipped, 1);
+});

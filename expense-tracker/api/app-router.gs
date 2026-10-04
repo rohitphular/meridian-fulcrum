@@ -207,8 +207,6 @@ function _dispatchPost(body) {
   if (body.action === 'delete_transaction')      return json(deleteTransaction(body));
   if (body.action === 'restore_transaction')     return json(restoreTransaction(body));
   if (body.action === 'create_transactions_bulk') return json(importTransactionsCsv(body));
-  if (body.action === 'upsert_rate')        return json(upsertRate(body));
-  if (body.action === 'delete_rate')        return json(deleteRate(body));
   if (body.action === 'create_category')    return json(createCategory(body));
   if (body.action === 'create_categories_bulk') return json(importCategoriesCsv(body));
   if (body.action === 'update_category')    return json(updateCategory(body));
@@ -232,6 +230,14 @@ function _dispatchPost(body) {
   if (body.action === 'restore_subscription')      return json(restoreSubscription(body));
   if (body.action === 'factory_reset_delete_sheets') return json(factoryResetDeleteSheets(body));
   if (body.action === 'fill_csv_ids')               return json(fillCsvIds(body));
+  if (body.action === 'create_report')              return json(createReport(body));
+  if (body.action === 'update_report')              return json(updateReport(body));
+  if (body.action === 'delete_report')              return json(deleteReport(body));
+  if (body.action === 'restore_report')             return json(restoreReport(body));
+  if (body.action === 'duplicate_report')           return json(duplicateReport(body));
+  if (body.action === 'update_dashboard_layout')    return json(updateDashboardLayout(body));
+  if (body.action === 'create_reports_bulk')        return json(importReportsCsv(body));
+  if (body.action === 'import_dashboard_layout')    return json(importDashboardLayoutCsv(body));
 
   return json({ ok: false, error: 'unknown_action' });
 }

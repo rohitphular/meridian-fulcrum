@@ -40,9 +40,12 @@ uv run --locked py-db-migrate run --db postgres
 # ── Step 4: Run selected mode ────────────────────────────────────────────────
 
 echo "[$ENV_ARG] Running $MODE_ARG job..."
+# exec: a signal sent to this launcher (kill, a scheduler) reaches the job itself.
 if [[ "$MODE_ARG" == "daily" ]]; then
-  # exec: a signal sent to this launcher (kill, a scheduler) reaches the job itself.
   exec uv run --locked python -m core.runner
+elif [[ "$MODE_ARG" == "publish-sheet" ]]; then
+  export FDL_SPREADSHEET_ID="$SPREADSHEET_ID"
+  exec uv run --locked python -m core.publish_sheet
 else
   exec uv run --locked python -m core.historical
 fi

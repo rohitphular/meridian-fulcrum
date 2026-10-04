@@ -171,6 +171,18 @@ The API includes XAU as a fixed `rate = 1` row. Legacy rate-table normalization 
 
 **Note:** The Rate entity has no `record_status`, `sync_status`, `sync_date`, `sync_notes`, or `created_at` columns. See Known gaps below.
 
+## Reports
+
+Report configuration and published results live in their own tabs; the full column lists and owners are in the [report contract](../../data-synchronization/analytics/contract/README.md).
+
+| Tab | Owner | Holds |
+|---|---|---|
+| `report_master` | app (GAS) | One row per report: pre-built (`report_type = predefined`, `locked`, fixed UUID) or your own (`user_defined`). Definition columns, `record_status`, `created_at` / `updated_at` and the `sync_status` / `sync_date` / `sync_notes` cells like the other masters. |
+| `dashboard_layout` | app (GAS) | Eight rows, `tile_1`…`tile_4` and `panel_1`…`panel_4`, each with a `report_master` id. No sync cells: nothing is computed from it. |
+| `report_meta`, `report_status`, `report_index_a/b`, `report_data_a/b` | analytics job | The published generation (two slots, switched atomically in `report_meta`), each report's result, and the payloads in chunks. GAS only reads them; a missing tab means nothing is published yet. |
+
+Money in published payloads is XAU (grams); GAS converts it to the display currency. Dates are UTC.
+
 ## Audit entry
 
 | Field | Type | Notes |

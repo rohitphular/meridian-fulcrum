@@ -80,7 +80,7 @@ function accountsFixture(stateExtra = {}) {
     accFilterOpen: false, accAddOpen: false, accImportOpen: false, accViewRow: null, accEditRow: null, accDeleteRow: null, accDeleteBlocked: null, ...stateExtra,
   };
   const exposed = load('sections/accounts.js', {
-    state, el, showLoading() {}, hideLoading() {}, showMsg() {}, recordStatusIcon: () => '', syncStatusIcon: () => '',
+    state, el, fmtAsOf: iso => (iso ? `local(${iso})` : ''), showLoading() {}, hideLoading() {}, showMsg() {}, recordStatusIcon: () => '', syncStatusIcon: () => '',
     closeContextMenu() {}, openContextMenu: (button, items) => menus.push(items), exportAccounts() {},
     document: { addEventListener() {}, removeEventListener() {}, dispatchEvent() {} }, CustomEvent: class { constructor(type) { this.type = type; } },
     ExpenseAPI: { view: async (action, params) => { calls.push([action, params]); return respond(action, params); } },
@@ -109,6 +109,36 @@ test('accounts render the server summary, groups and balances without converting
   assert.match(html, /&lt;Card&gt;/);
   assert.doesNotMatch(html, /<Card>/);
   assert.equal(context.state.views.list_accounts_view.data.total, 3);
+});
+
+test('accounts show published balances as of their local time, "—" for unpublished values, and the not-published notice', async () => {
+  const context = accountsFixture();
+  const unpublished = accountsView({ summary: { all_count: 1, cards: [
+    { key: 'total_assets', label: 'Total Assets', value: null, tone: 'positive' },
+    { key: 'net_worth', label: 'Net Worth', value: null, tone: 'positive' },
+  ] }, groups: [{ type: 'asset', label: 'Asset', is_liability: false, count: 1, total: { quote: 0, display_sign: 'positive', missing_currencies: [] },
+    rows: [accountRow({ balance: { native: null, currency: 'GBP', currency_symbol: '£', quote: null, display_sign: 'positive', is_foreign: false } })] }], total: 1 });
+  unpublished.warnings = [{ code: 'not_published' }];
+  unpublished.published_at = '';
+  context.setRespond(() => unpublished);
+  context.renderAccounts();
+  await flush();
+  let html = context.nodes.accListRegion.innerHTML;
+  assert.match(html, /Total Assets<\/div>\s*<div class="summary-card-value positive">—<\/div>/);
+  assert.match(html, /Net Worth<\/div>\s*<div class="summary-card-value positive">—<\/div>/);
+  assert.match(html, /<span class="muted">—<\/span>/);
+  assert.match(html, /Balances appear after the next refresh\./);
+  assert.match(html, /Asset\s*<span style="float:right;[^"]*">—<\/span>/, 'group totals are unknown, not £0');
+  assert.doesNotMatch(html, /£0/);
+  assert.doesNotMatch(html, /as of/i);
+  const published = accountsView();
+  published.published_at = '2026-10-04T06:00:00.000Z';
+  context.setRespond(() => published);
+  context.renderAccounts();
+  await flush();
+  html = context.nodes.accListRegion.innerHTML;
+  assert.match(html, /Balances as of local\(2026-10-04T06:00:00\.000Z\)/);
+  assert.doesNotMatch(html, /after the next refresh/);
 });
 
 test('account menus come from allowed_actions and filters are sent to the server on Apply', async () => {
@@ -165,34 +195,28 @@ test('accounts, rates and configure keep no client-side list logic', () => {
   }
 });
 
-test('rates render list_rates_view rows, hide the menu when no action is allowed and send sort params', async () => {
+test('rates render list_rates_view rows read-only, with the rate date, and send sort params', async () => {
   const { nodes, el } = dom();
   const calls = [];
   const view = { ok: true, data: { rows: [
-    { currency: 'GBP', symbol: '£', rate: 80, rate_label: '80.00', updated_at: '', is_base: false, allowed_actions: ['edit', 'delete'], used_by_accounts: [] },
-    { currency: 'XAU', symbol: '⊕', rate: 1, rate_label: '1.00', updated_at: '', is_base: true, allowed_actions: [], used_by_accounts: [] },
+    { currency: 'GBP', symbol: '£', rate: 80, rate_label: '80.00', rate_date: '2026-10-03', updated_at: '2026-10-04T06:30:00Z', is_base: false, readonly: true, allowed_actions: [], used_by_accounts: [] },
+    { currency: 'XAU', symbol: '⊕', rate: 1, rate_label: '1.00', rate_date: '2026-10-03', updated_at: '2026-10-04T06:30:00Z', is_base: true, readonly: true, allowed_actions: [], used_by_accounts: [] },
   ] } };
-  const state = { views: {}, rateAddOpen: false, rateEditCurrency: null, rateDeleteCurrency: null, rateDeleteBlocked: null };
-  const menus = [];
+  const state = { views: {} };
   const rates = load('sections/rates.js', {
-    state, el, closeContextMenu() {}, openContextMenu: (button, items) => menus.push(items), fmtDateTime: value => value,
-    showLoading() {}, hideLoading() {}, showMsg() {},
+    state, el, fmtDateTime: value => value, showLoading() {}, hideLoading() {},
     ExpenseAPI: { view: async (action, params) => { calls.push([action, params]); return view; } },
   }, ['renderRates', '_attachListEvents']);
   rates.renderRates();
   await flush();
   assert.deepEqual(JSON.parse(JSON.stringify(calls[0])), ['list_rates_view', { sort: 'sheet', dir: 'asc' }]);
   const html = nodes.rateListRegion.innerHTML;
-  assert.equal((html.match(/data-action="rate-menu" data-currency="GBP"/g) ?? []).length, 2);
-  assert.doesNotMatch(html, /data-currency="XAU"/);
+  assert.doesNotMatch(html, /rate-menu|rateAddBtn|data-action/);
   assert.match(html, /<td class="td-mono">80\.00<\/td>/);
-  const header = { dataset: { rateSort: 'rate' }, addEventListener(type, fn) { this.click = fn; } };
-  const wrap = { addEventListener(type, fn) { this.click = fn; } };
-  const region = { querySelector: selector => (selector === '.rate-table-wrap' ? wrap : null), querySelectorAll: () => [header] };
-  rates._attachListEvents(region);
-  wrap.click({ target: { closest: () => ({ dataset: { action: 'rate-menu', currency: 'GBP' } }) } });
-  assert.deepEqual(menus[0].map(item => item.key), ['rate-edit', 'rate-delete']);
+  assert.match(html, /<td class="td-mono">2026-10-03<\/td>/);
+  const header = { dataset: { rateSort: 'rate_date' }, addEventListener(type, fn) { this.click = fn; } };
+  rates._attachListEvents({ querySelectorAll: () => [header] });
   header.click();
   await flush();
-  assert.deepEqual(JSON.parse(JSON.stringify(calls.at(-1))), ['list_rates_view', { sort: 'rate', dir: 'asc' }]);
+  assert.deepEqual(JSON.parse(JSON.stringify(calls.at(-1))), ['list_rates_view', { sort: 'rate_date', dir: 'asc' }]);
 });

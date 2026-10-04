@@ -1,16 +1,34 @@
 // Phase 2–3 (P2-B accounts, P3-B): list_accounts_view, get_account_form_options,
 // list_rates_view and list_account_types_view — server filter / sort / paging,
-// summaries over all non-deleted accounts, row flags, one transaction read.
+// summaries over all non-deleted accounts, row flags. Balances and the summary
+// cards are the analytics job's published Accounts datasets (in XAU), converted.
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const { gasRuntime } = require('./support/gas-runtime.cjs');
 const { ID, ACCOUNT_TYPES, seedViewFixture } = require('./support/view-fixture.cjs');
+const { publish, payload, predefinedId } = require('./support/report-publish.cjs');
 
 const plain = value => JSON.parse(JSON.stringify(value));
 
-function appRuntime(overrides) {
+// The datasets the job publishes for the fixture (GBP 80 / INR 8400 per gram; no USD rate),
+// in grams: Bank 3142.5 GBP, Rupee 9450 INR, Card +40 GBP, Brokerage 525 USD (no rate), Closed 999 GBP.
+const BALANCES = [[11, 3142.5, 3142.5 / 80], [12, 9450, 9450 / 8400], [13, 40, 40 / 80], [14, 525, null], [15, 999, 999 / 80]];
+function publishAccounts(sheets, extra = {}) {
+  const missing = [{ code: 'missing_rate', currencies: ['USD'] }];
+  const card = (key, grams) => ({ key, label: key, value: grams, format: 'money' });
+  publish(sheets, { outputs: [
+    { report_id: predefinedId('dataset-accounts-summary'), payload: payload({ warnings: missing, stat_cards: [
+      card('total_assets', 3232.5 / 80), card('total_liabilities', -40 / 80), card('net_worth', 3272.5 / 80), card('liquid_cash', 3232.5 / 80)] }) },
+    { report_id: predefinedId('dataset-account-balances'), payload: payload({ warnings: missing, tables: [{ id: 'balances', columns: [
+      { key: 'account_id', format: 'text' }, { key: 'balance_local', format: 'local' }, { key: 'balance', format: 'money' }],
+    rows: BALANCES.map(([n, local, grams]) => ({ key: ID(n), cells: { account_id: ID(n), balance_local: local, balance: grams } })) }] }) },
+  ], ...extra });
+}
+
+function appRuntime(overrides, { published = true } = {}) {
   const runtime = gasRuntime({ properties: { MERIDIAN_FULCRUM_PIN: '1234' } });
   runtime.tabs = seedViewFixture(runtime, overrides);
+  if (published) publishAccounts(runtime.sheets);
   runtime.get = params => JSON.parse(runtime.ctx.doGet({ parameter: { pin: '1234', ...params } }).getContent());
   return runtime;
 }
@@ -27,7 +45,8 @@ test('list_accounts_view returns every account by default with native and quote 
   const runtime = appRuntime();
   const response = runtime.get({ action: 'list_accounts_view', today: '2026-09-30' });
   assert.equal(response.ok, true);
-  assert.deepEqual(response.quote, { currency: 'GBP', symbol: '£', rate_available: true });
+  assert.deepEqual(response.quote, { currency: 'GBP', symbol: '£', rate_available: true, rate: 80, rate_date: '' });
+  assert.deepEqual([response.generation_id, response.published_at], ['gen-1', '2026-09-30T06:00:00.000Z']);
   assert.deepEqual(response.warnings, [{ code: 'missing_rate', currencies: ['USD'] }]);
   const data = response.data;
   assert.deepEqual([data.total, data.page, data.pages, data.page_size, data.active_filter_count], [5, 1, 1, 5, 0]);
@@ -56,11 +75,16 @@ test('list_accounts_view returns every account by default with native and quote 
   assert.deepEqual(data.facets.statuses.map(status => status.value), ['active', 'inactive', 'deleted', 'locked']);
 });
 
-test('native balances equal listAccounts().current_value_local for every account', () => {
+test('native balances are the published local balances; nothing published shows no balance', () => {
   const runtime = appRuntime();
   const data = runtime.get({ action: 'list_accounts_view' }).data;
-  const expected = Object.fromEntries(runtime.ctx.listAccounts().map(account => [account.id, account.current_value_local]));
+  const expected = Object.fromEntries(BALANCES.map(([n, local]) => [ID(n), local]));
   for (const row of rowsOf(data)) assert.equal(row.balance.native, expected[row.id], row.account_name);
+  const empty = appRuntime(undefined, { published: false }).get({ action: 'list_accounts_view' });
+  assert.equal(empty.ok, true);
+  assert.deepEqual(empty.warnings, [{ code: 'not_published' }]);
+  assert.ok(rowsOf(empty.data).every(row => row.balance.native === null && row.balance.quote === null && row.display_sign === 'none'));
+  assert.equal(empty.data.summary.net_worth, null);
 });
 
 test('summary cards use ALL non-deleted accounts, whatever the filters', () => {
@@ -71,12 +95,6 @@ test('summary cards use ALL non-deleted accounts, whatever the filters', () => {
     assert.deepEqual(summary.missing_currencies, ['USD']);
     assert.deepEqual([summary.account_count, summary.all_count], [4, 5]);
   }
-  // Same numbers as ledger-core ldgNetWorth over the full ledger.
-  const { ctx } = runtime;
-  ctx.vmResetRequest();
-  const ledger = ctx.vmLedger('Europe/London');
-  const worth = ctx.ldgNetWorth(ledger, ctx.ldgCurrentBalances(ledger), ctx.fxContext(ctx.listRates(), 'GBP'));
-  assert.deepEqual([worth.total_assets, worth.total_liabilities, worth.net_worth], [SUMMARY.total_assets, SUMMARY.total_liabilities, SUMMARY.net_worth]);
   const cards = runtime.get({ action: 'list_accounts_view' }).data.summary.cards;
   assert.deepEqual(plain(cards), [
     { key: 'total_assets', label: 'Total Assets', value: 3232.5, tone: 'positive' },
@@ -90,20 +108,14 @@ test('summary cards use ALL non-deleted accounts, whatever the filters', () => {
   assert.equal(rowsOf(inr).find(row => row.account_name === 'Rupee').balance.is_foreign, false);
 });
 
-test('net worth counts locked and inactive accounts once their currency has a rate', () => {
-  const { RATES } = require('./support/view-fixture.cjs');
-  const runtime = appRuntime({ rates: [...RATES, { currency: 'USD', rate: 100, symbol: '$', updated_at: '2026-09-30T00:00:00Z' }] });
+test('a new publish is read at once: the cache key carries the generation id', () => {
+  const runtime = appRuntime();
+  assert.equal(runtime.get({ action: 'list_accounts_view' }).data.summary.net_worth, 3272.5);
+  publishAccounts(runtime.sheets, { generation_id: 'gen-2', slot: 'b' });
+  runtime.sheets.find(sheet => sheet.name === 'report_data_b').rows.forEach(row => { if (row[3] && row[3].includes('net_worth')) row[3] = row[3].replace(/"net_worth","label":"net_worth","value":[0-9.]+/, '"net_worth","label":"net_worth","value":50'); });
   const response = runtime.get({ action: 'list_accounts_view' });
-  assert.deepEqual(response.warnings, []);
-  const summary = response.data.summary;
-  // Locked Brokerage: 525 USD = 525 / 100 * 80 = 420 GBP; inactive Rupee (90 GBP) stays in.
-  assert.equal(summary.total_assets, SUMMARY.total_assets + 420);
-  assert.equal(summary.net_worth, SUMMARY.net_worth + 420);
-  assert.deepEqual(summary.missing_currencies, []);
-  // Liquid cash is deposit-backed assets only, so the brokerage does not move it.
-  assert.equal(summary.liquid_cash, SUMMARY.liquid_cash);
-  const withoutRupee = runtime.get({ action: 'list_accounts_view', statuses: 'active,locked' }).data.summary;
-  assert.equal(withoutRupee.total_assets, summary.total_assets);
+  assert.equal(response.generation_id, 'gen-2');
+  assert.equal(response.data.summary.net_worth, 4000);
 });
 
 test('filters: type, sub_type, currency, search and statuses (csv or none)', () => {
@@ -160,11 +172,11 @@ test('rows carry allowed actions and editable fields by status', () => {
   assert.deepEqual(byName.Bank.statuses_for_edit.map(status => status.value), ['active', 'inactive', 'locked']);
 });
 
-test('a list_accounts_view GET reads transaction_master and account_types once', () => {
+test('a list_accounts_view GET never reads transaction_master and reads account_types once', () => {
   const runtime = appRuntime();
   const before = { tx: runtime.tabs.transactions.reads, accounts: runtime.tabs.accounts.reads, types: runtime.tabs.account_types.reads };
   assert.equal(runtime.get({ action: 'list_accounts_view' }).ok, true);
-  assert.equal(runtime.tabs.transactions.reads - before.tx, 1);
+  assert.equal(runtime.tabs.transactions.reads - before.tx, 0);
   assert.equal(runtime.tabs.accounts.reads - before.accounts, 1);
   assert.equal(runtime.tabs.account_types.reads - before.types, 1);
 });
@@ -221,14 +233,15 @@ test('get_account_form_options returns form choices and per-account editable fie
   assert.deepEqual([missing.ok, missing.error, missing.field], [false, 'unknown_account_id', 'id']);
 });
 
-test('list_rates_view: sheet order, XAU read-only, accounts using each currency, search and sort', () => {
+test('list_rates_view: sheet order, every rate read-only, accounts using each currency, search and sort', () => {
   const runtime = appRuntime();
   const view = params => runtime.get({ action: 'list_rates_view', ...params });
   const data = view({}).data;
   assert.deepEqual(data.rows.map(row => row.currency), ['GBP', 'INR', 'XAU']);
   const [gbp, , xau] = data.rows;
-  assert.deepEqual([gbp.symbol, gbp.rate, gbp.rate_label, gbp.is_base, gbp.readonly, gbp.allowed_actions], ['£', 80, '80.00', false, false, ['edit', 'delete']]);
-  // Every account status counts, as delete_rate refuses on any account.
+  // Rates are published by forex-database-load: every row is read-only.
+  assert.deepEqual([gbp.symbol, gbp.rate, gbp.rate_label, gbp.is_base, gbp.readonly, gbp.allowed_actions, gbp.rate_date], ['£', 80, '80.00', false, true, [], '']);
+  // Every account status counts.
   assert.deepEqual([gbp.used_by_accounts, gbp.account_count], [['Bank', 'Card', 'Closed'], 3]);
   assert.deepEqual([xau.is_base, xau.readonly, xau.allowed_actions], [true, true, []]);
   assert.equal(data.rows[1].rate_label, '8,400.00');
@@ -287,14 +300,15 @@ test('a catalog that still needs migration only offers View', () => {
 test('view actions are registered through the file hooks and cached by data_version', () => {
   const runtime = appRuntime();
   const actions = runtime.ctx.grGetActions();
-  for (const action of ['list_accounts_view', 'get_account_form_options', 'list_rates_view', 'list_account_types_view']) {
+  for (const action of ['get_account_form_options', 'list_rates_view', 'list_account_types_view']) {
     assert.equal(actions[action].cache, true, action);
     assert.ok(actions[action].ttl <= 600);
   }
+  assert.equal(actions.list_accounts_view.cache, 'published');
   runtime.get({ action: 'list_accounts_view' });
-  const reads = runtime.tabs.transactions.reads;
+  const reads = runtime.tabs.accounts.reads;
   runtime.get({ action: 'list_accounts_view' });
-  assert.equal(runtime.tabs.transactions.reads, reads);
+  assert.equal(runtime.tabs.accounts.reads, reads);
 });
 
 // ── Exports (phase 5): export_accounts / export_account_types ────────────────
@@ -331,14 +345,14 @@ test('export_accounts returns every account (all statuses, filters ignored) in t
   assert.equal(runtime.ctx.grGetActions().export_accounts.cache, false);
 });
 
-test('export_account_types returns the whole catalog in the 13 import columns and restores through importAccountTypesCsv', () => {
+test('export_account_types returns the whole catalog in the 8 CSV columns (no audit or sync columns) and restores through importAccountTypesCsv', () => {
   const runtime = appRuntime();
   const response = runtime.get({ action: 'export_account_types', status: 'locked' });
   assert.equal(response.ok, true);
   const data = response.data;
   assert.equal(data.filename, 'account_types');
-  assert.deepEqual(data.columns, plain(runtime.ctx.getAccountTypeSheetColumns()));
-  assert.equal(data.columns.length, 13);
+  assert.deepEqual(data.columns, plain(runtime.ctx.getAccountTypeCsvColumns()));
+  assert.deepEqual(data.columns, ['id', 'account_type_key', 'account_type_label', 'account_subtype_key', 'account_subtype_label', 'description', 'detail_sheet', 'record_status']);
   assert.equal(data.count, ACCOUNT_TYPES.length);
   assert.equal(data.requires_migration, false);
   assert.deepEqual(data.rows.map(row => row.id), runtime.ctx.listAccountTypes().map(row => row.id));
@@ -347,8 +361,12 @@ test('export_account_types returns the whole catalog in the 13 import columns an
   assert.equal(result.ok, true, JSON.stringify(result));
   assert.equal(result.failed, 0);
   const after = plain(runtime.ctx.listAccountTypes()).map(row => Object.fromEntries(data.columns.map(c => [c, row[c]])));
-  const content = rows => rows.map(({ sync_status, sync_date, sync_notes, updated_at, ...rest }) => rest);
-  assert.deepEqual(content(after), content(before));
+  assert.deepEqual(after, before);
+  // An older file with the audit and sync columns still imports; those columns are ignored.
+  const full = { ...data, columns: plain(runtime.ctx.getAccountTypeSheetColumns()), rows: plain(runtime.ctx.listAccountTypes()) };
+  assert.equal(runtime.ctx.importAccountTypesCsv({ csv: exportCsv(full) }).ok, true);
+  const unknown = { ...data, columns: [...data.columns, 'is_loan'] };
+  assert.equal(runtime.ctx.importAccountTypesCsv({ csv: exportCsv(unknown) }).error, 'invalid_csv_headers');
   const legacy = appRuntime({ accountTypes: ACCOUNT_TYPES.map((row, index) => (index === 1 ? { ...row, account_subtype_key: 'credit_card' } : row)) });
   assert.equal(legacy.get({ action: 'export_account_types' }).data.requires_migration, true);
   assert.equal(runtime.ctx.grGetActions().export_account_types.cache, false);

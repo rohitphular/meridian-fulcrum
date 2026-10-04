@@ -1,5 +1,9 @@
 {
-  "_comment": "Non-secret per-env config. Secrets (DB creds, log root, CSV dir) stay in meridian-fulcrum/.env",
-  "dev": {},
-  "prod": {}
+  "_comment": "Non-secret per-env config. Secrets (DB creds, log root, CSV dir, service account key path) stay in infrastructure/.env.<env>. spreadsheet_id is used by publish-sheet only.",
+  "dev": {
+    "spreadsheet_id": "1Rb9zVu-pJOYUvNhdfyjpdgf1v2mw3HKX6NGQUFX_kJg"
+  },
+  "prod": {
+    "spreadsheet_id": "1tUtzrHCZzQd4GTBKJPNtSX2_PIWjGWqZQqHBUDEUlFc"
+  }
 }

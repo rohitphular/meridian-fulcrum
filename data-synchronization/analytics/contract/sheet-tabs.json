@@ -1,0 +1,131 @@
+{
+  "_comment": "Sheet tabs of the report processor: who owns each, its columns, and what factory reset does with it. owner app = written by GAS from the app (and the CSV round trip); owner analytics = written only by the analytics job through the Sheets API, read-only for GAS, never edited by hand. GAS reads analytics tabs with getSheetByName + sheetToObjects and treats a missing tab as not published yet (a documented exception to the getOrCreateSheet rule: GAS must never create or reshape a job-owned tab).",
+  "contract_version": 1,
+  "tabs": [
+    {
+      "name": "report_master",
+      "owner": "app",
+      "sync_columns": true,
+      "columns_from": "report-definition.json",
+      "factory_reset": "rebuilt_from_csv"
+    },
+    {
+      "name": "dashboard_layout",
+      "owner": "app",
+      "sync_columns": false,
+      "columns": [
+        "slot",
+        "report_id",
+        "updated_at"
+      ],
+      "csv_columns": [
+        "slot",
+        "report_id"
+      ],
+      "slots": [
+        "tile_1",
+        "tile_2",
+        "tile_3",
+        "tile_4",
+        "panel_1",
+        "panel_2",
+        "panel_3",
+        "panel_4"
+      ],
+      "factory_reset": "rebuilt_from_csv"
+    },
+    {
+      "name": "report_meta",
+      "owner": "analytics",
+      "_comment": "Exactly one data row, written last: switching active_slot publishes a generation atomically.",
+      "columns": [
+        "active_slot",
+        "generation_id",
+        "published_at",
+        "contract_version",
+        "anchor_date",
+        "source_watermark",
+        "reports_ok",
+        "reports_failed",
+        "rows_not_loaded",
+        "missing_currencies"
+      ],
+      "factory_reset": "deleted_recomputed"
+    },
+    {
+      "name": "report_index_a",
+      "owner": "analytics",
+      "slot": "a",
+      "columns": [
+        "report_id",
+        "variant_key",
+        "first_row",
+        "row_count",
+        "payload_hash"
+      ],
+      "factory_reset": "deleted_recomputed"
+    },
+    {
+      "name": "report_index_b",
+      "owner": "analytics",
+      "slot": "b",
+      "columns": [
+        "report_id",
+        "variant_key",
+        "first_row",
+        "row_count",
+        "payload_hash"
+      ],
+      "factory_reset": "deleted_recomputed"
+    },
+    {
+      "name": "report_data_a",
+      "owner": "analytics",
+      "slot": "a",
+      "columns": [
+        "report_id",
+        "variant_key",
+        "chunk_no",
+        "payload_chunk"
+      ],
+      "factory_reset": "deleted_recomputed"
+    },
+    {
+      "name": "report_data_b",
+      "owner": "analytics",
+      "slot": "b",
+      "columns": [
+        "report_id",
+        "variant_key",
+        "chunk_no",
+        "payload_chunk"
+      ],
+      "factory_reset": "deleted_recomputed"
+    },
+    {
+      "name": "report_status",
+      "owner": "analytics",
+      "_comment": "One row per report the last run handled. definition_updated_at is the report_master updated_at the result belongs to, so the app can tell an edited (Queued) report from a stale result.",
+      "columns": [
+        "report_id",
+        "definition_updated_at",
+        "status",
+        "error_code",
+        "published_at"
+      ],
+      "statuses": [
+        "ready",
+        "failed"
+      ],
+      "factory_reset": "deleted_recomputed"
+    }
+  ],
+  "slots": [
+    "a",
+    "b"
+  ],
+  "payload_chunk_max_chars": 45000,
+  "legacy_tabs_removed_by_factory_reset": [
+    "computed_insights"
+  ]
+}

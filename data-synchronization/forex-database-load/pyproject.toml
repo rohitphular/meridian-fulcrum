@@ -8,6 +8,7 @@ dependencies = [
     "pyyaml>=6.0",
     "py-logging",
     "py-db-migrate[postgres]",
+    "py-google-workspace",
 ]
 
 [tool.uv]
@@ -17,6 +18,7 @@ package = false
 py-logging = { git = "git+ssh://git@github.com/rohitphular/meridian-common-libs.git", subdirectory = "py-logging" }
 py-db-migrate = { git = "git+ssh://git@github.com/rohitphular/meridian-common-libs.git", subdirectory = "py-db-migrate" }
 py-db-schema = { git = "git+ssh://git@github.com/rohitphular/meridian-common-libs.git", subdirectory = "py-db-schema" }
+py-google-workspace = { git = "git+ssh://git@github.com/rohitphular/meridian-common-libs.git", subdirectory = "py-google-workspace" }
 
 [dependency-groups]
 dev = [

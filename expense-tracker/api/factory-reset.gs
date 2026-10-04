@@ -5,14 +5,16 @@
 // own CSV import endpoint (the same one the app uses).
 // =============================================================================
 
-// Tabs rebuilt from local CSVs. Every other tab (dummy, rates, audit_access,
-// advisor_chat, computed_insights, custom tabs) is never touched.
+// Tabs rebuilt from local CSVs (report_master.csv and dashboard_layout.csv
+// included), the report tabs the analytics job republishes on its next run,
+// and the retired computed_insights tab (never recreated). Every other tab
+// (dummy, rates, audit_access, advisor_chat, custom tabs) is never touched.
 const FACTORY_RESET_SHEETS = [
   ACCOUNT_TYPES_SHEET, CATEGORIES_SHEET, ACCOUNTS_SHEET,
   ACCOUNT_DEPOSIT_SHEET, ACCOUNT_INVESTMENT_PROPERTY_SHEET, ACCOUNT_INVESTMENT_STOCKS_SHEET,
   ACCOUNT_LIABILITY_CREDIT_CARD_SHEET, ACCOUNT_LIABILITY_MORTGAGE_SHEET, ACCOUNT_LIABILITY_PERSONAL_LOAN_SHEET,
-  SUBSCRIPTIONS_SHEET, TRANSACTIONS_SHEET,
-];
+  SUBSCRIPTIONS_SHEET, TRANSACTIONS_SHEET, REPORT_MASTER_SHEET, DASHBOARD_LAYOUT_SHEET,
+].concat(REPORT_OUTPUT_SHEETS, ['computed_insights']);
 const FACTORY_RESET_CONFIRM = 'factory-reset';
 function _factoryResetText(value) { return value === undefined || value === null ? '' : String(value); }
 

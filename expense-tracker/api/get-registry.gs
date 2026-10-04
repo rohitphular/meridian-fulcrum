@@ -13,6 +13,9 @@
 //   object: vmEnvelope(ctx, data, warnings) on success, vmError(...) on failure.
 // - cache: true stores { ok:true } payloads in view-cache.gs keyed by
 //   data_version + action + params (quote_currency, tz, today included).
+// - cache: 'published' does the same with the live report generation added to
+//   the key (report-store.gs rsMeta), for views that read what the analytics job
+//   published: its Sheets API writes do not bump data_version.
 // Globals in this file use the gr / _gr prefix.
 // =============================================================================
 
@@ -26,8 +29,8 @@ function grGetActions() {
   if (typeof viewConfigListsRegister === 'function') viewConfigListsRegister(actions);
   if (typeof viewSubscriptionsRegister === 'function') viewSubscriptionsRegister(actions);
   if (typeof viewCategoriesRegister === 'function') viewCategoriesRegister(actions);
-  if (typeof viewHomeRegister === 'function') viewHomeRegister(actions);
-  if (typeof insightsRegister === 'function') insightsRegister(actions);
+  if (typeof viewReportsRegister === 'function') viewReportsRegister(actions);
+  if (typeof viewReportStoreRegister === 'function') viewReportStoreRegister(actions);
   return actions;
 }
 
@@ -43,7 +46,12 @@ function grDispatchGet(action, e) {
   const built = vmRequestContext(e, action);
   if (built.ok !== true) return built;
   const ctx = built.ctx;
-  if (entry.cache !== true) return entry.handler(ctx);
-  const cached = vcGetOrCompute(ctx.data_version, action, ctx.cache_params, entry.ttl, function() { return entry.handler(ctx); });
+  if (entry.cache !== true && entry.cache !== 'published') return entry.handler(ctx);
+  let version = ctx.data_version;
+  if (entry.cache === 'published') {
+    const meta = rsMeta();
+    version += ':' + (meta === null ? 'unpublished' : meta.generation_id);
+  }
+  const cached = vcGetOrCompute(version, action, ctx.cache_params, entry.ttl, function() { return entry.handler(ctx); });
   return cached.value;
 }

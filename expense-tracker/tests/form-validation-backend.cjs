@@ -238,26 +238,4 @@ test('subscription create reports every schedule and amount rule on its field; d
   assertFormError(plain(ctx.updateSubscription({ row_num: 2, frequency: 'daily' })), 'invalid_frequency', 'frequency');
 });
 
-// ── R31: rates ─────────────────────────────────────────────────────────────────
-
-test('rate create mode refuses an existing currency and every rate must be a positive decimal', () => {
-  const rt = runtime();
-  const { ctx } = rt;
-  const rows = () => rt.tabs.rates.rows.length;
-  const before = rows();
-  assertFormError(plain(ctx.upsertRate({ currency: 'gbp', rate: '2', mode: 'create' })), 'rate_already_exists', 'currency', /already exists/);
-  assert.equal(rows(), before);
-  for (const rate of ['', '0', '-1', 'abc', '0x10', '1e', 'Infinity']) {
-    assertFormError(plain(ctx.upsertRate({ currency: 'JPY', rate, mode: 'create' })), rate === '' ? 'missing_rate' : 'rate_must_be_positive', 'rate');
-  }
-  assertFormError(plain(ctx.upsertRate({ currency: '', rate: '2', mode: 'create' })), 'missing_currency', 'currency');
-  assertFormError(plain(ctx.upsertRate({ currency: 'XAU', rate: '2', mode: 'create' })), 'base_currency_readonly', 'currency');
-  assertFormError(plain(ctx.upsertRate({ currency: 'JPY', rate: '2', mode: 'replace' })), 'invalid_rate_mode', 'mode');
-  assertFormError(plain(ctx.upsertRate({ currency: 'JPY', rate: '2', symbol: '<' })), 'invalid_symbol_characters', 'symbol');
-  assert.equal(rows(), before, 'no failed call writes');
-  assert.equal(ctx.upsertRate({ currency: 'JPY', rate: '195.5', symbol: '¥', mode: 'create' }).ok, true);
-  assert.equal(ctx.upsertRate({ currency: 'JPY', rate: '196', mode: 'create' }).error, 'rate_already_exists');
-  // The edit form (no mode) still updates an existing currency.
-  assert.equal(ctx.upsertRate({ currency: 'JPY', rate: '196' }).ok, true);
-  assert.equal(ctx.listRates().find(rate => rate.currency === 'JPY').rate, 196);
-});
+// Rates are published by forex-database-load and read-only in the app (rates-regressions.cjs).

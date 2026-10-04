@@ -1009,30 +1009,6 @@ test('native Sheets dates retain timestamp for cutoff comparisons', () => {
   const date = new Date('2026-09-01T12:30:00Z');
   assert.equal(ctx.sheetDateTimeToDate(date).getTime(), date.getTime());
 });
-test('advisor uses renamed fields and converts mixed currency flows to XAU', () => {
-  const now = new Date().toISOString();
-  const ctx = runtime(['app-utils.gs', 'advisor-core.gs'], {
-    listAccounts: () => [
-      { id: 'a', account_name: 'A', account_currency_local: 'GBP', current_value_local: 100, record_status: 'active', type: 'asset' },
-      { id: 'b', account_name: 'B', account_currency_local: 'INR', current_value_local: 200, record_status: 'active', type: 'asset' },
-    ],
-    listRates: () => [{ currency: 'GBP', rate: 100 }, { currency: 'INR', rate: 200 }],
-    isLiabilityType: () => false, TRANSACTIONS_SHEET: 'transaction_master', getTransactionSheetColumns: () => [],
-  });
-  ctx.getOrCreateSheet = () => ({});
-  ctx.sheetToObjects = () => [
-    { account_id: 'a', tx_date_local: now, tx_type: 'money-out', tx_amount_local: 100, record_status: 'active' },
-    { account_id: 'b', tx_date_local: now, tx_type: 'money-out', tx_amount_local: 200, record_status: 'active' },
-    { account_id: 'b', tx_date_local: now, tx_type: 'money-out', tx_amount_local: 999, record_status: 'deleted' },
-    { account_id: 'b', tx_date_local: now, tx_type: 'money-out', tx_amount_local: 'bad', record_status: 'active' },
-  ];
-  const snapshot = ctx._buildSnapshot();
-  assert.equal(snapshot.net_worth_xau, 2);
-  assert.equal(snapshot.accounts[0].name, 'A');
-  assert.equal(snapshot.last_3_months.total_expense, 2);
-  assert.equal(snapshot.last_3_months.currency, 'XAU');
-  assert.equal(snapshot.omitted_transactions, 2);
-});
 test('legacy sheet layout fails before any header write', () => {
   const sheet = { getLastColumn: () => 2, getRange: () => ({ getValues: () => [['id', 'old_currency']] }) };
   const ctx = runtime(['app-config.gs', 'app-utils.gs'], { SpreadsheetApp: { getActiveSpreadsheet: () => ({ getSheetByName: () => sheet, getSheets: () => [] }) } });

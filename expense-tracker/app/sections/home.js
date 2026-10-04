@@ -1,272 +1,310 @@
-/* global Chart */
 import { state } from '../core/state.js';
-import { el, esc, shareSnapshot } from '../core/utils.js';
+import { el, esc, fmtAsOf, shareSnapshot } from '../core/utils.js';
+import { showLoading, hideLoading, showMsg } from '../core/ui.js';
 import { ExpenseAPI } from '../core/api.js';
-import { getCssColors, baseChartOptions, dtiStatusColor } from './insights/chart-theme.js';
+import { fmtValue, fmtText } from './reports/chart-theme.js';
+import { renderCompactPayload } from './reports/render-kinds.js';
+import { reportWarningText, reportWarningsHtml } from './reports/viewer.js';
 
-// Renders get_home_view (api/view-home.gs) as-is: every figure, the period,
-// the DTI status and the debt-free projection come from the server.
+// Home: the configurable dashboard. get_home_view returns the 8 slots (4 number
+// tiles, then 4 report panels) with each slot report's published default
+// payload, already converted to the display currency. Tiles show the single
+// stat card of a number report; panels show the report's charts compactly.
+// No click-through, no period switch. Customise edits the layout from
+// get_dashboard_layout (what each slot can hold) and saves all 8 slots with
+// update_dashboard_layout; the server checks the slot rules.
 const HOME_VIEW = 'get_home_view';
+const LAYOUT_VIEW = 'get_dashboard_layout';
 
-let _charts   = [];
-let _viewSeq  = 0;
-let _viewError = '';
+let _homeSeq = 0;
+let _homeError = '';
+let _homeCharts = [];
+let _homeAbort = null;
 
-function _fmtFreedom(months) {
-  if (months === null) return null;
-  const yrs = Math.floor(months / 12);
-  const mo  = months % 12;
-  if (yrs === 0) return `${mo} month${mo !== 1 ? 's' : ''}`;
-  if (mo  === 0) return `${yrs} year${yrs !== 1 ? 's' : ''}`;
-  return `${yrs} yr${yrs !== 1 ? 's' : ''} ${mo} mo`;
+function _homeDestroyCharts() {
+  _homeCharts.forEach(chart => { try { chart?.destroy(); } catch (_) {} });
+  _homeCharts = [];
 }
 
-function _fmt(sym, v, decimals = 0) {
-  return sym + Math.abs(v).toLocaleString('en-GB', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+function _homeLayout() {
+  const response = state.views?.[LAYOUT_VIEW];
+  return response?.ok === true ? response.data : null;
 }
 
-function _fmtRatio(ratio) {
-  return ratio === null || ratio === undefined ? 'N/A' : ratio.toFixed(1) + '%';
-}
-
-// ── HTML builders ─────────────────────────────────────────────────────────────
-
-function _renderHero(d, sym) {
-  const { hero, dti } = d;
-  const nwCls    = hero.net_worth >= 0 ? 'positive' : 'negative';
-  const nwAccent = hero.net_worth >= 0 ? 'var(--teal)' : '#f87171';
-  const dtiColor = dtiStatusColor(dti.status);
-
-  return `
-    <div class="home-hero-stats">
-      <div class="home-hero-card" style="border-left:4px solid ${nwAccent}">
-        <div class="home-hero-label">Net Worth</div>
-        <div class="home-hero-value ${nwCls}">${esc(hero.net_worth < 0 ? '−' + _fmt(sym, hero.net_worth) : _fmt(sym, hero.net_worth))}</div>
-        <div class="home-hero-sub">assets − liabilities</div>
-      </div>
-      <div class="home-hero-card" style="border-left:4px solid var(--teal)">
-        <div class="home-hero-label">Avg Monthly Income</div>
-        <div class="home-hero-value positive">${esc(_fmt(sym, hero.monthly_income))}</div>
-        <div class="home-hero-sub">all-time average</div>
-      </div>
-      <div class="home-hero-card" style="border-left:4px solid ${hero.total_debt > 0 ? '#f87171' : 'var(--teal)'}">
-        <div class="home-hero-label">Total Debt</div>
-        <div class="home-hero-value ${hero.total_debt > 0 ? 'negative' : ''}">${esc(hero.total_debt > 0 ? '−' + _fmt(sym, hero.total_debt) : _fmt(sym, 0))}</div>
-        <div class="home-hero-sub">all liabilities</div>
-      </div>
-      <div class="home-hero-card" style="border-left:4px solid ${esc(dtiColor)}">
-        <div class="home-hero-label">DTI Ratio</div>
-        <div class="home-hero-value" style="color:${esc(dtiColor)}">${esc(_fmtRatio(dti.ratio))}</div>
-        <div class="home-hero-sub">${esc(dti.status_label)}</div>
-      </div>
-    </div>`;
-}
-
-function _renderIncomeCard(d, sym) {
-  const { income, period } = d;
-  const peak = income.peak;
-  return `
-    <div class="card home-chart-card">
-      <div class="home-chart-title">Income Trend <span class="home-chart-period">${esc(period.label.toLowerCase())}</span></div>
-      <div class="stat-cards home-income-stats" style="margin:12px 0 8px">
-        <div class="stat-card">
-          <p class="stat-card-label">Income</p>
-          <p class="stat-card-value positive">${esc(_fmt(sym, income.total))}</p>
-        </div>
-        <div class="stat-card">
-          <p class="stat-card-label">Monthly</p>
-          <p class="stat-card-value">${esc(_fmt(sym, income.monthly_avg))}</p>
-        </div>
-        <div class="stat-card">
-          <p class="stat-card-label">Annualised</p>
-          <p class="stat-card-value">${esc(_fmt(sym, income.annualised))}</p>
-        </div>
-        <div class="stat-card">
-          <p class="stat-card-label">Peak</p>
-          <p class="stat-card-value" style="font-size:var(--text-base)">${esc(peak ? peak.label : '—')}</p>
-          <p class="stat-card-sub">${esc(_fmt(sym, peak ? peak.value : 0))}</p>
-        </div>
-      </div>
-      <div class="chart-container home-chart-grow">
-        <canvas id="home-income-chart"></canvas>
-      </div>
-    </div>`;
-}
-
-function _renderDtiCard(d, sym) {
-  const { dti, hero, debt_free: debtFree, period } = d;
-  const dtiColor   = dtiStatusColor(dti.status);
-  const freedomVal = debtFree.is_debt_free
-    ? 'Now'
-    : (debtFree.months !== null ? _fmtFreedom(debtFree.months) : '—');
-  const amtSpan = `<span style="color:var(--teal);font-style:normal;font-weight:600">${esc(_fmt(sym, debtFree.monthly_reduction))}</span>`;
-  const freedomNote = debtFree.months !== null && !debtFree.is_debt_free && debtFree.monthly_reduction > 0
-    ? `<p class="home-dti-note"><em>At your current avg monthly debt reduction of ${amtSpan}, assuming income and lifestyle stay the same.</em></p>`
-    : '';
-
-  return `
-    <div class="card home-chart-card">
-      <div class="home-chart-title">Debt-to-Income <span class="home-chart-period">${esc(period.label.toLowerCase())}</span></div>
-      <div style="position:relative;height:180px;margin:12px 0 4px">
-        <canvas id="home-gauge-chart" style="width:100%;height:100%"></canvas>
-        <div style="position:absolute;left:50%;bottom:14%;transform:translateX(-50%);text-align:center;pointer-events:none">
-          <div style="font-size:var(--text-xl);font-weight:700;color:${esc(dtiColor)}">${esc(_fmtRatio(dti.ratio))}</div>
-          <div style="font-size:var(--text-sm);color:var(--muted)">${esc(dti.status_label)}</div>
-        </div>
-      </div>
-      ${!dti.has_income ? `<p style="font-size:var(--text-xs);color:var(--muted);text-align:center;margin:0 0 8px">No income data — DTI unavailable.</p>` : ''}
-      <div class="stat-cards home-dti-stats" style="margin-bottom:0">
-        <div class="stat-card">
-          <p class="stat-card-label">Debt</p>
-          <p class="stat-card-value ${hero.total_debt > 0 ? 'negative' : ''}">${esc(_fmt(sym, hero.total_debt))}</p>
-        </div>
-        <div class="stat-card">
-          <p class="stat-card-label">Monthly</p>
-          <p class="stat-card-value">${esc(hero.monthly_income > 0 ? _fmt(sym, hero.monthly_income) : '—')}</p>
-        </div>
-        <div class="stat-card">
-          <p class="stat-card-label">Annualised</p>
-          <p class="stat-card-value">${esc(hero.annualised_income > 0 ? _fmt(sym, hero.annualised_income) : '—')}</p>
-        </div>
-        <div class="stat-card">
-          <p class="stat-card-label">Debt free</p>
-          <p class="stat-card-value ${debtFree.is_debt_free ? 'positive' : ''}" style="font-size:var(--text-base)">${esc(freedomVal)}</p>
-        </div>
-      </div>
-      ${freedomNote}
-    </div>`;
-}
-
-function _rateWarnHtml(response) {
-  const warning = (response.warnings ?? []).find(w => w?.code === 'missing_rate');
-  if (!warning || !Array.isArray(warning.currencies) || warning.currencies.length === 0) return '';
-  return `<div class="insight-warn" style="margin-bottom:10px">⚠ No exchange rate for <strong>${esc(warning.currencies.join(', '))}</strong> — affected amounts are left out.</div>`;
-}
-
-// ── Chart builders ────────────────────────────────────────────────────────────
-
-function _buildIncomeChart(d, sym) {
-  const canvas = el('home-income-chart');
-  if (!canvas) return null;
-  const C      = getCssColors();
-  const base   = baseChartOptions(sym, C);
-  const chart  = d.income.chart;
-  const colors = chart.income.map((_, i) =>
-    i === chart.peak_index ? 'rgba(52,211,153,1)' : 'rgba(52,211,153,0.65)'
-  );
-  return new Chart(canvas, {
-    type: 'bar',
-    data: {
-      labels:   chart.labels,
-      datasets: [{ label: 'Income', data: chart.income, backgroundColor: colors, borderRadius: 3 }],
-    },
-    options: {
-      ...base,
-      plugins: { ...base.plugins, legend: { display: false } },
-      scales: {
-        ...base.scales,
-        x: { ...base.scales.x, ticks: { ...base.scales.x.ticks, maxRotation: 0, maxTicksLimit: 8 } },
-      },
-    },
+// The slot list in order: the draft while customising, else the home view.
+function _homeSlots(view) {
+  const custom = state.homeCustomise;
+  if (!custom) return view?.data?.slots ?? [];
+  return custom.order.map(({ slot, area }) => {
+    const chosen = custom.slots[slot] ?? { report_id: '', title: '' };
+    const shown = (view?.data?.slots ?? []).find(item => item.report_id !== '' && item.report_id === chosen.report_id) ?? null;
+    return { slot, area, report_id: chosen.report_id, title: chosen.title, report_type: chosen.report_type,
+      payload: shown?.payload ?? null, warnings: shown ? shown.warnings : [], pending: chosen.report_id !== '' && shown === null };
   });
 }
 
-function _buildGaugeChart(d) {
-  const canvas = el('home-gauge-chart');
-  if (!canvas) return null;
-  const C = getCssColors();
-  return new Chart(canvas, {
-    type: 'doughnut',
-    data: {
-      datasets: [{
-        data:            [d.dti.gauge_value, 100 - d.dti.gauge_value],
-        backgroundColor: [dtiStatusColor(d.dti.status), C.hair],
-        borderWidth:     0,
-      }],
-    },
-    options: {
-      responsive:          true,
-      maintainAspectRatio: false,
-      rotation:            -90,
-      circumference:       180,
-      cutout:              '75%',
-      plugins: { legend: { display: false }, tooltip: { enabled: false } },
-    },
-  });
+function _homeStatusLine(slot) {
+  if (slot.pending) return 'Shown after you save the layout.';
+  const warning = (slot.warnings ?? [])[0];
+  return warning ? reportWarningText(warning) : 'Appears after the next refresh.';
 }
 
-// ── Render ────────────────────────────────────────────────────────────────────
+// ── HTML ──────────────────────────────────────────────────────────────────────
 
-function _destroyCharts() {
-  _charts.forEach(c => { try { c?.destroy(); } catch (_) {} });
-  _charts = [];
+function _homeTools(slot, index, count) {
+  if (!state.homeCustomise) return '';
+  return `<div class="home-tools">
+    <button type="button" class="btn btn-secondary btn-sm" data-action="home-move" data-slot="${esc(slot.slot)}" data-step="-1"${index === 0 ? ' disabled' : ''} aria-label="Move earlier">‹</button>
+    <button type="button" class="btn btn-secondary btn-sm" data-action="home-move" data-slot="${esc(slot.slot)}" data-step="1"${index === count - 1 ? ' disabled' : ''} aria-label="Move later">›</button>
+    ${slot.report_id ? `<button type="button" class="btn btn-secondary btn-sm" data-action="home-pick" data-slot="${esc(slot.slot)}" aria-label="Change">Change</button>
+    <button type="button" class="btn btn-secondary btn-sm" data-action="home-remove" data-slot="${esc(slot.slot)}" aria-label="Remove">×</button>` : ''}
+  </div>`;
 }
 
-function _render() {
-  _destroyCharts();
+function _homeEmptyHtml(slot, cls, label) {
+  const picked = state.homeCustomise?.picker?.slot === slot.slot ? ' sel' : '';
+  if (!state.homeCustomise) return `<div class="${cls} home-empty">Empty</div>`;
+  return `<button type="button" class="${cls} home-empty home-empty-edit${picked}" data-action="home-pick" data-slot="${esc(slot.slot)}">+ ${esc(label)}</button>`;
+}
+
+function _homeTileHtml(slot, index, count, sym) {
+  if (!slot.report_id) return _homeEmptyHtml(slot, 'home-tile', 'Add number');
+  const picked = state.homeCustomise?.picker?.slot === slot.slot ? ' sel' : '';
+  const cards = slot.payload?.stat_cards ?? [];
+  const card = cards.find(item => item.key === 'value') ?? cards[0] ?? null;
+  const tone = card?.tone === 'positive' || card?.tone === 'negative' ? card.tone : '';
+  const sub = card === null ? _homeStatusLine(slot) : fmtText(card.sub ?? '', sym);
+  return `<div class="home-tile${picked}">
+    ${_homeTools(slot, index, count)}
+    <div class="home-tile-label">${esc(slot.title || card?.label || '')}</div>
+    <div class="home-tile-value ${esc(tone)}">${esc(card === null ? '—' : fmtValue(card.value, card.format, sym))}</div>
+    <div class="home-tile-sub">${esc(sub)}</div>
+  </div>`;
+}
+
+function _homePanelHtml(slot, index, count) {
+  if (!slot.report_id) return _homeEmptyHtml(slot, 'home-panel', 'Add report panel');
+  const picked = state.homeCustomise?.picker?.slot === slot.slot ? ' sel' : '';
+  return `<div class="home-panel${picked}">
+    ${_homeTools(slot, index, count)}
+    <div class="home-panel-title">${esc(slot.title || slot.payload?.title || '')}</div>
+    <div class="home-panel-body" id="homePanelBody_${esc(slot.slot)}">${slot.payload ? '' : `<p class="chart-empty">${esc(_homeStatusLine(slot))}</p>`}</div>
+  </div>`;
+}
+
+function _homePickerListHtml(picker) {
+  const layout = _homeLayout();
+  const custom = state.homeCustomise;
+  const area = custom.order.find(item => item.slot === picker.slot)?.area;
+  const options = layout?.options?.[area] ?? [];
+  const query = String(picker.query ?? '').trim().toLowerCase();
+  const used = Object.entries(custom.slots).filter(([, chosen]) => chosen.report_id !== '');
+  const groups = [['predefined', 'Pre-built'], ['user_defined', 'My reports']].map(([type, label]) => {
+    // Search over the server's option list (input UX, like tag autocomplete).
+    const items = options.filter(option => option.report_type === type && (query === '' || String(option.title).toLowerCase().includes(query)));
+    if (items.length === 0) return '';
+    return `<div class="rpt-eyebrow" style="margin:10px 0 4px">${esc(label)}</div>${items.map(option => {
+      const here = custom.slots[picker.slot]?.report_id === option.report_id;
+      const taken = !here && used.some(([, chosen]) => chosen.report_id === option.report_id);
+      return `<button type="button" class="home-option" data-action="home-choose" data-id="${esc(option.report_id)}"${taken ? ' disabled' : ''}>
+        <span>${esc(option.title)}</span><span class="field-hint">${here ? 'Current' : taken ? 'Already on Home' : ''}</span></button>`;
+    }).join('')}`;
+  }).join('');
+  return groups || '<p class="field-hint" style="padding:8px 0">No match.</p>';
+}
+
+function _homePickerHtml(area) {
+  const custom = state.homeCustomise;
+  const picker = custom?.picker;
+  if (!picker) return '';
+  const order = custom.order.filter(item => item.area === area);
+  const index = order.findIndex(item => item.slot === picker.slot);
+  if (index === -1) return '';
+  const title = area === 'tile' ? `Choose a number for tile ${index + 1}` : `Choose a report for panel ${index + 1}`;
+  return `<div class="card home-picker">
+    <div class="home-picker-head"><strong>${esc(title)}</strong><button type="button" class="btn btn-secondary btn-sm" data-action="home-pick-close" aria-label="Close picker">×</button></div>
+    <input type="search" id="homePickerSearch" placeholder="Search" value="${esc(picker.query ?? '')}" aria-label="Search reports">
+    <div id="homePickerList">${_homePickerListHtml(picker)}</div>
+    ${area === 'tile' ? '<p class="field-hint" style="margin-top:8px">Tiles take single-number reports. Your reports appear here when they show one number.</p>' : ''}
+  </div>`;
+}
+
+function _homeBarHtml() {
+  const custom = state.homeCustomise;
+  if (!custom) {
+    return `<button type="button" class="btn btn-secondary btn-sm" id="homeShareBtn" data-action="home-share">📤 Share</button>
+      <button type="button" class="btn btn-secondary btn-sm" data-action="home-customise">Customise</button>`;
+  }
+  const reset = _homeLayout()?.default_slots ? '<button type="button" class="btn btn-secondary btn-sm" data-action="home-reset">Reset to default</button>' : '';
+  return `${reset}
+    <button type="button" class="btn btn-secondary btn-sm" data-action="home-cancel">Cancel</button>
+    <button type="button" class="btn btn-primary btn-sm" data-action="home-save">Save layout</button>`;
+}
+
+function _homeRender() {
+  _homeDestroyCharts();
   const content = el('homeContent');
   if (!content) return;
   const response = state.views?.[HOME_VIEW];
-
   if (response?.ok !== true) {
-    content.innerHTML = _viewError
-      ? `<p class="placeholder" style="margin-top:32px">${esc(_viewError)}</p>`
-      : '<p class="placeholder" style="margin-top:32px">Loading…</p>';
-    return;
-  }
-  const d = response.data;
-  if (!d.has_data) {
-    content.innerHTML = `<p class="placeholder" style="margin-top:32px">No data yet — add transactions and accounts to see your dashboard.</p>`;
+    content.innerHTML = `<p class="placeholder" style="margin-top:32px">${esc(_homeError || 'Loading…')}</p>`;
     return;
   }
   const sym = response.quote?.symbol ?? '';
-
+  const slots = _homeSlots(response);
+  const tiles = slots.filter(slot => slot.area === 'tile');
+  const panels = slots.filter(slot => slot.area === 'panel');
+  const custom = state.homeCustomise;
+  const asOf = fmtAsOf(response.published_at);
   content.innerHTML = `
-    <div style="display:flex;justify-content:flex-end;margin-bottom:10px">
-      <button class="btn btn-secondary btn-sm" id="homeShareBtn">📤 Share</button>
+    <div class="home-head">
+      <div><div class="rpt-eyebrow">Home</div><div class="home-title">${custom ? 'Customise dashboard' : 'Your dashboard'}</div></div>
+      <div class="home-bar">${_homeBarHtml()}</div>
     </div>
-    ${_rateWarnHtml(response)}
-    ${_renderHero(d, sym)}
-    <div class="home-charts-grid">
-      ${_renderIncomeCard(d, sym)}
-      ${_renderDtiCard(d, sym)}
-    </div>`;
-
-  el('homeShareBtn')?.addEventListener('click', () => shareSnapshot(content, 'home-dashboard.png'));
-
-  const incomeChart = _buildIncomeChart(d, sym);
-  const gaugeChart  = _buildGaugeChart(d);
-  if (incomeChart) _charts.push(incomeChart);
-  if (gaugeChart)  _charts.push(gaugeChart);
+    ${custom?.error ? `<p class="pin-error" role="alert">${esc(custom.error)}</p>` : ''}
+    ${reportWarningsHtml(response.warnings)}
+    <div class="home-tiles${custom ? ' home-edit' : ''}">${tiles.map((slot, index) => _homeTileHtml(slot, index, tiles.length, sym)).join('')}</div>
+    <div id="homePicker_tile">${_homePickerHtml('tile')}</div>
+    <div class="home-panels${custom ? ' home-edit' : ''}">${panels.map((slot, index) => _homePanelHtml(slot, index, panels.length)).join('')}</div>
+    <div id="homePicker_panel">${_homePickerHtml('panel')}</div>
+    ${asOf ? `<p class="rpt-asof" style="margin-top:10px">As of ${esc(asOf)}</p>` : ''}`;
+  _homeAttach(content);
+  panels.forEach(slot => {
+    if (!slot.payload) return;
+    _homeCharts.push(...renderCompactPayload(el(`homePanelBody_${slot.slot}`), slot.payload, sym));
+  });
 }
 
-async function _loadView() {
-  const seq = ++_viewSeq;
+// ── Events ────────────────────────────────────────────────────────────────────
+
+function _homeAttach(content) {
+  if (_homeAbort) _homeAbort.abort();
+  _homeAbort = new AbortController();
+  const { signal } = _homeAbort;
+  content.addEventListener('input', e => {
+    if (e.target.id !== 'homePickerSearch' || !state.homeCustomise?.picker) return;
+    state.homeCustomise.picker.query = e.target.value;
+    const list = el('homePickerList');
+    if (list) list.innerHTML = _homePickerListHtml(state.homeCustomise.picker);
+  }, { signal });
+  content.addEventListener('click', e => {
+    const button = e.target.closest('[data-action]');
+    if (!button || button.disabled) return;
+    const { action, slot } = button.dataset;
+    const custom = state.homeCustomise;
+    if (action === 'home-share') { shareSnapshot(content, 'home-dashboard.png'); return; }
+    if (action === 'home-customise') { _homeStartCustomise(); return; }
+    if (!custom) return;
+    if (action === 'home-cancel') { state.homeCustomise = null; _homeRender(); return; }
+    if (action === 'home-save') { _homeSave(); return; }
+    if (action === 'home-reset') { _homeReset(); return; }
+    if (action === 'home-pick') { custom.picker = { slot, query: '' }; _homeRender(); return; }
+    if (action === 'home-pick-close') { custom.picker = null; _homeRender(); return; }
+    if (action === 'home-remove') {
+      custom.slots[slot] = { report_id: '', title: '', report_type: '' };
+      if (custom.picker?.slot === slot) custom.picker = null;
+      _homeRender();
+      return;
+    }
+    if (action === 'home-move') {
+      const area = custom.order.find(item => item.slot === slot)?.area;
+      const order = custom.order.filter(item => item.area === area).map(item => item.slot);
+      const other = order[order.indexOf(slot) + Number(button.dataset.step)];
+      if (other === undefined) return;
+      [custom.slots[slot], custom.slots[other]] = [custom.slots[other], custom.slots[slot]];
+      custom.picker = null;
+      _homeRender();
+      return;
+    }
+    if (action === 'home-choose' && custom.picker) {
+      const area = custom.order.find(item => item.slot === custom.picker.slot)?.area;
+      const option = (_homeLayout()?.options?.[area] ?? []).find(item => item.report_id === button.dataset.id);
+      if (!option) return;
+      custom.slots[custom.picker.slot] = { report_id: option.report_id, title: option.title, report_type: option.report_type };
+      custom.picker = null;
+      _homeRender();
+    }
+  }, { signal });
+}
+
+async function _homeStartCustomise() {
+  let response;
+  showLoading();
+  try { response = await ExpenseAPI.view(LAYOUT_VIEW, {}); }
+  catch (error) { response = { ok: false, message: 'Home layout could not be loaded. Check your connection and try again.' }; }
+  finally { hideLoading(); }
+  if (response?.ok !== true) { showMsg(response?.message || ('Home layout could not be loaded: ' + (response?.error ?? 'invalid_response')), 'warn'); return; }
+  state.views[LAYOUT_VIEW] = response;
+  const slots = {};
+  (response.data.slots ?? []).forEach(item => { slots[item.slot] = { report_id: item.report_id ?? '', title: item.title ?? '', report_type: item.report_type ?? '' }; });
+  state.homeCustomise = { order: (response.data.slots ?? []).map(item => ({ slot: item.slot, area: item.area })), slots, picker: null, error: '' };
+  _homeRender();
+}
+
+// default_slots ({ slot: report_id }) when the layout view offers it.
+function _homeReset() {
+  const custom = state.homeCustomise;
+  const layout = _homeLayout();
+  if (!custom || !layout?.default_slots) return;
+  custom.order.forEach(({ slot, area }) => {
+    const id = layout.default_slots[slot] ?? '';
+    const option = (layout.options?.[area] ?? []).find(item => item.report_id === id);
+    custom.slots[slot] = { report_id: id, title: option?.title ?? '', report_type: option?.report_type ?? '' };
+  });
+  custom.picker = null;
+  showMsg('Default layout restored. Save to keep it.');
+  _homeRender();
+}
+
+async function _homeSave() {
+  const custom = state.homeCustomise;
+  const body = { slots: {} };
+  custom.order.forEach(({ slot }) => { body.slots[slot] = custom.slots[slot]?.report_id ?? ''; });
+  let response;
+  showLoading();
+  try { response = await ExpenseAPI.updateDashboardLayout(body); }
+  catch (error) { response = { ok: false, error: 'connection_error', message: 'The layout may not have been saved. Refresh and check Home.' }; }
+  finally { hideLoading(); }
+  if (state.homeCustomise !== custom) return;
+  if (response?.ok !== true) {
+    custom.error = response?.message || ('The layout was not saved: ' + (response?.error ?? 'invalid_response'));
+    _homeRender();
+    return;
+  }
+  state.homeCustomise = null;
+  showMsg('Dashboard saved.');
+  document.dispatchEvent(new CustomEvent('et:reload'));
+}
+
+// ── Loading ───────────────────────────────────────────────────────────────────
+
+async function _homeLoad() {
+  const seq = ++_homeSeq;
   let response;
   try { response = await ExpenseAPI.view(HOME_VIEW, {}); }
   catch (error) {
-    if (seq !== _viewSeq) return;
-    console.error('[home] view failed:', error);
-    _viewError = 'Home could not be loaded. Check your connection and refresh.';
-    if (state.views?.[HOME_VIEW]?.ok !== true) _render();
+    if (seq !== _homeSeq) return;
+    console.error('[home] view failed:', error?.message ?? 'error');
+    _homeError = 'Home could not be loaded. Check your connection and refresh.';
+    if (state.views?.[HOME_VIEW]?.ok !== true) _homeRender();
     return;
   }
-  if (seq !== _viewSeq) return;
+  if (seq !== _homeSeq) return;
   if (response?.ok !== true) {
     console.warn('[home] view failed:', response?.error);
-    _viewError = response?.message || ('Home could not be loaded: ' + (response?.error ?? 'invalid_response'));
-    if (state.views?.[HOME_VIEW]?.ok !== true) _render();
+    _homeError = response?.message || ('Home could not be loaded: ' + (response?.error ?? 'invalid_response'));
+    if (state.views?.[HOME_VIEW]?.ok !== true) _homeRender();
     return;
   }
-  _viewError = '';
+  _homeError = '';
   state.views[HOME_VIEW] = response;
-  _render();
+  _homeRender();
 }
 
 // Called by navigation, quote-currency changes and every reload: renders the
 // last payload at once, then refreshes it from the server.
 export function renderHome() {
   if (state.views === undefined || state.views === null) state.views = {};
-  _render();
-  _loadView();
+  _homeRender();
+  _homeLoad();
 }

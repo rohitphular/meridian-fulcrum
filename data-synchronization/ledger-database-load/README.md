@@ -27,6 +27,8 @@ Transaction groups hold a table write lock plus shared locks on their valuation/
 
 PostgreSQL and the Sheet do not share a transaction. If the acknowledge step does not run, or a row was edited after the snapshot, that Sheet row stays pending and the next run safely upserts the same stable identity. Earlier successful rows remain committed when later rows fail; the run is not globally atomic. The Sheet itself is never read here, so mid-run Sheet edits cannot stop a load.
 
+Report configuration (`report_master`, from the app's Reports section) is loaded last: definitions are validated against the [report contract](../analytics/contract/README.md), and a failed report row is reported on its row without failing the load. See [report master](_docs/report-master.md).
+
 ## Stored entities
 
 For every source and database column, see the [mapping index](_docs/README.md).
@@ -72,7 +74,7 @@ Code tests use staged fixture rows and disposable PostgreSQL; a live smoke run r
 
 ## Runtime and migrations
 
-The load requires ledger migrations through `0023` (`0023` drops the unused job tracking tables) and ledger-sheet-extract's staging tables. Its launcher applies pending ledger migrations automatically before loading: `0018` aligns detail tables, `0019–0020` add Sheet-owned Account Types and policies, `0021` preserves optional subscription classification, and `0022` drops the unused `account_types.is_loan` column. Existing databases receive the table renames, loan split and requested fixed-income/P2P table drops from `0018`. Historical migrations remain unchanged so deployed databases and fresh installs converge to the same schema. The migration tracking table keeps its original name, `schema_migrations_ledger_extract`.
+The load requires ledger migrations through `0024` (`0023` drops the unused job tracking tables; `0024` creates `report_master`) and ledger-sheet-extract's staging tables. Its launcher applies pending ledger migrations automatically before loading: `0018` aligns detail tables, `0019–0020` add Sheet-owned Account Types and policies, `0021` preserves optional subscription classification, and `0022` drops the unused `account_types.is_loan` column. Existing databases receive the table renames, loan split and requested fixed-income/P2P table drops from `0018`. Historical migrations remain unchanged so deployed databases and fresh installs converge to the same schema. The migration tracking table keeps its original name, `schema_migrations_ledger_extract`.
 
 From this module directory:
 

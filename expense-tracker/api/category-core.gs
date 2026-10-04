@@ -393,6 +393,7 @@ function onEdit(e) {
   if (markAccountTypeEditPending(e)) return;
   if (markAccountDetailEditPending(e)) return;
   if (markAccountMasterEditPending(e)) return;
+  if (typeof markReportEditPending === 'function' && markReportEditPending(e)) return;
   const sheet = e.range.getSheet();
   if (sheet.getName() !== TRANSACTIONS_SHEET) {
     markSubscriptionEditPending(e);

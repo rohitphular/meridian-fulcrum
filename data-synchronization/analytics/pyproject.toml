@@ -1,0 +1,42 @@
+[project]
+name = "analytics"
+version = "0.1.0"
+description = "Compute the expense-tracker reports (pre-built and user-defined) from PostgreSQL and publish them to the Sheet"
+requires-python = ">=3.12"
+dependencies = [
+    "pyyaml>=6.0",
+    "py-logging",
+    "py-db-migrate[postgres]",
+    "psycopg2-binary>=2.9",
+    "py-google-workspace",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+py-logging          = { git = "git+ssh://git@github.com/rohitphular/meridian-common-libs.git", subdirectory = "py-logging" }
+py-db-migrate       = { git = "git+ssh://git@github.com/rohitphular/meridian-common-libs.git", subdirectory = "py-db-migrate" }
+py-google-workspace = { git = "git+ssh://git@github.com/rohitphular/meridian-common-libs.git", subdirectory = "py-google-workspace" }
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.9",
+]
+
+[tool.ruff]
+line-length = 200
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.pytest.ini_options]
+# importlib: unit and integration tests may share a file name (no __init__.py in job modules).
+addopts = "--import-mode=importlib"
+pythonpath = ["."]
+testpaths = ["tests"]

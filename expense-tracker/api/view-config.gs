@@ -3,7 +3,7 @@
 //
 // One GET returning what the app needs at startup: schemas / enums / labels,
 // quote currencies with symbols, account and category option trees, period
-// options, the insights registry (placeholder until phase 4) and data_version.
+// options and data_version.
 // The old get_*_schema / list_* actions stay available.
 // Globals in this file use the cfg / _cfg prefix (getAppContext is public).
 // =============================================================================
@@ -93,14 +93,9 @@ function _cfgCategoryOptions(categories, categorySchema) {
   return tree;
 }
 
-// Phase 4 defines insightsRegistryForClient() in insights-registry.gs.
-function _cfgInsightsRegistry() {
-  return typeof insightsRegistryForClient === 'function' ? insightsRegistryForClient() : [];
-}
-
 // GET get_app_context → vmEnvelope with data:
 // { default_quote, default_timezone, tz, today, quote_currencies, schemas,
-//   options: { accounts, categories }, periods, nav: { insights_registry } }
+//   options: { accounts, categories }, periods }
 function getAppContext(ctx) {
   const fx = vmFx(ctx);
   const schemas = {
@@ -124,7 +119,6 @@ function getAppContext(ctx) {
       categories: _cfgCategoryOptions(vmLoad('categories'), schemas.category),
     },
     periods: LDG_PERIODS.map(function(key) { return { value: key, label: LDG_PERIOD_LABELS[key] }; }),
-    nav: { insights_registry: _cfgInsightsRegistry() },
   };
   const warning = fxMissingRateWarning(accounts.filter(function(account) { return _cfgText(account.record_status) !== 'deleted'; })
     .map(function(account) { return account.account_currency_local; }), fx);

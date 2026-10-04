@@ -80,9 +80,9 @@ Setting `record_status = inactive` removes the account from transaction form dro
 
 ## Net Worth summary
 
-Four cards above the table, computed by `list_accounts_view` (`summary.cards`) in the selected quote currency and always unfiltered (the filter panel does not affect these totals). Deleted accounts are excluded from all four cards; inactive and locked accounts are included. The same net-worth definition is used on Home, in Insights and by the advisor; see [calculations](calculations.md#net-worth-assets-and-liabilities). A missing rate excludes that account and adds a `missing_rate` warning.
+Four cards above the table, published by the analytics job and returned by `list_accounts_view` (`summary.cards`) in the selected quote currency and always unfiltered (the filter panel does not affect these totals). Deleted accounts are excluded from all four cards; inactive and locked accounts are included. The same net-worth definition is used on Home, in Reports and by the advisor; see [calculations](calculations.md#net-worth-assets-and-liabilities). A missing rate excludes that account and adds a `missing_rate` warning.
 
-| Card | Calculation (server, `ldgNetWorth`) |
+| Card | Calculation (analytics job, `dataset-accounts-summary`) |
 |---|---|
 | **Total Assets** | Current balance converted to the quote currency, summed over all non-deleted `asset` and `investment` accounts |
 | **Total Liabilities** | The same over all non-deleted `liability` accounts (negative = owed; the UI shows the magnitude) |

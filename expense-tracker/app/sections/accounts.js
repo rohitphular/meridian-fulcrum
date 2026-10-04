@@ -1,10 +1,12 @@
 import { state } from '../core/state.js';
-import { el, esc, downloadExport, openContextMenu, closeContextMenu, recordStatusIcon, syncStatusIcon, renderImportResult } from '../core/utils.js';
+import { el, esc, fmtAsOf, downloadExport, openContextMenu, closeContextMenu, recordStatusIcon, syncStatusIcon, renderImportResult } from '../core/utils.js';
 import { showLoading, hideLoading, showMsg } from '../core/ui.js';
 import { ExpenseAPI } from '../core/api.js';
 
 // The server owns the list: list_accounts_view filters, sorts, pages, converts
-// to the quote currency and computes the summary cards and group totals.
+// to the quote currency and returns the summary cards and group totals.
+// Balances and summary cards are what the analytics job published (null until
+// it has run: shown as "—"); published_at is shown in local time.
 // get_account_form_options supplies the add / edit / import choices. This file
 // renders those payloads and sends the user's inputs back as params.
 const LIST_VIEW = 'list_accounts_view';
@@ -209,7 +211,7 @@ function _listHtml() {
     ${_renderAccFilterBar(data)}
     ${_renderWarnings(response)}
     ${_renderNetWorth(data.summary, response.quote)}
-    ${_renderTable(data, response.quote)}
+    ${_renderTable(data, response.quote, _unpublished(response))}
     ${_renderPager(data)}`;
 }
 
@@ -223,15 +225,27 @@ function _renderNetWorth(summary, quote) {
       ${summary.cards.map(card => `
       <div class="summary-card">
         <div class="summary-card-label">${esc(card.label)}</div>
-        <div class="summary-card-value ${card.tone === 'negative' ? 'negative' : 'positive'}">${card.value < 0 ? '−' : ''}${esc(sym)}${_fmtWhole(card.value)}</div>
+        <div class="summary-card-value ${card.tone === 'negative' ? 'negative' : 'positive'}">${card.value === null || card.value === undefined ? '—' : `${card.value < 0 ? '−' : ''}${esc(sym)}${_fmtWhole(card.value)}`}</div>
       </div>`).join('')}
     </div>`;
 }
 
+// The analytics job has not published balances (yet), or could not compute them:
+// group totals are then unknown, not zero.
+function _unpublished(response) {
+  return (response.warnings ?? []).some(warning => warning.code === 'not_published' || warning.code === 'report_failed');
+}
+
 function _renderWarnings(response) {
-  const missing = (response.warnings ?? []).filter(warning => warning.code === 'missing_rate').flatMap(warning => warning.currencies);
-  if (missing.length === 0) return '';
-  return `<p class="field-hint" style="margin:0 0 12px">No exchange rate for ${esc(missing.join(', '))} — those balances are left out of the ${esc(response.quote?.currency ?? '')} totals.</p>`;
+  const warnings = response.warnings ?? [];
+  const missing = warnings.filter(warning => warning.code === 'missing_rate').flatMap(warning => warning.currencies ?? []);
+  const asOf = fmtAsOf(response.published_at);
+  const lines = [];
+  if (warnings.some(warning => warning.code === 'not_published')) lines.push('Balances appear after the next refresh.');
+  if (warnings.some(warning => warning.code === 'report_failed')) lines.push('Balances could not be computed by the last refresh.');
+  if (missing.length > 0) lines.push(`No exchange rate for ${missing.join(', ')} — those balances are left out of the ${response.quote?.currency ?? ''} totals.`);
+  return `${asOf ? `<p class="rpt-asof" style="margin:0 0 8px">Balances as of ${esc(asOf)}</p>` : ''}
+    ${lines.map(line => `<p class="field-hint" style="margin:0 0 12px">${esc(line)}</p>`).join('')}`;
 }
 
 // ── Filter bar (facets from the server) ───────────────────────────────────────
@@ -566,14 +580,14 @@ function _renderAccountRow(a, quote) {
   </tr>`;
 }
 
-function _groupHeader(group, quote) {
+function _groupHeader(group, quote, unpublished = false) {
   const total = group.total;
   const owed = total.display_sign === 'owed' || total.display_sign === 'negative';
   const missing = total.missing_currencies.length > 0 ? ` <span title="No rate for ${esc(total.missing_currencies.join(', '))}">*</span>` : '';
   return `<tr class="acc-group-header">
     <td colspan="5" style="background:var(--canvas);padding:10px 12px 4px;font-size:11px;font-family:var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--muted);border-bottom:none">
       ${esc(group.label)}
-      <span style="float:right;font-weight:600;color:${group.is_liability ? 'var(--ember)' : 'var(--teal)'}">${owed ? '−' : ''}${esc(quote?.symbol ?? '')}${_fmtWhole(total.quote)}${missing}</span>
+      <span style="float:right;font-weight:600;color:${group.is_liability ? 'var(--ember)' : 'var(--teal)'}">${unpublished || total.quote === null || total.quote === undefined ? '—' : `${owed ? '−' : ''}${esc(quote?.symbol ?? '')}${_fmtWhole(total.quote)}${missing}`}</span>
     </td>
   </tr>`;
 }
@@ -583,14 +597,14 @@ function _thSort(col, label, width) {
   return `<th style="width:${width}px"${cls} data-acc-sort="${esc(col)}">${esc(label)}</th>`;
 }
 
-function _renderTable(data, quote) {
+function _renderTable(data, quote, unpublished = false) {
   if (data.total === 0) {
     if (data.summary.all_count === 0) return `<p class="placeholder">No accounts yet. Use &ldquo;+ Add&rdquo; to create one.</p>`;
     return `<p class="placeholder">No accounts match the current filters.</p>`;
   }
 
   const bodyRows = data.groups.map(group =>
-    _groupHeader(group, quote) + group.rows.map(row => _renderAccountRow(row, quote)).join('')
+    _groupHeader(group, quote, unpublished) + group.rows.map(row => _renderAccountRow(row, quote)).join('')
   ).join('');
 
   const cardSections = data.groups.map(group => [

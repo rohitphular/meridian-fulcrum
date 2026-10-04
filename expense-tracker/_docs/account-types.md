@@ -30,7 +30,7 @@ Family labels must agree across every row in the family, including retired rows.
 
 The former `is_loan` column (between `description` and `detail_sheet`) was retired on 2026-09-29. A Sheet that still has it fails with `account_types_is_loan_column_present`: delete that column in the Sheet before using the updated app or extractor. Exports made before the change have 14 columns and no longer import.
 
-The final six columns retain the shared lifecycle/sync/audit order. Import/export use all 13 columns. Configure → Export always downloads the complete, unfiltered catalog (every status, existing UUIDs) as `account_types-YYYY-MM-DD.csv`, which Import accepts unchanged as a restore file. Imported sync/audit values cannot mark a mutation as synchronized: the backend owns those values. All candidates, identities, policies and required dependent references are checked before any write. Invalid batches have no partial row success.
+The final six columns retain the shared lifecycle/sync/audit order. The CSV holds the first 8 columns (through `record_status`), like the other master CSVs: the five sync/audit columns are server-owned, left out of exports and ignored if an older file still has them. Configure → Export always downloads the complete, unfiltered catalog (every status, existing UUIDs) as `account_types-YYYY-MM-DD.csv`, which Import accepts unchanged as a restore file. Imported sync/audit values cannot mark a mutation as synchronized: the backend owns those values. All candidates, identities, policies and required dependent references are checked before any write. Invalid batches have no partial row success.
 
 ## CSV import
 
@@ -63,7 +63,7 @@ Direct Sheet edits queue pending sync and update the source timestamp. They rema
 | Action | Behavior |
 |---|---|
 | `list_account_types_view` | GET view model for Configure: search / status / type filters, sort, labels, `has_accounts`, `readonly_fields`, `statuses_for_edit`, `allowed_actions`, `requires_migration`. |
-| `export_account_types` | GET the whole catalog (every status, filters ignored) in the 13 import columns with existing UUIDs and `requires_migration`; Configure → Export previews and downloads it. It re-imports unchanged through `create_account_types_bulk`. |
+| `export_account_types` | GET the whole catalog (every status, filters ignored) in the 8 CSV columns (no sync/audit columns) with existing UUIDs and `requires_migration`; Configure → Export previews and downloads it. It re-imports unchanged through `create_account_types_bulk`. |
 | `list_account_types` | Raw rows with `_row` / `row_num`; empty list for an empty store; no seeding. Kept for the previous frontend only. |
 | schema | Fields, family options, detail Sheet options, lifecycle values, ordered headers and `requires_migration` arrive in `get_app_context` (`schemas.account_type`); the separate `get_account_type_schema` route was removed. |
 | `create_account_type` | Reject with `account_type_creation_restricted`. |

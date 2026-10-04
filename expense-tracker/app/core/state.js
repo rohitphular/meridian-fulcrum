@@ -2,7 +2,7 @@
 // and state.views (the last view payload per screen). No entity collections,
 // rate maps or derived figures are kept in the browser.
 export const state = {
-  context: null,   // get_app_context data: schemas, quote_currencies, options, periods, nav
+  context: null,   // get_app_context data: schemas, quote_currencies, options, periods
   views:   {},     // latest view payloads by action (e.g. views.get_home_view)
   accountTypeSchema: null,   // get_app_context schemas.account_type (set by loadAll)
   accountTypesOpen: false,
@@ -50,10 +50,6 @@ export const state = {
   catEditRow:   null,
   catDeleteRow: null,
 
-  rateAddOpen:        false,
-  rateEditCurrency:   null,
-  rateDeleteCurrency: null,
-  rateDeleteBlocked:  null,   // { error, referenced_count } when delete is refused — paired with rateDeleteCurrency
 
   // Schemas from get_app_context (set by main.js loadAll) that sections read.
   categorySchema:     null,  // { types, account_types, record_statuses }
@@ -87,13 +83,17 @@ export const state = {
   suggestionsLoaded:  false,  // true after first fetch
   suggestionsFetching: false, // true while fetch is in-flight
 
-  insightId:            '00-earn-burn-rate',
-  insightPeriod:        'last_3',
-  insightCustomFrom:    '',
-  insightCustomTo:      '',
-  insightTab:           'transactions',
-  insightDrill:         null,   // get_insight drill param, e.g. { date: '2026-09-12' } (null = none)
-  insightParams:        {},     // extra get_insight params from payload controls (window, top_n, sort, sort_dir)
+  // Reports (sections/reports.js). Panels hold report ids; the builder draft
+  // is the form being edited (sent as typed; the server validates on save).
+  reportsMenu:        'predefined',  // 'predefined' | 'mine'
+  reportsShowDeleted: false,         // My reports: list_reports_view include_deleted
+  reportDeleteId:     null,          // report id pending the inline delete confirmation
+  reportBuilder:      null,          // { mode: 'create' | 'edit', id, draft, error } while the builder is open
+  reportView:         null,          // { id, title, period, tab, controls: {}, drill } while a report is open
+
+  // Home (sections/home.js) customise mode: { slots: { slot: { report_id, title, report_type } },
+  // picker: { slot, query } | null, error } while editing; null otherwise.
+  homeCustomise:      null,
 
   advisorMessages: [],
 

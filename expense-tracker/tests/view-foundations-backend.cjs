@@ -72,9 +72,8 @@ test('get_app_context returns schemas, quote currencies, option trees, periods a
   assert.deepEqual(out.majors.map(major => [major.key, major.is_active, major.minors.map(minor => minor.key)]), [['food', true, ['groceries', 'takeaway']], ['transfer', true, ['own']]]);
   assert.deepEqual(out.majors[0].minors[1], { key: 'takeaway', label: 'Takeaway', record_status: 'inactive', is_active: false, source_account_mandatory: true, target_account_mandatory: false, is_subscription_eligible: false });
   assert.ok(data.periods.some(period => period.value === 'last_30' && period.label === 'Last 30 days'));
-  // Phase 4: the insights registry (insights-registry.gs) fills nav.
-  assert.deepEqual(data.nav, { insights_registry: plain(runtime.ctx.insightsRegistryForClient()) });
-  assert.equal(data.nav.insights_registry.length, 30);
+  // The report catalogue comes from list_reports_view, not the app context.
+  assert.equal(data.nav, undefined);
 });
 
 test('view params are validated with field-level messages', () => {
@@ -92,21 +91,17 @@ test('view params are validated with field-level messages', () => {
   assert.ok(unknownQuote.warnings.some(warning => warning.code === 'missing_rate' && warning.currencies.includes('EUR')));
 });
 
-test('each sheet is read at most once per request and the dataset equals listAccounts()', () => {
+test('each sheet is read at most once per request', () => {
   const runtime = appRuntime();
   runtime.get({ action: 'get_app_context' });
   assert.equal(runtime.tabs.accounts.reads, 1);
   assert.equal(runtime.tabs.categories.reads, 1);
   assert.equal(runtime.tabs.transactions.reads, 0);
-  const expected = plain(runtime.ctx.listAccounts());
   runtime.ctx.vmResetRequest();
   const before = runtime.tabs.transactions.reads;
-  const accounts = plain(runtime.ctx.vmLoad('accounts'));
   runtime.ctx.vmLoad('transactions');
-  runtime.ctx.vmLedger('Asia/Kolkata');
+  runtime.ctx.vmLoad('transactions');
   assert.equal(runtime.tabs.transactions.reads - before, 1);
-  assert.deepEqual(accounts, expected);
-  assert.deepEqual(accounts.map(account => account.current_value_local), [3142.5, 9450, 40, 525, 999]);
   runtime.ctx.vmResetRequest();
   assert.throws(() => runtime.ctx.vmLoad('secrets'), /unknown_dataset/);
 });
@@ -127,12 +122,12 @@ test('view payloads are cached by data_version + action + params and invalidated
   runtime.get({ action: 'get_app_context', today: '2026-10-01' });
   assert.equal(new Set(runtime.cache.puts.map(put => put.key)).size, 4);
   // A successful POST bumps data_version; the next GET recomputes.
-  const updated = runtime.post({ action: 'upsert_rate', currency: 'EUR', rate: 90, symbol: '€' });
+  const updated = runtime.post({ action: 'create_report', report_name: 'Monthly spend', measure: 'spend', period_preset: 'last_6', time_grain: 'month', chart_kind: 'line' });
   assert.equal(updated.ok, true);
   assert.notEqual(runtime.version(), '0');
   const fresh = runtime.get({ action: 'get_app_context', today: '2026-09-30' });
   assert.equal(fresh.data_version, runtime.version());
-  assert.ok(fresh.data.quote_currencies.some(q => q.currency === 'EUR'));
+  assert.notEqual(runtime.cache.puts.at(-1).key, runtime.cache.puts[0].key);
   // A direct Sheet edit bumps too (onEdit), before the edit cascade runs.
   const beforeEdit = runtime.version();
   runtime.ctx.onEdit({ range: { getSheet: () => runtime.tabs.rates, getRow: () => 2, getColumn: () => 2, getNumRows: () => 1, getNumColumns: () => 1 } });

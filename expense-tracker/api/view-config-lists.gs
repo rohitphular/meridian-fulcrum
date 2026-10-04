@@ -10,7 +10,7 @@
 // =============================================================================
 
 const _VWCFG_BASE_CURRENCY = 'XAU';
-const _VWCFG_RATE_SORTS = ['sheet', 'currency', 'rate', 'updated_at'];
+const _VWCFG_RATE_SORTS = ['sheet', 'currency', 'rate', 'rate_date', 'updated_at'];
 const _VWCFG_TYPE_SORTS = ['type', 'subtype', 'status', 'sheet'];
 const _VWCFG_TYPE_STATUSES = ['active', 'inactive', 'deleted', 'locked'];
 // Account type fields the edit form may change (ACCOUNT_TYPE_SCHEMA editable).
@@ -77,7 +77,7 @@ function listRatesView(ctx) {
   const sorting = _vwCfgSortParams(ctx.params, _VWCFG_RATE_SORTS, 'sheet');
   if (sorting.ok !== true) return sorting;
   const search = _vwCfgText(ctx.params.search);
-  // All account statuses count, as deleteRate (_countAccountsWithCurrency) does.
+  // Every account status counts: a currency is in use while any account row has it.
   const usedBy = Object.create(null);
   vmLoad('accounts_raw').forEach(function(account) {
     const code = _vwCfgText(account.account_currency_local).toUpperCase();
@@ -93,8 +93,9 @@ function listRatesView(ctx) {
     return {
       currency: currency, symbol: rate.symbol === undefined || rate.symbol === null ? '' : String(rate.symbol),
       rate: Number.isFinite(value) ? value : null, rate_label: _vwCfgRateLabel(value),
-      updated_at: _vwCfgText(rate.updated_at), is_base: isBase, readonly: isBase,
-      allowed_actions: isBase ? [] : ['edit', 'delete'],
+      updated_at: _vwCfgText(rate.updated_at), rate_date: _vwCfgText(rate.rate_date), is_base: isBase,
+      // Rates are published by forex-database-load; nothing is editable in the app.
+      readonly: true, allowed_actions: [],
       used_by_accounts: names, account_count: names.length, _order: index,
     };
   });
@@ -108,6 +109,7 @@ function listRatesView(ctx) {
     if (sorting.sort === 'currency') primary = _vwCfgCompareText(a.currency, b.currency);
     else if (sorting.sort === 'rate') primary = (a.rate === null ? Infinity : a.rate) - (b.rate === null ? Infinity : b.rate);
     else if (sorting.sort === 'updated_at') primary = a.updated_at < b.updated_at ? -1 : a.updated_at > b.updated_at ? 1 : 0;
+    else if (sorting.sort === 'rate_date') primary = a.rate_date < b.rate_date ? -1 : a.rate_date > b.rate_date ? 1 : 0;
     else primary = a._order - b._order;
     if (!Number.isFinite(primary)) primary = 0;
     return primary !== 0 ? sign * primary : a._order - b._order;
@@ -212,7 +214,8 @@ function listAccountTypesView(ctx) {
 // A legacy catalog still exports, as a reference copy (requires_migration).
 function vwCfgExportAccountTypes(ctx) {
   const catalog = vmLoad('account_types');
-  const columns = getAccountTypeSheetColumns();
+  // CSV columns only: audit and sync columns are server-owned (getAccountTypeCsvColumns).
+  const columns = getAccountTypeCsvColumns();
   const rows = catalog.map(function(source) {
     const row = {};
     columns.forEach(function(column) { row[column] = source[column] === undefined ? '' : source[column]; });

@@ -17,6 +17,7 @@ function rateRuntime(initial) {
   let writes = 0;
   const sheet = { getRange: () => ({ setValues() { writes++; } }), getDataRange: () => ({ getValues: () => [columns, ...rows] }) };
   const context = vm.createContext({ console, RATES_SHEET: 'rates', getRateSheetColumns: () => columns, getOrCreateSheet: () => sheet,
+    SpreadsheetApp: { getActiveSpreadsheet: () => ({ getSheetByName: () => sheet }) },
     sheetToObjects: () => rows.map(row => Object.fromEntries(columns.map((column, index) => [column, row[index]]))) });
   for (const file of ['rate-core.gs', 'fx-utils.gs']) vm.runInContext(fs.readFileSync(path.join(__dirname, '../api', file), 'utf8'), context);
   return { context, writes: () => writes };

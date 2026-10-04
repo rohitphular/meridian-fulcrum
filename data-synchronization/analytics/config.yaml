@@ -1,0 +1,8 @@
+# Successful builds kept in PostgreSQL (analytics.run / report_output). The newest
+# published generation is always kept, so `publish` can re-send it.
+keep_generations: 5
+
+# "Home" for reports that split spending into home and abroad (spend by city) or
+# domestic and foreign currency (foreign currency spend).
+home_country: United Kingdom
+home_currency: GBP

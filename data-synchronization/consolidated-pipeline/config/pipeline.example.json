@@ -1,11 +1,13 @@
 {
-  "_comment": "Template. Copy to pipeline.<env>.json in this folder (e.g. pipeline.dev.json; gitignored) and set \"env\" to the same name. Each file adds that env to the make consolidated-pipeline menu. Stages run in order; the run stops at the first failure, except stages with \"run_after_failure\": true (acknowledge, so a partly failed load still reports its outcomes to the Sheet). Modes: ledger-sheet-load sheet-sync|sheet-rebuild; ledger-sheet-extract extract|acknowledge; forex-database-load daily|historical; ledger-database-load normal-sync|hard-sync. A sheet-rebuild stage also needs \"confirm\" set to the env name.",
+  "_comment": "Template. Copy to pipeline.<env>.json in this folder (e.g. pipeline.dev.json; gitignored) and set \"env\" to the same name. Each file adds that env to the make consolidated-pipeline menu. Stages run in order; the run stops at the first failure (so analytics refresh, the last stage and not run_after_failure, never publishes after a failed load), except stages with \"run_after_failure\": true (acknowledge, so a partly failed load still reports its outcomes to the Sheet). Modes: ledger-sheet-load sheet-sync|sheet-rebuild; ledger-sheet-extract extract|acknowledge; forex-database-load daily|historical|publish-sheet; analytics refresh|build|publish|check; ledger-database-load normal-sync|hard-sync. A sheet-rebuild stage also needs \"confirm\" set to the env name.",
   "env": "dev",
   "stages": [
     {"module": "ledger-sheet-load", "mode": "sheet-sync"},
     {"module": "ledger-sheet-extract", "mode": "extract"},
     {"module": "forex-database-load", "mode": "daily"},
+    {"module": "forex-database-load", "mode": "publish-sheet"},
     {"module": "ledger-database-load", "mode": "normal-sync"},
-    {"module": "ledger-sheet-extract", "mode": "acknowledge", "run_after_failure": true}
+    {"module": "ledger-sheet-extract", "mode": "acknowledge", "run_after_failure": true},
+    {"module": "analytics", "mode": "refresh"}
   ]
 }

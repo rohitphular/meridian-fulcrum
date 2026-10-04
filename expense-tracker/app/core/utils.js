@@ -16,6 +16,17 @@ export function fmtDateTimeCompact(v) {
   } catch (_) { return '—'; }
 }
 
+// published_at (a UTC ISO timestamp from the analytics job) in the browser's
+// local timezone: '30 Sep, 07:00'. '' when missing or unreadable.
+export function fmtAsOf(iso) {
+  if (typeof iso !== 'string' || iso === '') return '';
+  const d = new Date(iso);
+  if (isNaN(d)) return '';
+  const date = d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+  const time = d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+  return `${date}, ${time}`;
+}
+
 // Subscription / category exports download the rows of their list view
 // (page_size=all); these column lists are the import contracts.
 // Preserve the complete Sheet contract and original audit timestamps on export.
@@ -158,7 +169,7 @@ export async function shareSnapshot(targetEl, filename = 'snapshot.png') {
     console.warn('[shareSnapshot] html2canvas not loaded');
     return;
   }
-  const btn = el('homeShareBtn') ?? el('insightShareBtn');
+  const btn = el('homeShareBtn') ?? el('reportShareBtn');
   if (btn) { btn.disabled = true; btn.textContent = '…'; }
   try {
     const bgColor = getComputedStyle(document.documentElement).getPropertyValue('--bg').trim() || '#111';

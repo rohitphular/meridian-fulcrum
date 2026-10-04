@@ -14,8 +14,11 @@ _SAFE_REASONS = {
     "invalid_rate_value",
     "rate_outside_storage_precision",
     "invalid_xau_identity_rate",
+    "no_rates_to_publish",
+    "missing_xau_rate",
+    "sheets_api_rate_limit_exhausted",
 }
-_ENVIRONMENT_NAMES = {"FULCRUM_DB_HOST", "FULCRUM_DB_PORT", "FULCRUM_DB_USER", "FULCRUM_DB_PASSWORD", "FULCRUM_DB_NAME", "MERIDIAN_LOG_ROOT", "FDL_HISTORICAL_CSV_DIR"}
+_ENVIRONMENT_NAMES = {"FULCRUM_DB_HOST", "FULCRUM_DB_PORT", "FULCRUM_DB_USER", "FULCRUM_DB_PASSWORD", "FULCRUM_DB_NAME", "MERIDIAN_LOG_ROOT", "FDL_HISTORICAL_CSV_DIR", "FDL_SERVICE_ACCOUNT_FILE"}
 
 
 def failure_reason(error: Exception) -> str:

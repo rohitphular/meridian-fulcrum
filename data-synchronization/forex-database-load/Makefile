@@ -23,7 +23,7 @@ lint: ## Lint and format-check — must pass before deploy
 
 .PHONY: upgrade-libs
 upgrade-libs: ## Re-resolve all meridian-common-libs packages to their latest commits on main
-	uv lock --upgrade-package py-logging --upgrade-package py-db-migrate --upgrade-package py-db-schema
+	uv lock --upgrade-package py-logging --upgrade-package py-db-migrate --upgrade-package py-db-schema --upgrade-package py-google-workspace
 
 .PHONY: generate-models
 generate-models: ## Regenerate typed model files from live schema (requires configured database)

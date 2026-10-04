@@ -1,0 +1,9 @@
+{
+  "_comment": "Non-secret per-env config. Secrets (DB creds, service account key path, log root) stay in meridian-fulcrum/.env",
+  "dev": {
+    "spreadsheet_id": "1Rb9zVu-pJOYUvNhdfyjpdgf1v2mw3HKX6NGQUFX_kJg"
+  },
+  "prod": {
+    "spreadsheet_id": "1tUtzrHCZzQd4GTBKJPNtSX2_PIWjGWqZQqHBUDEUlFc"
+  }
+}

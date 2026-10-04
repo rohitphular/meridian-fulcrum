@@ -10,7 +10,7 @@ A personal-finance ledger. Tracks money in, money out, and movement between owne
 4. **Normalise** — convert all amounts to a single base currency for cross-account comparison.
 5. **Analyse** — summarise income/expense, savings rate, and break down spend by category and account.
 
-The store is the source of truth. The backend computes every figure (balances, conversion, totals, periods, insights) and returns ready-to-render views; the browser only renders them. Definitions: [calculations](calculations.md).
+The store is the source of truth. The analytics job computes report, Home and Accounts figures and publishes them; the backend converts them and shapes list screens; the browser only renders. See [reports](reports.md). Definitions: [calculations](calculations.md).
 
 ## Domain entities
 
@@ -52,7 +52,7 @@ Asset and investment balances retain their supplied sign. Liabilities are modell
 | Categories | CRUD; two-level taxonomy scoped per transaction type; archive without delete; CSV import or manual creation |
 | Rates | Upsert per currency; XAU base currency read-only (rate = 1); auto-seed on first run |
 | Subscriptions | Registry of recurring payment obligations; frequency, amount, account, and category linkage; 21-column schema |
-| Insight | 30 server-computed insights (cash flow, comparisons, categories and tags, net worth and loans, counterparties, geography, FX) with periods, tabs and drills |
+| Reports | 30 pre-built reports (cash flow, comparisons, categories and tags, net worth and loans, payees, places, FX) with periods, tabs and drills, plus user-built reports and a configurable Home |
 | Multi-currency | Per-account currency; XAU base currency conversion via rates table; effective exchange rate for cross-currency transfers is implicit in the two stored `tx_amount_local` values |
 | Theming | Light + dark, persisted per user |
 

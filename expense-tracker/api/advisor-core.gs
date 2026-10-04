@@ -76,103 +76,54 @@ function _trimHistory() {
   if (lastRow > 101) sheet.deleteRows(2, lastRow - 101);
 }
 
+// The snapshot the advisor answers from: what the analytics job last published
+// (XAU grams, as of published_at). Nothing is calculated here.
 function _buildSnapshot() {
-  const accounts  = listAccounts();
-  const ratesData = listRates();
-
-  const rateMap = Object.create(null);
-  const accountMap = Object.create(null);
-  accounts.forEach(function(account) { accountMap[String(account.id)] = account; });
-  ratesData.forEach(function(r) {
-    if (r.currency) rateMap[String(r.currency).toUpperCase()] = Number(r.rate);
-  });
-
-  let assets = 0, liabilities = 0;
-  let omittedAccounts = 0, omittedTransactions = 0;
-  const acctList = [];
-
-  accounts.filter(function(a) { return String(a.record_status) === 'active'; }).forEach(function(a) {
-    const bal    = Number(a.current_value_local);
-    const rate   = rateMap[String(a.account_currency_local).toUpperCase()];
-    if (!Number.isFinite(bal) || !Number.isFinite(rate) || rate <= 0) {
-      omittedAccounts += 1;
-      return;
-    }
-    const balXau = bal / rate;
-
-    if (isLiabilityType(a.type)) liabilities += Math.abs(balXau);
-    else                          assets      += balXau;
-
-    acctList.push({ name: a.account_name, type: a.type, sub_type: a.sub_type, currency: a.account_currency_local, balance: Math.round(bal * 100) / 100 });
-  });
-
-  const txSheet = getOrCreateSheet(TRANSACTIONS_SHEET, getTransactionSheetColumns());
-  const allTx   = sheetToObjects(txSheet);
-
-  const cutoff = new Date();
-  cutoff.setMonth(cutoff.getMonth() - 3);
-
-  const recentTx = allTx.filter(function(tx) {
-    const d = sheetDateTimeToDate(tx.tx_date_local);
-    if (String(tx.record_status) === 'deleted' || d === null) {
-      omittedTransactions += 1;
-      return false;
-    }
-    return d >= cutoff;
-  });
-
-  const catSpend = Object.create(null), cpSpend = Object.create(null);
-  let totalIn = 0, totalOut = 0;
-  recentTx.forEach(function(tx) {
-    const account = accountMap[String(tx.account_id)];
-    const rate = account !== undefined ? rateMap[String(account.account_currency_local).toUpperCase()] : undefined;
-    const nativeAmount = Number(tx.tx_amount_local);
-    if (!Number.isFinite(nativeAmount) || nativeAmount <= 0 || !Number.isFinite(rate) || rate <= 0
-        || (tx.tx_type !== 'money-in' && tx.tx_type !== 'money-out')) {
-      omittedTransactions += 1;
-      return;
-    }
-    const amt = nativeAmount / rate;
-    if (tx.tx_type === 'money-out') {
-      totalOut += amt;
-      const key = tx.major_category + ' / ' + tx.minor_category;
-      if (!catSpend[key]) catSpend[key] = 0;
-      catSpend[key] += amt;
-      const cp = String(tx.counterparty_name).trim();
-      if (cp) {
-        if (!cpSpend[cp]) cpSpend[cp] = 0;
-        cpSpend[cp] += amt;
-      }
-    } else if (tx.tx_type === 'money-in') {
-      totalIn += amt;
-    }
-  });
-
-  const topCategories = Object.keys(catSpend)
-    .sort(function(a, b) { return catSpend[b] - catSpend[a]; })
-    .slice(0, 10)
-    .map(function(k) { return { category: k, amount: Math.round(catSpend[k] * 100) / 100 }; });
-
-  const topCounterparties = Object.keys(cpSpend)
-    .sort(function(a, b) { return cpSpend[b] - cpSpend[a]; })
-    .slice(0, 5)
-    .map(function(k) { return { name: k, amount: Math.round(cpSpend[k] * 100) / 100 }; });
-
+  const meta = rsMeta();
+  if (meta === null) return { note: 'No published figures yet: the analytics job has not run.', published_at: '' };
+  const read = function(key, params) { return rsPublishedPayload(meta, key, params); };
+  const grams = function(value) { return typeof value === 'number' && Number.isFinite(value) ? Math.round(value * 1000) / 1000 : null; };
+  const card = function(payload, key) {
+    const found = payload === null ? undefined : payload.stat_cards.find(function(item) { return item.key === key; });
+    return found === undefined ? null : grams(found.value);
+  };
+  const summary = read('dataset-accounts-summary');
+  const balances = read('dataset-account-balances');
+  const months = read('06-last-12-months');
+  const categories = read('10-top-categories', { period: 'last_3' });
+  const payees = read('22-top-counterparties');
+  const series = function(payload, key) {
+    const chart = payload === null || payload.charts.length === 0 ? null : payload.charts[0];
+    const found = chart === null ? undefined : chart.datasets.find(function(item) { return item.key === key; });
+    return found === undefined ? [] : found.data.map(grams);
+  };
+  const accounts = balances === null || balances.tables.length === 0 ? [] : balances.tables[0].rows
+    .filter(function(row) { return row.cells.record_status === 'active'; })
+    .map(function(row) {
+      return { name: row.cells.name, type: row.cells.type, sub_type: row.cells.subtype, currency: row.cells.currency, balance_local: row.cells.balance_local, balance_xau: grams(row.cells.balance) };
+    });
+  const payeeChart = payees === null || payees.charts.length === 0 ? null : payees.charts[0];
   return {
-    net_worth_xau:        Math.round((assets - liabilities) * 100) / 100,
-    total_assets_xau:     Math.round(assets * 100) / 100,
-    total_liabilities_xau: Math.round(liabilities * 100) / 100,
-    note: 'Net worth and transaction totals use XAU (grams of gold) at stored exchange rates. Account balances use native currency. Transfers are included in gross money flows. Omitted counts include invalid records and deleted transactions.',
-    omitted_accounts: omittedAccounts,
-    omitted_transactions: omittedTransactions,
-    accounts: acctList,
-    last_3_months: {
-      currency: 'XAU',
-      total_income:           Math.round(totalIn  * 100) / 100,
-      total_expense:          Math.round(totalOut * 100) / 100,
-      top_spending_categories: topCategories,
-      top_counterparties:      topCounterparties
-    }
+    currency: 'XAU',
+    published_at: meta.published_at,
+    as_of_date: meta.anchor_date,
+    note: 'All amounts are XAU grams from the last published analytics run (as of published_at); account balances also show the native amount. Income and spending exclude transfers between own accounts.',
+    net_worth_xau: card(summary, 'net_worth'),
+    total_assets_xau: card(summary, 'total_assets'),
+    total_liabilities_xau: card(summary, 'total_liabilities'),
+    liquid_cash_xau: card(summary, 'liquid_cash'),
+    accounts: accounts,
+    last_12_months: {
+      months: months === null || months.charts.length === 0 ? [] : months.charts[0].labels,
+      income: series(months, 'income'),
+      spending: series(months, 'expense'),
+    },
+    top_spending_categories_last_3_months: categories === null || categories.tables.length === 0 ? [] : categories.tables[0].rows.map(function(row) {
+      return { category: row.cells.category, amount: grams(row.cells.current) };
+    }),
+    top_payees_last_3_months: payeeChart === null ? [] : payeeChart.labels.slice(0, 5).map(function(label, index) {
+      return { name: label, amount: grams(payeeChart.datasets[0].data[index]) };
+    }),
   };
 }
 

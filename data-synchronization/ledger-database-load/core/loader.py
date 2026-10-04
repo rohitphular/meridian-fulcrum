@@ -14,6 +14,7 @@ import database.account_details as account_details_db
 import database.account_types as account_types_db
 import database.accounts as accounts_db
 import database.categories as categories_db
+import database.reports as reports_db
 import database.subscriptions as subscriptions_db
 import database.transactions as transactions_db
 from core.account_detail_contracts import CONTRACTS, SYNC_DETAIL_SHEETS
@@ -37,13 +38,15 @@ def _uninterruptible() -> Iterator[None]:
             signal.signal(signum, handler)
 
 
-_ENTITIES = ("account_types", "category_master", "account_master", *CONTRACTS, "transaction_master", "subscription_master")
+# report_master last: its filters refer to accounts and categories, and nothing depends on it.
+_ENTITIES = ("account_types", "category_master", "account_master", *CONTRACTS, "transaction_master", "subscription_master", "report_master")
 _ID_COLUMNS = {
     "account_types": ("account_types", "id"),
     "category_master": ("category_master", "id"),
     "account_master": ("account_master", "id"),
     "transaction_master": ("transaction_master", "transaction_id"),
     "subscription_master": ("subscription_master", "subscription_id"),
+    "report_master": ("report_master", "id"),
     **{name: (CONTRACTS[name].target_table, "id") for name in SYNC_DETAIL_SHEETS},
 }
 
@@ -96,6 +99,13 @@ class LedgerDatabaseLoadJob:
                         failures = categories_db.upsert_categories(conn, source, rows, 1)
                     elif name == "account_master":
                         failures = accounts_db.upsert_accounts(conn, source, rows, 1)
+                    elif name == "report_master":
+                        # An invalid report is the user's to fix: its row says why (Invalid in
+                        # the app). It must not fail the load and hold back every other report.
+                        failed_reports = reports_db.upsert_reports(conn, source, rows)
+                        if failed_reports:
+                            logger.warning(f"run: entity=report_master failed_rows={failed_reports} fatal=false")
+                        failures = 0
                     else:
                         if account_map is None:
                             account_map = transactions_db.load_account_map(conn)

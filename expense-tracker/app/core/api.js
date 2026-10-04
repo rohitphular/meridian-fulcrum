@@ -80,8 +80,6 @@ export const ExpenseAPI = {
   updateTransaction:  f   => _mutateRow('update_transaction', f),
   deleteTransaction:   f   => _mutateRow('delete_transaction', f),
   restoreTransaction:  f   => _mutateRow('restore_transaction', f),
-  upsertRate:        f    => SheetsClient.post({ action: 'upsert_rate',  ...f }),
-  deleteRate:        f    => SheetsClient.post({ action: 'delete_rate',  ...f }),
   createCategory:    f    => SheetsClient.post({ action: 'create_category', ...f }),
   createCategoriesBulk: f => SheetsClient.post({ action: 'create_categories_bulk', ...f }),
   updateCategory:    f    => _mutateRow('update_category', f),
@@ -101,4 +99,11 @@ export const ExpenseAPI = {
   deleteSubscription:         f  => _mutateRow('delete_subscription', f),
   restoreSubscription:        f  => _mutateRow('restore_subscription', f),
   getSuggestedTransactions:   () => _get({ action: 'get_suggested_transactions' }),
+  // Reports and the Home layout (configuration only; the analytics job computes reports).
+  createReport:               f  => SheetsClient.post({ action: 'create_report', ...f }),
+  updateReport:               f  => _mutateRow('update_report', f),
+  deleteReport:               f  => _mutateRow('delete_report', f),
+  restoreReport:              f  => _mutateRow('restore_report', f),
+  duplicateReport:            f  => _mutateRow('duplicate_report', f),
+  updateDashboardLayout:      f  => SheetsClient.post({ action: 'update_dashboard_layout', ...f }),
 };
