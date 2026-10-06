@@ -15,7 +15,7 @@ make consolidated-pipeline ENV=dev          # no question
 make consolidated-pipeline CONFIG=path/to/pipeline.dev.json
 ```
 
-Typical order: ledger-sheet-load (`sheet-sync`) → ledger-sheet-extract (`extract`) → forex-database-load (`daily`) → ledger-database-load (`normal-sync`) → ledger-sheet-extract (`acknowledge`, with `run_after_failure`). Put `sheet-rebuild` or `hard-sync` in a separate config you run deliberately. End a hard-sync config with `ledger-sheet-extract` (`acknowledge`, with `run_after_failure`): hard-sync re-loads the newest snapshot even when it was already acknowledged, and its outcomes reach the Sheet only through a new acknowledge. Without an `extract` stage before it, hard-sync re-loads the last snapshot taken.
+Typical order (rates first: the account import checks every currency against the rates tab): forex-database-load (`daily`) → forex-database-load (`publish-sheet`, the app's rates tab) → ledger-sheet-load (`sheet-sync`) → ledger-sheet-extract (`extract`) → ledger-database-load (`normal-sync`) → ledger-sheet-extract (`acknowledge`, with `run_after_failure`). Put `sheet-rebuild` or `hard-sync` in a separate config you run deliberately. End a hard-sync config with `ledger-sheet-extract` (`acknowledge`, with `run_after_failure`): hard-sync re-loads the newest snapshot even when it was already acknowledged, and its outcomes reach the Sheet only through a new acknowledge. Without an `extract` stage before it, hard-sync re-loads the last snapshot taken.
 
 ## Troubleshooting
 

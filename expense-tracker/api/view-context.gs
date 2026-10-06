@@ -153,50 +153,6 @@ const _VM_MESSAGES = {
   symbol_too_long: 'Symbol must be at most 8 characters.',
   invalid_symbol_characters: 'Symbol cannot contain < > & " \' ` or \\.',
   invalid_rate_table: 'The rates Sheet is invalid. Fix it in the Sheet, then retry.',
-  // Reports and the Home layout (codes from the report contract)
-  missing_report_name: 'Enter a name for the report.',
-  report_name_too_short: 'Use at least 3 characters for the report name.',
-  report_name_too_long: 'Use at most 60 characters for the report name.',
-  duplicate_report_name: 'You already have a report with this name.',
-  report_description_too_long: 'Use at most 140 characters for the description.',
-  invalid_report_type: 'This report type is not supported.',
-  invalid_predefined_key: 'This pre-built report does not exist.',
-  predefined_report_locked: 'Pre-built reports cannot be changed. Customise one to make your own copy.',
-  invalid_measure: 'Choose what to measure from the list.',
-  invalid_period_preset: 'Choose a period from the list.',
-  invalid_period_dates: 'Enter real dates (YYYY-MM-DD) with the start on or before the end.',
-  period_dates_not_allowed: 'Dates are only used with the Fixed dates period.',
-  fixed_period_too_long: 'A fixed period can be at most 10 years.',
-  invalid_compare_mode: 'Choose a comparison from the list.',
-  compare_not_allowed: 'All time cannot be compared with another period.',
-  invalid_time_grain: 'Choose time steps from the list.',
-  invalid_group_by: 'Choose a breakdown from the list.',
-  duplicate_group_by: 'Choose two different breakdowns.',
-  group_by_order: 'Choose the first breakdown before the second.',
-  group_by_not_allowed_for_measure: 'This breakdown is not available for what you measure.',
-  invalid_top_n: 'Choose how many to show from the list.',
-  top_n_without_group_by: 'Top and Other only apply when the report has a breakdown.',
-  invalid_include_other: 'Choose whether to group the rest as Other.',
-  invalid_filter_value: 'One of the filter values is not valid.',
-  too_many_filter_values: 'A filter can have at most 50 values.',
-  unknown_filter_reference: 'A filter refers to an account, category or currency that no longer exists.',
-  invalid_amount_range: 'The minimum amount must not be more than the maximum.',
-  filter_not_allowed_for_measure: 'Balance and net worth can only be filtered by account and currency.',
-  invalid_chart_kind: 'Choose how to show the report from the list.',
-  chart_not_allowed_for_measure: 'This chart cannot show what you measure.',
-  chart_not_allowed_for_shape: 'This chart does not fit the time steps and breakdowns you chose.',
-  too_many_points: 'Too many time steps for this period. Choose longer steps or a shorter period.',
-  too_many_series: 'Too many lines or bars. Show fewer, or remove a breakdown.',
-  too_many_rows: 'Too many rows. Show fewer, or remove a breakdown.',
-  report_not_found: 'This report could not be found. Refresh and try again.',
-  report_deleted: 'This report has been deleted.',
-  report_not_deleted: 'Only deleted reports can be restored.',
-  invalid_tab: 'Choose a tab from the list.',
-  invalid_drill: 'This detail is not available. Go back to the report and try again.',
-  invalid_dashboard_layout: 'The Home layout needs all 4 tiles and 4 panels. Refresh and try again.',
-  invalid_dashboard_slot: 'That Home slot does not exist.',
-  report_not_allowed_in_slot: 'Tiles show single numbers and panels show charts. Choose a report that fits this slot.',
-  duplicate_dashboard_report: 'A report can appear on Home only once.',
 };
 
 function vmMessage(code, fallback) {
@@ -277,17 +233,24 @@ function _vmReadAccountsRaw() {
   });
 }
 
+// listAccounts() over the shared transaction read: current_value_local from
+// _buildAccountNetMap (account-core.gs), as the balance validation uses.
+function _vmBuildAccounts() {
+  return listAccounts(vmLoad('transactions'));
+}
+
 const _VM_LOADERS = {
   transactions: function() { return listTransactions(); },
   accounts_raw: _vmReadAccountsRaw,
+  accounts: _vmBuildAccounts,
   categories: function() { return listCategories(); },
   rates: function() { return listRates(); },
   subscriptions: function() { return listSubscriptions(); },
   account_types: function() { return listAccountTypes(); },
 };
 
-// Memoized per request. Names: transactions, accounts_raw, categories, rates,
-// subscriptions, account_types.
+// Memoized per request. Names: transactions, accounts_raw, accounts (with
+// current_value_local), categories, rates, subscriptions, account_types.
 // Returned arrays are shared: callers must not mutate them.
 function vmLoad(name) {
   if (!Object.prototype.hasOwnProperty.call(_VM_LOADERS, name)) throw new Error('unknown_dataset');

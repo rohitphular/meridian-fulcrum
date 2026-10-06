@@ -9,7 +9,6 @@ The daily entry path is **Expense Tracker UI → Apps Script → Google Sheets**
 | [ledger-sheet-load](ledger-sheet-load/README.md) | Local CSV files in `local/files` | Google Sheets tabs, through the GAS import endpoints (sheet-rebuild or sheet-sync); fills missing CSV ids |
 | [ledger-sheet-extract](ledger-sheet-extract/README.md) | `extract`: enabled Sheet tabs (one batched read). `acknowledge`: the load's outcomes | Staging tables (`stg_*`, kept 6 months); only sync status/date/notes back to the Sheet |
 | [ledger-database-load](ledger-database-load/README.md) | The newest staged snapshot and PostgreSQL currency references (no Google access) | Validated ledger tables; per-row outcomes in staging |
-| [analytics](analytics/README.md) | PostgreSQL ledger, rates and `report_master` (one consistent snapshot) | `analytics` schema (runs, report payloads); the published report tabs in the Sheet |
 | [consolidated-pipeline](consolidated-pipeline/README.md) | `consolidated-pipeline/config/pipeline.<env>.json` (gitignored, one per env) | Nothing itself: runs the listed modules in order, unattended |
 
 The app's **Rates** tab is published from PostgreSQL by forex-database-load (`publish-sheet`: the latest rate per currency) and is read-only in the app. Both use XAU as one gram of gold. Accounts need a currency supported by the database catalog and the required rate history.
@@ -19,7 +18,7 @@ The app's **Rates** tab is published from PostgreSQL by forex-database-load (`pu
 `make data-sync` runs one module interactively: it lists every module that has a `cicd/start-up.sh` (except consolidated-pipeline), asks for the environment, and the module then asks for its own mode. To run several modules in a row unattended, use the [consolidated-pipeline](consolidated-pipeline/README.md) (`make consolidated-pipeline`).
 
 1. Save entries in the app and wait for the save result. Use **Refresh** to pull changes from another device or a completed sync. The app requires connectivity; there is no offline write queue. If a request loses its response, refresh and check whether it saved before resubmitting.
-2. From the repository root, run `make consolidated-pipeline`, pick the environment. It starts PostgreSQL, then runs: ledger-sheet-load (`sheet-sync`) → ledger-sheet-extract (`extract`) → forex-database-load (`daily`) → ledger-database-load (`normal-sync`) → ledger-sheet-extract (`acknowledge`). For older ledger dates, use forex-database-load's documented historical-import procedure first; daily mode refreshes a rolling window, not all historical dates.
+2. From the repository root, run `make consolidated-pipeline`, pick the environment. It starts PostgreSQL, then runs: forex-database-load (`daily`) → forex-database-load (`publish-sheet`, the app's rates tab) → ledger-sheet-load (`sheet-sync`) → ledger-sheet-extract (`extract`) → ledger-database-load (`normal-sync`) → ledger-sheet-extract (`acknowledge`). For older ledger dates, use forex-database-load's documented historical-import procedure first; daily mode refreshes a rolling window, not all historical dates.
 3. Normal-sync processes pending/failed rows; existing in-sync rows skip, with missing-row recovery and account-type dependency refresh exceptions described in the ledger-database-load README.
 4. Use **hard-sync** (a `ledger-database-load` stage with mode `hard-sync`) after a deliberate transformation/rate correction when existing in-sync records must be reprocessed. It honors the staged tabs; it does not repair missing facts, conflicting identities or immutable account fields. Hard-sync re-loads the newest snapshot even when it was already acknowledged, so end its pipeline config with a `ledger-sheet-extract` `acknowledge` stage (`run_after_failure`); without an `extract` stage before it, it re-loads the last snapshot taken.
 5. Check the summary and the Sheet's `sync_notes`. The acknowledge stage still runs after a failed load, so failed rows show their reason. Correct the source/dependency data and run again. Prior successful commits remain valid; retries use the same source UUIDs.
@@ -38,7 +37,6 @@ Every module has the same shape: `Makefile` with `run` (`ENV=dev|prod`, optional
 
 | Module | Env var prefix | Modes |
 |---|---|---|
-| analytics | `ANA_` | `refresh`, `build`, `publish`, `check` |
 | forex-database-load | `FDL_` | `daily`, `historical`, `publish-sheet` |
 | ledger-sheet-load | `LSL_` | `sheet-rebuild`, `sheet-sync` |
 | ledger-sheet-extract | `LSE_` | `extract`, `acknowledge` |
@@ -54,9 +52,9 @@ After editing the files in `local/files`, run `make data-sync` → **ledger-shee
 
 - Deploy the matching Expense Tracker frontend and Apps Script backend after code changes. Local tests do not update an existing deployment.
 - Follow the [source schema migration instructions](../expense-tracker/_docs/master-sheet-names.md). Import Account Types first, then categories/accounts and desired detail tabs. Enable only existing tabs with current headers.
-- Run currency migrations before ledger migrations on a new database. The launchers apply pending migrations for the selected environment. Ledger currently requires migrations through `0024`; currency requires `0006`, which rejects nonfinite rates and non-identity XAU values without rewriting historical data.
+- Run currency migrations before ledger migrations on a new database. The launchers apply pending migrations for the selected environment. Ledger currently requires migrations through `0023`; currency requires `0006`, which rejects nonfinite rates and non-identity XAU values without rewriting historical data.
 - Complete any missing per-row subscription timezones before importing/syncing dated subscriptions. No timezone is inferred from names or currencies.
-- Insights are still computed live by the backend until the app reads what [analytics](analytics/README.md) publishes (tasks 14–16 of `temp/report-processor/`). The retired `expense-tracker/job` precomputation job was removed on 2026-10-01.
+- The retired `expense-tracker/job` precomputation job (incompatible with the current data model) was removed on 2026-10-01; it is in git history if ever needed.
 - `make app-start` serves the repository on loopback for desktop development. Use the hosted frontend on mobile. Do not expose the repository's generic static server to a network: it contains private local configuration alongside public app assets.
 
 See the [September 25 review](./_docs/REVIEW-2026-09-25.md) for the fixed gaps, validation evidence and remaining boundaries.

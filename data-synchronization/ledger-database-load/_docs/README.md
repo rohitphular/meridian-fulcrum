@@ -13,7 +13,6 @@ Currency-rate synchronization belongs exclusively to the [forex-database-load mo
 | [Category master](category-master.md) | `category_master` | 21 | `category_master` — 16, plus two 2-column junctions | Every source field, account-type expansion and complete reference-table columns |
 | [Transactions](transaction-master.md) | `transaction_master` | 24 | `transaction_master` — 28 | Every source field, generated IDs, currency/time conversions, counterparty and beneficiary tables |
 | [Subscriptions](subscription-master.md) | `subscription_master` | 21 | `subscription_master` — 20 | Every source field, account/category/counterparty resolution and timestamp semantics |
-| [Report master](report-master.md) | `report_master` | 31 | `report_master` — 31 | Report configuration (pre-built and user-defined) for the analytics job, validated against the report contract |
 | [Account details](account-details.md) | Six detail tabs | 106 | Six tables named after their Sheet tabs | One document per detail type maps all source, derived and retained legacy fields |
 | [Structure and operational mapping](SETUP.md) | Spreadsheet metadata, no entity tab | — | None (migration `0023` dropped the former job tables) | Data flow and the absence of operational tables |
 | [Mapping notes and open decisions](implementation-learning.md) | Shared conventions | — | Cross-entity | Identity, money, dates, omissions and unresolved source/DB differences |

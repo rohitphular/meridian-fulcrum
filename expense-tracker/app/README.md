@@ -8,7 +8,7 @@ The browser renders what the GAS backend returns and nothing more. Each screen r
 
 Rules for frontend code:
 - No currency conversion, sums, balances or net-worth math; no date-range or period math; no sort, filter, search or pagination of collections; no validation or business rules. Definitions live in [calculations](../_docs/calculations.md).
-- Presentation only: number / date formatting of server values, colours for server tone / style / status keys, Chart.js configuration, UI state (open panel, applied query, filter draft), and input UX (geocoding, tag autocomplete over the server tag list, cascading selects that look values up in the server option tree).
+- Presentation only: number / date formatting of server values, colours for server tone / style / status keys, UI state (open panel, applied query, filter draft), and input UX (geocoding, tag autocomplete over the server tag list, cascading selects that look values up in the server option tree).
 - No raw collections in `state`: only `state.context` (`get_app_context`), `state.views` (the last payload per screen) and UI keys.
 - Open panels hold record ids, never Sheet row numbers; mutations send `id` + `row_num` + `updated_at` of the row in hand (`stale_record` on the server catches moved or changed rows).
 
@@ -32,14 +32,9 @@ app/
 │   ├── utils.js              el, esc, fmtDateTime, downloadExport, import result / form error rendering …
 │   └── ui.js                 re-exports loading/toast helpers from expense-tracker/_shared/ui.js
 ├── sections/               one module per tab; each exports a render<Name>() function
-│   ├── home.js               configurable dashboard: get_home_view (4 number tiles + 4 panels), Customise via get_dashboard_layout / update_dashboard_layout
-│   ├── reports.js            Reports menu (Pre-built | My reports) from list_reports_view; open, customise, edit, duplicate, add to Home, delete / restore
-│   ├── reports/builder.js    report builder: options and limits from the list_reports_view schema; disabled options follow the schema rules
-│   ├── reports/viewer.js     report viewer: get_report (tab, controls, drill) → render-kinds; drill modes panel / replace / query
-│   ├── reports/render-kinds.js  generic renderer for published payloads (Text with values, formats, charts, tables, drill panel, compact Home panels)
-│   ├── reports/chart-theme.js   colours, value / Text / tick formats, base chart options
+│   ├── home.js               placeholder (the dashboard is being redesigned)
 │   ├── transactions.js       renders list_transactions_view + get_transaction_facets; transfer entry
-│   ├── accounts.js           renders list_accounts_view (published summary cards and balances, groups)
+│   ├── accounts.js           renders list_accounts_view (summary cards, groups)
 │   ├── categories.js         category tree (major → minor) with archive toggle
 │   ├── rates.js              FX rates per currency, read-only (published by forex-database-load)
 │   ├── subscriptions.js      recurring payment definitions and CSV import
@@ -78,10 +73,6 @@ state.accAddOpen / accViewRow / accEditRow / accDeleteRow   // panels hold accou
 state.catAddOpen / catViewRow / catEditRow / catDeleteRow   // category ids
 state.subAddOpen / subEditRow / subDeleteRow                // subscription ids
 state.accountTypePanel / accountTypeViewId / accountTypeExport …
-state.reportsMenu / reportsShowDeleted / reportDeleteId     // Reports list (report ids)
-state.reportBuilder   // { mode, id, draft, error } while the builder is open (draft = the form as typed)
-state.reportView      // { id, title, period, tab, controls, drill } while a report is open
-state.homeCustomise   // { order, slots, picker, error } while Home is being customised
 ```
 
 Transactions keeps its applied query, filter draft, facets and open panel in module scope.
@@ -108,17 +99,6 @@ Transactions keeps its applied query, filter draft, facets and open panel in mod
 - **Cards mirror table rows on mobile.** Desktop sees the table; at 640px and below the table hides and the cards show. Header and pagination controls wrap, form controls use a 16px font, and primary actions have a minimum 44px touch target.
 - **Transaction drafts survive suggestion updates.** An asynchronous suggestions response and expanding/collapsing that panel update only the panel. They do not recreate the add/edit form.
 - **Transaction precision.** Entry, edit, copy and CSV export retain decimal amount text. Blank target amounts default only for same-currency transfers; cross-currency transfers require a target amount. Editing another field preserves the original seconds and fractional seconds when the displayed minute is unchanged.
-
-## Reports and Home
-
-The analytics job (`data-synchronization/analytics`) computes every report and publishes it; GAS reads the published payload and converts money to the display currency. The browser only renders ([payload contract](../../data-synchronization/analytics/contract/report-payload.md)).
-
-- **Reports** (`reports.js`): Pre-built (catalogue by group) and My reports (user-defined, with status: Queued, Invalid: reason, Ready · as of <local time>, Failed: reason). Row actions are the server's `allowed_actions`. Customise opens the builder with "Copy of <title>" and no server call until Save. Delete is an inline confirm that warns when the report is on Home; "Show deleted" lists deleted reports for Restore. Add to Home puts the report in the first empty slot of its kind and saves all 8 slots (`update_dashboard_layout`); a full Home points to Customise.
-- **Builder** (`reports/builder.js`): every choice, label and limit comes from the `list_reports_view` schema (name 60 / description 140 with live counters). Options the schema rules out for the current choices (`chart_kinds` modes and measures, `measures.group_by`, `compare_rules`, `filter_rules.transaction_only`, `group_by_rules`) are disabled and dropped from the draft; this mirrors the schema for presentation and the server validates again on save, its `{ error, field, message }` shown next to the field. Saved reports are Queued until the next refresh. No preview chart.
-- **Viewer** (`reports/viewer.js`): `get_report` with `id` and the tab, controls and drill the user picked. Drill modes: `panel` requests the variant `drill=<param>:<value>` and shows its `payload.drill` under the report; `replace` shows that variant as the body (breadcrumbs lead back); `query` opens Transactions with the query's params (`state.filters`; `from` / `to` without a range become a custom range). Shows the period label, "As of" (`published_at` in local time) and reader warnings (`not_published`, `variant_not_published`, `report_failed`, `missing_rate`).
-- **Renderer** (`reports/render-kinds.js`): fills Text with values (`{ text, values }` → `{0}` placeholders formatted by `fmtValue`, then escaped), formats `money` / `money2` / `money_delta` with the envelope's `quote.symbol`, `local` in the row's own `currency` cell (plain number without one), `progress`, `percent`, `month`, `date`, `days`, `count`.
-- **Home** (`home.js`): `get_home_view` → 4 number tiles (the single stat card of a number report) and 4 panels (the report's charts, compact; tables when it has no chart). No click-through and no period switch. Customise (from `get_dashboard_layout`): change a slot through a searchable picker (Pre-built / My reports; options already on Home are disabled), remove, move earlier / later, Cancel, Save layout (all 8 slots). Reset to default appears only when the layout view returns `default_slots`. Mobile: tiles 2×2, panels stacked.
-- **Accounts**: summary cards and balances are the published datasets; `null` shows "—", with "Balances as of <local time>" and a notice until the first refresh.
 
 ## CSV import and export
 
@@ -151,11 +131,11 @@ Never use literal px font sizes in code or styles. Pick the closest token. Mobil
 - **Filter bar** (transactions) — collapsible, summarises active filters with a count.
 - **Loading overlay** (`showLoading()` / `hideLoading()`) — used for every network call.
 - **Toast** (`showMsg(text)`) — non-blocking confirmations.
-- **Number formatting** — views return native and quote amounts (and usually display strings); sections only format them (`toLocaleString`, `fmtValue(value, format, sym)` / `fmtText(text, sym)` for report payloads). Changing the display currency re-requests the active view.
+- **Number formatting** — views return native and quote amounts (and usually display strings); sections only format them (`toLocaleString`). Changing the display currency re-requests the active view.
 
 ## Local verification
 
-Run `node --test expense-tracker/tests/*.cjs` from the repository root. `reports-frontend.cjs` and `home-insights-frontend.cjs` drive Reports, the builder, the viewer, Home and the renderer against the real GAS views on published fixture payloads (`tests/support/frontend-harness.cjs`); the builder's disabled options are checked against the server validator. `mobile-daily-use-review.cjs` covers sign-in recovery, refresh races, stale identities, transaction precision and transfer copying, draft preservation, mobile confirmation rendering and the view auth hook. Browser layout checks use synthetic data and block external requests; they do not write to Sheets or PostgreSQL. A September 25 review verified Chrome mobile viewports at 320, 390 and 640px, including confirmation visibility, touch targets, viewport overflow and transaction entry. `frontend-final-review.cjs` covers multiline CSV/decimal preservation, malformed headers, file-read races, uncertain write results, transfer-export guards, portable date filters, suggestion identity and HTTP deadlines. Browser checks also exercise valid/invalid CSV button state. Physical iOS/Android keyboard and deployed GAS integration still require device testing.
+Run `node --test expense-tracker/tests/*.cjs` from the repository root. `mobile-daily-use-review.cjs` covers sign-in recovery, refresh races, stale identities, transaction precision and transfer copying, draft preservation, mobile confirmation rendering and the view auth hook. Browser layout checks use synthetic data and block external requests; they do not write to Sheets or PostgreSQL. A September 25 review verified Chrome mobile viewports at 320, 390 and 640px, including confirmation visibility, touch targets, viewport overflow and transaction entry. `frontend-final-review.cjs` covers multiline CSV/decimal preservation, malformed headers, file-read races, uncertain write results, transfer-export guards, portable date filters, suggestion identity and HTTP deadlines. Browser checks also exercise valid/invalid CSV button state. Physical iOS/Android keyboard and deployed GAS integration still require device testing.
 
 ## Adding a new section
 

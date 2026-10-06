@@ -11,7 +11,7 @@ In the [consolidated pipeline](../consolidated-pipeline/README.md) the order is:
 
 ## Extract
 
-1. Read `config.yaml`: the tabs to stage. Every master must be listed; switches must be booleans. A misspelled or retired tab name fails as a missing tab when it is read, and ledger-database-load rejects any staged tab it has no contract for. `report_master` (report configuration from the app's Reports section) is staged and acknowledged like any other master (structure checks, sync cells by header name).
+1. Read `config.yaml`: the tabs to stage. Every master must be listed; switches must be booleans. A misspelled or retired tab name fails as a missing tab when it is read, and ledger-database-load rejects any staged tab it has no contract for.
 2. Take the Sheet-side advisory lock (shared with acknowledge; the load uses its own).
 3. Check the tabs exist (legacy plural master names fail with a migration instruction), then read headers and raw cells (`UNFORMATTED_VALUE`) for all of them in one `values.batchGet`, keeping physical row numbers and blank gaps.
 4. Check structure only: unique headers including `id` and the three sync cells, no row wider than its headers, a valid and unique UUID per row, and a known `sync_status`. The business columns are checked by ledger-database-load against the GAS contract.

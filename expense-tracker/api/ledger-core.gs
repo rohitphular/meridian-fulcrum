@@ -1,9 +1,7 @@
 // =============================================================================
 // FULCRUM FORGE — Ledger core: date keys, periods, transfer pairs, tracking start
 //
-// What the Transactions list and input validation still need. Reports, balances
-// over time and net worth are computed by the analytics job
-// (data-synchronization/analytics) and read through report-store.gs.
+// What the Transactions list and input validation need.
 // - Periods are inclusive of today (the list's range filter, see below).
 // - Transaction dates: strict localDateTimeKey (seconds required); blank
 //   tx_timezone_local means Europe/London. Filters use the recorded wall date.
@@ -11,7 +9,6 @@
 //   balance check in transaction-validation.gs uses.
 // Globals in this file use the ldg / _ldg prefix.
 // =============================================================================
-
 
 function _ldgText(value) {
   return value === undefined || value === null ? '' : String(value).trim();

@@ -104,7 +104,7 @@ test('an auth or locked answer to any view GET reopens the PIN gate; get_app_con
   ExpenseAPI.onAuthError(code => reopened.push(code));
   answers.push({ ok: false, error: 'auth' }, { ok: false, error: 'locked' }, { ok: false, error: 'invalid_page' }, { ok: false, error: 'auth' }, { ok: false, error: 'auth' });
   assert.equal((await ExpenseAPI.view('list_transactions_view', { page: 2 })).error, 'auth');
-  await ExpenseAPI.view('get_report', { id: '00000000-0000-4000-8000-000000000000' });
+  await ExpenseAPI.view('list_categories_view');
   await ExpenseAPI.view('list_accounts_view');
   await ExpenseAPI.getSuggestedTransactions();
   assert.equal((await ExpenseAPI.getAppContext()).error, 'auth');

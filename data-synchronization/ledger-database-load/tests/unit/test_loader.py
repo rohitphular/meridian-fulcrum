@@ -302,14 +302,3 @@ def test_outcomes_are_stored_with_ctrl_c_ignored(monkeypatch: pytest.MonkeyPatch
         job.run()
     assert seen == [(signal.SIG_IGN, signal.SIG_IGN)]
     assert (signal.getsignal(signal.SIGINT), signal.getsignal(signal.SIGTERM)) == before
-
-
-def test_invalid_reports_are_reported_on_their_rows_without_failing_the_load(monkeypatch: pytest.MonkeyPatch) -> None:
-    job, tabs, conn, source, _ = _job(monkeypatch)
-    tabs.append("report_master")
-    upsert = MagicMock(return_value=2)
-    monkeypatch.setattr(extractor.reports_db, "upsert_reports", upsert)
-    job.run()
-    upsert.assert_called_once()
-    source.flush_pending.assert_called_once()
-    conn.rollback.assert_not_called()

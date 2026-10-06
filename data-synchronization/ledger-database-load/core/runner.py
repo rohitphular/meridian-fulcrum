@@ -13,7 +13,7 @@ from core.loader import LedgerDatabaseLoadJob
 
 logger = get_logger(__name__)
 _DETAIL_NAMES = "|".join(re.escape(name) for name in CONTRACTS)
-_ENTITY_NAMES = "|".join(("account_types", "category_master", "account_master", "transaction_master", "subscription_master", "report_master", _DETAIL_NAMES))
+_ENTITY_NAMES = "|".join(("account_types", "category_master", "account_master", "transaction_master", "subscription_master", _DETAIL_NAMES))
 
 
 def _safe_failure_reason(error: Exception) -> str:

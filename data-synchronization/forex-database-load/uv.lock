@@ -906,7 +906,7 @@ wheels = [
 [[package]]
 name = "py-db-migrate"
 version = "0.1.0"
-source = { git = "ssh://git@github.com/rohitphular/meridian-common-libs.git?subdirectory=py-db-migrate#900267c09a1be012881d2d1b423ef47559121be0" }
+source = { git = "ssh://git@github.com/rohitphular/meridian-common-libs.git?subdirectory=py-db-migrate#e65bc522a780967f78816d64fb6a4de8cbf4f5ad" }
 
 [package.optional-dependencies]
 postgres = [
@@ -916,7 +916,7 @@ postgres = [
 [[package]]
 name = "py-db-schema"
 version = "0.1.0"
-source = { git = "ssh://git@github.com/rohitphular/meridian-common-libs.git?subdirectory=py-db-schema#900267c09a1be012881d2d1b423ef47559121be0" }
+source = { git = "ssh://git@github.com/rohitphular/meridian-common-libs.git?subdirectory=py-db-schema#e65bc522a780967f78816d64fb6a4de8cbf4f5ad" }
 
 [package.optional-dependencies]
 postgres = [
@@ -928,7 +928,7 @@ postgres = [
 [[package]]
 name = "py-google-workspace"
 version = "0.1.0"
-source = { git = "ssh://git@github.com/rohitphular/meridian-common-libs.git?subdirectory=py-google-workspace#900267c09a1be012881d2d1b423ef47559121be0" }
+source = { git = "ssh://git@github.com/rohitphular/meridian-common-libs.git?subdirectory=py-google-workspace#e65bc522a780967f78816d64fb6a4de8cbf4f5ad" }
 dependencies = [
     { name = "google-api-python-client" },
     { name = "google-auth" },
@@ -939,7 +939,7 @@ dependencies = [
 [[package]]
 name = "py-logging"
 version = "0.1.0"
-source = { git = "ssh://git@github.com/rohitphular/meridian-common-libs.git?subdirectory=py-logging#900267c09a1be012881d2d1b423ef47559121be0" }
+source = { git = "ssh://git@github.com/rohitphular/meridian-common-libs.git?subdirectory=py-logging#e65bc522a780967f78816d64fb6a4de8cbf4f5ad" }
 
 [[package]]
 name = "pyasn1"

@@ -51,7 +51,7 @@ function runtime(initialTabs) {
   ctx.listRates = () => [{ currency: 'GBP' }, { currency: 'XAU' }];
   return { ctx, sheets, tab: name => sheets.find(sheet => sheet.name === name) };
 }
-const RETAINED = ['dummy', 'rates', 'audit_access', 'advisor_chat', 'my_notes'];
+const RETAINED = ['dummy', 'rates', 'audit_access', 'advisor_chat', 'computed_insights', 'my_notes'];
 
 test('delete removes only the CSV-backed tabs and requires confirmation for the bound spreadsheet', () => {
   const { ctx, sheets } = runtime([...RETAINED, 'account_types', 'transaction_master', 'account_deposit']);
@@ -63,15 +63,6 @@ test('delete removes only the CSV-backed tabs and requires confirmation for the 
   assert.deepEqual(Array.from(result.deleted).sort(), ['account_deposit', 'account_types', 'transaction_master']);
   assert.deepEqual(sheets.map(sheet => sheet.name), RETAINED);
   assert.ok(sheets.every(sheet => JSON.stringify(sheet.rows) === JSON.stringify([['keep', sheet.name]])));
-});
-
-test('delete also removes the report tabs (rebuilt from CSV or republished) and the retired computed_insights tab', () => {
-  const published = ['report_master', 'dashboard_layout', 'report_meta', 'report_status', 'report_index_a', 'report_index_b', 'report_data_a', 'report_data_b'];
-  const { ctx, sheets } = runtime([...RETAINED, ...published, 'computed_insights']);
-  const result = ctx.factoryResetDeleteSheets({ confirm: 'factory-reset', spreadsheet_id: 'sheet-id' });
-  assert.equal(result.ok, true);
-  assert.deepEqual(Array.from(result.deleted).sort(), [...published, 'computed_insights'].sort());
-  assert.deepEqual(sheets.map(sheet => sheet.name), RETAINED);
 });
 
 test('delete refuses to remove the last remaining tab', () => {

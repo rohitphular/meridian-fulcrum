@@ -17,13 +17,12 @@ Source is split into per-domain `.gs` modules. GAS flattens them all into one na
 | Import | `import-core.gs`, `import-registry.gs` | Account master/detail CSV validation and ID-based replacement |
 | Subscriptions | `subscription-core.gs`, `subscription-schema.gs`, `subscription-utils.gs`, `subscription-validation.gs` | Recurring obligations and schedule calculation |
 | Rates | `rate-core.gs`, `rate-schema.gs` | Read-only rates (forex-database-load publishes the `rates` tab) |
-| Advisor | `advisor-core.gs` | LLM advisor endpoint; its snapshot is the published figures (`rsPublishedPayload`) |
-| View foundations | `get-registry.gs`, `view-context.gs`, `view-cache.gs`, `fx-utils.gs`, `ledger-core.gs` | GET action registry (router delegates unknown actions here); request context (`quote_currency`, `tz`, `today`), envelopes and per-request dataset; CacheService by `data_version`; currency conversion; date keys, periods, transfer pairing and the tracking-start cutoff |
+| Advisor | `advisor-core.gs` | LLM advisor endpoint |
+| View foundations | `get-registry.gs`, `view-context.gs`, `view-cache.gs`, `fx-utils.gs`, `ledger-core.gs` | GET action registry (router delegates unknown actions here); request context (`quote_currency`, `tz`, `today`), envelopes and per-request dataset; CacheService by `data_version`; currency conversion; periods, transfer pairing and the tracking-start cutoff |
 | Views | `view-config.gs`, `view-transactions.gs`, `view-accounts.gs`, `view-config-lists.gs`, `view-subscriptions.gs`, `view-categories.gs` | Ready-to-render view models, form options and exports for each screen (see [View GETs](#view-gets)) |
-| Report store | `report-store.gs` | Reads what the analytics job published: `get_report`, `get_home_view`, the Accounts datasets; converts XAU to the quote currency. Computes nothing |
 | CSV import | `csv-import.gs`, `account-type-import.gs`, `category-import.gs`, `account-import.gs`, `subscription-import.gs`, `transaction-import.gs` | Server-side CSV parsing and validation for every import endpoint (`{ csv, dry_run }`), writing through the entity bulk functions |
 | Factory reset | `factory-reset.gs` | `factory_reset_delete_sheets` for the [ledger-sheet-load](../../data-synchronization/ledger-sheet-load/README.md) job's sheet-rebuild mode (its `deleted` list names only tabs actually deleted, also on `delete_failed`); `fill_csv_ids` (csv-import.gs) for both modes |
-| Retired | `workflow-engine.gs` | Placeholder only |
+| Retired | `workflow-engine.gs` | Placeholder only; balances are computed at read time |
 | Manifest | `appsscript.json` | GAS runtime config — timezone, V8 engine, web app access |
 | clasp link | `.clasp.json` | Links this directory to a GAS project. Committed with `"scriptId": "${SCRIPT_ID_PLACEHOLDER}"`; the real `scriptId` is written by `cicd/deploy.sh` at deploy time and reverted on exit. |
 
@@ -36,21 +35,18 @@ The frontend is a pure renderer: every screen reads a view GET that returns conv
 - Register new GET actions only in a view file's hook (`view<Name>Register(actions)`, called by `grGetActions()` in `get-registry.gs`); never in the router's if-chain.
 - Every view accepts `quote_currency` (default GBP), `tz` (IANA, default Europe/London) and optional `today` (validated `YYYY-MM-DD`). The client sends the first two automatically (`ExpenseAPI.view`).
 - Success: `{ ok: true, data_version, computed_at, quote: { currency, symbol, rate_available }, warnings: [{ code: 'missing_rate', currencies }], data }`. Failure: `{ ok: false, error, field?, message?, details? }`.
-- Views of what the analytics job published (`get_report`, `get_home_view`, `list_accounts_view`) also return `published_at`, `generation_id`, and `quote.rate` / `quote.rate_date`; warnings add `not_published`, `variant_not_published` and `report_failed` (+ `error_code`). They use `cache: 'published'`: the same cache with the live generation id in the key, because the job's Sheets API writes do not bump `data_version`. `report-store.gs` reads `report_meta`, the live slot's index (once per generation) and only the rows of the requested payload, then multiplies every money value by the quote rate; it never computes.
 - `cache: true` actions are stored in CacheService (≤ 600 s) under `data_version` + action + all params; payloads over 90 KB are not cached. `data_version` changes on manual Sheet edits (`onEdit`) and after a POST that may have changed data. A successful POST bumps it unless it reports numeric `created: 0` and `updated: 0` with no `references_migrated > 0`, `catalog_written` or `deleted`; single-record actions (no counts) always bump it. A failed POST bumps it when it reports `sheet_written: true`, a non-empty `deleted` list, or `created` / `updated` / `deleted` above 0. `dry_run` requests and `advisor_chat`, `clear_advisor_history` and `fill_csv_ids` never bump it.
 
 | Action | File | Params | Cached |
 |---|---|---|---|
 | `get_app_context` | `view-config.gs` | — | yes |
-| `get_home_view` | `report-store.gs` | — (the 8 Home slots with their published payloads) | published |
-| `get_report` | `report-store.gs` | `id`; for a pre-built report `period`, `tab`, `drill` (`param:value`) and its controls (defaults when omitted) | published |
 | `list_transactions_view` | `view-transactions.gs` | `range` (`last_30` … `all`, `custom` + `from`/`to`), `types`, `account_ids`, `account_types`, `major`, `minor` (CSV), `user_location_country`/`_city`/`_area`, `tag`, `counterparty`, `search`, `sort_col`, `sort_dir`, `page`, `page_size` (10/25/50) | yes |
 | `get_transaction_facets` | `view-transactions.gs` | — (filter-bar options, ranges, sort columns, page sizes; kept out of list pages to stay under the cache cap) | yes |
 | `get_transaction` | `view-transactions.gs` | `id` | yes |
 | `get_transaction_form_options` | `view-transactions.gs` | `mode` (`create`/`edit`), `id` | yes |
 | `get_transaction_prefill` | `view-transactions.gs` | `mode` (`copy`/`subscribe`), `id` | yes |
 | `export_transactions` | `view-transactions.gs` | the list filters | no |
-| `list_accounts_view` | `view-accounts.gs` | `type`, `sub_type`, `currency`, `search`, `statuses`, `sort`, `dir`, `page`, `page_size` (balances and cards from the published Accounts datasets) | published |
+| `list_accounts_view` | `view-accounts.gs` | `type`, `sub_type`, `currency`, `search`, `statuses`, `sort`, `dir`, `page`, `page_size` | yes |
 | `get_account_form_options` | `view-accounts.gs` | `id` | yes |
 | `export_accounts` | `view-accounts.gs` | — (every account, all statuses, account_master columns) | no |
 | `list_rates_view` | `view-config-lists.gs` | `search`, `sort`, `dir` | yes |
@@ -113,23 +109,6 @@ All master row-number mutations accept `expected_id` and `expected_updated_at`; 
 
 Local date/time and decimal validation is shared in `app-utils.gs`. Transactions and account dates are checked against the extraction contracts; subscription schedule helpers use the same DST resolver. Sync and audit metadata are source-owned on every mutation.
 
-No report, Home or Accounts figure is computed in GAS: the analytics job (`data-synchronization/analytics`) computes them in XAU and publishes them to job-owned tabs. The retired `computed_insights` tab is no longer listed anywhere except factory reset, which deletes it.
-
-Reports (configuration only; the analytics job computes them):
-
-| Action | Kind | Purpose |
-|---|---|---|
-| `list_reports_view` | GET, not cached | Builder schema and filter options from the contract, pre-built reports by group, the user's reports with summary, status (`queued`, `invalid` + sync note, `ready` + `published_at`, `failed` + code) and `allowed_actions`; `include_deleted=true` adds deleted reports for restore |
-| `get_dashboard_layout` | GET, not cached | The 8 Home slots with titles and statuses (contract default until first saved) and the reports each kind of slot can take |
-| `create_report`, `update_report`, `delete_report`, `restore_report`, `duplicate_report` | POST | `report_master` rows: validated against `report-contract.gs` before any write (`report-validation.gs`); row-number actions take `expected_id` / `expected_updated_at`; pre-built rows are locked (`predefined_report_locked`); an unchanged update writes nothing; delete empties the report's Home slots |
-| `update_dashboard_layout` | POST | All 8 slots at once: tiles take single-number reports, panels chart reports, no report twice |
-| `create_reports_bulk` | POST | `report_master.csv` (pre-built and user-defined rows, by id): the whole file is checked first (format only on `dry_run`, references too on a real import), unchanged rows are skipped, pre-built rows keep the contract's id, key, name and `locked` status |
-| `import_dashboard_layout` | POST | `dashboard_layout.csv`: all 8 slots once each, saved like `update_dashboard_layout`; an unchanged layout is skipped |
-| `export_reports`, `export_dashboard_layout` | GET, not cached | The backup files' columns and rows (same shape as `export_account_types`) |
-
-Every saved change sets `sync_status` (create-pending / update-pending), and a hand edit of a definition cell does the same (`markReportEditPending`), so the report flows through ledger-sheet-extract, ledger-database-load and acknowledge like the other masters. Statuses are read from the job-owned `report_status` tab, so these views are not cached.
-
-Report tabs: `report_master` and `dashboard_layout` are app-owned configuration. The `report_*` output tabs (`REPORT_OUTPUT_SHEETS` in `app-config.gs`) are written only by the analytics job. GAS reads them with `getSheetByName` + `sheetToObjects` and never through `getOrCreateSheet`: creating or reshaping a job-owned tab would race the job, so a missing tab means "not published yet". This is the one documented exception to the `getOrCreateSheet` rule. `report-contract.gs` is generated from `data-synchronization/analytics/contract/` (`generate_gas.py`); do not edit it by hand.
 
 Positional Sheet contracts reject unknown trailing columns as well as renamed/reordered headers. Appending missing schema columns remains supported. Extra legacy fields require an explicit migration before either the app or extractor can accept the tab.
 

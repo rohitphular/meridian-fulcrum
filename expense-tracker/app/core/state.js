@@ -83,17 +83,6 @@ export const state = {
   suggestionsLoaded:  false,  // true after first fetch
   suggestionsFetching: false, // true while fetch is in-flight
 
-  // Reports (sections/reports.js). Panels hold report ids; the builder draft
-  // is the form being edited (sent as typed; the server validates on save).
-  reportsMenu:        'predefined',  // 'predefined' | 'mine'
-  reportsShowDeleted: false,         // My reports: list_reports_view include_deleted
-  reportDeleteId:     null,          // report id pending the inline delete confirmation
-  reportBuilder:      null,          // { mode: 'create' | 'edit', id, draft, error } while the builder is open
-  reportView:         null,          // { id, title, period, tab, controls: {}, drill } while a report is open
-
-  // Home (sections/home.js) customise mode: { slots: { slot: { report_id, title, report_type } },
-  // picker: { slot, query } | null, error } while editing; null otherwise.
-  homeCustomise:      null,
 
   advisorMessages: [],
 

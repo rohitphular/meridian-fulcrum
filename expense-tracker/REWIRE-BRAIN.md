@@ -1,6 +1,6 @@
 # Expense Tracker — Current project state
 
-Updated: 2026-10-04. This snapshot supersedes the historical review notes below.
+Updated: 2026-10-06. This snapshot supersedes the historical review notes below.
 
 ## Architecture and local use
 
@@ -17,18 +17,11 @@ CSV parsing and validation run only on the server: each entity's import endpoint
 
 From `expense-tracker/`, backend deployment uses `bash cicd/deploy.sh <env> "description"`. Deployment is separate from local validation. No deployment was performed during this review.
 
-## Report processor (2026-10-04)
+## Reporting removed (2026-10-06)
 
-Reports, Home and the Accounts figures are no longer computed in GAS. The **analytics** job (`data-synchronization/analytics`, modes `refresh` / `build` / `publish` / `check`) reads PostgreSQL in one snapshot, computes every pre-built report (all variants and aggregate drills), the Home numbers and panels, the Accounts datasets and every user-defined report in XAU and UTC, and publishes them to job-owned tabs (`report_meta`, `report_index_a|b`, `report_data_a|b`, `report_status`) with a two-slot switch. GAS (`report-store.gs`) reads the live slot and converts XAU to the display currency; the app renders. See [_docs/reports.md](_docs/reports.md) and the plan/status log in `temp/report-processor/README.md`.
-
-- New screens: Reports (Pre-built | My reports, builder, viewer), configurable Home (4 tiles + 4 panels), Accounts from published datasets. Report definitions live in `report_master`, the Home layout in `dashboard_layout` (both CSV round-trip through ledger-sheet-load and load into PostgreSQL).
-- Rates are read-only in the app: forex-database-load `publish-sheet` writes the `rates` tab (it replaces hand-entered rates).
-- Removed: `insights-*.gs`, `view-home.gs` calculation, `get_insight`, the ledger replay in `ledger-core.gs` (only list periods, wall-date filters, transfer pairing and the tracking cutoff remain), the advisor's own calculation (it reads published figures).
-- Deploy order: push `meridian-common-libs` and `make upgrade-libs`; add `FDL_SERVICE_ACCOUNT_FILE` / `ANA_SERVICE_ACCOUNT_FILE`; save the current `rates` tab; run forex `publish-sheet` and analytics `refresh` once; then deploy GAS and the frontend together; then add the two stages to your `pipeline.<env>.json`.
+Insights and the report work that was to replace them (analytics job, Reports screen, configurable Home, report definitions) were removed from the app, API, docs and data-sync. Home is a placeholder; the Accounts summary cards return no values (shown as "—"); account balances still come from `listAccounts` (`_buildAccountNetMap`). Rates stay read-only, published by forex-database-load `publish-sheet`. Reporting will be rebuilt step by step. The dumb-UI notes below predate this: their insight / Home / net-worth parts no longer apply.
 
 ## Dumb-UI architecture (phases 0–5, 2026-09-30 / 10-01)
-
-> Superseded in part by the report processor above: report / Home / Accounts figures, insights and the ledger replay moved to the analytics job.
 
 The frontend is a pure renderer. Every screen reads a server view GET (`get_app_context`, `get_home_view`, `list_*_view`, `get_*_form_options`, `get_transaction(_facets|_prefill)`, `get_insight`, exports); the browser keeps UI state only and holds no entity collections, rate maps or derived figures. All currency conversion, aggregation, balances / net worth, periods, sort / filter / search / paging and validation run in GAS (`ledger-core.gs`, `fx-utils.gs`, `view-*.gs`, `insights-*.gs`, entity validation). All 30 insights are server-computed; the client insight modules, `insight-utils.js`, `date-utils.js`, `schema.js`, `daterange.js` and the `toBase` / `fmtBase` / `getSymbol` helpers are deleted. Definitions and the intentional number changes (net worth over all non-deleted accounts; income / spending exclude deleted rows and own-account transfers; periods end today, `last_30` = 30 days) are in [_docs/calculations.md](_docs/calculations.md). Actions: [api/README.md](api/README.md#view-gets); client rules: [app/README.md](app/README.md#a-pure-renderer).
 

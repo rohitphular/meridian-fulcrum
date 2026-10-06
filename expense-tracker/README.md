@@ -10,7 +10,6 @@ Part of the **[Fulcrum Forge](../)** family of static web apps backed by Google 
 - **Maintain balances** — balances are computed at read time from the opening snapshot and eligible movements, never stored per transaction (see [_docs/balance-lifecycle.md](_docs/balance-lifecycle.md))
 - **Multi-currency** — per-account currency with rates against an XAU (one gram of gold) base and a selectable display currency; there is no per-transaction `fx_rate` field (see [_docs/rates.md](_docs/rates.md))
 - **Classify** — two-level category taxonomy (`major → minor`) scoped per transaction type
-- **Analyse** — Reports (pre-built and your own) and a configurable Home, computed by the analytics job
 - **Manage accounts** — account choices and detail eligibility come from the existing `account_types` Sheet catalog
 
 Full capability list and out-of-scope items: **[_docs/overview.md](_docs/overview.md)**.
@@ -94,8 +93,7 @@ _docs/
 ├── financial-rules.md    ← implemented validation and enforcement limits
 ├── categories.md         ← two-level taxonomy + account-type hints
 ├── rates.md              ← FX rates (read-only, published by forex-database-load)
-├── calculations.md       ← definitions: net worth, flows, periods, conversion
-├── reports.md            ← reports, Home and Accounts figures (analytics job)
+├── calculations.md       ← periods, conversion, caching
 └── raw-requirement.md    ← original product brief (historical)
 ```
 

@@ -16,17 +16,6 @@ export function fmtDateTimeCompact(v) {
   } catch (_) { return '—'; }
 }
 
-// published_at (a UTC ISO timestamp from the analytics job) in the browser's
-// local timezone: '30 Sep, 07:00'. '' when missing or unreadable.
-export function fmtAsOf(iso) {
-  if (typeof iso !== 'string' || iso === '') return '';
-  const d = new Date(iso);
-  if (isNaN(d)) return '';
-  const date = d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
-  const time = d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
-  return `${date}, ${time}`;
-}
-
 // Subscription / category exports download the rows of their list view
 // (page_size=all); these column lists are the import contracts.
 // Preserve the complete Sheet contract and original audit timestamps on export.
@@ -161,43 +150,4 @@ export function renderImportResult(response, { message = importErrorText, filena
   const table = failures.length === 0 ? '' : `<div class="table-wrap"><table><thead><tr><th>CSV line</th><th>Error</th><th>Details</th></tr></thead><tbody>${failures.map(result =>
     `<tr><td class="td-mono">${esc(result.line ?? '—')}</td><td class="import-result-reason">${esc(message(result.error, result))}<div class="td-mono td-muted">${esc(result.error ?? '')}</div></td><td>${esc(details(result))}</td></tr>`).join('')}</tbody></table></div>`;
   return `<div class="import-result"><p class="cat-count">${summary}</p>${notice}${table}</div>`;
-}
-
-export async function shareSnapshot(targetEl, filename = 'snapshot.png') {
-  /* global html2canvas */
-  if (typeof html2canvas === 'undefined') {
-    console.warn('[shareSnapshot] html2canvas not loaded');
-    return;
-  }
-  const btn = el('homeShareBtn') ?? el('reportShareBtn');
-  if (btn) { btn.disabled = true; btn.textContent = '…'; }
-  try {
-    const bgColor = getComputedStyle(document.documentElement).getPropertyValue('--bg').trim() || '#111';
-    const canvas  = await html2canvas(targetEl, {
-      backgroundColor: bgColor,
-      scale:     2,
-      useCORS:   true,
-      logging:   false,
-      scrollX:   0,
-      scrollY:   -window.scrollY,
-    });
-    canvas.toBlob(async blob => {
-      if (!blob) return;
-      const file = new File([blob], filename, { type: 'image/png' });
-      if (navigator.canShare?.({ files: [file] })) {
-        try { await navigator.share({ files: [file], title: filename }); return; }
-        catch (err) { if (err.name === 'AbortError') return; }
-      }
-      const url = URL.createObjectURL(blob);
-      const a   = Object.assign(document.createElement('a'), { href: url, download: filename });
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
-    }, 'image/png');
-  } catch (err) {
-    console.error('[shareSnapshot]', err);
-  } finally {
-    if (btn) { btn.disabled = false; btn.textContent = '📤 Share'; }
-  }
 }

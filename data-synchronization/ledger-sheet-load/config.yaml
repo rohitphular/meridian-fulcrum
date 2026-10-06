@@ -15,10 +15,6 @@ datasets:
   - { file: account_liability_mortgage.csv,      action: import_account_data, file_type: account_liability_mortgage }
   - { file: account_liability_personal_loan.csv, action: import_account_data, file_type: account_liability_personal_loan }
   - { file: subscription_master.csv,             action: create_subscriptions_bulk }
-  # Report configuration: after accounts and categories (filters refer to them).
-  # Seed both from data-synchronization/analytics/contract/seed/ for a new data folder.
-  - { file: report_master.csv,                   action: create_reports_bulk }
-  - { file: dashboard_layout.csv,                action: import_dashboard_layout }
 
 # Monthly transaction files, loaded last in file-name order.
 transaction_files:
@@ -26,7 +22,7 @@ transaction_files:
   action: create_transactions_bulk
 
 # sheet-rebuild only: list endpoints that recreate their tab after the delete.
-# account_types, the detail tabs, report_master and dashboard_layout are created by their own imports.
+# account_types and the detail tabs are created by their own imports.
 recreate_actions:
   - list_transactions
   - list_categories

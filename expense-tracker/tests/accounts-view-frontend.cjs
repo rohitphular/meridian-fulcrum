@@ -80,7 +80,7 @@ function accountsFixture(stateExtra = {}) {
     accFilterOpen: false, accAddOpen: false, accImportOpen: false, accViewRow: null, accEditRow: null, accDeleteRow: null, accDeleteBlocked: null, ...stateExtra,
   };
   const exposed = load('sections/accounts.js', {
-    state, el, fmtAsOf: iso => (iso ? `local(${iso})` : ''), showLoading() {}, hideLoading() {}, showMsg() {}, recordStatusIcon: () => '', syncStatusIcon: () => '',
+    state, el, showLoading() {}, hideLoading() {}, showMsg() {}, recordStatusIcon: () => '', syncStatusIcon: () => '',
     closeContextMenu() {}, openContextMenu: (button, items) => menus.push(items), exportAccounts() {},
     document: { addEventListener() {}, removeEventListener() {}, dispatchEvent() {} }, CustomEvent: class { constructor(type) { this.type = type; } },
     ExpenseAPI: { view: async (action, params) => { calls.push([action, params]); return respond(action, params); } },
@@ -109,36 +109,6 @@ test('accounts render the server summary, groups and balances without converting
   assert.match(html, /&lt;Card&gt;/);
   assert.doesNotMatch(html, /<Card>/);
   assert.equal(context.state.views.list_accounts_view.data.total, 3);
-});
-
-test('accounts show published balances as of their local time, "—" for unpublished values, and the not-published notice', async () => {
-  const context = accountsFixture();
-  const unpublished = accountsView({ summary: { all_count: 1, cards: [
-    { key: 'total_assets', label: 'Total Assets', value: null, tone: 'positive' },
-    { key: 'net_worth', label: 'Net Worth', value: null, tone: 'positive' },
-  ] }, groups: [{ type: 'asset', label: 'Asset', is_liability: false, count: 1, total: { quote: 0, display_sign: 'positive', missing_currencies: [] },
-    rows: [accountRow({ balance: { native: null, currency: 'GBP', currency_symbol: '£', quote: null, display_sign: 'positive', is_foreign: false } })] }], total: 1 });
-  unpublished.warnings = [{ code: 'not_published' }];
-  unpublished.published_at = '';
-  context.setRespond(() => unpublished);
-  context.renderAccounts();
-  await flush();
-  let html = context.nodes.accListRegion.innerHTML;
-  assert.match(html, /Total Assets<\/div>\s*<div class="summary-card-value positive">—<\/div>/);
-  assert.match(html, /Net Worth<\/div>\s*<div class="summary-card-value positive">—<\/div>/);
-  assert.match(html, /<span class="muted">—<\/span>/);
-  assert.match(html, /Balances appear after the next refresh\./);
-  assert.match(html, /Asset\s*<span style="float:right;[^"]*">—<\/span>/, 'group totals are unknown, not £0');
-  assert.doesNotMatch(html, /£0/);
-  assert.doesNotMatch(html, /as of/i);
-  const published = accountsView();
-  published.published_at = '2026-10-04T06:00:00.000Z';
-  context.setRespond(() => published);
-  context.renderAccounts();
-  await flush();
-  html = context.nodes.accListRegion.innerHTML;
-  assert.match(html, /Balances as of local\(2026-10-04T06:00:00\.000Z\)/);
-  assert.doesNotMatch(html, /after the next refresh/);
 });
 
 test('account menus come from allowed_actions and filters are sent to the server on Apply', async () => {
@@ -219,4 +189,18 @@ test('rates render list_rates_view rows read-only, with the rate date, and send 
   header.click();
   await flush();
   assert.deepEqual(JSON.parse(JSON.stringify(calls.at(-1))), ['list_rates_view', { sort: 'rate_date', dir: 'asc' }]);
+});
+
+test('summary cards without a value (placeholders) show "—"', async () => {
+  const context = accountsFixture();
+  const view = accountsView({ summary: { all_count: 1, cards: [
+    { key: 'total_assets', label: 'Total Assets', value: null, tone: 'positive' },
+    { key: 'net_worth', label: 'Net Worth', value: null, tone: 'positive' },
+  ] } });
+  context.setRespond(() => view);
+  context.renderAccounts();
+  await flush();
+  const html = context.nodes.accListRegion.innerHTML;
+  assert.match(html, /Total Assets<\/div>\s*<div class="summary-card-value positive">—<\/div>/);
+  assert.match(html, /Net Worth<\/div>\s*<div class="summary-card-value positive">—<\/div>/);
 });

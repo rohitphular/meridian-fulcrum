@@ -1,7 +1,6 @@
 import { state } from './state.js';
 import { el, closeContextMenu } from './utils.js';
 import { renderHome } from '../sections/home.js';
-import { renderReports } from '../sections/reports.js';
 import { renderTransactions } from '../sections/transactions.js';
 import { renderAccounts } from '../sections/accounts.js';
 import { renderCategories } from '../sections/categories.js';
@@ -10,7 +9,7 @@ import { renderAdvisor } from '../sections/advisor.js';
 import { renderSubscriptions } from '../sections/subscriptions.js';
 import { renderConfigure } from '../sections/configure.js';
 
-const SECTIONS = ['home', 'reports', 'accounts', 'transactions', 'subscriptions', 'categories', 'rates', 'advisor', 'configure'];
+const SECTIONS = ['home', 'accounts', 'transactions', 'subscriptions', 'categories', 'rates', 'advisor', 'configure'];
 
 document.addEventListener('et:show-section', e => showSection(e.detail));
 
@@ -24,7 +23,6 @@ export function showSection(id) {
   sessionStorage.setItem('et_section', id);
 
   if (id === 'home')          renderHome();
-  if (id === 'reports')       renderReports();
   if (id === 'transactions')  renderTransactions();
   if (id === 'accounts')      renderAccounts();
   if (id === 'categories')    renderCategories();

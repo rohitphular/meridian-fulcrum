@@ -21,7 +21,3 @@ entities:
     enabled: true
   subscription_master:
     enabled: true
-  # Report configuration (expense-tracker Reports); loaded by ledger-database-load
-  # into report_master for the analytics job.
-  report_master:
-    enabled: true

@@ -72,7 +72,7 @@ test('get_app_context returns schemas, quote currencies, option trees, periods a
   assert.deepEqual(out.majors.map(major => [major.key, major.is_active, major.minors.map(minor => minor.key)]), [['food', true, ['groceries', 'takeaway']], ['transfer', true, ['own']]]);
   assert.deepEqual(out.majors[0].minors[1], { key: 'takeaway', label: 'Takeaway', record_status: 'inactive', is_active: false, source_account_mandatory: true, target_account_mandatory: false, is_subscription_eligible: false });
   assert.ok(data.periods.some(period => period.value === 'last_30' && period.label === 'Last 30 days'));
-  // The report catalogue comes from list_reports_view, not the app context.
+  // The app context carries no navigation registry.
   assert.equal(data.nav, undefined);
 });
 
@@ -122,7 +122,7 @@ test('view payloads are cached by data_version + action + params and invalidated
   runtime.get({ action: 'get_app_context', today: '2026-10-01' });
   assert.equal(new Set(runtime.cache.puts.map(put => put.key)).size, 4);
   // A successful POST bumps data_version; the next GET recomputes.
-  const updated = runtime.post({ action: 'create_report', report_name: 'Monthly spend', measure: 'spend', period_preset: 'last_6', time_grain: 'month', chart_kind: 'line' });
+  const updated = runtime.post({ action: 'create_category', tx_type_key: 'money-out', major_category_label: 'Hobbies', minor_category_label: 'Books', source_account_types: '', target_account_types: '', source_account_mandatory: true, target_account_mandatory: false, is_subscription_eligible: false, record_status: 'active' });
   assert.equal(updated.ok, true);
   assert.notEqual(runtime.version(), '0');
   const fresh = runtime.get({ action: 'get_app_context', today: '2026-09-30' });

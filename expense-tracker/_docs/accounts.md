@@ -80,14 +80,7 @@ Setting `record_status = inactive` removes the account from transaction form dro
 
 ## Net Worth summary
 
-Four cards above the table, published by the analytics job and returned by `list_accounts_view` (`summary.cards`) in the selected quote currency and always unfiltered (the filter panel does not affect these totals). Deleted accounts are excluded from all four cards; inactive and locked accounts are included. The same net-worth definition is used on Home, in Reports and by the advisor; see [calculations](calculations.md#net-worth-assets-and-liabilities). A missing rate excludes that account and adds a `missing_rate` warning.
-
-| Card | Calculation (analytics job, `dataset-accounts-summary`) |
-|---|---|
-| **Total Assets** | Current balance converted to the quote currency, summed over all non-deleted `asset` and `investment` accounts |
-| **Total Liabilities** | The same over all non-deleted `liability` accounts (negative = owed; the UI shows the magnitude) |
-| **Net Worth** | Assets + liabilities. Negative renders in ember/red. |
-| **Liquid Cash** | The same over non-deleted `asset` accounts whose account type maps to the `account_deposit` detail sheet |
+Four cards above the table (`list_accounts_view` → `summary.cards`): Total Assets, Total Liabilities, Net Worth and Liquid Cash. They are placeholders for now: the server returns them without values (`value: null`) and the app shows "—". Account counts (`account_count`, `all_count`) are still returned.
 
 The account list itself (filters, sort, paging, group totals, display signs, labels, `allowed_actions`) is also returned by `list_accounts_view`; the browser only renders it.
 

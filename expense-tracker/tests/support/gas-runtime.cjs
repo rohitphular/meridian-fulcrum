@@ -27,7 +27,6 @@ function memoryCache() {
     service: { getScriptCache: () => ({
       get: key => (store.has(key) ? store.get(key) : null),
       put: (key, value, ttl) => { puts.push({ key, bytes: Buffer.byteLength(value, 'utf8'), ttl }); store.set(key, value); },
-      putAll: (entries, ttl) => Object.entries(entries).forEach(([key, value]) => { puts.push({ key, bytes: Buffer.byteLength(value, 'utf8'), ttl }); store.set(key, value); }),
       remove: key => store.delete(key),
     }) },
   };

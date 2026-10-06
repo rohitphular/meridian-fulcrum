@@ -310,15 +310,6 @@ function stageSummary(stage) {
   } else if (m === 'forex-database-load' && mode === 'publish-sheet') {
     const done = lastEvent(stage, e => e.event === 'publish_sheet' && e.values.currencies);
     if (done) cards.push(['rates written', num(done.values.currencies)], ['newest rate', done.values.newest_rate_date]);
-  } else if (m === 'analytics') {
-    const built = lastEvent(stage, e => e.event === 'build' && e.values.complete);
-    const published = lastEvent(stage, e => e.event === 'publish' && e.values.complete);
-    const skipped = lastEvent(stage, e => e.event === 'publish' && e.values.skipped);
-    if (built) cards.push(['reports ok', num(built.values.reports_ok)], ['failed', num(built.values.reports_failed)], ['rows not loaded', num(built.values.rows_not_loaded)], ['missing currencies', num(built.values.missing_currencies)]);
-    if (published) cards.push(['published', fmtAgo(new Date(published.values.published_at))], ['slot', published.values.slot], ['requests', num(published.values.requests)]);
-    else if (skipped) cards.push(['published', 'unchanged']);
-    const steps = eventsWhere(stage, e => e.event === 'predefined' && e.values.report);
-    if (steps.length) tables.push({ title: 'Pre-built reports', cols: ['report', 'variants', 'seconds'], rows: steps.map(e => [e.values.report, num(e.values.variants), e.values.seconds]), bar: [1] });
   } else if (m === 'forex-database-load') {
     const done = lastEvent(stage, e => e.event === 'runner' && e.values.complete === undefined && e.values.fiat_currencies);
     const tickers = eventsWhere(stage, e => e.event === 'download_closes' && e.values.ticker);

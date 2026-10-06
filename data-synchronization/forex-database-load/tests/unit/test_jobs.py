@@ -207,3 +207,17 @@ def test_error_messages_keep_controlled_repair_codes_and_redact_external_details
     assert failure_reason(RuntimeError("forex_database_load_job_already_running")) == "forex_database_load_job_already_running"
     assert failure_reason(ValueError("missing_environment_variable:FULCRUM_DB_PASSWORD")) == "missing_environment_variable:FULCRUM_DB_PASSWORD"
     assert failure_reason(RuntimeError("password=sensitive token=also_sensitive")) == "see_source_logs"
+
+
+def test_publish_sheet_validates_without_the_price_provider(monkeypatch) -> None:
+    """The launcher validates every mode it can run (it once rejected publish-sheet)."""
+    for name, value in {"FULCRUM_DB_HOST": "h", "FULCRUM_DB_PORT": "5432", "FULCRUM_DB_USER": "u", "FULCRUM_DB_PASSWORD": "p", "FULCRUM_DB_NAME": "d"}.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.delenv("FDL_SERVICE_ACCOUNT_FILE", raising=False)
+    import pytest
+
+    with pytest.raises(ValueError):
+        config.validate_runtime("publish-sheet")
+    monkeypatch.setenv("FDL_SERVICE_ACCOUNT_FILE", "/keys/service-account.json")
+    monkeypatch.setattr(config, "source_enabled", lambda _name: (_ for _ in ()).throw(AssertionError("no provider check")))
+    config.validate_runtime("publish-sheet")

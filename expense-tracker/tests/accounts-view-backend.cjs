@@ -1,34 +1,17 @@
 // Phase 2–3 (P2-B accounts, P3-B): list_accounts_view, get_account_form_options,
 // list_rates_view and list_account_types_view — server filter / sort / paging,
-// summaries over all non-deleted accounts, row flags. Balances and the summary
-// cards are the analytics job's published Accounts datasets (in XAU), converted.
+// summary placeholders, row flags. Balances come from listAccounts
+// (_buildAccountNetMap); the summary cards carry no values for now.
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const { gasRuntime } = require('./support/gas-runtime.cjs');
 const { ID, ACCOUNT_TYPES, seedViewFixture } = require('./support/view-fixture.cjs');
-const { publish, payload, predefinedId } = require('./support/report-publish.cjs');
 
 const plain = value => JSON.parse(JSON.stringify(value));
 
-// The datasets the job publishes for the fixture (GBP 80 / INR 8400 per gram; no USD rate),
-// in grams: Bank 3142.5 GBP, Rupee 9450 INR, Card +40 GBP, Brokerage 525 USD (no rate), Closed 999 GBP.
-const BALANCES = [[11, 3142.5, 3142.5 / 80], [12, 9450, 9450 / 8400], [13, 40, 40 / 80], [14, 525, null], [15, 999, 999 / 80]];
-function publishAccounts(sheets, extra = {}) {
-  const missing = [{ code: 'missing_rate', currencies: ['USD'] }];
-  const card = (key, grams) => ({ key, label: key, value: grams, format: 'money' });
-  publish(sheets, { outputs: [
-    { report_id: predefinedId('dataset-accounts-summary'), payload: payload({ warnings: missing, stat_cards: [
-      card('total_assets', 3232.5 / 80), card('total_liabilities', -40 / 80), card('net_worth', 3272.5 / 80), card('liquid_cash', 3232.5 / 80)] }) },
-    { report_id: predefinedId('dataset-account-balances'), payload: payload({ warnings: missing, tables: [{ id: 'balances', columns: [
-      { key: 'account_id', format: 'text' }, { key: 'balance_local', format: 'local' }, { key: 'balance', format: 'money' }],
-    rows: BALANCES.map(([n, local, grams]) => ({ key: ID(n), cells: { account_id: ID(n), balance_local: local, balance: grams } })) }] }) },
-  ], ...extra });
-}
-
-function appRuntime(overrides, { published = true } = {}) {
+function appRuntime(overrides) {
   const runtime = gasRuntime({ properties: { MERIDIAN_FULCRUM_PIN: '1234' } });
   runtime.tabs = seedViewFixture(runtime, overrides);
-  if (published) publishAccounts(runtime.sheets);
   runtime.get = params => JSON.parse(runtime.ctx.doGet({ parameter: { pin: '1234', ...params } }).getContent());
   return runtime;
 }
@@ -39,14 +22,12 @@ const names = data => rowsOf(data).map(row => row.account_name);
 // Fixture balances (GBP 80 / INR 8400 per XAU; no USD rate):
 // Bank 3142.5 GBP, Rupee 9450 INR = 90 GBP (inactive), Card +40 GBP (liability in
 // credit), Brokerage 525 USD (locked, no rate), Closed 999 GBP (deleted).
-const SUMMARY = { total_assets: 3232.5, total_liabilities: -40, net_worth: 3272.5, liquid_cash: 3232.5 };
 
 test('list_accounts_view returns every account by default with native and quote balances', () => {
   const runtime = appRuntime();
   const response = runtime.get({ action: 'list_accounts_view', today: '2026-09-30' });
   assert.equal(response.ok, true);
-  assert.deepEqual(response.quote, { currency: 'GBP', symbol: '£', rate_available: true, rate: 80, rate_date: '' });
-  assert.deepEqual([response.generation_id, response.published_at], ['gen-1', '2026-09-30T06:00:00.000Z']);
+  assert.deepEqual(response.quote, { currency: 'GBP', symbol: '£', rate_available: true });
   assert.deepEqual(response.warnings, [{ code: 'missing_rate', currencies: ['USD'] }]);
   const data = response.data;
   assert.deepEqual([data.total, data.page, data.pages, data.page_size, data.active_filter_count], [5, 1, 1, 5, 0]);
@@ -75,47 +56,21 @@ test('list_accounts_view returns every account by default with native and quote 
   assert.deepEqual(data.facets.statuses.map(status => status.value), ['active', 'inactive', 'deleted', 'locked']);
 });
 
-test('native balances are the published local balances; nothing published shows no balance', () => {
+test('native balances equal listAccounts().current_value_local for every account', () => {
   const runtime = appRuntime();
   const data = runtime.get({ action: 'list_accounts_view' }).data;
-  const expected = Object.fromEntries(BALANCES.map(([n, local]) => [ID(n), local]));
+  const expected = Object.fromEntries(runtime.ctx.listAccounts().map(account => [account.id, account.current_value_local]));
   for (const row of rowsOf(data)) assert.equal(row.balance.native, expected[row.id], row.account_name);
-  const empty = appRuntime(undefined, { published: false }).get({ action: 'list_accounts_view' });
-  assert.equal(empty.ok, true);
-  assert.deepEqual(empty.warnings, [{ code: 'not_published' }]);
-  assert.ok(rowsOf(empty.data).every(row => row.balance.native === null && row.balance.quote === null && row.display_sign === 'none'));
-  assert.equal(empty.data.summary.net_worth, null);
 });
 
-test('summary cards use ALL non-deleted accounts, whatever the filters', () => {
+test('summary cards are placeholders without values; counts cover all non-deleted accounts', () => {
   const runtime = appRuntime();
-  for (const params of [{}, { statuses: 'active' }, { search: 'bank' }, { type: 'liability' }, { statuses: 'none' }, { page_size: '1', page: '3' }]) {
+  for (const params of [{}, { statuses: 'active' }, { type: 'liability' }]) {
     const summary = runtime.get({ action: 'list_accounts_view', ...params }).data.summary;
-    assert.deepEqual({ total_assets: summary.total_assets, total_liabilities: summary.total_liabilities, net_worth: summary.net_worth, liquid_cash: summary.liquid_cash }, SUMMARY, JSON.stringify(params));
-    assert.deepEqual(summary.missing_currencies, ['USD']);
+    assert.deepEqual([summary.total_assets, summary.total_liabilities, summary.net_worth, summary.liquid_cash], [null, null, null, null]);
     assert.deepEqual([summary.account_count, summary.all_count], [4, 5]);
+    assert.deepEqual(summary.cards.map(card => [card.key, card.value]), [['total_assets', null], ['total_liabilities', null], ['net_worth', null], ['liquid_cash', null]]);
   }
-  const cards = runtime.get({ action: 'list_accounts_view' }).data.summary.cards;
-  assert.deepEqual(plain(cards), [
-    { key: 'total_assets', label: 'Total Assets', value: 3232.5, tone: 'positive' },
-    { key: 'total_liabilities', label: 'Total Liabilities', value: -40, tone: 'negative' },
-    { key: 'net_worth', label: 'Net Worth', value: 3272.5, tone: 'positive' },
-    { key: 'liquid_cash', label: 'Liquid Cash', value: 3232.5, tone: 'positive' },
-  ]);
-  // Quote currency changes every converted figure; INR rows are then native.
-  const inr = runtime.get({ action: 'list_accounts_view', quote_currency: 'INR' }).data;
-  assert.equal(inr.summary.total_assets, 3142.5 / 80 * 8400 + 9450);
-  assert.equal(rowsOf(inr).find(row => row.account_name === 'Rupee').balance.is_foreign, false);
-});
-
-test('a new publish is read at once: the cache key carries the generation id', () => {
-  const runtime = appRuntime();
-  assert.equal(runtime.get({ action: 'list_accounts_view' }).data.summary.net_worth, 3272.5);
-  publishAccounts(runtime.sheets, { generation_id: 'gen-2', slot: 'b' });
-  runtime.sheets.find(sheet => sheet.name === 'report_data_b').rows.forEach(row => { if (row[3] && row[3].includes('net_worth')) row[3] = row[3].replace(/"net_worth","label":"net_worth","value":[0-9.]+/, '"net_worth","label":"net_worth","value":50'); });
-  const response = runtime.get({ action: 'list_accounts_view' });
-  assert.equal(response.generation_id, 'gen-2');
-  assert.equal(response.data.summary.net_worth, 4000);
 });
 
 test('filters: type, sub_type, currency, search and statuses (csv or none)', () => {
@@ -172,11 +127,11 @@ test('rows carry allowed actions and editable fields by status', () => {
   assert.deepEqual(byName.Bank.statuses_for_edit.map(status => status.value), ['active', 'inactive', 'locked']);
 });
 
-test('a list_accounts_view GET never reads transaction_master and reads account_types once', () => {
+test('a list_accounts_view GET reads transaction_master and account_types once', () => {
   const runtime = appRuntime();
   const before = { tx: runtime.tabs.transactions.reads, accounts: runtime.tabs.accounts.reads, types: runtime.tabs.account_types.reads };
   assert.equal(runtime.get({ action: 'list_accounts_view' }).ok, true);
-  assert.equal(runtime.tabs.transactions.reads - before.tx, 0);
+  assert.equal(runtime.tabs.transactions.reads - before.tx, 1);
   assert.equal(runtime.tabs.accounts.reads - before.accounts, 1);
   assert.equal(runtime.tabs.account_types.reads - before.types, 1);
 });
@@ -300,15 +255,15 @@ test('a catalog that still needs migration only offers View', () => {
 test('view actions are registered through the file hooks and cached by data_version', () => {
   const runtime = appRuntime();
   const actions = runtime.ctx.grGetActions();
-  for (const action of ['get_account_form_options', 'list_rates_view', 'list_account_types_view']) {
+  for (const action of ['list_accounts_view', 'get_account_form_options', 'list_rates_view', 'list_account_types_view']) {
     assert.equal(actions[action].cache, true, action);
     assert.ok(actions[action].ttl <= 600);
   }
-  assert.equal(actions.list_accounts_view.cache, 'published');
+  assert.equal(actions.list_accounts_view.cache, true);
   runtime.get({ action: 'list_accounts_view' });
-  const reads = runtime.tabs.accounts.reads;
+  const reads = runtime.tabs.transactions.reads;
   runtime.get({ action: 'list_accounts_view' });
-  assert.equal(runtime.tabs.accounts.reads, reads);
+  assert.equal(runtime.tabs.transactions.reads, reads);
 });
 
 // ── Exports (phase 5): export_accounts / export_account_types ────────────────

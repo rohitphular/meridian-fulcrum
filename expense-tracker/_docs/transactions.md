@@ -13,7 +13,7 @@ Schema reference: [data-model.md § Transaction](data-model.md#transaction). Bal
 - Ten independent filter dimensions, combined with AND (date range, type, account, major category, minor category, country, city, area, tag, free-text search)
 - Active-filter count on the Filters button
 - Sortable, paginated table; mobile uses card layout
-- Date-range scoping (report query drills open the list with a custom range)
+- Date-range scoping
 - CSV / JSON export of the **currently filtered rows** (both date-range and active filter dimensions apply)
 - CSV bulk import — choose a file and import; the backend parses and validates it, then reports created/updated/unchanged/failed counts and line-numbered failures. ID-based insert or replacement
 - Warning banner separating malformed rows from the main table

@@ -1,7 +1,7 @@
 """publish-sheet: copy the latest rate of every currency to the app's rates tab.
 
-The app converts XAU (grams of gold) to the display currency with these rates; the
-analytics job publishes every amount in XAU. One row per currency in currency_master
+The app converts amounts to the display currency with these rates (units per gram of
+gold, XAU). One row per currency in currency_master
 that has a rate: its latest rate_value (units per gram), symbol and rate_date. XAU is 1.
 Nothing in the app edits rates any more: this job owns the tab.
 """

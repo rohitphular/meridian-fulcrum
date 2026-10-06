@@ -6,11 +6,8 @@
 // - list_accounts_view: server filter / sort / search / paging, rows with native
 //   and quote balances, display signs, subtype labels, detail sheet, allowed
 //   actions and editable fields; group totals over the whole filtered set; the
-//   net-worth cards over ALL non-deleted accounts, independent of the filters;
-//   facets (types, subtypes, currencies, statuses). Balances and the cards are
-//   what the analytics job published (dataset-account-balances and
-//   dataset-accounts-summary, report-store.gs), converted to the quote currency;
-//   an account added since the last publish shows no balance yet.
+//   summary cards (placeholders for now: values null); facets (types,
+//   subtypes, currencies, statuses).
 // - get_account_form_options: add / edit / import form choices, plus the
 //   editable fields of one account when `id` is given.
 // - export_accounts: every account row (all statuses, filters ignored) in the
@@ -47,7 +44,7 @@ const _VWACC_EXPORT_COLUMNS = ['id', 'account_name', 'legal_entity_name', 'type'
   'account_opening_date_local', 'account_closing_date_local', 'tracking_start_date_local', 'opening_value_local', 'description', 'record_status'];
 
 function viewAccountsRegister(actions) {
-  actions.list_accounts_view = { handler: function(ctx) { return listAccountsView(ctx); }, cache: 'published', ttl: 600 };
+  actions.list_accounts_view = { handler: function(ctx) { return listAccountsView(ctx); }, cache: true, ttl: 600 };
   actions.get_account_form_options = { handler: function(ctx) { return getAccountFormOptions(ctx); }, cache: true, ttl: 600 };
   // Exports can exceed the cache payload limit; always computed.
   actions.export_accounts = { handler: function(ctx) { return vwAccExport(ctx); }, cache: false };
@@ -150,18 +147,14 @@ function _vwAccEditableFields(status) {
   return status === 'locked' || status === 'deleted' ? [] : _VWACC_EDIT_FIELDS.slice();
 }
 
-// published: { local, quote } from dataset-account-balances, or undefined.
-function _vwAccRow(account, catalog, fx, published) {
+function _vwAccRow(account, catalog, fx) {
   const type = _vwAccText(account.type);
   const subtype = _vwAccText(account.sub_type);
   const currency = _vwAccText(account.account_currency_local).toUpperCase();
   const status = _vwAccText(account.record_status);
   const isLiability = type === 'liability';
-  const balance = {
-    native: published === undefined || typeof published.local !== 'number' ? null : published.local,
-    currency: currency, currency_symbol: fxSymbol(currency, fx.symbols),
-    quote: published === undefined || typeof published.quote !== 'number' ? null : published.quote,
-  };
+  const current = account.current_value_local === null || account.current_value_local === undefined ? null : Number(account.current_value_local);
+  const balance = fxMoney(current, currency, fx);
   balance.display_sign = _vwAccDisplaySign(balance.native, isLiability);
   balance.is_foreign = currency !== fx.quote_currency;
   const opening = fxMoney(account.opening_value_local, currency, fx);
@@ -289,49 +282,19 @@ function _vwAccGroupOrder(rows, catalog) {
 
 // ── list_accounts_view ────────────────────────────────────────────────────────
 
-// The published Accounts datasets: { summary: payload|null, balances: { id: { local, quote } },
-// warnings } (payload money already in the quote currency).
-function _vwAccPublished(ctx) {
-  const meta = rsMeta();
-  const summary = rsReadReport(ctx, meta, rptPredefinedByKey('dataset-accounts-summary').id, '');
-  const balances = rsReadReport(ctx, meta, rptPredefinedByKey('dataset-account-balances').id, '');
-  const byId = Object.create(null);
-  if (balances.payload !== null && balances.payload.tables.length > 0) {
-    balances.payload.tables[0].rows.forEach(function(row) {
-      byId[_vwAccText(row.cells.account_id).toLowerCase()] = { local: row.cells.balance_local, quote: row.cells.balance };
-    });
-  }
-  const warnings = [];
-  summary.warnings.concat(balances.warnings).forEach(function(warning) {
-    if (!warnings.some(function(seen) { return seen.code === warning.code; })) warnings.push(warning);
-  });
-  return { summary: summary.payload, balances: byId, warnings: warnings };
-}
-
-// Summary over ALL non-deleted accounts, whatever the filters (product decision):
-// the published dataset-accounts-summary cards.
-function _vwAccSummary(accounts, published) {
-  const card = function(key) {
-    const found = published.summary === null ? undefined : published.summary.stat_cards.find(function(item) { return item.key === key; });
-    return found === undefined || typeof found.value !== 'number' ? null : found.value;
-  };
-  const missing = [];
-  (published.summary === null ? [] : published.summary.warnings || []).forEach(function(warning) {
-    if (warning.code === 'missing_rate') (warning.currencies || []).forEach(function(code) { if (missing.indexOf(code) === -1) missing.push(code); });
-  });
-  const tone = function(value) { return value !== null && value < 0 ? 'negative' : 'positive'; };
-  const worth = card('net_worth'), liquid = card('liquid_cash');
+// Summary cards: placeholders until net worth / liquid cash are computed again
+// (the calculation was removed with the report work). Counts stay.
+function _vwAccSummary(accounts) {
   return {
-    total_assets: card('total_assets'), total_liabilities: card('total_liabilities'),
-    net_worth: worth, liquid_cash: liquid,
-    missing_currencies: missing.sort(),
+    total_assets: null, total_liabilities: null, net_worth: null, liquid_cash: null,
+    missing_currencies: [],
     account_count: accounts.filter(function(account) { return account.record_status !== 'deleted'; }).length,
     all_count: accounts.length,
     cards: [
-      { key: 'total_assets', label: 'Total Assets', value: card('total_assets'), tone: 'positive' },
-      { key: 'total_liabilities', label: 'Total Liabilities', value: card('total_liabilities'), tone: 'negative' },
-      { key: 'net_worth', label: 'Net Worth', value: worth, tone: tone(worth) },
-      { key: 'liquid_cash', label: 'Liquid Cash', value: liquid, tone: tone(liquid) },
+      { key: 'total_assets', label: 'Total Assets', value: null, tone: 'positive' },
+      { key: 'total_liabilities', label: 'Total Liabilities', value: null, tone: 'negative' },
+      { key: 'net_worth', label: 'Net Worth', value: null, tone: 'positive' },
+      { key: 'liquid_cash', label: 'Liquid Cash', value: null, tone: 'positive' },
     ],
   };
 }
@@ -339,18 +302,15 @@ function _vwAccSummary(accounts, published) {
 // Group total over every filtered, non-deleted row of the group (not just the
 // page). Signed quote sum; liabilities are negative (owed). Missing rates are
 // excluded and listed, never converted 1:1.
-// quote is null when no row of the group has a published balance yet.
 function _vwAccGroupTotal(rows, isLiability) {
-  let total = 0, counted = 0;
+  let total = 0;
   const missing = Object.create(null);
   rows.forEach(function(row) {
     if (row.record_status === 'deleted' || row.balance.native === null) return;
     if (row.balance.quote === null) { missing[row.currency === '' ? '(blank)' : row.currency] = true; return; }
     total += row.balance.quote;
-    counted += 1;
   });
-  const published = counted > 0 || Object.keys(missing).length > 0;
-  return { quote: published ? total : null, display_sign: published ? _vwAccDisplaySign(total, isLiability) : 'none', missing_currencies: Object.keys(missing).sort() };
+  return { quote: total, display_sign: _vwAccDisplaySign(total, isLiability), missing_currencies: Object.keys(missing).sort() };
 }
 
 // GET list_accounts_view. Params: type, sub_type, currency, search, statuses
@@ -361,8 +321,7 @@ function listAccountsView(ctx) {
   if (parsed.ok !== true) return parsed;
   const fx = vmFx(ctx);
   const catalog = _vwAccCatalog();
-  const published = _vwAccPublished(ctx);
-  const rows = vmLoad('accounts_raw').map(function(account) { return _vwAccRow(account, catalog, fx, published.balances[_vwAccText(account.id).toLowerCase()]); });
+  const rows = vmLoad('accounts').map(function(account) { return _vwAccRow(account, catalog, fx); });
   const filtered = rows.filter(function(row) { return _vwAccMatches(row, parsed.filters); });
   const order = _vwAccGroupOrder(rows, catalog);
   const sign = parsed.dir === 'desc' ? -1 : 1;
@@ -391,7 +350,7 @@ function listAccountsView(ctx) {
   const activeCount = [filters.type !== 'all', filters.sub_type !== 'all', filters.currency !== 'all', filters.search !== '',
     filters.statuses.length < _VWACC_STATUSES.length].filter(function(flag) { return flag; }).length;
   const data = {
-    summary: _vwAccSummary(rows, published),
+    summary: _vwAccSummary(rows),
     groups: groups,
     total: paged.total, page: paged.page, page_size: paged.page_size, pages: paged.pages,
     sort: { col: parsed.sort, dir: parsed.dir },
@@ -404,7 +363,9 @@ function listAccountsView(ctx) {
       sorts: _VWACC_SORTS.map(function(key) { return { value: key, label: _VWACC_SORT_LABELS[key] }; }),
     },
   };
-  return rsEnvelope(ctx, rsMeta(), data, published.warnings);
+  const warning = fxMissingRateWarning(rows.filter(function(row) { return row.record_status !== 'deleted'; })
+    .map(function(row) { return row.currency; }), fx);
+  return vmEnvelope(ctx, data, [warning]);
 }
 
 // ── get_account_form_options ──────────────────────────────────────────────────
@@ -456,7 +417,7 @@ function getAccountFormOptions(ctx) {
 // Every account in Sheet order, all statuses, stored values only (no computed
 // balances), so the download re-imports as-is through import_account_data.
 function vwAccExport(ctx) {
-  const rows = vmLoad('accounts_raw').map(function(account) {
+  const rows = vmLoad('accounts').map(function(account) {
     const row = {};
     _VWACC_EXPORT_COLUMNS.forEach(function(column) { row[column] = account[column] === undefined ? '' : account[column]; });
     return row;

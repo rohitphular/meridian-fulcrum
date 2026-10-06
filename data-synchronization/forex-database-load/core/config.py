@@ -66,9 +66,12 @@ def db_config() -> ConnectionConfig:
 
 def validate_runtime(mode: str) -> None:
     """Offline startup checks, run before migrations touch the selected database."""
-    if mode not in {"daily", "historical"}:
+    if mode not in {"daily", "historical", "publish-sheet"}:
         raise ValueError("invalid_mode")
     db_config()
+    if mode == "publish-sheet":  # reads PostgreSQL and writes the Sheet: no provider involved
+        _required_env("FDL_SERVICE_ACCOUNT_FILE")
+        return
     source_enabled("yfinance")
     if mode == "historical":
         historical_csv_dir()
@@ -76,7 +79,7 @@ def validate_runtime(mode: str) -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Validate job configuration before database migrations")
-    parser.add_argument("mode", choices=("daily", "historical"))
+    parser.add_argument("mode", choices=("daily", "historical", "publish-sheet"))
     arguments = parser.parse_args()
     try:
         validate_runtime(arguments.mode)

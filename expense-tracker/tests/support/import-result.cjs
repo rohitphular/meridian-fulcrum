@@ -5,7 +5,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const source = fs.readFileSync(path.join(__dirname, '../../app/core/utils.js'), 'utf8');
 const start = source.indexOf('// ── Form errors (shared by every add/edit form)');
-const end = source.indexOf('export async function shareSnapshot');
+const end = source.length;
 const esc = value => String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 const context = vm.createContext({ esc });
 const helperSource = source.slice(start, end).replace(/\bexport (?=function)/g, '');

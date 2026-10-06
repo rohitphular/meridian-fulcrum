@@ -34,7 +34,7 @@ for each non-deleted row with valid date, positive finite amount and known accou
     if tx_type === 'money-out': net[account_id] -= tx_amount_local
 ```
 
-The opening value is the snapshot at `tracking_start_date_local`, when set. The cutoff is inclusive: a movement exactly at the tracking timestamp counts. A blank cutoff retains all-history behavior. `account_opening_date_local` records the real-world opening date and is not the balance cutoff. The analytics job's balance history activates the opening snapshot at the tracking timestamp and values each day's balance in XAU at that day's rate.
+The opening value is the snapshot at `tracking_start_date_local`, when set. The cutoff is inclusive: a movement exactly at the tracking timestamp counts. A blank cutoff retains all-history behavior. `account_opening_date_local` records the real-world opening date and is not the balance cutoff.
 
 When the account supplies `local_timezone`, the cutoff is resolved in that zone and each movement is resolved in `tx_timezone_local` (blank transaction zone retains the legacy `Europe/London` default). The comparison uses actual UTC instants, including fractional seconds. For an account without a timezone, both values retain the documented wall-clock comparison. An invalid or ambiguous account snapshot fails the balance read rather than replaying all history. Native Sheet date cells are interpreted from their displayed wall time.
 

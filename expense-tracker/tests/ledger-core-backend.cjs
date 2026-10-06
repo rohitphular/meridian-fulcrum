@@ -1,6 +1,5 @@
 // ledger-core.gs: periods, wall-date filters and transfer pairing (what the
-// Transactions list and input validation still use; reports are computed by
-// the analytics job).
+// Transactions list and input validation use).
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const { gasRuntime } = require('./support/gas-runtime.cjs');
