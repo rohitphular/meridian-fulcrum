@@ -82,13 +82,13 @@ entities:
   subscription_master: {enabled: false}
 ```
 
-Create and populate the six visible detail types through the expense-tracker account importer before enabling extraction. The [import guide](../../../expense-tracker/_docs/account-imports.md) lists exact headers; the six requested `local/files/` CSVs now include the appended metadata block. Importer-owned sync/audit inputs are ignored; it generates new audit timestamps and preserves creation timestamps on replacement. An omitted detail toggle defaults to disabled for older configuration files.
+Create and populate the six visible detail types through the expense-tracker account importer before enabling extraction. The [import guide](../../../expense-tracker/_docs/account-imports.md) lists exact headers; the six requested `../../../_do-not-touch` CSVs now include the appended metadata block. Importer-owned sync/audit inputs are ignored; it generates new audit timestamps and preserves creation timestamps on replacement. An omitted detail toggle defaults to disabled for older configuration files.
 
 Values must be YAML booleans, not quoted strings. Disabling a dependency means the downstream entity uses existing database references; it does not sync the disabled tab. Empty valid tabs are allowed and never wipe stored data. Missing tabs, schema drift, invalid/duplicate UUIDs and invalid master/metadata-detail sync statuses abort the snapshot before entity writes.
 
 ## Account type configuration
 
-Deploy expense-tracker and open Configure → Account Types before extraction to initialize the thirteen-column `account_types` source from CSV. Import `local/files/account_types.csv` to use the existing reference UUIDs. Migrations 0019–0020 and normal-sync preserve category links, hyphenate key values and support one-time adoption of existing unmanaged catalog IDs. Import explicit `detail_sheet` policy from the current CSV; no runtime seed is supplied. Migration 0020 requires a completed policy refresh before dependent lookups, including source rows already marked in-sync. Unknown classifications are rejected. Process account types before categories and accounts; unavailable or invalid enabled configuration stops dependent entities. See [account-type mapping](../_docs/account-types.md).
+Deploy expense-tracker and open Configure → Account Types before extraction to initialize the thirteen-column `account_types` source from CSV. Import `../../../_do-not-touch` to use the existing reference UUIDs. Migrations 0019–0020 and normal-sync preserve category links, hyphenate key values and support one-time adoption of existing unmanaged catalog IDs. Import explicit `detail_sheet` policy from the current CSV; no runtime seed is supplied. Migration 0020 requires a completed policy refresh before dependent lookups, including source rows already marked in-sync. Unknown classifications are rejected. Process account types before categories and accounts; unavailable or invalid enabled configuration stops dependent entities. See [account-type mapping](../_docs/account-types.md).
 
 ## Recovery
 

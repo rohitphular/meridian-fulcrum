@@ -123,7 +123,7 @@ clasp deploy --deploymentId "<paste from envs.json>" --description "your descrip
 
 ## Loading local CSV files into the Sheet
 
-Loading `local/files` into an environment's Sheet (sheet-rebuild or sheet-sync) is the [ledger-sheet-load](../../data-synchronization/ledger-sheet-load/README.md) data-synchronization job: `make data-sync` → `ledger-sheet-load`. It only calls the deployed GAS web app, so deploy the current backend first.
+Loading `../../_do-not-touch` into an environment's Sheet (sheet-rebuild or sheet-sync) is the [ledger-sheet-load](../../data-synchronization/ledger-sheet-load/README.md) data-synchronization job: `make data-sync` → `ledger-sheet-load`. It only calls the deployed GAS web app, so deploy the current backend first.
 
 ## Credentials (`MERIDIAN_FULCRUM_PIN` and `MERIDIAN_FULCRUM_SECRET`)
 
@@ -154,6 +154,6 @@ For an existing spreadsheet with plural master tab names, deploy this version an
 
 ### Account Types configuration
 
-Deploy the updated `account-type-*.gs` implementation and frontend; there is no catalog seed file. Then use Configure → Account Types → Import with the complete `local/files/account_types.csv`. The 13-column file preserves the existing 16 UUIDs and adds `detail_sheet` before metadata. If the live `account_types` tab still has the retired `is_loan` column, delete it first. Classification keys use hyphens. An absent/empty catalog stays empty until this explicit import; an established catalog cannot accept additional identities.
+Deploy the updated `account-type-*.gs` implementation and frontend; there is no catalog seed file. Then use Configure → Account Types → Import with the complete `../../_do-not-touch`. The 13-column file preserves the existing 16 UUIDs and adds `detail_sheet` before metadata. If the live `account_types` tab still has the retired `is_loan` column, delete it first. Classification keys use hyphens. An absent/empty catalog stays empty until this explicit import; an established catalog cannot accept additional identities.
 
 For an existing 12-column Sheet, the same full CSV import validates identities, key equivalence, policy values and dependent account/category references before writing. It upgrades the catalog and dependent keys/hints, marking changed rows pending. The explicit Apps Script alternative is `migrateAccountTypeKeys(catalogRows)` with the parsed full CSV objects. Multi-tab updates are not atomic; retry the same full CSV after an interrupted migration. Apply the current ledger migrations, through `0023`, before extraction. See the [Account Types guide](../_docs/account-types.md) for the full rollout and dependency rules.

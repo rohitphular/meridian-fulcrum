@@ -6,7 +6,7 @@ The daily entry path is **Expense Tracker UI → Apps Script → Google Sheets**
 |---|---|---|
 | Expense Tracker | Its Google Sheets tabs | Source business fields, lifecycle and pending-sync metadata |
 | [forex-database-load](forex-database-load/README.md) | Market provider data, or configured historical CSV files | PostgreSQL `currency_master` and dated `currency_rates` |
-| [ledger-sheet-load](ledger-sheet-load/README.md) | Local CSV files in `local/files` | Google Sheets tabs, through the GAS import endpoints (sheet-rebuild or sheet-sync); fills missing CSV ids |
+| [ledger-sheet-load](ledger-sheet-load/README.md) | Local CSV files in `../_do-not-touch` | Google Sheets tabs, through the GAS import endpoints (sheet-rebuild or sheet-sync); fills missing CSV ids |
 | [ledger-sheet-extract](ledger-sheet-extract/README.md) | `extract`: enabled Sheet tabs (one batched read). `acknowledge`: the load's outcomes | Staging tables (`stg_*`, kept 6 months); only sync status/date/notes back to the Sheet |
 | [ledger-database-load](ledger-database-load/README.md) | The newest staged snapshot and PostgreSQL currency references (no Google access) | Validated ledger tables; per-row outcomes in staging |
 | [consolidated-pipeline](consolidated-pipeline/README.md) | `consolidated-pipeline/config/pipeline.<env>.json` (gitignored, one per env) | Nothing itself: runs the listed modules in order, unattended |
@@ -46,7 +46,7 @@ Each launcher logs under its own folder, `$MERIDIAN_LOG_ROOT/<module>/`, because
 
 ## Bulk loads from CSV
 
-After editing the files in `local/files`, run `make data-sync` → **ledger-sheet-load** → environment → **sheet-sync** (update rows by id, add new ones) or **sheet-rebuild** (delete and reload the CSV-backed tabs). Then run the ledger sync as above (`extract` → ledger-database-load → `acknowledge`), or simply `make consolidated-pipeline`. This replaces the former `make factory-reset`.
+After editing the files in `../_do-not-touch`, run `make data-sync` → **ledger-sheet-load** → environment → **sheet-sync** (update rows by id, add new ones) or **sheet-rebuild** (delete and reload the CSV-backed tabs). Then run the ledger sync as above (`extract` → ledger-database-load → `acknowledge`), or simply `make consolidated-pipeline`. This replaces the former `make factory-reset`.
 
 ## Setup and release
 

@@ -17,7 +17,7 @@ Each document accounts for every source column, derived database column and reta
 | [Market investment](account-market-investment.md) | `account_investment_stocks` | 27 | `account_investment_stocks` |
 | [Property](account-property.md) | `account_investment_property` | 23 | `account_investment_property` |
 
-The six tabs contain **106 source columns**. The Accounts importer exposes master plus these six detail choices; see the [import guide](../../../expense-tracker/_docs/account-imports.md). The six listed CSVs under `local/files/` now match their expanded contracts. Existing fields and values are preserved; new status fields start as `active` and `create-pending`, and unknown audit/sync timestamps stay blank. `account_deposit_details.csv` imports through `file_type=account_deposit` into the `account_deposit` tab. Stocks already had `record_status`; only five columns were appended there.
+The six tabs contain **106 source columns**. The Accounts importer exposes master plus these six detail choices; see the [import guide](../../../expense-tracker/_docs/account-imports.md). The six listed CSVs under `../../../_do-not-touch` now match their expanded contracts. Existing fields and values are preserved; new status fields start as `active` and `create-pending`, and unknown audit/sync timestamps stay blank. `account_deposit_details.csv` imports through `file_type=account_deposit` into the `account_deposit` tab. Stocks already had `record_status`; only five columns were appended there.
 
 ## Identity, relationships and cardinality
 

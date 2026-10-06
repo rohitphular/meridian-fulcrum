@@ -13,7 +13,7 @@ python3 -m http.server 8000 --bind 127.0.0.1
 # http://localhost:8000/expense-tracker/app/
 ```
 
-CSV parsing and validation run only on the server: each entity's import endpoint takes the raw file text (`{ csv, dry_run }`), and the browser only uploads it and renders line-numbered results (no preview, retry or import geocoding). `make data-sync` → **ledger-sheet-load** asks for a mode — sheet-rebuild (delete the 11 CSV-backed tabs first) or sheet-sync (keep tabs, update by id) — and loads `local/files` for a chosen environment through those same endpoints; see [ledger-sheet-load](../data-synchronization/ledger-sheet-load/README.md). (It replaced `make factory-reset` and `expense-tracker/scripts/`.)
+CSV parsing and validation run only on the server: each entity's import endpoint takes the raw file text (`{ csv, dry_run }`), and the browser only uploads it and renders line-numbered results (no preview, retry or import geocoding). `make data-sync` → **ledger-sheet-load** asks for a mode — sheet-rebuild (delete the 11 CSV-backed tabs first) or sheet-sync (keep tabs, update by id) — and loads `../_do-not-touch` for a chosen environment through those same endpoints; see [ledger-sheet-load](../data-synchronization/ledger-sheet-load/README.md). (It replaced `make factory-reset` and `expense-tracker/scripts/`.)
 
 From `expense-tracker/`, backend deployment uses `bash cicd/deploy.sh <env> "description"`. Deployment is separate from local validation. No deployment was performed during this review.
 

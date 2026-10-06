@@ -42,7 +42,7 @@ When a category with these hints is used on a transaction:
 2. Account subtype hints are not enforced server-side.
 3. The transaction form pre-filters the account dropdowns to the allowed types so the user cannot easily pick a forbidden combination.
 
-Example from `local/files/category_master.csv`:
+Example from `../../_do-not-touch`:
 - `money-out / Debt repayment / Loan repayment`: target mandatory; target type ∈ {`auto-loan`, `heloc`, `personal-loan`, `debt-consolidation`}
 
 Categories without hints have no account-type constraints.
@@ -154,7 +154,7 @@ The browser only reads the file and sends its raw text; parsing and validation r
 
 Only `id` (lowercased), the three required fields, `description`, `record_status`, `tag_keywords`, `counterparty_examples`, `source_account_types` and `target_account_types` are forwarded, plus the three booleans as real booleans. Blank `record_status` and blank booleans are omitted so server defaults apply.
 
-Account-type hints are checked against the `account_types` Sheet only in a real run. A hinted import returns `account_types_missing` or `account_types_migration_required` before any write when the catalog is absent or not upgraded. In that case, import the complete updated `local/files/account_types.csv` through **Configure → Account Types**, then import `local/files/category_master.csv`. Matching UUIDs update the rows already imported and preserve identity.
+Account-type hints are checked against the `account_types` Sheet only in a real run. A hinted import returns `account_types_missing` or `account_types_migration_required` before any write when the catalog is absent or not upgraded. In that case, import the complete updated `../../_do-not-touch` through **Configure → Account Types**, then import `../../_do-not-touch`. Matching UUIDs update the rows already imported and preserve identity.
 
 After submission, the panel stays open with created, updated, unchanged and failed counts. Every rejected row appears with its CSV line, category, field, explanation and backend error code. A rejected file shows the server's `Row N: …` messages as a list. There is no preview and no failed-rows-only retry. Fix the file and import it again; UUID-bearing rows that were already saved update in place. Successful mutations dispatch `et:reload`, and the report survives that refresh. A connection failure, a malformed response or a `request_failed` answer (the server handler threw part-way) leaves the outcome uncertain: the app reloads, and the message says some rows may have been saved. Choosing another file or closing the panel clears the previous report.
 

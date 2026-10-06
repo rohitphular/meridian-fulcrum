@@ -121,7 +121,7 @@ A supplied UUID identifies the row to insert or replace. Matching is case-insens
 
 A real run returns the bulk result (`created`, `updated`, `skipped`, `failed`, `results[]`, `rows`). `skipped` counts rows equal to the stored row; they are left untouched and keep their sync status. Every result carries its CSV `line`. The toast shows `N created · N updated · N unchanged · N failed`. The panel shows the same summary (`· N unchanged` only when it is above 0) and a table of line, error code and details for failed rows. The app reloads only when a row was created or updated. A `request_failed` answer (the server handler threw part-way) is treated as uncertain: the app reloads and says some rows may have been saved. There is no preview and no retry button: fix the file and import it again (rows with IDs are upserted, so re-importing is safe). A transport failure can leave an unknown outcome; check/reload the Sheet before submitting again, especially for rows without IDs.
 
-The current local `local/files/subscription_master.csv` has 21 monthly definitions. Every row now has an explicit `subscription_timezone_local` (currently `Europe/London`). Zones are never inferred from account currency or the browser; a blank zone is rejected for dated rows.
+The current local `../../_do-not-touch` has 21 monthly definitions. Every row now has an explicit `subscription_timezone_local` (currently `Europe/London`). Zones are never inferred from account currency or the browser; a blank zone is rejected for dated rows.
 
 ## Existing data and deployment
 

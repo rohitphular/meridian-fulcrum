@@ -13,7 +13,7 @@
 | Backend  | `api/sync-utils.gs`              | `VALID_RECORD_STATUSES = ['active','inactive','deleted','locked']`; `computeSyncStatus()` added                                        |
 | Frontend | `app/sections/categories.js`     | `_parseCatCsv` passes `id` field through so seed CSVs with pre-assigned UUIDs flow into the bulk import API; import panel hint updated; `record_status` / sync icons; locked/deleted menu guards; restore flow |
 | Frontend | `app/core/utils.js`              | `recordStatusIcon` / `syncStatusIcon` — fixed-size 16×16 inline-flex; `CAT_COLS` excludes sync                                        |
-| Data     | `local/files/categories_new.csv` | 102 categories; `id` column added (pre-assigned UUIDs for cross-entity FK references); `record_status` column present                 |
+| Data     | `../../_do-not-touch` | 102 categories; `id` column added (pre-assigned UUIDs for cross-entity FK references); `record_status` column present                 |
 
 ### 1. Deploy backend
 
@@ -52,7 +52,7 @@ Files: `category-schema.gs`, `category-core.gs`, `sync-utils.gs`, `app-router.gs
 | 20  | `created_at`              |
 | 21  | `updated_at`              |
 
-3. Categories → **↑ Import** → upload `local/files/categories_new.csv`
+3. Categories → **↑ Import** → upload `../../_do-not-touch`
    - The CSV has an `id` column with pre-assigned UUIDs — these are preserved in the sheet (no new UUIDs generated for seed rows)
    - Expect: 102 categories imported, 0 updated, 0 failed
 
@@ -94,7 +94,7 @@ Files: `app/sections/categories.js`, `app/core/utils.js`
 | Backend  | `api/account-core.gs`           | `createAccount`: `generateAccountId()` replaced with UUID logic (uses caller-supplied `body.id` when present — seed import path; otherwise `Utilities.getUuid()`); all new fields set (`legal_entity_name`, `local_timezone`, `account_opening_date_local`, `account_closing_date_local`); no UTC conversion on datetimes; `updateAccount` now writes `account_name`, `account_closing_date_local` |
 | Backend  | `api/account-validation.gs`     | `body.name` → `body.account_name`, error `missing_name` → `missing_account_name`; `body.currency` → `body.account_currency_local`, error `missing_currency` → `missing_local_currency`; `account_opening_date_local` required on create → `missing_opening_date_local` |
 | Frontend | `app/sections/accounts.js`      | All `a.currency` → `a.account_currency_local`; all `a.name` → `a.account_name`; `local_timezone` auto-detected via `Intl.DateTimeFormat().resolvedOptions().timeZone` (not a form field); `account_opening_date_local` datetime-local input in add form; `account_closing_date_local` datetime-local input in edit form; `legal_entity_name` text input in add form (read-only in view/edit); CSV parser updated for all new column names |
-| Data     | `local/files/accounts_new.csv`  | `name` → `account_name`; `currency` → `account_currency_local`; `legal_entity_name` column added; `local_timezone` column added (GBP → `Europe/London`, INR → `Asia/Kolkata`); `opening_date` → `account_opening_date_local`; `closing_date` → `account_closing_date_local`; `id` column with pre-assigned UUIDs; 21 accounts |
+| Data     | `../../_do-not-touch`  | `name` → `account_name`; `currency` → `account_currency_local`; `legal_entity_name` column added; `local_timezone` column added (GBP → `Europe/London`, INR → `Asia/Kolkata`); `opening_date` → `account_opening_date_local`; `closing_date` → `account_closing_date_local`; `id` column with pre-assigned UUIDs; 21 accounts |
 
 ### 1. Deploy backend
 
@@ -130,7 +130,7 @@ Files: `account-schema.gs`, `account-core.gs`, `account-validation.gs`, `sync-ut
 | 17  | `created_at`         |
 | 18  | `updated_at`         |
 
-3. Accounts → **↑ Import** → upload `local/files/accounts_new.csv`
+3. Accounts → **↑ Import** → upload `../../_do-not-touch`
    - The CSV has an `id` column with pre-assigned UUIDs — these are used as-is (no new UUIDs generated for seed rows)
    - `local_timezone` is populated in the CSV (`Europe/London` for GBP accounts, `Asia/Kolkata` for INR accounts)
    - Expect: 21 accounts imported, 0 skipped, 0 failed

@@ -19,7 +19,7 @@ The [README](../README.md) is the current behaviour contract: modes, steps and w
 | `LSL_SCRIPT_URL` | Set by the launcher from `cicd/envs.json`; required when invoking Python directly |
 | `LSL_SPREADSHEET_ID` | Set by the launcher from `cicd/envs.json`; required when invoking Python directly |
 | `MERIDIAN_FULCRUM_PIN` / `MERIDIAN_FULCRUM_SECRET` | Optional, in the env file: the PIN and Base32 TOTP secret (same names and values as the GAS Script Properties). Both set: no prompts. Both empty: asked for |
-| `LSL_DATA_DIR` | Optional absolute path to load a different CSV folder (default: `local/files`) |
+| `LSL_DATA_DIR` | Optional absolute path to load a different CSV folder (default: `../../../_do-not-touch`) |
 
 ## Running
 
@@ -57,4 +57,4 @@ Typical order after editing the CSVs: `make consolidated-pipeline` (ledger-sheet
 | `spreadsheet_mismatch:drop_tabs` | `spreadsheet_id` in `cicd/envs.json` is not the Sheet bound to that deployment; nothing was deleted |
 | `delete_failed:drop_tabs` | A tab delete failed part-way; the printed `deleted` list names only the tabs actually deleted. Rerun sheet-rebuild |
 
-A run that stops after the check step can be repeated as is: imports match rows by id. Backups written by the fill-ids step stay in `local/files/.backup/`.
+A run that stops after the check step can be repeated as is: imports match rows by id. Backups written by the fill-ids step stay in `../../../_do-not-touch`.

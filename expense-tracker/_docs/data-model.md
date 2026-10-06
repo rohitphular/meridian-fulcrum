@@ -43,7 +43,7 @@ All entity shapes. Field types are abstract — choose a concrete type appropria
 
 ### Sub-types
 
-`sub_type` is required. Its pair with `type` must identify an active or locked row in the `account_types` Sheet. Configure manages the existing 16-row catalog; it does not create additional classifications. Consumers read keys and labels from the Sheet-backed schema. A row's `detail_sheet` value identifies the permitted detail tab; blank means no supported detail import for that classification. The current catalog is supplied in `local/files/account_types.csv`, rather than duplicated here.
+`sub_type` is required. Its pair with `type` must identify an active or locked row in the `account_types` Sheet. Configure manages the existing 16-row catalog; it does not create additional classifications. Consumers read keys and labels from the Sheet-backed schema. A row's `detail_sheet` value identifies the permitted detail tab; blank means no supported detail import for that classification. The current catalog is supplied in `../../_do-not-touch`, rather than duplicated here.
 
 The appended account column is:
 

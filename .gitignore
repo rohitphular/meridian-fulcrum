@@ -15,7 +15,7 @@
 .clasprc.json
 
 # Local configs, secrets, and temp files — never commit
-local/
+_do-not-touch/
 infrastructure/.env.*
 
 # Python virtual environments

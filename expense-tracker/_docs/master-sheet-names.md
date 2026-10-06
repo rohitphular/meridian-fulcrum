@@ -2,7 +2,7 @@
 
 The four masters use the same singular name for their Sheet tabs, ledger-database-load entity keys and database tables:
 
-| Local CSV in `local/files/` | Sheet tab | PostgreSQL table | Previous Sheet tab |
+| Local CSV in `../../_do-not-touch` | Sheet tab | PostgreSQL table | Previous Sheet tab |
 |---|---|---|---|
 | `account_master.csv` | `account_master` | `account_master` | `accounts` |
 | `category_master.csv` | `category_master` | `category_master` | `categories` |

@@ -16,7 +16,7 @@ The Accounts import panel sends `import_account_data` with `{ file_type, csv }`,
 
 Every detail `id` and `account_id` must be a hyphenated UUID. Optional `linked_property_account_id` on mortgages and `evaluation_currency_rate_id` on stocks must also be UUIDs when supplied. The importer trims surrounding whitespace and writes lowercase UUIDs, preserving their identity. It never generates a new detail ID. The extraction mapping keeps the same UUID in the database.
 
-Account eligibility is configured by `account_types.detail_sheet`: the account's type/subtype row must name the selected detail tab. A blank mapping permits no detail import. The current 16-row catalog and its policy values live in the `account_types` Sheet, initially imported from `local/files/account_types.csv`; they are not duplicated in importer code or the tables below. Hyphens apply to classification key values only; these Sheet/tab identifiers keep underscores.
+Account eligibility is configured by `account_types.detail_sheet`: the account's type/subtype row must name the selected detail tab. A blank mapping permits no detail import. The current 16-row catalog and its policy values live in the `account_types` Sheet, initially imported from `../../_do-not-touch`; they are not duplicated in importer code or the tables below. Hyphens apply to classification key values only; these Sheet/tab identifiers keep underscores.
 
 ## `account_deposit`
 

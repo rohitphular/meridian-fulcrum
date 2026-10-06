@@ -4,7 +4,7 @@ Configure → Account Types manages existing account classifications in a collap
 
 ## Source catalog and identity
 
-The Sheet supplies classification keys, labels and detail-import eligibility. There is no application seed, fixed family catalog, hardcoded subtype count or embedded subtype mapping. An absent or empty Sheet lists no rows and creates nothing on GET. Import the supplied complete `local/files/account_types.csv` to bootstrap it.
+The Sheet supplies classification keys, labels and detail-import eligibility. There is no application seed, fixed family catalog, hardcoded subtype count or embedded subtype mapping. An absent or empty Sheet lists no rows and creates nothing on GET. Import the supplied complete `../../_do-not-touch` to bootstrap it.
 
 After the Sheet is populated, neither the API nor CSV import can add an ID/classification. Existing UUIDs, family keys and subtype keys are immutable. View, edit descriptive/policy fields, soft-delete and restore existing rows. The explicit legacy migration accepts only the equivalent underscore-to-hyphen key conversion. Source UUIDs and creation timestamps survive imports and migrations.
 
