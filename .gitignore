@@ -30,8 +30,8 @@ _volume/
 **/*.pyo
 
 # Consolidated pipeline configs, one per env (per machine; copy config/pipeline.example.json)
-data-synchronization/consolidated-pipeline/config/pipeline.*.json
-!data-synchronization/consolidated-pipeline/config/pipeline.example.json
+codebase/data-synchronization/consolidated-pipeline/config/pipeline.*.json
+!codebase/data-synchronization/consolidated-pipeline/config/pipeline.example.json
 
 # Consolidated pipeline run reports (read by output/index.html)
-data-synchronization/consolidated-pipeline/output/data/
+codebase/data-synchronization/consolidated-pipeline/output/data/

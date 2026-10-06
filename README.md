@@ -10,11 +10,11 @@ Personal finance management system. Tracks expenses, debts, investments, and lif
 
 ### Forge
 
-Standalone prototype modules built independently, at the repository root: `expense-tracker/`, plus `data-synchronization/` (Python data jobs) and `infrastructure/` (local PostgreSQL services and environment settings). Each module solves one problem cleanly before being integrated into the unified Fulcrum app.
+Standalone prototype modules built independently: `codebase/expense-tracker/` and `codebase/data-synchronization/` (Python data jobs), plus `infrastructure/` (local PostgreSQL services and environment settings) at the repository root. Each module solves one problem cleanly before being integrated into the unified Fulcrum app.
 
 | Module | Status | What it does |
 |---|---|---|
-| `expense-tracker` | Prototype | Multi-currency expense + accounts tracker — transactions, categories, accounts (assets + liabilities), FX rates. Insight section with income/expense/net summary, category drilldown, per-account spend. |
+| `codebase/expense-tracker` | Prototype | Multi-currency expense + accounts tracker — transactions, categories, accounts (assets + liabilities), FX rates. |
 
 ---
 

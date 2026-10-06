@@ -1,0 +1,11 @@
+{
+  "_comment": "Non-secret per-env config: the expense-tracker GAS /exec URL and its spreadsheet. Keep in step with codebase/expense-tracker/cicd/envs.json. The PIN and authenticator code are asked for at run time; the log root comes from infrastructure/.env.<env>.",
+  "dev": {
+    "script_url": "https://script.google.com/macros/s/AKfycbxWTOuXeCkH4tsDvrmCjkjxlhIZqLyIhxfvXR51ymWRc1FGAOYkLt0rkeGjTfQmWAv2RA/exec",
+    "spreadsheet_id": "1Rb9zVu-pJOYUvNhdfyjpdgf1v2mw3HKX6NGQUFX_kJg"
+  },
+  "prod": {
+    "script_url": "https://script.google.com/macros/s/AKfycbz21kZuwPCTVWKmLcUmogk2ZECYAL4Jibc8Dfs8dZmdUc-HSzqVLvqJPcpc6AhzUOWJUg/exec",
+    "spreadsheet_id": "1tUtzrHCZzQd4GTBKJPNtSX2_PIWjGWqZQqHBUDEUlFc"
+  }
+}
